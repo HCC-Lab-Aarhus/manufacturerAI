@@ -15,9 +15,10 @@ Outputs:
   - generated_remote.blend  (open this in Blender to inspect the result)
 """
 
-import bpy
+import bpy # cant import this on windows, used pip install fake-bpy-module-4.5 
 import json
 import sys
+import os
 
 def parse_args():
     argv = sys.argv
@@ -232,14 +233,33 @@ def cut_button_holes(top_obj, params):
 
     bpy.data.objects.remove(hole_union, do_unlink=True)
 
-def export_stl(obj, filepath):
+def export_stl(obj, filepath: str):
+    import os
+    filepath = os.path.abspath(filepath)
+
+    # Select only the object
     bpy.ops.object.select_all(action='DESELECT')
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj
-    bpy.ops.export_mesh.stl(filepath=filepath, use_selection=True)
+
+    # Blender 4.x STL exporter
+    if hasattr(bpy.ops.wm, "stl_export"):
+        # This flag name is correct for 4.5
+        bpy.ops.wm.stl_export(filepath=filepath, export_selected_objects=True)
+        return
+
+    # Fallbacks for older versions
+    if hasattr(bpy.ops.export_mesh, "stl"):
+        bpy.ops.export_mesh.stl(filepath=filepath, use_selection=True)
+        return
+
+    raise RuntimeError("No STL export operator found on this Blender build.")
+
 
 def main():
     params_path, out_dir = parse_args()
+    out_dir = os.path.abspath(out_dir)
+    os.makedirs(out_dir, exist_ok=True)
     params = json.loads(open(params_path, "r", encoding="utf-8").read())
 
     clear_scene()
