@@ -1,0 +1,19 @@
+{
+  "remote": {
+    "length_mm": 180,
+    "width_mm": 45,
+    "thickness_mm": 18,
+    "wall_mm": 1.6,
+    "corner_radius_mm": 6
+  },
+  "buttons": {
+    "rows": 4,
+    "cols": 3,
+    "diam_mm": 9,
+    "spacing_mm": 3,
+    "margin_top_mm": 20,
+    "margin_bottom_mm": 18,
+    "margin_side_mm": 6,
+    "hole_clearance_mm": 0.25
+  }
+}
