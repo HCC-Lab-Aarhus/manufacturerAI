@@ -15,5 +15,41 @@
     "margin_bottom_mm": 18,
     "margin_side_mm": 6,
     "hole_clearance_mm": 0.25
+  },
+  "battery": {
+    "type": "AAA",
+    "count": 2,
+    "orientation": "lengthwise",
+    "clearance_mm": 0.6,
+    "placement": {
+      "margin_from_bottom_end_mm": 12.0,
+      "z_center_mm": 0.0,
+      "x_spacing_mm": 3.0
+    },
+    "door": {
+      "enabled": true,
+      "opening_clearance_mm": 0.3,
+      "ledge_width_mm": 1.0,
+      "ledge_depth_mm": 1.2,
+      "door_thickness_mm": 1.8
+    }
+  },
+  "switches": {
+    "pocket_depth_mm": 4.0,
+    "pocket_xy_mm": 12.0,
+    "pocket_clearance_mm": 0.4
+  },
+  "wiring": {
+    "enabled": true,
+    "mode": "ink_volume",
+    "trace_width_mm": 1.2,
+    "trace_height_mm": 0.4,
+    "z_from_bottom_inner_mm": 0.8,
+    "trunk_x_mm": 0.0,
+    "led": {
+      "enabled": true,
+      "y_from_top_end_mm": 8.0,
+      "x_mm": 0.0
+    }
   }
 }
