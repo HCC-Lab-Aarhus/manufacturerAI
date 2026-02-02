@@ -22,7 +22,10 @@
         <section class="composer">
           <textarea id="promptInput" placeholder="Describe the remote you want to create..."></textarea>
           <div class="composer-actions">
-            <span class="muted">LLM disabled</span>
+            <label class="toggle">
+              <input type="checkbox" id="useLlm" checked />
+              <span>Use Gemini</span>
+            </label>
             <button id="sendBtn">Send</button>
           </div>
           <button class="secondary" id="ttsBtn">Speak last response</button>

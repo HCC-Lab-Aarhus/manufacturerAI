@@ -4,6 +4,7 @@ const sendBtn = document.getElementById("sendBtn");
 const ttsBtn = document.getElementById("ttsBtn");
 const printBtn = document.getElementById("printBtn");
 const printerStatus = document.getElementById("printerStatus");
+const useLlm = document.getElementById("useLlm");
 
 let lastAssistantMessage = "";
 let currentModelUrl = null;
@@ -41,7 +42,7 @@ sendBtn.addEventListener("click", async () => {
     const res = await fetch("/api/prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, use_llm: false }),
+      body: JSON.stringify({ message, use_llm: useLlm ? useLlm.checked : true }),
     });
 
     if (!res.ok) {

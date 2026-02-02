@@ -13,7 +13,7 @@ class PrinterStatus:
 
 
 def _flag_path() -> Path:
-    return Path(__file__).resolve().parents[3] / "configs" / "printer_connected.flag"
+    return Path(__file__).resolve().parents[2] / "configs" / "printer_connected.flag"
 
 
 def get_printer_status() -> PrinterStatus:
@@ -32,7 +32,7 @@ def queue_print_job(stl_path: Path) -> str:
     Placeholder print queue: copies the STL into outputs/print_jobs with a timestamp.
     Replace with real printer integration when available.
     """
-    root = Path(__file__).resolve().parents[3]
+    root = Path(__file__).resolve().parents[2]
     out_dir = root / "outputs" / "print_jobs"
     out_dir.mkdir(parents=True, exist_ok=True)
 
