@@ -10,12 +10,10 @@ Args after `--`:
 
 Outputs:
   - remote_body.stl
-  - battery_door.stl (if enabled)
-  - ink_trace.stl    (if enabled)
   - generated_remote.blend
 """
 
-import bpy #read notes
+import bpy
 import json
 import sys
 import math
@@ -45,8 +43,6 @@ def clear_scene():
 
 
 def set_mm_units():
-    # Display-only; internal coordinates are still Blender units.
-    # We keep using "mm-like" numbers directly for modeling and STL export.
     scene = bpy.context.scene
     scene.unit_settings.system = "METRIC"
     scene.unit_settings.scale_length = 0.001
@@ -73,13 +69,11 @@ def cleanup_mesh(obj):
         bpy.ops.object.mode_set(mode="EDIT")
         bpy.ops.mesh.select_all(action="SELECT")
 
-        # Merge-by-distance (Blender 4.x)
         try:
             bpy.ops.mesh.merge_by_distance(distance=0.0001)
         except Exception:
             pass
 
-        # Recalculate normals
         try:
             bpy.ops.mesh.normals_make_consistent(inside=False)
         except Exception:
@@ -93,11 +87,10 @@ def cleanup_mesh(obj):
 
 
 # ----------------------------
-# Geometry primitives (mm-like)
-# IMPORTANT: use size=2.0 cubes so scale=(dim/2) yields correct final dims
+# Geometry primitives
 # ----------------------------
 def add_mm_cube(size_x, size_y, size_z, location=(0, 0, 0), name="CUBE"):
-    bpy.ops.mesh.primitive_cube_add(size=2.0, location=location)  # <-- key fix
+    bpy.ops.mesh.primitive_cube_add(size=2.0, location=location)
     obj = bpy.context.active_object
     obj.name = name
     obj.scale = (size_x / 2.0, size_y / 2.0, size_z / 2.0)
@@ -106,7 +99,6 @@ def add_mm_cube(size_x, size_y, size_z, location=(0, 0, 0), name="CUBE"):
 
 
 def add_base_body(length_mm, width_mm, thickness_mm, corner_radius_mm):
-    # X=width, Y=length, Z=thickness. Origin at center.
     obj = add_mm_cube(width_mm, length_mm, thickness_mm, location=(0, 0, 0), name="REMOTE_SOLID")
 
     if corner_radius_mm > 0:
@@ -116,7 +108,7 @@ def add_base_body(length_mm, width_mm, thickness_mm, corner_radius_mm):
         bev.profile = 0.7
         if hasattr(bev, "limit_method"):
             bev.limit_method = "ANGLE"
-            bev.angle_limit = 0.785398  # 45 degrees
+            bev.angle_limit = 0.785398
     return obj
 
 
@@ -150,7 +142,7 @@ def make_hollow_shell(solid, wall_mm):
     bpy.context.collection.objects.link(inner)
     inner.name = "REMOTE_INNER"
 
-    dims = outer.dimensions  # same units as we modeled in
+    dims = outer.dimensions
     inner_w = max(1.0, dims.x - 2 * wall_mm)
     inner_l = max(1.0, dims.y - 2 * wall_mm)
     inner_t = max(1.0, dims.z - 2 * wall_mm)
@@ -170,141 +162,14 @@ def make_hollow_shell(solid, wall_mm):
 
 
 # ----------------------------
-# Button layout
-# ----------------------------
-def button_positions(
-    length_mm,
-    width_mm,
-    rows,
-    cols,
-    diam_mm,
-    spacing_mm,
-    margin_top_mm,
-    margin_bottom_mm=None,
-    margin_side_mm=None,
-):
-    # Centered grid in X. Y is placed from the top margin downward.
-    grid_w = cols * diam_mm + (cols - 1) * spacing_mm
-    x0 = -grid_w / 2.0 + diam_mm / 2.0
-
-    y_top = length_mm / 2.0 - margin_top_mm - diam_mm / 2.0
-    for r in range(rows):
-        y = y_top - r * (diam_mm + spacing_mm)
-        for c in range(cols):
-            x = x0 + c * (diam_mm + spacing_mm)
-            yield x, y
-
-
-def cut_button_holes(remote_obj, params):
-    r = params["remote"]
-    b = params["buttons"]
-
-    length_mm = float(r["length_mm"])
-    width_mm = float(r["width_mm"])
-    thickness_mm = float(r["thickness_mm"])
-
-    rows = int(b["rows"])
-    cols = int(b["cols"])
-    diam_mm = float(b["diam_mm"])
-    spacing_mm = float(b["spacing_mm"])
-    margin_top_mm = float(b["margin_top_mm"])
-    clearance = float(b.get("hole_clearance_mm", 0.25))
-
-    holes = []
-    for x, y in button_positions(length_mm, width_mm, rows, cols, diam_mm, spacing_mm, margin_top_mm):
-        bpy.ops.mesh.primitive_cylinder_add(
-            radius=(diam_mm / 2.0 + clearance),
-            depth=thickness_mm * 2.0,
-            location=(x, y, thickness_mm / 4.0),
-        )
-        holes.append(bpy.context.active_object)
-
-    if not holes:
-        return
-
-    bpy.ops.object.select_all(action="DESELECT")
-    for h in holes:
-        h.select_set(True)
-    bpy.context.view_layer.objects.active = holes[0]
-    bpy.ops.object.join()
-    hole_union = bpy.context.active_object
-    hole_union.name = "BUTTON_HOLE_CUTTERS"
-
-    boolean_difference(remote_obj, hole_union, name="ButtonHoles")
-    apply_all_modifiers(remote_obj)
-    cleanup_mesh(remote_obj)
-
-    bpy.data.objects.remove(hole_union, do_unlink=True)
-
-
-def cut_switch_pockets(remote_obj, params):
-    """Subtract rectangular switch pockets under each button hole."""
-    sw = params.get("switches") or {}
-    pocket_depth = float(sw.get("pocket_depth_mm", 0.0))
-    pocket_xy = float(sw.get("pocket_xy_mm", 0.0))
-    pocket_clear = float(sw.get("pocket_clearance_mm", 0.0))
-    if pocket_depth <= 0 or pocket_xy <= 0:
-        return
-
-    r = params["remote"]
-    b = params["buttons"]
-
-    length_mm = float(r["length_mm"])
-    width_mm = float(r["width_mm"])
-    thickness_mm = float(r["thickness_mm"])
-    wall_mm = float(r["wall_mm"])
-
-    rows = int(b["rows"])
-    cols = int(b["cols"])
-    diam_mm = float(b["diam_mm"])
-    spacing_mm = float(b["spacing_mm"])
-    margin_top_mm = float(b["margin_top_mm"])
-    margin_bottom_mm = float(b.get("margin_bottom_mm", 0.0))
-    margin_side_mm = float(b.get("margin_side_mm", 0.0))
-
-    # Pocket placed under the top inner surface
-    top_inner_z = (thickness_mm / 2.0) - wall_mm
-    pocket_center_z = top_inner_z - pocket_depth / 2.0
-
-    cutters = []
-    for (x, y) in button_positions(
-        length_mm, width_mm, rows, cols, diam_mm, spacing_mm, margin_top_mm, margin_bottom_mm, margin_side_mm
-    ):
-        c = add_mm_cube(
-            pocket_xy + 2 * pocket_clear,
-            pocket_xy + 2 * pocket_clear,
-            pocket_depth,
-            location=(x, y, pocket_center_z),
-            name="SW_POCKET",
-        )
-        cutters.append(c)
-
-    bpy.ops.object.select_all(action="DESELECT")
-    for c in cutters:
-        c.select_set(True)
-    bpy.context.view_layer.objects.active = cutters[0]
-    bpy.ops.object.join()
-    pocket_union = bpy.context.active_object
-    pocket_union.name = "SW_POCKET_UNION"
-
-    boolean_difference(remote_obj, pocket_union, name="SwitchPockets")
-    apply_all_modifiers(remote_obj)
-    cleanup_mesh(remote_obj)
-
-    bpy.data.objects.remove(pocket_union, do_unlink=True)
-
-
-# ----------------------------
-# Battery cavity + door
+# Battery compartment
 # ----------------------------
 def cut_battery_compartment_and_make_door(remote_obj, params, out_dir: str):
     """
-    Creates 1x or 2x AAA cavity, bottom opening, and a simple ledge.
-    Generates a door object in the assembled position, exports it, then offsets for viewing.
+    Creates AAA battery cavity with bottom opening and door.
     """
     bat = params.get("battery") or {}
-    door_cfg = bat.get("door") or {}
-    if bat.get("type", "AAA") != "AAA":
+    if not bool(bat.get("enabled", True)):
         return None
 
     count = int(bat.get("count", 2))
@@ -323,28 +188,33 @@ def cut_battery_compartment_and_make_door(remote_obj, params, out_dir: str):
     z_center = float(placement.get("z_center_mm", 0.0))
     x_spacing = float(placement.get("x_spacing_mm", 3.0))
 
-    # AAA with clearance
-    batt_len = 44.5 + 2.0
-    batt_rad = (10.5 / 2.0) + clearance
+    # AAA dimensions with clearance
+    batt_len = 44.0 + clearance
+    batt_rad = (10.1 / 2.0) + clearance
 
     # Place along Y (length axis)
     y_center = -length_mm / 2.0 + margin_bottom_end + batt_len / 2.0
 
-    # Battery cutters (cylinders)
+    # Battery cutters (curved recesses for better fit)
     cutters = []
     x_positions = [0.0]
     if count == 2:
         x_positions = [-(batt_rad + x_spacing / 2.0), (batt_rad + x_spacing / 2.0)]
 
+    # Create form-fitting semicircular recesses
     for x in x_positions:
+        # Create a cylinder that extends from bottom to center height for cradle effect
+        recess_depth = batt_len
+        recess_height = batt_rad * 1.2  # Slightly more than radius for good fit
+        
         bpy.ops.mesh.primitive_cylinder_add(
             radius=batt_rad,
-            depth=batt_len,
-            location=(x, y_center, z_center),
+            depth=recess_depth,
+            location=(x, y_center, -thickness_mm/2 + recess_height/2),
             rotation=(math.radians(90.0), 0.0, 0.0),
         )
         cyl = bpy.context.active_object
-        cyl.name = "BAT_CUT"
+        cyl.name = "BAT_CRADLE"
         cutters.append(cyl)
 
     bpy.ops.object.select_all(action="DESELECT")
@@ -360,7 +230,8 @@ def cut_battery_compartment_and_make_door(remote_obj, params, out_dir: str):
     cleanup_mesh(remote_obj)
     bpy.data.objects.remove(batt_union, do_unlink=True)
 
-    # Door opening + ledge
+    # Battery door
+    door_cfg = bat.get("door") or {}
     if not bool(door_cfg.get("enabled", True)):
         return None
 
@@ -431,110 +302,6 @@ def cut_battery_compartment_and_make_door(remote_obj, params, out_dir: str):
 
 
 # ----------------------------
-# Ink trace volume (optional)
-# ----------------------------
-def _cylinder_between(p1, p2, radius):
-    from mathutils import Vector
-
-    v1 = Vector(p1)
-    v2 = Vector(p2)
-    d = v2 - v1
-    dist = d.length
-    if dist <= 1e-6:
-        return None
-
-    mid = (v1 + v2) / 2.0
-    bpy.ops.mesh.primitive_cylinder_add(radius=radius, depth=dist, location=mid)
-    obj = bpy.context.active_object
-
-    # Rotate so cylinder Z aligns with segment direction
-    z_axis = Vector((0, 0, 1))
-    rot = z_axis.rotation_difference(d.normalized())
-    obj.rotation_mode = "QUATERNION"
-    obj.rotation_quaternion = rot
-    bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
-    obj.rotation_mode = "XYZ"
-    return obj
-
-
-def make_ink_trace(params):
-    wiring = params.get("wiring") or {}
-    if not bool(wiring.get("enabled", False)):
-        return None
-    if wiring.get("mode", "ink_volume") != "ink_volume":
-        return None
-
-    r = params["remote"]
-    b = params["buttons"]
-
-    length_mm = float(r["length_mm"])
-    width_mm = float(r["width_mm"])
-    thickness_mm = float(r["thickness_mm"])
-    wall_mm = float(r["wall_mm"])
-
-    rows = int(b["rows"])
-    cols = int(b["cols"])
-    diam_mm = float(b["diam_mm"])
-    spacing_mm = float(b["spacing_mm"])
-    margin_top_mm = float(b["margin_top_mm"])
-    margin_bottom_mm = float(b.get("margin_bottom_mm", 0.0))
-    margin_side_mm = float(b.get("margin_side_mm", 0.0))
-
-    trace_w = float(wiring.get("trace_width_mm", 1.2))
-    trace_h = float(wiring.get("trace_height_mm", 0.4))
-    z_from_bottom_inner = float(wiring.get("z_from_bottom_inner_mm", 0.8))
-
-    bottom_inner_z = -thickness_mm / 2.0 + wall_mm
-    z = bottom_inner_z + z_from_bottom_inner + trace_h / 2.0
-
-    trunk_x = float(wiring.get("trunk_x_mm", 0.0))
-
-    led_cfg = wiring.get("led") or {}
-    led_enabled = bool(led_cfg.get("enabled", True))
-    led_y = length_mm / 2.0 - float(led_cfg.get("y_from_top_end_mm", 8.0))
-    led_x = float(led_cfg.get("x_mm", 0.0))
-
-    button_pos = list(
-        button_positions(length_mm, width_mm, rows, cols, diam_mm, spacing_mm, margin_top_mm, margin_bottom_mm, margin_side_mm)
-    )
-    if not button_pos:
-        return None
-
-    y_vals = [p[1] for p in button_pos]
-    trunk_y0 = min(y_vals) - 8.0
-    trunk_y1 = led_y if led_enabled else (max(y_vals) + 10.0)
-
-    segs = []
-    segs.append(((trunk_x, trunk_y0, z), (trunk_x, trunk_y1, z)))
-    for (x, y) in button_pos:
-        segs.append(((x, y, z), (trunk_x, y, z)))
-    if led_enabled:
-        segs.append(((trunk_x, led_y, z), (led_x, led_y, z)))
-
-    radius = trace_w / 2.0
-    pieces = []
-    for p1, p2 in segs:
-        obj = _cylinder_between(p1, p2, radius=radius)
-        if obj:
-            obj.name = "INK_SEG"
-            pieces.append(obj)
-
-    if not pieces:
-        return None
-
-    bpy.ops.object.select_all(action="DESELECT")
-    for o in pieces:
-        o.select_set(True)
-    bpy.context.view_layer.objects.active = pieces[0]
-    bpy.ops.object.join()
-    ink = bpy.context.active_object
-    ink.name = "INK_TRACE"
-
-    cleanup_mesh(ink)
-    return ink
-
-
-# ----------------------------
 # Export
 # ----------------------------
 def export_stl(obj, filepath: str):
@@ -575,30 +342,20 @@ def main():
     wall_mm = float(r["wall_mm"])
     corner_radius_mm = float(r["corner_radius_mm"])
 
-    # 1) Base + shell
+    # 1) Base solid
     solid = add_base_body(length_mm, width_mm, thickness_mm, corner_radius_mm)
     apply_all_modifiers(solid)
     cleanup_mesh(solid)
 
+    # 2) Hollow shell
     shell = make_hollow_shell(solid, wall_mm)
     cleanup_mesh(shell)
 
-    # 2) Buttons + switch pockets
-    cut_button_holes(shell, params)
-    cut_switch_pockets(shell, params)
-
-    # 3) Battery cavity + door
+    # 3) Battery compartment
     door_obj = cut_battery_compartment_and_make_door(shell, params, out_dir)
 
-    # 4) Ink trace (optional)
-    ink_obj = make_ink_trace(params)
-
-    # Export body + optional ink
+    # Export the hollow body
     export_stl(shell, os.path.join(out_dir, "remote_body.stl"))
-    if ink_obj is not None:
-        export_stl(ink_obj, os.path.join(out_dir, "ink_trace.stl"))
-        # After export, move ink up for easier viewing in the .blend
-        ink_obj.location.z += 10.0
 
     # Save a .blend for inspection
     try:

@@ -6,6 +6,12 @@
     "wall_mm": 1.6,
     "corner_radius_mm": 6
   },
+  "floor": {
+    "enabled": false,
+    "thickness_mm": 1.2,
+    "z_from_bottom_inner_mm": 0.0,
+    "clearance_mm": 0.2
+  },
   "buttons": {
     "rows": 4,
     "cols": 3,
@@ -14,7 +20,27 @@
     "margin_top_mm": 20,
     "margin_bottom_mm": 18,
     "margin_side_mm": 6,
-    "hole_clearance_mm": 0.25
+    "hole_clearance_mm": 0.25,
+    "cap": {
+      "enabled": false,
+      "diam_mm": 8.6,
+      "height_mm": 3.0,
+      "clearance_mm": 0.2
+    }
+  },
+  "electronics": {
+    "atmega328p": {
+      "enabled": false,
+      "length_mm": 32.0,
+      "width_mm": 10.0,
+      "height_mm": 4.0,
+      "clearance_mm": 0.6,
+      "placement": {
+        "margin_from_top_end_mm": 30.0,
+        "z_from_top_inner_mm": 1.5,
+        "x_center_mm": 0.0
+      }
+    }
   },
   "battery": {
     "type": "AAA",
@@ -35,12 +61,12 @@
     }
   },
   "switches": {
-    "pocket_depth_mm": 4.0,
+    "pocket_depth_mm": 0.0,
     "pocket_xy_mm": 12.0,
     "pocket_clearance_mm": 0.4
   },
   "wiring": {
-    "enabled": true,
+    "enabled": false,
     "mode": "ink_volume",
     "trace_width_mm": 1.2,
     "trace_height_mm": 0.4,

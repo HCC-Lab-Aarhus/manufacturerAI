@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Remote GDT Studio</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="panel left">
+        <header class="brand">
+          <div class="logo">RG</div>
+          <div>
+            <h1>Remote GDT Studio</h1>
+            <p>Create printable remotes with a prompt.</p>
+          </div>
+        </header>
+
+        <section class="chat" id="chat"></section>
+
+        <section class="composer">
+          <textarea id="promptInput" placeholder="Describe the remote you want to create..."></textarea>
+          <div class="composer-actions">
+            <span class="muted">LLM disabled</span>
+            <button id="sendBtn">Send</button>
+          </div>
+          <button class="secondary" id="ttsBtn">Speak last response</button>
+        </section>
+      </aside>
+
+      <main class="panel right">
+        <div class="viewer-header">
+          <div class="status" id="printerStatus">Not connected</div>
+          <div class="zoom-controls">
+            <button id="zoomIn">+</button>
+            <button id="zoomOut">−</button>
+          </div>
+        </div>
+        <div id="viewer"></div>
+        <div class="viewer-footer">
+          <button class="primary" id="printBtn">Print</button>
+        </div>
+      </main>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/STLLoader.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

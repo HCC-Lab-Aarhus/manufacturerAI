@@ -17,6 +17,10 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--blender-bin", default=None, help="Path to blender executable (optional)")
     pr.add_argument("--no-llm", action="store_true", help="Disable LLM; use rule-based defaults/parser")
 
+    sv = sub.add_parser("serve", help="Start the web frontend server")
+    sv.add_argument("--host", default="127.0.0.1", help="Host to bind")
+    sv.add_argument("--port", type=int, default=8000, help="Port to bind")
+
     return p
 
 def main() -> int:
@@ -34,6 +38,11 @@ def main() -> int:
     if args.cmd == "prompt":
         orch.run_from_prompt(args.text, out_dir, use_llm=(not args.no_llm))
         print(f"✅ Generated outputs in: {out_dir}")
+        return 0
+
+    if args.cmd == "serve":
+        from src.web.server import main as serve_main
+        serve_main(host=args.host, port=args.port)
         return 0
 
     return 2
