@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
-from remote_gdt.design.models import RemoteParams
+from src.design.models import RemoteParams
 
 def write_report(out_dir: Path, params: RemoteParams, issues: list[str]) -> None:
     lines = []

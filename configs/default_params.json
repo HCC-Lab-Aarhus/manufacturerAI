@@ -1,10 +1,10 @@
 {
   "remote": {
-    "length_mm": 180,
-    "width_mm": 45,
-    "thickness_mm": 18,
-    "wall_mm": 1.6,
-    "corner_radius_mm": 6
+    "length_mm": 200,
+    "width_mm": 50,
+    "thickness_mm": 20,
+    "wall_mm": 2.0,
+    "corner_radius_mm": 8
   },
   "floor": {
     "enabled": false,
@@ -13,14 +13,16 @@
     "clearance_mm": 0.2
   },
   "buttons": {
-    "rows": 4,
-    "cols": 3,
-    "diam_mm": 9,
-    "spacing_mm": 3,
-    "margin_top_mm": 20,
-    "margin_bottom_mm": 18,
-    "margin_side_mm": 6,
+    "enabled": true,
+    "rows": 2,
+    "cols": 2,
+    "diam_mm": 12,
+    "spacing_mm": 10,
+    "margin_top_mm": 40,
+    "margin_bottom_mm": 30,
+    "margin_side_mm": 10,
     "hole_clearance_mm": 0.25,
+    "pin_assignments": [2, 3, 4, 5],
     "cap": {
       "enabled": false,
       "diam_mm": 8.6,
@@ -30,14 +32,36 @@
   },
   "electronics": {
     "atmega328p": {
-      "enabled": false,
-      "length_mm": 32.0,
-      "width_mm": 10.0,
-      "height_mm": 4.0,
-      "clearance_mm": 0.6,
+      "enabled": true,
+      "length_mm": 35.0,
+      "width_mm": 15.2,
+      "height_mm": 4.5,
+      "clearance_mm": 0.5,
+      "pin_count": 28,
+      "pin_spacing_mm": 2.54,
+      "pin_width_mm": 0.6,
+      "pin_length_mm": 3.5,
       "placement": {
-        "margin_from_top_end_mm": 30.0,
-        "z_from_top_inner_mm": 1.5,
+        "margin_from_top_end_mm": 35.0,
+        "z_from_top_inner_mm": 1.0,
+        "x_center_mm": 0.0
+      },
+      "pinout": {
+        "vcc_pins": [7, 20],
+        "gnd_pins": [8, 22],
+        "digital_pins": [2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+        "analog_pins": [23, 24, 25, 26, 27, 28]
+      }
+    },
+    "led": {
+      "enabled": true,
+      "diameter_mm": 5.0,
+      "height_mm": 8.5,
+      "clearance_mm": 0.4,
+      "pin_assignment": 13,
+      "placement": {
+        "margin_from_top_end_mm": 8.0,
+        "z_from_top_inner_mm": 1.0,
         "x_center_mm": 0.0
       }
     }
@@ -66,10 +90,10 @@
     "pocket_clearance_mm": 0.4
   },
   "wiring": {
-    "enabled": false,
+    "enabled": true,
     "mode": "ink_volume",
     "trace_width_mm": 1.2,
-    "trace_height_mm": 0.4,
+    "trace_height_mm": 2.0,
     "z_from_bottom_inner_mm": 0.8,
     "trunk_x_mm": 0.0,
     "led": {

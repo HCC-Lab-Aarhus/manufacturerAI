@@ -25,17 +25,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    orch = Orchestrator(blender_bin=args.blender_bin)
-
-    out_dir = Path(args.out).resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
 
     if args.cmd == "generate":
+        orch = Orchestrator(blender_bin=args.blender_bin)
+        out_dir = Path(args.out).resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
         orch.run_from_params_file(Path(args.params), out_dir)
         print(f"✅ Generated outputs in: {out_dir}")
         return 0
 
     if args.cmd == "prompt":
+        orch = Orchestrator(blender_bin=args.blender_bin)
+        out_dir = Path(args.out).resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
         orch.run_from_prompt(args.text, out_dir, use_llm=(not args.no_llm))
         print(f"✅ Generated outputs in: {out_dir}")
         return 0

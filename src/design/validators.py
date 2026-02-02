@@ -4,7 +4,7 @@ from pathlib import Path
 from src.design.layout import compute_grid_metrics, choose_rows_cols
 
 def load_printer_limits() -> dict:
-    p = Path(__file__).resolve().parents[3] / "configs" / "printer_limits.json"
+    p = Path(__file__).resolve().parents[2] / "configs" / "printer_limits.json"
     return json.loads(p.read_text(encoding="utf-8"))
 
 def validate_and_fix_params(params: dict) -> tuple[dict, list[str]]:
