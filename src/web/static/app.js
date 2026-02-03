@@ -82,7 +82,8 @@ function updateModelSelector(models) {
         currentModelUrl = availableModels[modelType] + `?t=${Date.now()}`;
         loadModel(currentModelUrl);
       } else {
-        addMessage("assistant", `${modelType === 'top' ? 'Top' : 'Bottom'} shell STL not available. Check OpenSCAD rendering.`);
+        const names = {top: 'Top shell', bottom: 'Bottom shell', hatch: 'Battery hatch'};
+        addMessage("assistant", `${names[modelType] || modelType} STL not available. Check OpenSCAD rendering.`);
       }
     });
   }
@@ -98,6 +99,9 @@ function updateModelSelector(models) {
     selector.innerHTML += `<option value="bottom">Bottom Shell (with traces)</option>`;
   } else {
     selector.innerHTML += `<option value="bottom" disabled>Bottom Shell (rendering...)</option>`;
+  }
+  if (models.hatch) {
+    selector.innerHTML += `<option value="hatch">Battery Hatch</option>`;
   }
   
   document.getElementById("modelSelectorContainer").style.display = "flex";

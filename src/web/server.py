@@ -285,7 +285,9 @@ def prompt_to_model(req: PromptRequest) -> PromptResponse:
     top_stl = run_dir / "top_shell.stl"
     bottom_stl = run_dir / "bottom_shell.stl"
     
-    if top_stl.exists() or bottom_stl.exists():
+    battery_hatch_stl = run_dir / "battery_hatch.stl"
+    
+    if top_stl.exists() or bottom_stl.exists() or battery_hatch_stl.exists():
         models_dict = {}
         if top_stl.exists():
             models_dict["top"] = "/api/model/top"
@@ -296,6 +298,9 @@ def prompt_to_model(req: PromptRequest) -> PromptResponse:
             if _latest_stl is None:
                 _latest_stl = bottom_stl
             print(f"[SERVER] PATH: Found parametric STL → bottom_shell.stl")
+        if battery_hatch_stl.exists():
+            models_dict["hatch"] = "/api/model/hatch"
+            print(f"[SERVER] PATH: Found parametric STL → battery_hatch.stl")
     elif (run_dir / "remote_body.stl").exists():
         _latest_stl = run_dir / "remote_body.stl"
         print(f"[SERVER] PATH: Found legacy STL → remote_body.stl")
@@ -444,6 +449,26 @@ def get_bottom_shell():
         media_type="model/stl",
         headers={
             "Content-Disposition": "inline; filename=bottom_shell.stl",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+        }
+    )
+
+
+@app.get("/api/model/hatch")
+def get_battery_hatch():
+    """Serve the battery hatch STL."""
+    if _latest_run_dir is None:
+        raise HTTPException(status_code=404, detail="No design generated yet.")
+    stl_path = _latest_run_dir / "battery_hatch.stl"
+    if not stl_path.exists():
+        raise HTTPException(status_code=404, detail="Battery hatch STL not available.")
+    
+    content = stl_path.read_bytes()
+    return Response(
+        content=content,
+        media_type="model/stl",
+        headers={
+            "Content-Disposition": "inline; filename=battery_hatch.stl",
             "Cache-Control": "no-cache, no-store, must-revalidate",
         }
     )
