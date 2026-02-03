@@ -5,6 +5,7 @@ from typing import Optional, Callable
 
 from src.core.state import PipelineState, PipelineContext
 from src.core.reporting import write_report
+from src.core.usage_tracker import get_tracker, reset_tracker
 from src.llm.consultant_agent import ConsultantAgent
 from src.pcb_python.pcb_agent import PCBAgent
 from src.pcb_python.ts_router_bridge import TSPCBRouter
@@ -68,6 +69,10 @@ class Orchestrator:
         """
         out_dir.mkdir(parents=True, exist_ok=True)
         
+        # Initialize usage tracker for this pipeline run
+        tracker = reset_tracker()
+        tracker.start_pipeline()
+        
         context = PipelineContext(
             run_dir=out_dir,
             max_iterations=self.max_iterations
@@ -94,6 +99,19 @@ class Orchestrator:
             
             elif state == PipelineState.FINAL_VERIFY:
                 state = self._final_verify(context)
+        
+        # End usage tracking and save report
+        tracker.end_pipeline()
+        try:
+            json_path, md_path = tracker.save_report(out_dir)
+            print(f"\n[ORCHESTRATOR] 📊 Usage report saved:")
+            print(f"  - {json_path}")
+            print(f"  - {md_path}")
+            print(f"  - Total API calls: {tracker.total_calls}")
+            print(f"  - Total tokens: {tracker.total_tokens:,}")
+            print(f"  - Estimated cost: ${tracker.total_cost_usd:.6f}")
+        except Exception as e:
+            print(f"[ORCHESTRATOR] ⚠ Failed to save usage report: {e}")
         
         if state == PipelineState.ERROR:
             raise RuntimeError("Pipeline failed. Check logs in run directory.")

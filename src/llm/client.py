@@ -216,6 +216,7 @@ class GeminiClient:
 
     api_key: str = os.environ.get("GEMINI_API_KEY", "")
     model: str = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
+    current_stage: str = "unknown"  # Set by caller for usage tracking
 
     def complete_json(self, system: str, user: str) -> dict:
         if not self.api_key:
@@ -224,24 +225,66 @@ class GeminiClient:
         import google.generativeai as genai
         from google.api_core.exceptions import ResourceExhausted
         import time
+        from src.core.usage_tracker import get_tracker
 
         genai.configure(api_key=self.api_key)
         model = genai.GenerativeModel(self.model, system_instruction=system)
         
         max_retries = 3
         base_delay = 2
+        tracker = get_tracker()
 
         for attempt in range(max_retries + 1):
             try:
                 response = model.generate_content(user)
                 content = response.text or ""
+                
+                # Extract token counts from response metadata
+                input_tokens = 0
+                output_tokens = 0
+                
+                if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                    input_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0) or 0
+                    output_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0) or 0
+                
+                # Record successful call
+                tracker.record_call(
+                    stage=self.current_stage,
+                    model=self.model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    success=True
+                )
+                
+                print(f"[GEMINI] ✓ {self.current_stage}: {input_tokens:,} in / {output_tokens:,} out tokens")
+                
                 return _extract_json(content)
             except ResourceExhausted:
                 if attempt == max_retries:
+                    # Record failed call
+                    tracker.record_call(
+                        stage=self.current_stage,
+                        model=self.model,
+                        input_tokens=0,
+                        output_tokens=0,
+                        success=False,
+                        error="Rate limit exceeded after max retries"
+                    )
                     raise
                 # Exponential backoff: 2, 4, 8 seconds
                 sleep_time = base_delay * (2 ** attempt)
                 print(f"Gemini rate limit hit. Retrying in {sleep_time} seconds... (Attempt {attempt + 1}/{max_retries})")
                 time.sleep(sleep_time)
+            except Exception as e:
+                # Record failed call for other exceptions
+                tracker.record_call(
+                    stage=self.current_stage,
+                    model=self.model,
+                    input_tokens=0,
+                    output_tokens=0,
+                    success=False,
+                    error=str(e)
+                )
+                raise
         
         raise RuntimeError("Max retries exceeded")

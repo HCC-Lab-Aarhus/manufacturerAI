@@ -15,10 +15,11 @@ def read_text(p: Path) -> str:
 class ParamsFromPrompt:
     use_llm: bool = True
 
-    def _client(self) -> LLMClient:
+    def _client(self, stage: str = "legacy") -> LLMClient:
         if self.use_llm:
             try:
                 c = GeminiClient()
+                c.current_stage = stage  # Set stage for usage tracking
                 return c
             except Exception:
                 pass
@@ -32,17 +33,20 @@ class ParamsFromPrompt:
         extractor = read_text(root / "prompts" / "param_extractor.md")
         verifier = read_text(root / "prompts" / "verifier.md")
 
-        client = self._client()
-
+        # Each step gets its own client with appropriate stage name
+        consultant_client = self._client(stage="legacy_consultant")
         consultant_system = consultant + "\n\n# --- Library ---\n" + library + "\n\n# Output JSON only."
-        design_brief = client.complete_json(system=consultant_system, user=user_prompt)
+        design_brief = consultant_client.complete_json(system=consultant_system, user=user_prompt)
 
+        extractor_client = self._client(stage="legacy_extractor")
         extractor_system = extractor + "\n\n# --- Library ---\n" + library + "\n\n# Output JSON only."
         extractor_user = (
             "User prompt:\n" + user_prompt + "\n\nDesignBrief JSON:\n" + json.dumps(design_brief)
         )
-        params = client.complete_json(system=extractor_system, user=extractor_user)
+        params = extractor_client.complete_json(system=extractor_system, user=extractor_user)
 
+        verifier_client = self._client(stage="legacy_verifier")
         verifier_system = verifier + "\n\n# --- Library ---\n" + library + "\n\n# Output JSON only."
-        params_verified = client.complete_json(system=verifier_system, user=json.dumps(params))
+        params_verified = verifier_client.complete_json(system=verifier_system, user=json.dumps(params))
         return params_verified
+

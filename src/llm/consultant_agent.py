@@ -64,11 +64,12 @@ class ConsultantAgent:
     def __init__(self, use_llm: bool = True):
         self.use_llm = use_llm
     
-    def _client(self) -> LLMClient:
+    def _client(self, stage: str = "consultant") -> LLMClient:
         print("[CONSULTANT] Initializing LLM client...")
         if self.use_llm:
             try:
                 client = GeminiClient()
+                client.current_stage = stage  # Set stage for usage tracking
                 print("[CONSULTANT] PATH: Using GeminiClient (LLM enabled)")
                 return client
             except Exception as e:
@@ -174,8 +175,11 @@ Output **valid JSON only** matching the design_spec.schema.json structure.
         effective_use_llm = use_llm if use_llm is not None else self.use_llm
         print(f"[CONSULTANT] Effective use_llm: {effective_use_llm}")
         
+        # Determine stage name for tracking
+        stage_name = "consultant_modify" if is_modification else "consultant_new"
+        
         if effective_use_llm:
-            client = self._client()
+            client = self._client(stage=stage_name)
         else:
             print("[CONSULTANT] PATH: LLM disabled, using MockLLMClient")
             client = MockLLMClient()
