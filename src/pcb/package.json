@@ -1,0 +1,29 @@
+
+{
+  "name": "pcb-router",
+  "version": "1.0.0",
+  "description": "Automatic PCB Routing Engine for single-layer, planar boards",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc && node dist/index.js",
+    "test": "jest"
+  },
+  "keywords": [
+    "pcb",
+    "routing",
+    "autorouter"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "sharp": "^0.33.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}
