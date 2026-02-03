@@ -142,7 +142,7 @@ export class Router {
       componentId: button.id,
       pinName: 'B1',
       center: pinB1Center,
-      net: 'VCC',
+      net: 'GND',  // INPUT_PULLUP: button connects signal to GND when pressed
       componentCenter: buttonCenter
     })
 
@@ -288,7 +288,7 @@ export class Router {
     const result = this.attemptRouteWithOrder(netPads, netOrder)
     
     if (result.failures.length > 0) {
-      console.log(`\nInitial routing failed for ${result.failures.length} nets. Attempting rip-up and reroute...`)
+      console.error(`\nInitial routing failed for ${result.failures.length} nets. Attempting rip-up and reroute...`)
       this.ripUpAndReroute(netPads, netOrder, result)
     } else {
       this.applyRoutingResult(result)
@@ -423,7 +423,7 @@ export class Router {
         return { success: false, routedCells, traces, failedPads }
       }
 
-      console.log(`OK: ${netName} to pad ${bestPadIdx}, length=${bestPath.length}`)
+      console.error(`OK: ${netName} to pad ${bestPadIdx}, length=${bestPath.length}`)
 
       connectedPads.add(bestPadIdx)
       for (const cell of bestPath) {
@@ -455,23 +455,23 @@ export class Router {
     const orderStrategies = this.generateOrderStrategies(originalOrder, failedNetNames)
     
     for (let attempt = 0; attempt < Math.min(this.maxRipupAttempts, orderStrategies.length); attempt++) {
-      console.log(`\nRip-up attempt ${attempt + 1}/${this.maxRipupAttempts}`)
+      console.error(`\nRip-up attempt ${attempt + 1}/${this.maxRipupAttempts}`)
       
       const newOrder = orderStrategies[attempt]
-      console.log(`Trying order: ${newOrder.join(' → ')}`)
+      console.error(`Trying order: ${newOrder.join(' → ')}`)
       
       const newResult = this.attemptRouteWithOrder(netPads, newOrder)
       
       if (newResult.failures.length === 0) {
-        console.log(`Rip-up and reroute succeeded with order: ${newOrder.join(' → ')}`)
+        console.error(`Rip-up and reroute succeeded with order: ${newOrder.join(' → ')}`)
         this.applyRoutingResult(newResult)
         return
       }
       
-      console.log(`Failures: ${newResult.failures.length} (${newResult.failures.map(f => f.netName).join(', ')})`)
+      console.error(`Failures: ${newResult.failures.length} (${newResult.failures.map(f => f.netName).join(', ')})`)
       
       if (newResult.failures.length < bestResult.failures.length) {
-        console.log(`Progress: reduced failures from ${bestResult.failures.length} to ${newResult.failures.length}`)
+        console.error(`Progress: reduced failures from ${bestResult.failures.length} to ${newResult.failures.length}`)
         bestResult = newResult
       }
     }

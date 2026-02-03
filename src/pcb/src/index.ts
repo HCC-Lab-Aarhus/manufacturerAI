@@ -52,8 +52,8 @@ const exampleInput: RouterInput = {
     gridResolution: 0.5
   },
   manufacturing: {
-    traceWidth: 1.5,
-    traceClearance: 2
+    traceWidth: 1.2,      // mm - minimum for 3D printed PCB
+    traceClearance: 1.5   // mm - minimum clearance
   },
   footprints: {
     button: {

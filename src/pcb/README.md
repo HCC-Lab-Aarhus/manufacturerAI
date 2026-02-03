@@ -30,8 +30,8 @@ const input: RouterInput = {
     gridResolution: 1.0   // mm per cell
   },
   manufacturing: {
-    minTraceWidth: 0.8,   // mm
-    minClearance: 0.4     // mm
+    traceWidth: 1.2,      // mm - minimum for 3D printed PCB
+    traceClearance: 1.5   // mm - minimum clearance
   },
   placement: {
     buttons: [
