@@ -33,13 +33,14 @@ def is_modification_request(text: str) -> bool:
         "move", "raise", "lower", "shift", "offset", "change", "modify",
         "make the", "set the", "adjust", "increase", "decrease",
         "bigger", "smaller", "wider", "narrower", "taller", "shorter",
-        "add a", "remove", "delete", "swap", "replace",
+        "add a", "add an", "remove", "delete", "swap", "replace", "create a", "put a", "insert a",
         "the button", "the middle", "the left", "the right", "the top", "the bottom",
         "more", "less", "higher", "2cm", "1cm", "5mm", "10mm",
+        "diode", "led", "ir led", "ir diode", "infrared",
     ]
     
     # If text starts with action verbs, it's likely a modification
-    action_starts = ["move", "raise", "lower", "shift", "add", "remove", "make", "change", "set"]
+    action_starts = ["move", "raise", "lower", "shift", "add", "remove", "make", "change", "set", "create", "put", "insert"]
     first_word = text_lower.split()[0] if text_lower.split() else ""
     
     if first_word in action_starts:
@@ -135,6 +136,12 @@ Keep all existing settings EXCEPT what the user specifically asks to change.
 # MODIFICATION INSTRUCTIONS
 Apply ONLY the changes requested. Do not add extra buttons, do not change dimensions 
 unless specifically asked.
+
+## For adding components (LED, diode, IR diode):
+- If the user asks to "add a diode", "add an IR LED", "add IR", or "create a diode":
+  Add an entry to the `leds` array with `"id": "LED1"` and `"placement_hint": "top"`
+  IR diodes should be placed at the top of the remote so they can point outward.
+- Example: Add `"leds": [{"id": "LED1", "color": "IR", "placement_hint": "top"}]`
 
 ## For position changes like "move button X higher/lower/left/right":
 - Use the `offset_y_mm` field for vertical movement (positive = towards top)

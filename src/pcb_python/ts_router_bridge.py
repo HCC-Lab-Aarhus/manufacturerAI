@@ -196,9 +196,10 @@ class TSPCBRouter:
         board_width = max(xs) - min(xs)
         board_height = max(ys) - min(ys)
         
-        # Count buttons for controller pin assignment
+        # Count buttons and LEDs for controller pin assignment
         components = pcb_layout.get("components", [])
         total_buttons = sum(1 for c in components if c.get("type") == "button")
+        led_components = [c for c in components if c.get("type") == "led"]
         
         # Build placement lists
         buttons = []
@@ -223,7 +224,7 @@ class TSPCBRouter:
                     "id": comp_id,
                     "x": x,
                     "y": y,
-                    "pins": self._generate_controller_pins(total_buttons)
+                    "pins": self._generate_controller_pins(total_buttons, led_components)
                 })
             elif comp_type == "battery":
                 batteries.append({"id": comp_id, "x": x, "y": y})
@@ -259,8 +260,8 @@ class TSPCBRouter:
             }
         }
     
-    def _generate_controller_pins(self, button_count: int) -> Dict[str, str]:
-        """Generate controller pin assignments for buttons."""
+    def _generate_controller_pins(self, button_count: int, led_components: List[dict] = None) -> Dict[str, str]:
+        """Generate controller pin assignments for buttons and LEDs."""
         pins = {
             "VCC": "VCC",
             "GND1": "GND",
@@ -274,12 +275,26 @@ class TSPCBRouter:
                    "PB0", "PB1", "PB2", "PB3", "PB4", "PB5",
                    "PC0", "PC1", "PC2", "PC3", "PC4", "PC5"]
         
-        # Assign pins to buttons
-        for i, pin in enumerate(io_pins):
-            if i < button_count:
-                pins[pin] = f"SW{i+1}_SIG"
-            else:
-                pins[pin] = "NC"
+        pin_index = 0
+        
+        # Assign pins to buttons first
+        for i in range(button_count):
+            if pin_index < len(io_pins):
+                pins[io_pins[pin_index]] = f"SW{i+1}_SIG"
+                pin_index += 1
+        
+        # Assign pins to LEDs
+        if led_components:
+            for led in led_components:
+                if pin_index < len(io_pins):
+                    led_id = led.get("id", f"LED{pin_index}")
+                    pins[io_pins[pin_index]] = f"{led_id}_SIG"
+                    pin_index += 1
+        
+        # Mark remaining pins as NC
+        while pin_index < len(io_pins):
+            pins[io_pins[pin_index]] = "NC"
+            pin_index += 1
         
         # Unused pins
         for pin in ["PC6", "PB6", "PB7"]:
