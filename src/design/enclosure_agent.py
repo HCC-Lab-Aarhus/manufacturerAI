@@ -603,11 +603,12 @@ bottom_shell();
         """Generate OpenSCAD code for battery compartment cutout in bottom shell.
         
         Creates a stepped opening for the spring-loaded hatch:
-        1. Bottom ledge recess (outside) - where the hatch panel rests flush
-        2. Main cutout - through hole for battery access
+        1. Main cutout - through hole for battery access (full width/height)
+        2. Side ledges (long edges only) - where the hatch panel rests flush
         
-        The hatch inserts from below, the panel rests on the bottom ledge,
+        The hatch inserts from below, the panel rests on the side ledges,
         and the spring hooks wrap around the shell edge to catch on the inside.
+        Short edges have no lip - flat end for spring latch clearance.
         """
         if battery_cavity is None:
             return "        // No battery cavity"
@@ -625,22 +626,26 @@ bottom_shell();
         
         # Ledge dimensions
         hatch_thickness = p.battery_hatch_thickness
-        bottom_ledge_width = 2.5  # Wider ledge on outside for hatch to rest on
-        bottom_ledge_depth = hatch_thickness + 0.3  # Recess depth for hatch panel
+        ledge_width = 2.5  # Width of ledge on long edges
+        ledge_depth = hatch_thickness + 0.3  # Recess depth for hatch panel
         
-        # Main through-hole dimensions (smaller than ledge)
-        hole_width = width - 2 * bottom_ledge_width
-        hole_height = height - 2 * bottom_ledge_width
+        # Main through-hole dimensions (narrower on long edges for ledge, full height)
+        hole_width = width - 2 * ledge_width
+        hole_height = height  # Full height - no ledge on short edges
         
         # 1. Main through-hole (center of battery compartment)
         lines.append(f"        // Main through-hole for battery access")
         lines.append(f"        translate([{cx - hole_width/2:.2f}, {cy - hole_height/2:.2f}, -1])")
         lines.append(f"            cube([{hole_width:.2f}, {hole_height:.2f}, bottom_thickness + 2]);")
         
-        # 2. Bottom ledge recess (on outside/bottom - where hatch rests flush)
-        lines.append(f"        // Bottom ledge recess (outside) - hatch panel rests here")
+        # 2. Side ledge recesses (long edges only - left and right sides)
+        lines.append(f"        // Left ledge recess - hatch rests here")
         lines.append(f"        translate([{cx - width/2:.2f}, {cy - height/2:.2f}, -1])")
-        lines.append(f"            cube([{width:.2f}, {height:.2f}, {bottom_ledge_depth + 1:.2f}]);")
+        lines.append(f"            cube([{ledge_width:.2f}, {height:.2f}, {ledge_depth + 1:.2f}]);")
+        
+        lines.append(f"        // Right ledge recess - hatch rests here")
+        lines.append(f"        translate([{cx + width/2 - ledge_width:.2f}, {cy - height/2:.2f}, -1])")
+        lines.append(f"            cube([{ledge_width:.2f}, {height:.2f}, {ledge_depth + 1:.2f}]);")
         
         return "\n".join(lines)
     
