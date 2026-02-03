@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import json
 
-from src.llm.client import MockLLMClient, OpenAICompatibleClient, GeminiClient, LLMClient
+from src.llm.client import GeminiClient, LLMClient
 
 def project_root() -> Path:
     return Path(__file__).resolve().parents[2]
@@ -16,13 +16,9 @@ class ParamsFromPrompt:
     use_llm: bool = True
 
     def _client(self) -> LLMClient:
-        if self.use_llm:
-            try:
-                c = GeminiClient()
-                return c
-            except Exception:
-                pass
-        return MockLLMClient()
+        if not self.use_llm:
+            raise RuntimeError("LLM usage is disabled.")
+        return GeminiClient()
 
     def generate(self, user_prompt: str) -> dict:
         root = project_root()

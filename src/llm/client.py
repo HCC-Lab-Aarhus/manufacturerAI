@@ -34,34 +34,6 @@ def _extract_json(content: str) -> dict:
     return json.loads(match.group(0))
 
 @dataclass
-class MockLLMClient:
-    """Offline fallback: a tiny heuristic parser that returns a params-like dict."""
-    def complete_json(self, system: str, user: str) -> dict:
-        text = user.lower()
-        out = {
-            "remote": {"length_mm": 180, "width_mm": 45, "thickness_mm": 18, "wall_mm": 1.6, "corner_radius_mm": 6},
-            "buttons": {"rows": 4, "cols": 3, "diam_mm": 9, "spacing_mm": 3,
-                        "margin_top_mm": 20, "margin_bottom_mm": 18, "margin_side_mm": 6,
-                        "hole_clearance_mm": 0.25}
-        }
-        m = re.search(r"(\d+)\s*buttons", text)
-        if m:
-            out["buttons"]["button_count"] = int(m.group(1))
-        m = re.search(r"(\d+(?:\.\d+)?)\s*mm\s*(?:long|length)", text)
-        if m:
-            out["remote"]["length_mm"] = float(m.group(1))
-        m = re.search(r"(\d+(?:\.\d+)?)\s*mm\s*(?:wide|width)", text)
-        if m:
-            out["remote"]["width_mm"] = float(m.group(1))
-        m = re.search(r"(\d+(?:\.\d+)?)\s*mm\s*(?:thick|thickness)", text)
-        if m:
-            out["remote"]["thickness_mm"] = float(m.group(1))
-        m = re.search(r"(\d+(?:\.\d+)?)\s*mm\s*(?:button|buttons)", text)
-        if m:
-            out["buttons"]["diam_mm"] = float(m.group(1))
-        return out
-
-@dataclass
 class OpenAICompatibleClient:
     """Example client for OpenAI-compatible chat endpoints.
 
