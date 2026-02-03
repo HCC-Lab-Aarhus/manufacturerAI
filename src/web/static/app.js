@@ -6,8 +6,38 @@ const printBtn = document.getElementById("printBtn");
 const printerStatus = document.getElementById("printerStatus");
 const useLlm = document.getElementById("useLlm");
 
+// View panels and tabs
+const viewerEl = document.getElementById("viewer");
+const debugView = document.getElementById("debugView");
+const masksView = document.getElementById("masksView");
+const debugImage = document.getElementById("debugImage");
+const positiveImage = document.getElementById("positiveImage");
+const negativeImage = document.getElementById("negativeImage");
+const tabBtns = document.querySelectorAll(".tab-btn");
+
 let lastAssistantMessage = "";
 let currentModelUrl = null;
+
+// Tab switching
+tabBtns.forEach(btn => {
+  btn.addEventListener("click", () => {
+    const view = btn.dataset.view;
+    
+    // Update active tab
+    tabBtns.forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    
+    // Update active panel
+    viewerEl.classList.toggle("active", view === "3d");
+    debugView.classList.toggle("active", view === "debug");
+    masksView.classList.toggle("active", view === "masks");
+    
+    // Trigger resize to fix Three.js canvas when switching to 3D view
+    if (view === "3d") {
+      setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+    }
+  });
+});
 
 function addMessage(role, content) {
   const div = document.createElement("div");
@@ -21,6 +51,28 @@ function setPrinterStatus(connected) {
   printerStatus.textContent = connected ? "Printer connected" : "Not connected";
   printerStatus.classList.toggle("connected", connected);
   printerStatus.classList.toggle("disconnected", !connected);
+}
+
+function loadDebugImages(debugImages) {
+  if (!debugImages) {
+    console.log("No debug images in response");
+    return;
+  }
+  
+  console.log("Loading debug images:", debugImages);
+  const timestamp = Date.now();
+  if (debugImages.debug) {
+    console.log("Setting debug image src:", debugImages.debug);
+    debugImage.src = debugImages.debug + `?t=${timestamp}`;
+    debugImage.onload = () => console.log("Debug image loaded");
+    debugImage.onerror = (e) => console.error("Debug image failed to load:", e);
+  }
+  if (debugImages.positive) {
+    positiveImage.src = debugImages.positive + `?t=${timestamp}`;
+  }
+  if (debugImages.negative) {
+    negativeImage.src = debugImages.negative + `?t=${timestamp}`;
+  }
 }
 
 async function refreshPrinterStatus() {
@@ -38,20 +90,60 @@ sendBtn.addEventListener("click", async () => {
   promptInput.value = "";
   sendBtn.disabled = true;
 
+  // Add status message
+  const statusDiv = document.createElement("div");
+  statusDiv.className = "message assistant";
+  statusDiv.textContent = "Generating design... (this may take a minute)";
+  chatEl.appendChild(statusDiv);
+
   try {
+    // Use AbortController with 5 minute timeout for OpenSCAD rendering
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minutes
+
+    console.log("Sending request to /api/prompt...");
     const res = await fetch("/api/prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, use_llm: useLlm ? useLlm.checked : true }),
+      signal: controller.signal,
     });
 
+    clearTimeout(timeoutId);
+    console.log("Response received:", res.status, res.statusText);
+
+    // Remove status message
+    if (statusDiv.parentNode) statusDiv.remove();
+
     if (!res.ok) {
-      const error = await res.json();
-      addMessage("assistant", error.detail || "Generation failed.");
+      console.log("Response not OK, reading error...");
+      const errorText = await res.text();
+      console.log("Error text:", errorText);
+      let errorDetail = "Generation failed.";
+      try {
+        const error = JSON.parse(errorText);
+        errorDetail = error.detail || errorDetail;
+      } catch (e) {
+        errorDetail = errorText || errorDetail;
+      }
+      addMessage("assistant", errorDetail);
       return;
     }
 
-    const data = await res.json();
+    console.log("Reading response body...");
+    const responseText = await res.text();
+    console.log("Response text:", responseText.substring(0, 500));
+    
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch (parseErr) {
+      console.error("JSON parse error:", parseErr);
+      addMessage("assistant", "Error parsing server response");
+      return;
+    }
+    
+    console.log("Parsed data:", data);
     const messages = data.messages || [];
     const last = messages[messages.length - 1];
     if (last && last.role === "assistant") {
@@ -59,12 +151,29 @@ sendBtn.addEventListener("click", async () => {
       lastAssistantMessage = last.content;
     }
     setPrinterStatus(data.printer_connected);
+    
+    // Load debug images if available
+    if (data.debug_images) {
+      console.log("Loading debug images:", data.debug_images);
+      loadDebugImages(data.debug_images);
+    }
+    
     if (data.model_url) {
+      console.log("Loading model from:", data.model_url);
       currentModelUrl = data.model_url + `?t=${Date.now()}`;
       loadModel(currentModelUrl);
+    } else {
+      console.log("No model_url in response");
     }
   } catch (err) {
-    addMessage("assistant", "Network error while generating model.");
+    console.error("Caught exception:", err);
+    console.error("Exception stack:", err.stack);
+    if (statusDiv.parentNode) statusDiv.remove();
+    if (err.name === 'AbortError') {
+      addMessage("assistant", "Request timed out. The model may still be generating.");
+    } else {
+      addMessage("assistant", `Error: ${err.name} - ${err.message}`);
+    }
   } finally {
     sendBtn.disabled = false;
   }
@@ -97,8 +206,7 @@ printBtn.addEventListener("click", async () => {
   addMessage("assistant", `Print queued: ${data.job_id}`);
 });
 
-// Three.js scene
-const viewerEl = document.getElementById("viewer");
+// Three.js scene (viewerEl already defined at top)
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0b1120);
 
@@ -124,12 +232,24 @@ scene.add(dir);
 let currentMesh = null;
 
 function loadModel(url) {
+  console.log("loadModel called with:", url);
+  
+  // Switch to 3D view tab when loading a new model
+  tabBtns.forEach(b => b.classList.remove("active"));
+  document.querySelector('[data-view="3d"]').classList.add("active");
+  viewerEl.classList.add("active");
+  debugView.classList.remove("active");
+  masksView.classList.remove("active");
+  
   const loader = new THREE.STLLoader();
   loader.load(
     url,
     (geometry) => {
+      console.log("STL loaded, updating scene...");
       if (currentMesh) {
         scene.remove(currentMesh);
+        if (currentMesh.geometry) currentMesh.geometry.dispose();
+        if (currentMesh.material) currentMesh.material.dispose();
       }
       const material = new THREE.MeshStandardMaterial({ color: 0x93c5fd, metalness: 0.1, roughness: 0.5 });
       const mesh = new THREE.Mesh(geometry, material);
@@ -145,10 +265,18 @@ function loadModel(url) {
       const maxDim = Math.max(size.x, size.y, size.z);
       const distance = maxDim * 1.7;
       camera.position.set(0, -distance, distance * 0.7);
+      controls.target.set(0, 0, 0);
       controls.update();
+      
+      // Force render update
+      renderer.render(scene, camera);
+      console.log("Model updated, size:", size);
     },
-    undefined,
-    () => {
+    (progress) => {
+      console.log("Loading progress:", progress.loaded, "/", progress.total);
+    },
+    (error) => {
+      console.error("STL load error:", error);
       addMessage("assistant", "Failed to load STL preview.");
     }
   );

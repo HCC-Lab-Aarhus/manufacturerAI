@@ -38,6 +38,114 @@ class MockLLMClient:
     """Offline fallback: a tiny heuristic parser that returns a params-like dict."""
     def complete_json(self, system: str, user: str) -> dict:
         text = user.lower()
+        
+        # Detect if this is a design_spec request (new pipeline) or legacy request
+        if "design_spec" in system.lower() or "design spec" in system.lower():
+            return self._generate_design_spec(text)
+        else:
+            return self._generate_legacy_params(text)
+    
+    def _generate_design_spec(self, text: str) -> dict:
+        """Generate design_spec.json format for new pipeline."""
+        import re
+        
+        # Parse button count (max 3 buttons for optimal layout)
+        MAX_BUTTONS = 3 # might be changed in the future
+        button_count = 3  # default (max 3)
+        m = re.search(r"(\d+)\s*buttons?", text)
+        if m:
+            button_count = min(int(m.group(1)), MAX_BUTTONS)
+        
+        # Parse dimensions
+        length_mm = 180.0
+        width_mm = 45.0
+        thickness_mm = 18.0
+        
+        m = re.search(r"(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*mm", text)
+        if m:
+            length_mm = float(m.group(1))
+            width_mm = float(m.group(2))
+        
+        m = re.search(r"(\d+(?:\.\d+)?)\s*mm\s*(?:long|length)", text)
+        if m:
+            length_mm = float(m.group(1))
+        
+        m = re.search(r"(\d+(?:\.\d+)?)\s*mm\s*(?:wide|width)", text)
+        if m:
+            width_mm = float(m.group(1))
+        
+        # Build buttons list
+        buttons = []
+        
+        # Check for power button mention
+        if "power" in text:
+            buttons.append({
+                "id": "BTN_POWER",
+                "switch_type": "tactile_6x6",
+                "cap_diameter_mm": 9.0,
+                "label": "Power",
+                "priority": "high",
+                "placement_hint": {"region": "top", "horizontal": "center"}
+            })
+            button_count -= 1
+        
+        # Check for volume buttons
+        if "volume" in text:
+            buttons.append({
+                "id": "BTN_VOL_UP",
+                "switch_type": "tactile_6x6",
+                "cap_diameter_mm": 9.0,
+                "label": "Volume Up",
+                "priority": "normal",
+                "placement_hint": {"region": "center", "horizontal": "right"}
+            })
+            buttons.append({
+                "id": "BTN_VOL_DOWN",
+                "switch_type": "tactile_6x6",
+                "cap_diameter_mm": 9.0,
+                "label": "Volume Down",
+                "priority": "normal",
+                "placement_hint": {"region": "center", "horizontal": "right"}
+            })
+            button_count -= 2
+        
+        # Add remaining buttons
+        for i in range(max(0, button_count)):
+            buttons.append({
+                "id": f"BTN{i+1}",
+                "switch_type": "tactile_6x6",
+                "cap_diameter_mm": 9.0,
+                "priority": "normal"
+            })
+        
+        assumptions = []
+        if "power" not in text and "volume" not in text:
+            assumptions.append(f"Created {len(buttons)} generic buttons from count")
+        assumptions.append("Using mock LLM client - default values applied")
+        
+        return {
+            "units": "mm",
+            "device_constraints": {
+                "length_mm": length_mm,
+                "width_mm": width_mm,
+                "thickness_mm": thickness_mm
+            },
+            "buttons": buttons,
+            "battery": {"type": "2xAAA", "placement_hint": "bottom"},
+            "leds": [],
+            "constraints": {
+                "min_button_spacing_mm": 3.0,
+                "edge_clearance_mm": 5.0,
+                "min_wall_thickness_mm": 1.6,
+                "mounting_preference": "screws"
+            },
+            "assumptions": assumptions
+        }
+    
+    def _generate_legacy_params(self, text: str) -> dict:
+        """Generate legacy params format for backward compatibility."""
+        import re
+        
         out = {
             "remote": {"length_mm": 180, "width_mm": 45, "thickness_mm": 18, "wall_mm": 1.6, "corner_radius_mm": 6},
             "buttons": {"rows": 4, "cols": 3, "diam_mm": 9, "spacing_mm": 3,

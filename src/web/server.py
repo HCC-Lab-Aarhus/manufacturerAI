@@ -1,19 +1,28 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Optional
+from queue import Queue
+import threading
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from src.core.orchestrator import Orchestrator
 from src.core.printer import get_printer_status, queue_print_job
 from src.design.models import RemoteParams
+
+
+# Global progress tracking for SSE
+_progress_queue: Queue = Queue()
+_current_job: Dict[str, Any] = {}
 
 
 def _load_env():
@@ -49,9 +58,19 @@ class PromptResponse(BaseModel):
     messages: list[ChatMessage]
     model_url: str | None
     printer_connected: bool
+    debug_images: dict | None = None  # {"debug": url, "positive": url, "negative": url}
 
 
 app = FastAPI(title="Remote GDT Web")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUTS_DIR = ROOT / "outputs" / "web"
@@ -62,6 +81,8 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 _chat_log: list[ChatMessage] = []
 _latest_stl: Path | None = None
+_latest_run_dir: Path | None = None
+_latest_design_spec: dict | None = None  # For incremental modifications
 
 
 @app.get("/")
@@ -110,7 +131,7 @@ def _is_design_request(text: str) -> bool:
 
 @app.post("/api/prompt", response_model=PromptResponse)
 def prompt_to_model(req: PromptRequest) -> PromptResponse:
-    global _latest_stl
+    global _latest_stl, _latest_run_dir, _latest_design_spec
 
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="Prompt is empty.")
@@ -158,10 +179,36 @@ def prompt_to_model(req: PromptRequest) -> PromptResponse:
     run_dir = _make_run_dir()
     blender_bin = os.environ.get("BLENDER_BIN")
     print(f"Using Blender binary: {blender_bin}")
-    orch = Orchestrator(blender_bin=blender_bin)
+    orch = Orchestrator(blender_bin=blender_bin, use_parametric=True)
+    
+    # Set up progress callback
+    def progress_callback(stage: str, iteration: int, max_iter: int, message: Optional[str]) -> None:
+        global _current_job
+        _current_job = {
+            "stage": stage,
+            "iteration": iteration,
+            "max_iterations": max_iter,
+            "message": message or "",
+            "timestamp": datetime.now().isoformat()
+        }
+        _progress_queue.put(_current_job.copy())
+    
+    orch.set_progress_callback(progress_callback)
+
+    # Check if this is a modification of existing design
+    from src.llm.consultant_agent import is_modification_request
+    previous_design = None
+    if _latest_design_spec and is_modification_request(req.message):
+        print(f"  → Detected modification request, using previous design as base")
+        previous_design = _latest_design_spec
 
     try:
-        orch.run_from_prompt(req.message, run_dir, use_llm=req.use_llm)
+        new_design_spec = orch.run_from_prompt(
+            req.message, 
+            run_dir, 
+            use_llm=req.use_llm,
+            previous_design=previous_design
+        )
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
@@ -173,29 +220,170 @@ def prompt_to_model(req: PromptRequest) -> PromptResponse:
         # Return full traceback in detail for debugging
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}\n\nTraceback:\n{tb}")
 
+    # Update module-level variables (already declared global at function start)
+    _latest_run_dir = run_dir
+    _latest_design_spec = new_design_spec  # Store for future modification requests
+    
     params_path = run_dir / "params_validated.json"
-    params = RemoteParams.model_validate(json.loads(params_path.read_text(encoding="utf-8")))
-
+    
+    # Handle both old Blender workflow and new parametric workflow
+    if params_path.exists():
+        params = RemoteParams.model_validate(json.loads(params_path.read_text(encoding="utf-8")))
+        assistant_text = _summarize_params(params) + " Generated STL and report."
+    else:
+        # New workflow - read from design_spec
+        design_spec_path = run_dir / "design_spec.json"
+        if design_spec_path.exists():
+            design_spec = json.loads(design_spec_path.read_text(encoding="utf-8"))
+            device = design_spec.get("device_constraints", {})
+            buttons = design_spec.get("buttons", [])
+            assistant_text = (
+                f"Design completed! "
+                f"Remote: {device.get('length_mm', '?')}×{device.get('width_mm', '?')}mm, "
+                f"{len(buttons)} buttons. "
+                "Generated enclosure files."
+            )
+        else:
+            assistant_text = "Design completed. Files generated."
+    
+    # Check for STL files - support both old and new workflow
     _latest_stl = run_dir / "remote_body.stl"
     if not _latest_stl.exists():
-        raise HTTPException(status_code=500, detail="STL was not generated.")
+        _latest_stl = run_dir / "top_shell.stl"
+    if not _latest_stl.exists():
+        _latest_stl = run_dir / "bottom_shell.stl"
+    if not _latest_stl.exists():
+        # Check if SCAD files exist (OpenSCAD not installed)
+        scad_file = run_dir / "top_shell.scad"
+        if scad_file.exists():
+            assistant_text += " (OpenSCAD files ready - render manually or install OpenSCAD for STL)"
+            _latest_stl = None
+        else:
+            raise HTTPException(status_code=500, detail="No model files were generated.")
 
-    assistant_text = _summarize_params(params) + " Generated STL and report."
     _chat_log.append(ChatMessage(role="assistant", content=assistant_text))
+
+    # Build debug image URLs if they exist
+    debug_images = None
+    debug_file = run_dir / "pcb_debug.png"
+    if debug_file.exists():
+        debug_images = {
+            "debug": "/api/images/debug",
+            "positive": "/api/images/positive",
+            "negative": "/api/images/negative"
+        }
 
     status = get_printer_status()
     return PromptResponse(
         messages=_chat_log,
-        model_url="/api/model/latest",
+        model_url="/api/model/latest" if _latest_stl else None,
         printer_connected=status.connected,
+        debug_images=debug_images,
     )
 
 
+@app.get("/api/progress")
+async def get_progress_stream():
+    """
+    Server-Sent Events endpoint for real-time pipeline progress.
+    
+    Returns events like:
+    data: {"stage": "GENERATE_PCB", "iteration": 2, "max_iterations": 5, "message": "Creating PCB layout"}
+    """
+    async def event_generator():
+        while True:
+            try:
+                # Non-blocking check with short timeout
+                if not _progress_queue.empty():
+                    progress = _progress_queue.get_nowait()
+                    yield f"data: {json.dumps(progress)}\n\n"
+                    
+                    # If done or error, close stream
+                    if progress.get("stage") in ("DONE", "ERROR"):
+                        break
+                else:
+                    # Send keepalive
+                    yield f": keepalive\n\n"
+                
+                await asyncio.sleep(0.1)
+            except Exception:
+                break
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+@app.get("/api/progress/current")
+def get_current_progress() -> Dict[str, Any]:
+    """Get the current pipeline progress state (polling alternative to SSE)."""
+    if _current_job:
+        return _current_job
+    return {"stage": "IDLE", "iteration": 0, "max_iterations": 0, "message": "No job running"}
+
+
+from fastapi.responses import Response
+
 @app.get("/api/model/latest")
-def get_latest_model() -> FileResponse:
+def get_latest_model():
+    print(f"[DEBUG] /api/model/latest called, _latest_stl = {_latest_stl}")
     if _latest_stl is None or not _latest_stl.exists():
         raise HTTPException(status_code=404, detail="No model generated yet.")
-    return FileResponse(_latest_stl, media_type="model/stl", filename=_latest_stl.name)
+    
+    # Read file and return with no-cache headers
+    content = _latest_stl.read_bytes()
+    file_size = len(content)
+    print(f"[DEBUG] Serving STL: {_latest_stl}, size: {file_size} bytes")
+    return Response(
+        content=content,
+        media_type="model/stl",
+        headers={
+            "Content-Disposition": f"inline; filename={_latest_stl.name}",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-STL-Path": str(_latest_stl),
+            "X-STL-Size": str(file_size)
+        }
+    )
+
+
+@app.get("/api/images/debug")
+def get_debug_image() -> FileResponse:
+    """Serve the PCB debug visualization image."""
+    if _latest_run_dir is None:
+        raise HTTPException(status_code=404, detail="No design generated yet.")
+    img_path = _latest_run_dir / "pcb_debug.png"
+    if not img_path.exists():
+        raise HTTPException(status_code=404, detail="Debug image not available.")
+    return FileResponse(img_path, media_type="image/png", filename="pcb_debug.png")
+
+
+@app.get("/api/images/positive")
+def get_positive_mask() -> FileResponse:
+    """Serve the PCB positive mask (conductive areas)."""
+    if _latest_run_dir is None:
+        raise HTTPException(status_code=404, detail="No design generated yet.")
+    img_path = _latest_run_dir / "pcb_positive.png"
+    if not img_path.exists():
+        raise HTTPException(status_code=404, detail="Positive mask not available.")
+    return FileResponse(img_path, media_type="image/png", filename="pcb_positive.png")
+
+
+@app.get("/api/images/negative")
+def get_negative_mask() -> FileResponse:
+    """Serve the PCB negative mask (non-conductive areas)."""
+    if _latest_run_dir is None:
+        raise HTTPException(status_code=404, detail="No design generated yet.")
+    img_path = _latest_run_dir / "pcb_negative.png"
+    if not img_path.exists():
+        raise HTTPException(status_code=404, detail="Negative mask not available.")
+    return FileResponse(img_path, media_type="image/png", filename="pcb_negative.png")
 
 
 class PrintRequest(BaseModel):

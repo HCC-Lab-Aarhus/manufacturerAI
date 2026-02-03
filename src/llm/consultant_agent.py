@@ -1,0 +1,233 @@
+"""
+Consultant Agent - Normalizes user requirements into design_spec.json
+
+Responsibilities:
+- Translate vague user input into concrete parameters
+- Fill in defaults when user is unclear
+- Log all assumptions
+- Validate obvious impossibilities early
+- Output structured design_spec.json
+- Handle incremental modifications to existing designs
+"""
+
+from __future__ import annotations
+from pathlib import Path
+import json
+from typing import Optional
+
+from src.llm.client import MockLLMClient, GeminiClient, LLMClient
+
+def project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+def read_text(p: Path) -> str:
+    return p.read_text(encoding="utf-8")
+
+
+def is_modification_request(text: str) -> bool:
+    """Detect if user is asking to modify an existing design rather than create new."""
+    text_lower = text.lower()
+    
+    # Modification keywords
+    mod_keywords = [
+        "move", "raise", "lower", "shift", "offset", "change", "modify",
+        "make the", "set the", "adjust", "increase", "decrease",
+        "bigger", "smaller", "wider", "narrower", "taller", "shorter",
+        "add a", "remove", "delete", "swap", "replace",
+        "the button", "the middle", "the left", "the right", "the top", "the bottom",
+        "more", "less", "higher", "2cm", "1cm", "5mm", "10mm",
+    ]
+    
+    # If text starts with action verbs, it's likely a modification
+    action_starts = ["move", "raise", "lower", "shift", "add", "remove", "make", "change", "set"]
+    first_word = text_lower.split()[0] if text_lower.split() else ""
+    
+    if first_word in action_starts:
+        return True
+    
+    # Check for modification keywords
+    return any(kw in text_lower for kw in mod_keywords)
+
+class ConsultantAgent:
+    """
+    Consultant Agent converts user prompts into normalized design specifications.
+    
+    Output: design_spec.json with:
+    - Device constraints (length, width, thickness)
+    - Button list with placement hints
+    - Battery/LED specs
+    - Manufacturing constraints
+    - Logged assumptions
+    """
+    
+    def __init__(self, use_llm: bool = True):
+        self.use_llm = use_llm
+    
+    def _client(self) -> LLMClient:
+        if self.use_llm:
+            try:
+                return GeminiClient()
+            except Exception:
+                pass
+        return MockLLMClient()
+    
+    def generate_design_spec(
+        self, 
+        user_prompt: str, 
+        use_llm: Optional[bool] = None,
+        previous_design: Optional[dict] = None
+    ) -> dict:
+        """
+        Generate design_spec.json from user prompt.
+        
+        Args:
+            user_prompt: Natural language description of desired remote
+            use_llm: Override default LLM setting
+            previous_design: If provided, treat prompt as modification request
+        
+        Returns:
+            dict matching design_spec.schema.json
+        """
+        root = project_root()
+        
+        # Load library and system prompt
+        library = read_text(root / "library" / "remote_design_rules.md")
+        consultant_prompt = read_text(root / "prompts" / "consultant_v2.md")
+        
+        # Load schema for reference
+        schema = json.loads(read_text(root / "schemas" / "design_spec.schema.json"))
+        
+        # Check if this is a modification request
+        is_modification = previous_design is not None and is_modification_request(user_prompt)
+        
+        if is_modification:
+            system_prompt = f"""{consultant_prompt}
+
+# Design Spec Schema
+{json.dumps(schema, indent=2)}
+
+# Library Reference
+{library}
+
+# IMPORTANT: MODIFICATION MODE
+The user is asking to MODIFY an existing design, not create a new one.
+Below is the CURRENT design that should be modified according to the user's request.
+Keep all existing settings EXCEPT what the user specifically asks to change.
+
+## Current Design (to be modified):
+```json
+{json.dumps(previous_design, indent=2)}
+```
+
+# MODIFICATION INSTRUCTIONS
+Apply ONLY the changes requested. Do not add extra buttons, do not change dimensions 
+unless specifically asked.
+
+## For position changes like "move button X higher/lower/left/right":
+- Use the `offset_y_mm` field for vertical movement (positive = towards top)
+- Use the `offset_x_mm` field for horizontal movement (positive = towards right)
+- Example: "move middle button 20mm higher" → add `"offset_y_mm": 20` to that button's placement_hint
+
+## For region changes like "put button at the top":
+- Change the `region` field to "top", "center", or "bottom"
+- Change the `horizontal` field to "left", "center", or "right"
+
+# Output Requirement
+Output **valid JSON only** matching the design_spec.schema.json structure.
+The output should be the MODIFIED design with the user's changes applied.
+Add an assumption noting what was modified.
+"""
+        else:
+            system_prompt = f"""{consultant_prompt}
+
+# Design Spec Schema
+{json.dumps(schema, indent=2)}
+
+# Library Reference
+{library}
+
+# Output Requirement
+Output **valid JSON only** matching the design_spec.schema.json structure.
+"""
+        
+        client = self._client() if (use_llm if use_llm is not None else self.use_llm) else MockLLMClient()
+        
+        design_spec = client.complete_json(system=system_prompt, user=user_prompt)
+        
+        # Validate and fill defaults if needed
+        design_spec = self._validate_and_fill_defaults(design_spec)
+        
+        return design_spec
+    
+    def _validate_and_fill_defaults(self, spec: dict) -> dict:
+        """Ensure design_spec has all required fields with reasonable defaults."""
+        assumptions = spec.get("assumptions", [])
+        
+        # Ensure units
+        spec.setdefault("units", "mm")
+        
+        # Device constraints
+        if "device_constraints" not in spec:
+            spec["device_constraints"] = {}
+            assumptions.append("Device constraints not specified, using defaults")
+        
+        device = spec["device_constraints"]
+        if "length_mm" not in device:
+            device["length_mm"] = 180.0
+            assumptions.append("Device length defaulted to 180mm")
+        if "width_mm" not in device:
+            device["width_mm"] = 45.0
+            assumptions.append("Device width defaulted to 45mm")
+        if "thickness_mm" not in device:
+            device["thickness_mm"] = 18.0
+            assumptions.append("Device thickness defaulted to 18mm")
+        
+        # Buttons
+        if "buttons" not in spec or not spec["buttons"]:
+            spec["buttons"] = [
+                {
+                    "id": "BTN1",
+                    "switch_type": "tactile_6x6",
+                    "cap_diameter_mm": 9.0,
+                    "priority": "normal"
+                }
+            ]
+            assumptions.append("No buttons specified, created 1 default button")
+        
+        # Ensure each button has required fields
+        for i, btn in enumerate(spec["buttons"]):
+            if "id" not in btn:
+                btn["id"] = f"BTN{i+1}"
+            if "switch_type" not in btn:
+                btn["switch_type"] = "tactile_6x6"
+            if "cap_diameter_mm" not in btn:
+                btn["cap_diameter_mm"] = 9.0
+            if "priority" not in btn:
+                btn["priority"] = "normal"
+        
+        # Constraints
+        if "constraints" not in spec:
+            spec["constraints"] = {}
+            assumptions.append("Constraints not specified, using defaults")
+        
+        constraints = spec["constraints"]
+        constraints.setdefault("min_button_spacing_mm", 3.0)
+        constraints.setdefault("edge_clearance_mm", 5.0)
+        constraints.setdefault("min_wall_thickness_mm", 1.6)
+        constraints.setdefault("mounting_preference", "screws")
+        
+        # Battery (optional)
+        if "battery" not in spec:
+            spec["battery"] = {
+                "type": "2xAAA",
+                "placement_hint": "bottom"
+            }
+            assumptions.append("Battery defaulted to 2xAAA at bottom")
+        
+        # LEDs (optional)
+        spec.setdefault("leds", [])
+        
+        # Store assumptions
+        spec["assumptions"] = assumptions
+        
+        return spec

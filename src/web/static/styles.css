@@ -163,6 +163,33 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+}
+
+.view-tabs {
+  display: flex;
+  gap: 4px;
+  background: #1f2937;
+  padding: 4px;
+  border-radius: 10px;
+}
+
+.tab-btn {
+  padding: 6px 14px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px;
+}
+
+.tab-btn.active {
+  background: var(--accent);
+  color: white;
+}
+
+.tab-btn:hover:not(.active) {
+  background: #374151;
 }
 
 .status {
@@ -194,12 +221,68 @@ button:disabled {
   border-radius: 10px;
 }
 
-#viewer {
+.view-panel {
   flex: 1;
   border-radius: 16px;
   border: 1px solid var(--border);
   background: #0b1120;
   overflow: hidden;
+  display: none;
+}
+
+.view-panel.active {
+  display: flex;
+  flex-direction: column;
+}
+
+#viewer.active {
+  display: block;
+}
+
+#debugView img,
+#masksView img {
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+
+#debugView {
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+#debugView img {
+  max-height: 100%;
+  border-radius: 8px;
+}
+
+.masks-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 20px;
+  height: 100%;
+}
+
+.mask-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.mask-item h3 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.mask-item img {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #000;
 }
 
 .viewer-footer {

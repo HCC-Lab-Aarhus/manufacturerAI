@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DesignSpec",
+  "description": "Output of Consultant Agent - normalized requirements",
+  "type": "object",
+  "required": ["units", "device_constraints", "buttons", "constraints", "assumptions"],
+  "properties": {
+    "units": {
+      "type": "string",
+      "enum": ["mm"],
+      "default": "mm"
+    },
+    "device_constraints": {
+      "type": "object",
+      "required": ["length_mm", "width_mm", "thickness_mm"],
+      "properties": {
+        "length_mm": {
+          "type": "number",
+          "minimum": 80,
+          "maximum": 240,
+          "description": "Overall device length"
+        },
+        "width_mm": {
+          "type": "number",
+          "minimum": 25,
+          "maximum": 70,
+          "description": "Overall device width"
+        },
+        "thickness_mm": {
+          "type": "number",
+          "minimum": 10,
+          "maximum": 35,
+          "description": "Target device thickness including PCB and enclosure"
+        }
+      }
+    },
+    "buttons": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "switch_type", "cap_diameter_mm", "priority"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique button identifier (e.g., BTN1, BTN_POWER)"
+          },
+          "switch_type": {
+            "type": "string",
+            "enum": ["tactile_6x6", "tactile_12x12", "custom"],
+            "default": "tactile_6x6"
+          },
+          "cap_diameter_mm": {
+            "type": "number",
+            "minimum": 5.0,
+            "maximum": 18.0,
+            "description": "Button cap diameter for enclosure hole"
+          },
+          "label": {
+            "type": "string",
+            "description": "Human-readable label (e.g., 'Power', 'Volume Up')"
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["high", "normal", "low"],
+            "default": "normal"
+          },
+          "placement_hint": {
+            "type": "object",
+            "description": "Rough placement guidance for PCB agent",
+            "properties": {
+              "region": {
+                "type": "string",
+                "enum": ["top", "center", "bottom"],
+                "description": "Vertical region"
+              },
+              "horizontal": {
+                "type": "string",
+                "enum": ["left", "center", "right"],
+                "description": "Horizontal position"
+              },
+              "offset_y_mm": {
+                "type": "number",
+                "description": "Vertical offset in mm from default position (positive = towards top)"
+              },
+              "offset_x_mm": {
+                "type": "number",
+                "description": "Horizontal offset in mm from default position (positive = towards right)"
+              },
+              "bounding_box": {
+                "type": "object",
+                "description": "Optional precise constraint",
+                "properties": {
+                  "x_min": {"type": "number"},
+                  "y_min": {"type": "number"},
+                  "x_max": {"type": "number"},
+                  "y_max": {"type": "number"}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "battery": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["2xAAA", "CR2032", "custom"],
+          "default": "2xAAA"
+        },
+        "placement_hint": {
+          "type": "string",
+          "enum": ["bottom", "back_cavity"],
+          "default": "bottom"
+        }
+      }
+    },
+    "leds": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": {"type": "string"},
+          "color": {"type": "string"},
+          "placement_hint": {
+            "type": "string",
+            "enum": ["top", "center", "bottom"]
+          }
+        }
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "required": ["min_button_spacing_mm", "edge_clearance_mm", "min_wall_thickness_mm"],
+      "properties": {
+        "min_button_spacing_mm": {
+          "type": "number",
+          "minimum": 1.0,
+          "default": 3.0
+        },
+        "edge_clearance_mm": {
+          "type": "number",
+          "minimum": 3.0,
+          "default": 5.0
+        },
+        "min_wall_thickness_mm": {
+          "type": "number",
+          "minimum": 1.2,
+          "default": 1.6
+        },
+        "mounting_preference": {
+          "type": "string",
+          "enum": ["screws", "snap_fit", "glue"],
+          "default": "screws"
+        }
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "description": "Log of assumptions made when user was vague",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

@@ -35,21 +35,41 @@
       <main class="panel right">
         <div class="viewer-header">
           <div class="status" id="printerStatus">Not connected</div>
+          <div class="view-tabs">
+            <button class="tab-btn active" data-view="3d">3D Model</button>
+            <button class="tab-btn" data-view="debug">PCB Debug</button>
+            <button class="tab-btn" data-view="masks">Masks</button>
+          </div>
           <div class="zoom-controls">
             <button id="zoomIn">+</button>
             <button id="zoomOut">−</button>
           </div>
         </div>
-        <div id="viewer"></div>
+        <div id="viewer" class="view-panel active"></div>
+        <div id="debugView" class="view-panel">
+          <img id="debugImage" alt="PCB Debug Layout" />
+        </div>
+        <div id="masksView" class="view-panel">
+          <div class="masks-grid">
+            <div class="mask-item">
+              <h3>Positive (Conductive)</h3>
+              <img id="positiveImage" alt="Positive Mask" />
+            </div>
+            <div class="mask-item">
+              <h3>Negative (Insulating)</h3>
+              <img id="negativeImage" alt="Negative Mask" />
+            </div>
+          </div>
+        </div>
         <div class="viewer-footer">
           <button class="primary" id="printBtn">Print</button>
         </div>
       </main>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/STLLoader.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
     <script src="/static/app.js"></script>
   </body>
 </html>
