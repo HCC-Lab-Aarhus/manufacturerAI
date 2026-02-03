@@ -17,6 +17,7 @@ const tabBtns = document.querySelectorAll(".tab-btn");
 
 let lastAssistantMessage = "";
 let currentModelUrl = null;
+let availableModels = null;  // {top: url, bottom: url}
 
 // Tab switching
 tabBtns.forEach(btn => {
@@ -51,6 +52,62 @@ function setPrinterStatus(connected) {
   printerStatus.textContent = connected ? "Printer connected" : "Not connected";
   printerStatus.classList.toggle("connected", connected);
   printerStatus.classList.toggle("disconnected", !connected);
+}
+
+// Model selector for top/bottom shells
+function updateModelSelector(models) {
+  let selector = document.getElementById("modelSelector");
+  
+  // Create selector if it doesn't exist
+  if (!selector) {
+    const container = document.createElement("div");
+    container.id = "modelSelectorContainer";
+    container.className = "model-selector-container";
+    container.innerHTML = `
+      <label>View: </label>
+      <select id="modelSelector">
+        <option value="top">Top Shell</option>
+        <option value="bottom">Bottom Shell (with traces)</option>
+      </select>
+    `;
+    
+    // Insert before the viewer element (inside the right panel)
+    const viewerPanel = document.getElementById("viewer");
+    viewerPanel.parentNode.insertBefore(container, viewerPanel);
+    
+    selector = document.getElementById("modelSelector");
+    selector.addEventListener("change", (e) => {
+      const modelType = e.target.value;
+      if (availableModels && availableModels[modelType]) {
+        currentModelUrl = availableModels[modelType] + `?t=${Date.now()}`;
+        loadModel(currentModelUrl);
+      } else {
+        addMessage("assistant", `${modelType === 'top' ? 'Top' : 'Bottom'} shell STL not available. Check OpenSCAD rendering.`);
+      }
+    });
+  }
+  
+  // Update options based on what's available
+  selector.innerHTML = "";
+  if (models.top) {
+    selector.innerHTML += `<option value="top">Top Shell</option>`;
+  } else {
+    selector.innerHTML += `<option value="top" disabled>Top Shell (not rendered)</option>`;
+  }
+  if (models.bottom) {
+    selector.innerHTML += `<option value="bottom">Bottom Shell (with traces)</option>`;
+  } else {
+    selector.innerHTML += `<option value="bottom" disabled>Bottom Shell (rendering...)</option>`;
+  }
+  
+  document.getElementById("modelSelectorContainer").style.display = "flex";
+}
+
+function hideModelSelector() {
+  const container = document.getElementById("modelSelectorContainer");
+  if (container) {
+    container.style.display = "none";
+  }
 }
 
 function loadDebugImages(debugImages) {
@@ -158,8 +215,22 @@ sendBtn.addEventListener("click", async () => {
       loadDebugImages(data.debug_images);
     }
     
-    if (data.model_url) {
+    // Handle multi-part models (top/bottom shells)
+    if (data.models) {
+      console.log("Multiple models available:", data.models);
+      availableModels = data.models;
+      updateModelSelector(data.models);
+      
+      // Load top shell by default, or bottom if top not available
+      const defaultModel = data.models.top || data.models.bottom;
+      if (defaultModel) {
+        currentModelUrl = defaultModel + `?t=${Date.now()}`;
+        loadModel(currentModelUrl);
+      }
+    } else if (data.model_url) {
       console.log("Loading model from:", data.model_url);
+      availableModels = null;
+      hideModelSelector();
       currentModelUrl = data.model_url + `?t=${Date.now()}`;
       loadModel(currentModelUrl);
     } else {

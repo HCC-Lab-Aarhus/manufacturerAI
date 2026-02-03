@@ -289,3 +289,33 @@ button:disabled {
   display: flex;
   justify-content: flex-end;
 }
+
+/* Model selector for top/bottom shell switching */
+.model-selector-container {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: rgba(0, 0, 0, 0.3);
+  border-bottom: 1px solid var(--border);
+}
+
+.model-selector-container label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.model-selector-container select {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #0b1120;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.model-selector-container select:focus {
+  outline: none;
+  border-color: var(--accent);
+}

@@ -26,7 +26,7 @@ class EnclosureParams:
     
     # Enclosure walls
     wall_thickness: float = 1.6
-    bottom_thickness: float = 2.0
+    bottom_thickness: float = 3.0
     top_thickness: float = 1.5
     
     # Clearances
@@ -38,6 +38,13 @@ class EnclosureParams:
     standoff_height: float = 3.0
     standoff_outer_diameter: float = 6.0
     screw_hole_diameter: float = 2.5
+    
+    # Trace channels (for conductive filament)
+    trace_channel_depth: float = 0.4  # mm depth of carved channels
+    trace_channel_width: float = 1.5  # mm width of traces
+    pinhole_depth: float = 0.8  # mm depth of pinholes (2x trace depth)
+    pinhole_diameter: float = 1.0  # mm diameter of pinholes for component pins
+    grid_resolution: float = 0.5  # mm per grid cell from router
     
     # Derived
     @property
@@ -88,7 +95,8 @@ class Enclosure3DAgent:
         self,
         pcb_layout: dict,
         design_spec: dict,
-        output_dir: Path
+        output_dir: Path,
+        routing_result: Optional[dict] = None
     ) -> Dict[str, Path]:
         """
         Generate enclosure from PCB layout.
@@ -97,6 +105,7 @@ class Enclosure3DAgent:
             pcb_layout: pcb_layout.json dict
             design_spec: design_spec.json dict for additional parameters
             output_dir: Directory for output files
+            routing_result: Optional routing result with traces for conductive channels
         
         Returns:
             Dict mapping output names to file paths
@@ -117,10 +126,21 @@ class Enclosure3DAgent:
         led_windows = self._extract_led_windows(pcb_layout)
         print(f"[ENCLOSURE] Features: {len(button_holes)} buttons, {len(mounting_posts)} mounting posts, {len(led_windows)} LEDs")
         
+        # Extract trace channels if routing result provided
+        trace_channels = []
+        all_pads = []
+        if routing_result and routing_result.get("traces"):
+            trace_channels = routing_result["traces"]
+            print(f"[ENCLOSURE] Trace channels: {len(trace_channels)} nets for conductive filament")
+        
+        # Extract ALL pads from component footprints (including unconnected pads)
+        all_pads = self._extract_all_pads_from_layout(pcb_layout, grid_resolution=0.5)
+        print(f"[ENCLOSURE] Component pads: {len(all_pads)} pinholes for component pins")
+        
         # Generate OpenSCAD files
         print("[ENCLOSURE] PATH: Generating OpenSCAD files...")
         top_scad = self._generate_top_shell_scad(button_holes, led_windows)
-        bottom_scad = self._generate_bottom_shell_scad(mounting_posts, battery_cavity)
+        bottom_scad = self._generate_bottom_shell_scad(mounting_posts, battery_cavity, trace_channels, all_pads)
         
         # Write SCAD files
         top_scad_path = output_dir / "top_shell.scad"
@@ -246,6 +266,94 @@ class Enclosure3DAgent:
         
         return windows
     
+    def _extract_all_pads(self, routing_result: Optional[dict]) -> List[Tuple[float, float]]:
+        """
+        Extract all pad positions from routing result.
+        Returns list of (x, y) tuples in grid coordinates.
+        
+        Note: This currently only gets pads from traces. Need to extract from
+        component footprints for complete coverage.
+        """
+        if not routing_result or not routing_result.get("traces"):
+            return []
+        
+        pads = set()
+        for trace in routing_result["traces"]:
+            path = trace.get("path", [])
+            if path:
+                # Start and end of each trace are pads
+                pads.add((path[0]["x"], path[0]["y"]))
+                pads.add((path[-1]["x"], path[-1]["y"]))
+        
+        return list(pads)
+    
+    def _extract_all_pads_from_layout(self, pcb_layout: dict, grid_resolution: float = 0.5) -> List[Tuple[float, float]]:
+        """
+        Extract ALL pad positions from PCB layout by calculating footprint pad locations.
+        This includes pads that don't have traces connected.
+        
+        Returns list of (grid_x, grid_y) tuples in grid coordinates.
+        """
+        pads = []
+        
+        # Footprint definitions (matches ts_router_bridge.py)
+        footprints = {
+            "button": {"pinSpacingX": 9.0, "pinSpacingY": 6.0},  # 4 pads: corners of rectangle
+            "controller": {"pinSpacing": 2.5, "rowSpacing": 10.0},  # DIP-28: 2 rows of 14 pins
+            "battery": {"padSpacing": 6.0},  # 2 pads
+            "led": {"padSpacing": 5.0}  # 2 pads
+        }
+        
+        for comp in pcb_layout.get("components", []):
+            comp_type = comp.get("type")
+            center_x, center_y = comp["center"]
+            
+            if comp_type == "button":
+                # 4 pads at corners of rectangle
+                fp = footprints["button"]
+                dx = fp["pinSpacingX"] / 2
+                dy = fp["pinSpacingY"] / 2
+                for px, py in [(center_x - dx, center_y - dy),
+                               (center_x + dx, center_y - dy),
+                               (center_x - dx, center_y + dy),
+                               (center_x + dx, center_y + dy)]:
+                    pads.append((int(px / grid_resolution), int(py / grid_resolution)))
+            
+            elif comp_type == "controller":
+                # DIP-28: 2 rows of 14 pins
+                fp = footprints["controller"]
+                pin_spacing = fp["pinSpacing"]
+                row_spacing = fp["rowSpacing"]
+                num_pins_per_side = 14
+                
+                # Calculate starting Y (top of chip)
+                total_height = (num_pins_per_side - 1) * pin_spacing
+                start_y = center_y - total_height / 2
+                
+                # Left row and right row
+                for i in range(num_pins_per_side):
+                    y = start_y + i * pin_spacing
+                    left_x = center_x - row_spacing / 2
+                    right_x = center_x + row_spacing / 2
+                    pads.append((int(left_x / grid_resolution), int(y / grid_resolution)))
+                    pads.append((int(right_x / grid_resolution), int(y / grid_resolution)))
+            
+            elif comp_type == "battery":
+                # 2 pads along vertical axis
+                fp = footprints["battery"]
+                pad_spacing = fp["padSpacing"]
+                pads.append((int(center_x / grid_resolution), int((center_y - pad_spacing / 2) / grid_resolution)))
+                pads.append((int(center_x / grid_resolution), int((center_y + pad_spacing / 2) / grid_resolution)))
+            
+            elif comp_type == "led":
+                # 2 pads along vertical axis
+                fp = footprints["led"]
+                pad_spacing = fp["padSpacing"]
+                pads.append((int(center_x / grid_resolution), int((center_y - pad_spacing / 2) / grid_resolution)))
+                pads.append((int(center_x / grid_resolution), int((center_y + pad_spacing / 2) / grid_resolution)))
+        
+        return pads
+    
     def _generate_top_shell_scad(
         self,
         button_holes: List[ButtonHole],
@@ -334,13 +442,23 @@ top_shell();
     def _generate_bottom_shell_scad(
         self,
         mounting_posts: List[MountingPost],
-        battery_cavity: Optional[Dict[str, float]]
+        battery_cavity: Optional[Dict[str, float]],
+        trace_channels: Optional[List[dict]] = None,
+        all_pads: Optional[List[Tuple[float, float]]] = None
     ) -> str:
-        """Generate OpenSCAD code for bottom shell."""
+        """Generate OpenSCAD code for bottom shell with trace channels and pinholes for conductive filament."""
         p = self.params
+        
+        # Generate trace channel code if traces provided
+        trace_channel_code = self._generate_trace_channels_scad(trace_channels) if trace_channels else "        // No trace channels"
+        
+        # Generate pinhole code for all component pads
+        pinhole_code = self._generate_pinholes_scad(all_pads) if all_pads else "        // No pinholes"
         
         scad = f"""// Bottom Shell - Generated by ManufacturerAI
 // This file is parametric - edit values below to customize
+// Trace channels carved into the inside base are meant to be filled
+// with conductive filament after printing.
 
 // Parameters
 outer_width = {p.outer_width:.2f};
@@ -352,6 +470,12 @@ shell_height = 12;  // Height of bottom shell walls
 standoff_height = {p.standoff_height:.2f};
 standoff_od = {p.standoff_outer_diameter:.2f};
 screw_hole_d = {p.screw_hole_diameter:.2f};
+
+// Trace channel parameters
+trace_channel_depth = {p.trace_channel_depth:.2f};  // Depth of conductive trace channels
+trace_channel_width = {p.trace_channel_width:.2f};  // Width of trace channels
+pinhole_depth = {p.pinhole_depth:.2f};  // Depth of pinholes for component pins (2x trace depth)
+pinhole_diameter = {p.pinhole_diameter:.2f};  // Diameter of pinholes
 
 // Main shell
 module bottom_shell() {{
@@ -380,6 +504,12 @@ module bottom_shell() {{
         
         // Battery cavity
 {self._generate_battery_cavity_scad(battery_cavity)}
+        
+        // Trace channels carved into bottom (for conductive filament)
+{trace_channel_code}
+        
+        // Pinholes for component pins (deeper than traces for good contact)
+{pinhole_code}
     }}
 }}
 
@@ -442,6 +572,140 @@ bottom_shell();
         translate([{x:.2f}, {y:.2f}, -1])
             cube([{w:.2f}, {h:.2f}, {d:.2f}]);"""
     
+    def _generate_trace_channels_scad(self, traces: List[dict]) -> str:
+        """
+        Generate OpenSCAD code for trace channels carved into the bottom.
+        
+        These channels will be filled with conductive filament after printing.
+        Uses a module-based approach with simple cubes instead of hull() to reduce CSG complexity.
+        """
+        if not traces:
+            return "        // No trace channels"
+        
+        p = self.params
+        offset_x = p.wall_thickness + p.pcb_clearance
+        offset_y = p.wall_thickness + p.pcb_clearance
+        grid_res = p.grid_resolution
+        half_width = p.trace_channel_width / 2
+        
+        lines = ["        // Trace channels for conductive filament"]
+        lines.append(f"        // {len(traces)} nets, carved depth={p.trace_channel_depth}mm, width={p.trace_channel_width}mm")
+        lines.append(f"        // Using simplified cube-based traces for faster rendering")
+        
+        total_segments = 0
+        pad_positions = set()
+        
+        for trace in traces:
+            net_name = trace.get("net", "unknown")
+            path = trace.get("path", [])
+            
+            if len(path) < 2:
+                continue
+            
+            # Simplify path: keep only points where direction changes
+            simplified = self._simplify_path(path)
+            lines.append(f"        // Net: {net_name} ({len(path)} pts -> {len(simplified)} simplified)")
+            
+            # Collect pads
+            pad_positions.add((path[0]["x"], path[0]["y"]))
+            pad_positions.add((path[-1]["x"], path[-1]["y"]))
+            
+            # Generate simple cubes for each segment (much faster than hull)
+            for i in range(len(simplified) - 1):
+                p1 = simplified[i]
+                p2 = simplified[i + 1]
+                
+                # Convert grid coords to world coords
+                x1 = p1["x"] * grid_res + offset_x
+                y1 = p1["y"] * grid_res + offset_y
+                x2 = p2["x"] * grid_res + offset_x
+                y2 = p2["y"] * grid_res + offset_y
+                
+                # Determine if this is a horizontal or vertical segment
+                if abs(x2 - x1) > 0.01:  # Horizontal
+                    min_x = min(x1, x2) - half_width
+                    max_x = max(x1, x2) + half_width
+                    lines.append(f"        translate([{min_x:.2f}, {y1 - half_width:.2f}, bottom_thickness - trace_channel_depth])")
+                    lines.append(f"            cube([{max_x - min_x:.2f}, {p.trace_channel_width:.2f}, trace_channel_depth + 0.01]);")
+                else:  # Vertical
+                    min_y = min(y1, y2) - half_width
+                    max_y = max(y1, y2) + half_width
+                    lines.append(f"        translate([{x1 - half_width:.2f}, {min_y:.2f}, bottom_thickness - trace_channel_depth])")
+                    lines.append(f"            cube([{p.trace_channel_width:.2f}, {max_y - min_y:.2f}, trace_channel_depth + 0.01]);")
+                
+                total_segments += 1
+        
+        lines.insert(3, f"        // Total segments after simplification: {total_segments}")
+        
+        # Add pad areas (slightly larger squares at endpoints - faster than cylinders)
+        lines.append("        // Pad areas for component connections")
+        pad_size = p.trace_channel_width * 1.5
+        half_pad = pad_size / 2
+        
+        for px, py in pad_positions:
+            x = px * grid_res + offset_x
+            y = py * grid_res + offset_y
+            lines.append(f"        translate([{x - half_pad:.2f}, {y - half_pad:.2f}, bottom_thickness - trace_channel_depth])")
+            lines.append(f"            cube([{pad_size:.2f}, {pad_size:.2f}, trace_channel_depth + 0.01]);")
+        
+        return "\n".join(lines)
+    
+    def _generate_pinholes_scad(self, pads: List[Tuple[float, float]]) -> str:
+        """
+        Generate OpenSCAD code for pinholes at component pad locations.
+        
+        Pinholes are deeper than traces (2x depth) to ensure good electrical contact
+        when filled with conductive filament.
+        """
+        if not pads:
+            return "        // No pinholes"
+        
+        p = self.params
+        offset_x = p.wall_thickness + p.pcb_clearance
+        offset_y = p.wall_thickness + p.pcb_clearance
+        grid_res = p.grid_resolution
+        
+        lines = ["        // Pinholes for component pins"]
+        lines.append(f"        // {len(pads)} pinholes, depth={p.pinhole_depth}mm, diameter={p.pinhole_diameter}mm")
+        
+        for px, py in pads:
+            x = px * grid_res + offset_x
+            y = py * grid_res + offset_y
+            lines.append(f"        translate([{x:.2f}, {y:.2f}, bottom_thickness - pinhole_depth])")
+            lines.append(f"            cylinder(d=pinhole_diameter, h=pinhole_depth + 0.01, $fn=16);")
+        
+        return "\n".join(lines)
+    
+    def _simplify_path(self, path: List[dict]) -> List[dict]:
+        """
+        Simplify a path by keeping only corner points (where direction changes).
+        
+        Reduces a path like [(0,0), (1,0), (2,0), (2,1), (2,2)] 
+        to [(0,0), (2,0), (2,2)] - only start, corners, and end.
+        """
+        if len(path) <= 2:
+            return path
+        
+        simplified = [path[0]]  # Always keep start
+        
+        for i in range(1, len(path) - 1):
+            prev = path[i - 1]
+            curr = path[i]
+            next_pt = path[i + 1]
+            
+            # Calculate direction vectors
+            dx1 = curr["x"] - prev["x"]
+            dy1 = curr["y"] - prev["y"]
+            dx2 = next_pt["x"] - curr["x"]
+            dy2 = next_pt["y"] - curr["y"]
+            
+            # If direction changes, this is a corner - keep it
+            if dx1 != dx2 or dy1 != dy2:
+                simplified.append(curr)
+        
+        simplified.append(path[-1])  # Always keep end
+        return simplified
+    
     def _render_scad_to_stl(self, scad_path: Path, stl_path: Path) -> bool:
         """Render OpenSCAD file to STL."""
         import os
@@ -475,7 +739,7 @@ bottom_shell();
                 [openscad_bin, "-o", str(stl_path), str(scad_path)],
                 capture_output=True,
                 text=True,
-                timeout=120
+                timeout=300  # 5 minutes for complex bottom shells with trace channels
             )
             
             if result.returncode == 0:
@@ -490,7 +754,7 @@ bottom_shell();
             print("[ENCLOSURE] PATH: FALLBACK → SCAD files only")
             return False
         except subprocess.TimeoutExpired:
-            print("[ENCLOSURE] ✗ OpenSCAD rendering timed out (120s)")
+            print("[ENCLOSURE] ✗ OpenSCAD rendering timed out (300s)")
             return False
     
     def _generate_manifest(

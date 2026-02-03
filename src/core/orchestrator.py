@@ -152,14 +152,16 @@ class Orchestrator:
         # Route and generate debug images via TypeScript CLI
         print("[ORCHESTRATOR] Routing traces and generating debug images via TypeScript...")
         try:
-            routing_result = self.router.route(context.pcb_layout, context.run_dir)
-            if routing_result.get("success"):
-                print(f"[ORCHESTRATOR] ✓ Routing completed with {len(routing_result.get('traces', []))} traces")
+            context.routing_result = self.router.route(context.pcb_layout, context.run_dir)
+            context.save_routing_result()
+            if context.routing_result.get("success"):
+                print(f"[ORCHESTRATOR] ✓ Routing completed with {len(context.routing_result.get('traces', []))} traces")
             else:
-                failed = routing_result.get("failed_nets", [])
+                failed = context.routing_result.get("failed_nets", [])
                 print(f"[ORCHESTRATOR] ⚠ Routing had {len(failed)} failed nets")
         except Exception as e:
             print(f"[ORCHESTRATOR] ✗ Routing failed: {e}")
+            context.routing_result = {"success": False, "traces": [], "failed_nets": [], "error": str(e)}
         
         print(f"[ORCHESTRATOR] ✓ PCB layout v{context.iteration} created")
         self._report_progress("GENERATE_PCB", context.iteration, self.max_iterations, f"PCB layout v{context.iteration} created")
@@ -170,29 +172,28 @@ class Orchestrator:
         print("Stage 3: Checking feasibility...")
         self._report_progress("CHECK_FEASIBILITY", context.iteration, self.max_iterations, "Running DRC checks")
         
-        # Route and check for failures
-        try:
-            routing_result = self.router.route(context.pcb_layout, context.run_dir)
-            
-            # Convert routing result to feasibility report format
-            errors = []
-            for net in routing_result.get("failed_nets", []):
-                errors.append({
-                    "type": "routing_failed",
-                    "net": net,
-                    "message": f"Failed to route net: {net}"
-                })
-            
-            context.feasibility_report = {
-                "feasible": routing_result.get("success", False) and len(errors) == 0,
-                "errors": errors,
-                "routing_result": routing_result
-            }
-        except Exception as e:
-            context.feasibility_report = {
-                "feasible": False,
-                "errors": [{"type": "router_error", "message": str(e)}]
-            }
+        # Use routing result from _generate_pcb (already routed)
+        routing_result = context.routing_result or {"success": False, "traces": [], "failed_nets": []}
+        
+        # Convert routing result to feasibility report format
+        errors = []
+        for net in routing_result.get("failed_nets", []):
+            errors.append({
+                "type": "routing_failed",
+                "net": net,
+                "message": f"Failed to route net: {net}"
+            })
+        
+        if routing_result.get("error"):
+            errors.append({
+                "type": "router_error",
+                "message": routing_result["error"]
+            })
+        
+        context.feasibility_report = {
+            "feasible": routing_result.get("success", False) and len(errors) == 0,
+            "errors": errors
+        }
         
         context.save_feasibility_report()
         
@@ -235,10 +236,12 @@ class Orchestrator:
         if self.use_parametric:
             print("[ORCHESTRATOR] PATH: Parametric enclosure (OpenSCAD)")
             # Use new parametric 3D agent that reads pcb_layout.json directly
+            # Pass routing result for trace channels in bottom shell
             outputs = self.enclosure_agent.generate_from_pcb_layout(
                 pcb_layout=context.pcb_layout,
                 design_spec=context.design_spec,
-                output_dir=context.run_dir
+                output_dir=context.run_dir,
+                routing_result=context.routing_result
             )
             print(f"[ORCHESTRATOR] ✓ Parametric enclosure generated: {list(outputs.keys())}")
         else:

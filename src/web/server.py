@@ -59,6 +59,7 @@ class PromptResponse(BaseModel):
     model_url: str | None
     printer_connected: bool
     debug_images: dict | None = None  # {"debug": url, "positive": url, "negative": url}
+    models: dict | None = None  # {"top": url, "bottom": url} for multi-part enclosures
 
 
 app = FastAPI(title="Remote GDT Web")
@@ -277,27 +278,36 @@ def prompt_to_model(req: PromptRequest) -> PromptResponse:
     
     # Check for STL files - support both old and new workflow
     print("[SERVER] Searching for STL files...")
-    _latest_stl = run_dir / "remote_body.stl"
-    if _latest_stl.exists():
+    models_dict = None
+    
+    # Check for parametric shells (new workflow)
+    top_stl = run_dir / "top_shell.stl"
+    bottom_stl = run_dir / "bottom_shell.stl"
+    
+    if top_stl.exists() or bottom_stl.exists():
+        models_dict = {}
+        if top_stl.exists():
+            models_dict["top"] = "/api/model/top"
+            _latest_stl = top_stl
+            print(f"[SERVER] PATH: Found parametric STL → top_shell.stl")
+        if bottom_stl.exists():
+            models_dict["bottom"] = "/api/model/bottom"
+            if _latest_stl is None:
+                _latest_stl = bottom_stl
+            print(f"[SERVER] PATH: Found parametric STL → bottom_shell.stl")
+    elif (run_dir / "remote_body.stl").exists():
+        _latest_stl = run_dir / "remote_body.stl"
         print(f"[SERVER] PATH: Found legacy STL → remote_body.stl")
     else:
-        _latest_stl = run_dir / "top_shell.stl"
-        if _latest_stl.exists():
-            print(f"[SERVER] PATH: Found parametric STL → top_shell.stl")
+        # Check if SCAD files exist (OpenSCAD not installed)
+        scad_file = run_dir / "top_shell.scad"
+        if scad_file.exists():
+            print("[SERVER] PATH: FALLBACK → SCAD files only (OpenSCAD not installed)")
+            assistant_text += " (OpenSCAD files ready - render manually or install OpenSCAD for STL)"
+            _latest_stl = None
         else:
-            _latest_stl = run_dir / "bottom_shell.stl"
-            if _latest_stl.exists():
-                print(f"[SERVER] PATH: Found parametric STL → bottom_shell.stl")
-            else:
-                # Check if SCAD files exist (OpenSCAD not installed)
-                scad_file = run_dir / "top_shell.scad"
-                if scad_file.exists():
-                    print("[SERVER] PATH: FALLBACK → SCAD files only (OpenSCAD not installed)")
-                    assistant_text += " (OpenSCAD files ready - render manually or install OpenSCAD for STL)"
-                    _latest_stl = None
-                else:
-                    print("[SERVER] ✗ ERROR: No model files generated!")
-                    raise HTTPException(status_code=500, detail="No model files were generated.")
+            print("[SERVER] ✗ ERROR: No model files generated!")
+            raise HTTPException(status_code=500, detail="No model files were generated.")
 
     _chat_log.append(ChatMessage(role="assistant", content=assistant_text))
 
@@ -323,6 +333,7 @@ def prompt_to_model(req: PromptRequest) -> PromptResponse:
         model_url="/api/model/latest" if _latest_stl else None,
         printer_connected=status.connected,
         debug_images=debug_images,
+        models=models_dict,
     )
 
 
@@ -393,6 +404,46 @@ def get_latest_model():
             "Expires": "0",
             "X-STL-Path": str(_latest_stl),
             "X-STL-Size": str(file_size)
+        }
+    )
+
+
+@app.get("/api/model/top")
+def get_top_shell():
+    """Serve the top shell STL (enclosure top with button holes)."""
+    if _latest_run_dir is None:
+        raise HTTPException(status_code=404, detail="No design generated yet.")
+    stl_path = _latest_run_dir / "top_shell.stl"
+    if not stl_path.exists():
+        raise HTTPException(status_code=404, detail="Top shell STL not available.")
+    
+    content = stl_path.read_bytes()
+    return Response(
+        content=content,
+        media_type="model/stl",
+        headers={
+            "Content-Disposition": "inline; filename=top_shell.stl",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+        }
+    )
+
+
+@app.get("/api/model/bottom")
+def get_bottom_shell():
+    """Serve the bottom shell STL (enclosure bottom with trace channels)."""
+    if _latest_run_dir is None:
+        raise HTTPException(status_code=404, detail="No design generated yet.")
+    stl_path = _latest_run_dir / "bottom_shell.stl"
+    if not stl_path.exists():
+        raise HTTPException(status_code=404, detail="Bottom shell STL not available.")
+    
+    content = stl_path.read_bytes()
+    return Response(
+        content=content,
+        media_type="model/stl",
+        headers={
+            "Content-Disposition": "inline; filename=bottom_shell.stl",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
         }
     )
 

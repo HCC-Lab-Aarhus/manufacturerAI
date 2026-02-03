@@ -35,6 +35,7 @@ class PipelineContext:
     design_spec: Optional[dict] = None
     pcb_layout: Optional[dict] = None
     feasibility_report: Optional[dict] = None
+    routing_result: Optional[dict] = None  # Traces for conductive filament channels
     iteration: int = 0
     max_iterations: int = 5
     
@@ -54,6 +55,12 @@ class PipelineContext:
             ver = version or self.iteration
             path = self.run_dir / f"feasibility_v{ver}.json"
             path.write_text(json.dumps(self.feasibility_report, indent=2), encoding="utf-8")
+    
+    def save_routing_result(self, version: Optional[int] = None) -> None:
+        if self.routing_result:
+            ver = version or self.iteration
+            path = self.run_dir / f"routing_result_v{ver}.json"
+            path.write_text(json.dumps(self.routing_result, indent=2), encoding="utf-8")
     
     def load_design_spec(self) -> dict:
         path = self.run_dir / "design_spec.json"
