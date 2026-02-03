@@ -45,13 +45,24 @@ sendBtn.addEventListener("click", async () => {
       body: JSON.stringify({ message, use_llm: useLlm ? useLlm.checked : true }),
     });
 
+    const text = await res.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch (e) {
+      data = null;
+    }
+
     if (!res.ok) {
-      const error = await res.json();
-      addMessage("assistant", error.detail || "Generation failed.");
+      const detail = (data && data.detail) || text || "Generation failed.";
+      addMessage("assistant", detail);
       return;
     }
 
-    const data = await res.json();
+    if (!data) {
+      addMessage("assistant", "Invalid server response.");
+      return;
+    }
     const messages = data.messages || [];
     const last = messages[messages.length - 1];
     if (last && last.role === "assistant") {
