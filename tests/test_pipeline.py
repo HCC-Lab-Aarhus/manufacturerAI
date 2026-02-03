@@ -7,6 +7,7 @@ Or:  python tests/test_pipeline.py
 
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 # Add src to path
@@ -14,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.llm.consultant_agent import ConsultantAgent
 from src.pcb_python.pcb_agent import PCBAgent
-from src.pcb_python.feasibility_tool import FeasibilityTool
+from src.pcb_python.ts_router_bridge import TSPCBRouter
 
 
 def test_consultant_agent_basic():
@@ -91,9 +92,9 @@ def test_pcb_agent_from_design_spec():
     return pcb_layout
 
 
-def test_feasibility_tool():
-    """Test Feasibility Tool checks layout."""
-    # Create a layout with some violations
+def test_routing_via_typescript():
+    """Test routing via TypeScript router."""
+    # Create a layout with some buttons
     pcb_layout = {
         "board": {
             "outline_polygon": [[0, 0], [40, 0], [40, 176], [0, 176]],
@@ -101,11 +102,11 @@ def test_feasibility_tool():
         },
         "components": [
             {"id": "SW1", "ref": "BTN1", "type": "button", "footprint": "tactile_6x6",
-             "center": [5, 10], "rotation_deg": 0, "keepout": {"type": "circle", "radius_mm": 6}},
+             "center": [10, 50], "rotation_deg": 0, "keepout": {"type": "circle", "radius_mm": 6}},
             {"id": "SW2", "ref": "BTN2", "type": "button", "footprint": "tactile_6x6",
-             "center": [15, 10], "rotation_deg": 0, "keepout": {"type": "circle", "radius_mm": 6}},  # Too close!
+             "center": [30, 50], "rotation_deg": 0, "keepout": {"type": "circle", "radius_mm": 6}},
             {"id": "U1", "ref": "controller", "type": "controller", "footprint": "ATMEGA328P",
-             "center": [20, 60], "rotation_deg": 0, "keepout": {"type": "rectangle", "width_mm": 12, "height_mm": 12}},
+             "center": [20, 100], "rotation_deg": 0, "keepout": {"type": "rectangle", "width_mm": 12, "height_mm": 12}},
         ],
         "mounting_holes": [
             {"id": "MH1", "center": [5, 5], "drill_diameter_mm": 3.0},
@@ -113,27 +114,22 @@ def test_feasibility_tool():
         ]
     }
     
-    tool = FeasibilityTool()
-    report = tool.check(pcb_layout)
+    router = TSPCBRouter()
     
-    # Verify structure
-    assert "feasible" in report
-    assert "checks" in report
-    assert "errors" in report
-    assert "warnings" in report
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = router.route(pcb_layout, Path(tmpdir))
+        
+        # Verify result structure
+        assert "success" in result
+        assert "traces" in result
+        assert "failed_nets" in result
+        
+        print("✓ TypeScript Routing test passed")
+        print(f"  Success: {result['success']}")
+        print(f"  Traces: {len(result['traces'])}")
+        print(f"  Failed nets: {len(result['failed_nets'])}")
     
-    print("✓ Feasibility Tool test passed")
-    print(f"  Feasible: {report['feasible']}")
-    print(f"  Errors: {len(report['errors'])}")
-    
-    if report['errors']:
-        for error in report['errors']:
-            print(f"    - {error['code']}: {error['message']}")
-            if error.get('suggested_fixes'):
-                for fix in error['suggested_fixes']:
-                    print(f"      Fix: {fix}")
-    
-    return report
+    return result
 
 
 def test_full_pipeline_no_llm():
@@ -156,34 +152,21 @@ def test_full_pipeline_no_llm():
     pcb_layout = pcb_agent.generate_layout(design_spec)
     print(f"  Created layout with {len(pcb_layout['components'])} components")
     
-    # Step 3: Feasibility Check
-    print("\n[Step 3] Feasibility Tool")
-    feasibility_tool = FeasibilityTool()
-    report = feasibility_tool.check(pcb_layout)
-    print(f"  Feasible: {report['feasible']}")
+    # Step 3: Route via TypeScript
+    print("\n[Step 3] TypeScript Router")
+    router = TSPCBRouter()
     
-    # Step 4: Iterate if needed
-    iteration = 1
-    max_iterations = 5
-    
-    while not report['feasible'] and iteration < max_iterations:
-        print(f"\n[Step 4] Iteration {iteration + 1}")
-        print(f"  Applying {len(report['errors'])} fixes...")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = router.route(pcb_layout, Path(tmpdir))
+        print(f"  Routing success: {result['success']}")
+        print(f"  Traces: {len(result['traces'])}")
         
-        pcb_layout = pcb_agent.generate_layout(design_spec, previous_feasibility_report=report)
-        report = feasibility_tool.check(pcb_layout)
-        
-        print(f"  Feasible: {report['feasible']}")
-        iteration += 1
+        if result['success']:
+            print("\n✓ Pipeline completed successfully!")
+        else:
+            print(f"\n⚠ Routing had {len(result['failed_nets'])} failed nets")
     
-    if report['feasible']:
-        print("\n✓ Pipeline completed successfully!")
-    else:
-        print(f"\n✗ Pipeline failed after {iteration} iterations")
-        for error in report['errors']:
-            print(f"  - {error['code']}: {error['message']}")
-    
-    return design_spec, pcb_layout, report
+    return design_spec, pcb_layout, result
 
 
 def test_complex_prompt():
@@ -233,7 +216,7 @@ if __name__ == "__main__":
     test_pcb_agent_from_design_spec()
     print()
     
-    test_feasibility_tool()
+    test_routing_via_typescript()
     print()
     
     test_full_pipeline_no_llm()

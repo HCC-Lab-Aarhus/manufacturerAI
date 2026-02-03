@@ -133,21 +133,33 @@ def _is_design_request(text: str) -> bool:
 def prompt_to_model(req: PromptRequest) -> PromptResponse:
     global _latest_stl, _latest_run_dir, _latest_design_spec
 
+    print("\n" + "="*80)
+    print("[SERVER] NEW REQUEST")
+    print("="*80)
+    print(f"[SERVER] Message: {req.message[:100]}{'...' if len(req.message) > 100 else ''}")
+    print(f"[SERVER] use_llm: {req.use_llm}")
+
     if not req.message.strip():
+        print("[SERVER] ✗ Empty prompt rejected")
         raise HTTPException(status_code=400, detail="Prompt is empty.")
 
     _chat_log.append(ChatMessage(role="user", content=req.message.strip()))
 
     # Check for simple chat vs design
-    if not _is_design_request(req.message):
+    is_design = _is_design_request(req.message)
+    print(f"[SERVER] Request type: {'DESIGN' if is_design else 'CHAT'}")
+    
+    if not is_design:
          # Just chat
+         print("[SERVER] PATH: Chat conversation mode")
          reply = ""
          try:
              # Force reload of key from env to be safe
              api_key = os.environ.get("GEMINI_API_KEY")
              if not api_key:
-                 print("WARNING: GEMINI_API_KEY is missing in chat handler.")
+                 print("[SERVER] ⚠ WARNING: GEMINI_API_KEY is missing in chat handler.")
              
+             print("[SERVER] PATH: Attempting LLM chat response...")
              client = GeminiClient(api_key=api_key)
              # Attempt to use LLM for conversational reply
              reply_json = client.complete_json(
@@ -155,14 +167,17 @@ def prompt_to_model(req: PromptRequest) -> PromptResponse:
                  user=req.message
              )
              reply = reply_json.get("reply", "")
+             print(f"[SERVER] ✓ LLM chat response received: {len(reply)} chars")
          except Exception as e:
              # Fallback if LLM fails (e.g. quota limit)
-             print(f"Chat Generation Failed: {e}")
+             print(f"[SERVER] ✗ Chat LLM failed: {e}")
+             print("[SERVER] PATH: FALLBACK → Using static chat responses")
              import traceback
              traceback.print_exc()
              pass
 
          if not reply:
+             print("[SERVER] PATH: FALLBACK → Using default greeting")
              reply = "Hello! I am ManufacturerAI. Describe a remote control (e.g., '100x50mm with 2x2 buttons'), and I will generate a 3D printable design for you."
              msg_lower = req.message.lower().strip()
              if "bye" in msg_lower:
@@ -176,9 +191,12 @@ def prompt_to_model(req: PromptRequest) -> PromptResponse:
             printer_connected=status.connected,
         )
 
+    print("[SERVER] PATH: Design generation mode")
     run_dir = _make_run_dir()
+    print(f"[SERVER] Run directory: {run_dir}")
     blender_bin = os.environ.get("BLENDER_BIN")
-    print(f"Using Blender binary: {blender_bin}")
+    print(f"[SERVER] Blender binary: {blender_bin or '(not set)'}")
+    print(f"[SERVER] Using parametric mode: True")
     orch = Orchestrator(blender_bin=blender_bin, use_parametric=True)
     
     # Set up progress callback
@@ -198,9 +216,16 @@ def prompt_to_model(req: PromptRequest) -> PromptResponse:
     # Check if this is a modification of existing design
     from src.llm.consultant_agent import is_modification_request
     previous_design = None
-    if _latest_design_spec and is_modification_request(req.message):
-        print(f"  → Detected modification request, using previous design as base")
+    has_previous = _latest_design_spec is not None
+    is_mod_request = is_modification_request(req.message) if has_previous else False
+    print(f"[SERVER] Has previous design: {has_previous}")
+    print(f"[SERVER] Is modification request: {is_mod_request}")
+    
+    if has_previous and is_mod_request:
+        print("[SERVER] PATH: MODIFICATION mode - using previous design as base")
         previous_design = _latest_design_spec
+    else:
+        print("[SERVER] PATH: NEW DESIGN mode - starting fresh")
 
     try:
         new_design_spec = orch.run_from_prompt(
@@ -227,13 +252,16 @@ def prompt_to_model(req: PromptRequest) -> PromptResponse:
     params_path = run_dir / "params_validated.json"
     
     # Handle both old Blender workflow and new parametric workflow
+    print(f"[SERVER] Checking output workflow...")
     if params_path.exists():
+        print("[SERVER] PATH: Legacy Blender workflow (params_validated.json found)")
         params = RemoteParams.model_validate(json.loads(params_path.read_text(encoding="utf-8")))
         assistant_text = _summarize_params(params) + " Generated STL and report."
     else:
         # New workflow - read from design_spec
         design_spec_path = run_dir / "design_spec.json"
         if design_spec_path.exists():
+            print("[SERVER] PATH: New parametric workflow (design_spec.json found)")
             design_spec = json.loads(design_spec_path.read_text(encoding="utf-8"))
             device = design_spec.get("device_constraints", {})
             buttons = design_spec.get("buttons", [])
@@ -244,22 +272,32 @@ def prompt_to_model(req: PromptRequest) -> PromptResponse:
                 "Generated enclosure files."
             )
         else:
+            print("[SERVER] PATH: FALLBACK → No spec files found, using generic message")
             assistant_text = "Design completed. Files generated."
     
     # Check for STL files - support both old and new workflow
+    print("[SERVER] Searching for STL files...")
     _latest_stl = run_dir / "remote_body.stl"
-    if not _latest_stl.exists():
+    if _latest_stl.exists():
+        print(f"[SERVER] PATH: Found legacy STL → remote_body.stl")
+    else:
         _latest_stl = run_dir / "top_shell.stl"
-    if not _latest_stl.exists():
-        _latest_stl = run_dir / "bottom_shell.stl"
-    if not _latest_stl.exists():
-        # Check if SCAD files exist (OpenSCAD not installed)
-        scad_file = run_dir / "top_shell.scad"
-        if scad_file.exists():
-            assistant_text += " (OpenSCAD files ready - render manually or install OpenSCAD for STL)"
-            _latest_stl = None
+        if _latest_stl.exists():
+            print(f"[SERVER] PATH: Found parametric STL → top_shell.stl")
         else:
-            raise HTTPException(status_code=500, detail="No model files were generated.")
+            _latest_stl = run_dir / "bottom_shell.stl"
+            if _latest_stl.exists():
+                print(f"[SERVER] PATH: Found parametric STL → bottom_shell.stl")
+            else:
+                # Check if SCAD files exist (OpenSCAD not installed)
+                scad_file = run_dir / "top_shell.scad"
+                if scad_file.exists():
+                    print("[SERVER] PATH: FALLBACK → SCAD files only (OpenSCAD not installed)")
+                    assistant_text += " (OpenSCAD files ready - render manually or install OpenSCAD for STL)"
+                    _latest_stl = None
+                else:
+                    print("[SERVER] ✗ ERROR: No model files generated!")
+                    raise HTTPException(status_code=500, detail="No model files were generated.")
 
     _chat_log.append(ChatMessage(role="assistant", content=assistant_text))
 
@@ -267,11 +305,17 @@ def prompt_to_model(req: PromptRequest) -> PromptResponse:
     debug_images = None
     debug_file = run_dir / "pcb_debug.png"
     if debug_file.exists():
+        print("[SERVER] ✓ Debug images found, adding to response")
         debug_images = {
             "debug": "/api/images/debug",
             "positive": "/api/images/positive",
             "negative": "/api/images/negative"
         }
+    else:
+        print("[SERVER] ⚠ No debug images found")
+    
+    print(f"[SERVER] Response: model_url={'yes' if _latest_stl else 'no'}, debug_images={'yes' if debug_images else 'no'}")
+    print("="*80 + "\n")
 
     status = get_printer_status()
     return PromptResponse(

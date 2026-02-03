@@ -64,11 +64,17 @@ class ConsultantAgent:
         self.use_llm = use_llm
     
     def _client(self) -> LLMClient:
+        print("[CONSULTANT] Initializing LLM client...")
         if self.use_llm:
             try:
-                return GeminiClient()
-            except Exception:
-                pass
+                client = GeminiClient()
+                print("[CONSULTANT] PATH: Using GeminiClient (LLM enabled)")
+                return client
+            except Exception as e:
+                print(f"[CONSULTANT] ✗ GeminiClient failed: {e}")
+                print("[CONSULTANT] PATH: FALLBACK → Using MockLLMClient")
+        else:
+            print("[CONSULTANT] PATH: Using MockLLMClient (LLM disabled)")
         return MockLLMClient()
     
     def generate_design_spec(
@@ -88,6 +94,11 @@ class ConsultantAgent:
         Returns:
             dict matching design_spec.schema.json
         """
+        print("\n[CONSULTANT] Generating design spec...")
+        print(f"[CONSULTANT] Prompt: {user_prompt[:80]}{'...' if len(user_prompt) > 80 else ''}")
+        print(f"[CONSULTANT] use_llm override: {use_llm}")
+        print(f"[CONSULTANT] previous_design provided: {previous_design is not None}")
+        
         root = project_root()
         
         # Load library and system prompt
@@ -99,8 +110,10 @@ class ConsultantAgent:
         
         # Check if this is a modification request
         is_modification = previous_design is not None and is_modification_request(user_prompt)
+        print(f"[CONSULTANT] is_modification_request: {is_modification}")
         
         if is_modification:
+            print("[CONSULTANT] PATH: MODIFICATION mode - keeping previous design, applying changes")
             system_prompt = f"""{consultant_prompt}
 
 # Design Spec Schema
@@ -138,6 +151,7 @@ The output should be the MODIFIED design with the user's changes applied.
 Add an assumption noting what was modified.
 """
         else:
+            print("[CONSULTANT] PATH: NEW DESIGN mode - generating from scratch")
             system_prompt = f"""{consultant_prompt}
 
 # Design Spec Schema
@@ -150,12 +164,24 @@ Add an assumption noting what was modified.
 Output **valid JSON only** matching the design_spec.schema.json structure.
 """
         
-        client = self._client() if (use_llm if use_llm is not None else self.use_llm) else MockLLMClient()
+        effective_use_llm = use_llm if use_llm is not None else self.use_llm
+        print(f"[CONSULTANT] Effective use_llm: {effective_use_llm}")
         
+        if effective_use_llm:
+            client = self._client()
+        else:
+            print("[CONSULTANT] PATH: LLM disabled, using MockLLMClient")
+            client = MockLLMClient()
+        
+        print(f"[CONSULTANT] Client type: {type(client).__name__}")
+        print("[CONSULTANT] Calling LLM for design spec...")
         design_spec = client.complete_json(system=system_prompt, user=user_prompt)
+        print(f"[CONSULTANT] ✓ LLM returned design spec with {len(design_spec.get('buttons', []))} buttons")
         
         # Validate and fill defaults if needed
+        print("[CONSULTANT] Validating and filling defaults...")
         design_spec = self._validate_and_fill_defaults(design_spec)
+        print(f"[CONSULTANT] ✓ Validation complete, {len(design_spec.get('assumptions', []))} assumptions logged")
         
         return design_spec
     

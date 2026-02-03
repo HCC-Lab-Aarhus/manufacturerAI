@@ -101,18 +101,24 @@ class Enclosure3DAgent:
         Returns:
             Dict mapping output names to file paths
         """
+        print("\n[ENCLOSURE] Generating 3D enclosure...")
+        print(f"[ENCLOSURE] Output directory: {output_dir}")
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Extract parameters from PCB layout
+        print("[ENCLOSURE] Extracting parameters from PCB layout...")
         self._configure_from_layout(pcb_layout, design_spec)
+        print(f"[ENCLOSURE] Board dimensions: {self.params.board_width}x{self.params.board_length}mm")
         
         # Extract features
         button_holes = self._extract_button_holes(pcb_layout)
         mounting_posts = self._extract_mounting_posts(pcb_layout)
         battery_cavity = self._extract_battery_cavity(pcb_layout)
         led_windows = self._extract_led_windows(pcb_layout)
+        print(f"[ENCLOSURE] Features: {len(button_holes)} buttons, {len(mounting_posts)} mounting posts, {len(led_windows)} LEDs")
         
         # Generate OpenSCAD files
+        print("[ENCLOSURE] PATH: Generating OpenSCAD files...")
         top_scad = self._generate_top_shell_scad(button_holes, led_windows)
         bottom_scad = self._generate_bottom_shell_scad(mounting_posts, battery_cavity)
         
@@ -122,6 +128,7 @@ class Enclosure3DAgent:
         
         top_scad_path.write_text(top_scad, encoding="utf-8")
         bottom_scad_path.write_text(bottom_scad, encoding="utf-8")
+        print(f"[ENCLOSURE] ✓ Generated SCAD files: top_shell.scad ({len(top_scad)} chars), bottom_shell.scad ({len(bottom_scad)} chars)")
         
         # Try to render to STL using OpenSCAD
         outputs = {
@@ -130,14 +137,21 @@ class Enclosure3DAgent:
         }
         
         # Attempt OpenSCAD rendering
+        print("[ENCLOSURE] PATH: Attempting OpenSCAD STL rendering...")
         top_stl_path = output_dir / "top_shell.stl"
         bottom_stl_path = output_dir / "bottom_shell.stl"
         
         if self._render_scad_to_stl(top_scad_path, top_stl_path):
             outputs["top_shell_stl"] = top_stl_path
+            print("[ENCLOSURE] ✓ Rendered top_shell.stl")
+        else:
+            print("[ENCLOSURE] ⚠ Could not render top_shell.stl (OpenSCAD not available?)")
         
         if self._render_scad_to_stl(bottom_scad_path, bottom_stl_path):
             outputs["bottom_shell_stl"] = bottom_stl_path
+            print("[ENCLOSURE] ✓ Rendered bottom_shell.stl")
+        else:
+            print("[ENCLOSURE] ⚠ Could not render bottom_shell.stl (OpenSCAD not available?)")
         
         # Also generate manifest
         manifest = self._generate_manifest(button_holes, mounting_posts)
@@ -445,14 +459,18 @@ bottom_shell();
         for path in openscad_paths:
             if path and Path(path).exists():
                 openscad_bin = path
+                print(f"[ENCLOSURE] Found OpenSCAD at: {path}")
                 break
         
         if not openscad_bin:
-            print("OpenSCAD not found. SCAD files generated but not rendered to STL.")
-            print("Install OpenSCAD to automatically render STL files.")
+            print("[ENCLOSURE] ✗ OpenSCAD not found in any of:")
+            for p in openscad_paths:
+                print(f"[ENCLOSURE]   - {p or '(None)'}")
+            print("[ENCLOSURE] PATH: FALLBACK → SCAD files only (no STL rendering)")
             return False
         
         try:
+            print(f"[ENCLOSURE] Rendering {scad_path.name} → {stl_path.name}...")
             result = subprocess.run(
                 [openscad_bin, "-o", str(stl_path), str(scad_path)],
                 capture_output=True,
@@ -461,18 +479,18 @@ bottom_shell();
             )
             
             if result.returncode == 0:
-                print(f"Generated {stl_path}")
+                print(f"[ENCLOSURE] ✓ Generated {stl_path.name}")
                 return True
             else:
-                print(f"OpenSCAD error: {result.stderr}")
+                print(f"[ENCLOSURE] ✗ OpenSCAD error: {result.stderr[:200]}")
                 return False
                 
         except FileNotFoundError:
-            print("OpenSCAD not found. SCAD files generated but not rendered to STL.")
-            print("Install OpenSCAD to automatically render STL files.")
+            print("[ENCLOSURE] ✗ OpenSCAD executable not found at runtime")
+            print("[ENCLOSURE] PATH: FALLBACK → SCAD files only")
             return False
         except subprocess.TimeoutExpired:
-            print("OpenSCAD rendering timed out")
+            print("[ENCLOSURE] ✗ OpenSCAD rendering timed out (120s)")
             return False
     
     def _generate_manifest(

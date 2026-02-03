@@ -7,8 +7,7 @@ from src.core.state import PipelineState, PipelineContext
 from src.core.reporting import write_report
 from src.llm.consultant_agent import ConsultantAgent
 from src.pcb_python.pcb_agent import PCBAgent
-from src.pcb_python.feasibility_tool import FeasibilityTool
-from src.pcb_python.visualizer import generate_pcb_debug_images
+from src.pcb_python.ts_router_bridge import TSPCBRouter
 from src.design.enclosure_agent import Enclosure3DAgent
 from src.blender.runner import BlenderRunner
 
@@ -34,7 +33,7 @@ class Orchestrator:
         self.enclosure_agent = Enclosure3DAgent()
         self.consultant = ConsultantAgent()
         self.pcb_agent = PCBAgent()
-        self.feasibility_tool = FeasibilityTool()
+        self.router = TSPCBRouter()
         self.max_iterations = max_iterations
         self.use_parametric = use_parametric
         self._progress_callback: Optional[ProgressCallback] = None
@@ -103,11 +102,19 @@ class Orchestrator:
     
     def _collect_requirements(self, context: PipelineContext, user_prompt: str, use_llm: bool) -> PipelineState:
         """Stage 1: Consultant agent normalizes requirements."""
-        print("Stage 1: Collecting requirements...")
+        print("\n" + "-"*60)
+        print("[ORCHESTRATOR] Stage 1: Collecting requirements...")
+        print("-"*60)
+        print(f"[ORCHESTRATOR] use_llm: {use_llm}")
         self._report_progress("COLLECT_REQUIREMENTS", 0, self.max_iterations, "Normalizing user requirements")
         
         # Pass previous design if available for modification mode
         previous = getattr(context, 'previous_design', None)
+        if previous:
+            print("[ORCHESTRATOR] PATH: MODIFICATION mode - previous design provided")
+        else:
+            print("[ORCHESTRATOR] PATH: NEW DESIGN mode - no previous design")
+        
         context.design_spec = self.consultant.generate_design_spec(
             user_prompt, 
             use_llm=use_llm,
@@ -116,19 +123,25 @@ class Orchestrator:
         context.save_design_spec()
         
         button_count = len(context.design_spec.get('buttons', []))
-        print(f"  ✓ Design spec created with {button_count} buttons")
+        print(f"[ORCHESTRATOR] ✓ Design spec created with {button_count} buttons")
         self._report_progress("COLLECT_REQUIREMENTS", 0, self.max_iterations, f"Created spec with {button_count} buttons")
         return PipelineState.GENERATE_PCB
     
     def _generate_pcb(self, context: PipelineContext) -> PipelineState:
         """Stage 2: PCB agent creates layout."""
-        print(f"Stage 2: Generating PCB layout (iteration {context.iteration + 1})...")
+        print("\n" + "-"*60)
+        print(f"[ORCHESTRATOR] Stage 2: Generating PCB layout (iteration {context.iteration + 1})...")
+        print("-"*60)
         self._report_progress("GENERATE_PCB", context.iteration + 1, self.max_iterations, "Creating PCB layout")
         
         context.iteration += 1
         
         # If we have a previous feasibility report, pass it for fixes
         previous_report = context.feasibility_report if context.iteration > 1 else None
+        if previous_report:
+            print("[ORCHESTRATOR] PATH: ITERATION mode - applying fixes from previous report")
+        else:
+            print("[ORCHESTRATOR] PATH: INITIAL layout generation")
         
         context.pcb_layout = self.pcb_agent.generate_layout(
             context.design_spec,
@@ -136,24 +149,51 @@ class Orchestrator:
         )
         context.save_pcb_layout()
         
-        # Generate debug images for the PCB layout
+        # Route and generate debug images via TypeScript CLI
+        print("[ORCHESTRATOR] Routing traces and generating debug images via TypeScript...")
         try:
-            debug_images = generate_pcb_debug_images(context.pcb_layout, context.run_dir)
-            if debug_images:
-                print(f"  ✓ Generated debug images: {list(debug_images.keys())}")
+            routing_result = self.router.route(context.pcb_layout, context.run_dir)
+            if routing_result.get("success"):
+                print(f"[ORCHESTRATOR] ✓ Routing completed with {len(routing_result.get('traces', []))} traces")
+            else:
+                failed = routing_result.get("failed_nets", [])
+                print(f"[ORCHESTRATOR] ⚠ Routing had {len(failed)} failed nets")
         except Exception as e:
-            print(f"  ⚠ Could not generate debug images: {e}")
+            print(f"[ORCHESTRATOR] ✗ Routing failed: {e}")
         
-        print(f"  ✓ PCB layout v{context.iteration} created")
+        print(f"[ORCHESTRATOR] ✓ PCB layout v{context.iteration} created")
         self._report_progress("GENERATE_PCB", context.iteration, self.max_iterations, f"PCB layout v{context.iteration} created")
         return PipelineState.CHECK_PCB_FEASIBILITY
     
     def _check_feasibility(self, context: PipelineContext) -> PipelineState:
-        """Stage 3: Feasibility tool validates layout."""
+        """Stage 3: Check routing feasibility via TypeScript router results."""
         print("Stage 3: Checking feasibility...")
         self._report_progress("CHECK_FEASIBILITY", context.iteration, self.max_iterations, "Running DRC checks")
         
-        context.feasibility_report = self.feasibility_tool.check(context.pcb_layout)
+        # Route and check for failures
+        try:
+            routing_result = self.router.route(context.pcb_layout, context.run_dir)
+            
+            # Convert routing result to feasibility report format
+            errors = []
+            for net in routing_result.get("failed_nets", []):
+                errors.append({
+                    "type": "routing_failed",
+                    "net": net,
+                    "message": f"Failed to route net: {net}"
+                })
+            
+            context.feasibility_report = {
+                "feasible": routing_result.get("success", False) and len(errors) == 0,
+                "errors": errors,
+                "routing_result": routing_result
+            }
+        except Exception as e:
+            context.feasibility_report = {
+                "feasible": False,
+                "errors": [{"type": "router_error", "message": str(e)}]
+            }
+        
         context.save_feasibility_report()
         
         if context.feasibility_report["feasible"]:
@@ -185,25 +225,30 @@ class Orchestrator:
     
     def _generate_enclosure(self, context: PipelineContext) -> PipelineState:
         """Stage 5: Generate 3D enclosure from PCB layout."""
-        print("Stage 5: Generating enclosure...")
+        print("\n" + "-"*60)
+        print("[ORCHESTRATOR] Stage 5: Generating enclosure...")
+        print("-"*60)
+        print(f"[ORCHESTRATOR] use_parametric: {self.use_parametric}")
         self._report_progress("GENERATE_ENCLOSURE", context.iteration, self.max_iterations, 
                               "Creating 3D model")
         
         if self.use_parametric:
+            print("[ORCHESTRATOR] PATH: Parametric enclosure (OpenSCAD)")
             # Use new parametric 3D agent that reads pcb_layout.json directly
             outputs = self.enclosure_agent.generate_from_pcb_layout(
                 pcb_layout=context.pcb_layout,
                 design_spec=context.design_spec,
                 output_dir=context.run_dir
             )
-            print(f"  ✓ Parametric enclosure generated: {list(outputs.keys())}")
+            print(f"[ORCHESTRATOR] ✓ Parametric enclosure generated: {list(outputs.keys())}")
         else:
+            print("[ORCHESTRATOR] PATH: FALLBACK → Legacy Blender workflow")
             # Fallback to legacy Blender runner
             params_for_blender = self._convert_pcb_to_legacy_params(context.pcb_layout, context.design_spec)
             params_path = context.run_dir / "params_for_blender.json"
             params_path.write_text(json.dumps(params_for_blender, indent=2), encoding="utf-8")
             self.blender.generate_stls(params_path=params_path, out_dir=context.run_dir)
-            print("  ✓ Blender enclosure generated")
+            print("[ORCHESTRATOR] ✓ Blender enclosure generated")
         
         # Write final report
         write_report(

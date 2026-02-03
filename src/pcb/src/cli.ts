@@ -12,6 +12,7 @@
  */
 
 import * as fs from 'fs'
+import * as path from 'path'
 import { RouterInput, RoutingResult } from './types'
 import { Router } from './router'
 import { Visualizer } from './visualizer'
@@ -72,6 +73,12 @@ async function main(): Promise<void> {
 
     // Generate visualization if requested
     if (options.visualize && options.outputPath) {
+      // Ensure output directory exists
+      const outputDir = path.dirname(options.outputPath)
+      if (outputDir && outputDir !== '.') {
+        fs.mkdirSync(outputDir, { recursive: true })
+      }
+      
       const visualizer = new Visualizer(router.getGrid())
       await visualizer.saveToFile(
         `${options.outputPath}_debug.png`,

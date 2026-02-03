@@ -53,6 +53,7 @@ class PCBAgent:
         Returns:
             dict matching pcb_layout.schema.json
         """
+        print("\n[PCB_AGENT] Generating PCB layout...")
         
         # Calculate board dimensions
         device = design_spec["device_constraints"]
@@ -60,6 +61,7 @@ class PCBAgent:
         
         board_width = device["width_mm"] - (2 * self.enclosure_wall_clearance)
         board_length = device["length_mm"] - (2 * self.enclosure_wall_clearance)
+        print(f"[PCB_AGENT] Board dimensions: {board_width}x{board_length}mm (from device {device['width_mm']}x{device['length_mm']}mm)")
         
         # Create board outline
         outline = self._create_board_outline(board_width, board_length)
@@ -67,17 +69,25 @@ class PCBAgent:
         # Calculate usable regions
         edge_clearance = constraints["edge_clearance_mm"]
         min_spacing = constraints["min_button_spacing_mm"]
+        print(f"[PCB_AGENT] Constraints: edge_clearance={edge_clearance}mm, min_spacing={min_spacing}mm")
         
         # Check if we have a previous report with fixes to apply
         fix_offsets = {}
         if previous_feasibility_report and not previous_feasibility_report.get("feasible", True):
             fix_offsets = self._extract_fix_offsets(previous_feasibility_report)
+            print(f"[PCB_AGENT] PATH: ITERATION mode - applying {len(fix_offsets)} fixes from feasibility report")
+            for comp_id, offset in fix_offsets.items():
+                print(f"[PCB_AGENT]   Fix: {comp_id} offset by ({offset[0]}, {offset[1]})mm")
+        else:
+            print("[PCB_AGENT] PATH: INITIAL placement (no fixes to apply)")
         
         components = []
         reserved_regions = []
         
         # 1. Place battery first (reserves bottom region)
+        print("[PCB_AGENT] Placing components...")
         if "battery" in design_spec:
+            print(f"[PCB_AGENT]   1. Battery: {design_spec['battery'].get('type', 'unknown')}")
             battery_component, battery_region = self._place_battery_smart(
                 design_spec["battery"],
                 board_width,
@@ -91,11 +101,16 @@ class PCBAgent:
                 battery_component["center"][1] += dy
                 # Clamp to valid position
                 battery_component = self._clamp_to_board(battery_component, board_width, board_length, edge_clearance)
+                print(f"[PCB_AGENT]      Applied fix offset ({dx}, {dy})mm")
             
+            print(f"[PCB_AGENT]      Placed at: {battery_component['center']}")
             components.append(battery_component)
             reserved_regions.append(battery_region)
+        else:
+            print("[PCB_AGENT]   1. Battery: (none specified)")
         
         # 2. Place controller (reserves middle-bottom region)
+        print("[PCB_AGENT]   2. Controller: ATmega328P")
         controller, controller_region = self._place_controller_smart(
             board_width,
             board_length,
@@ -108,16 +123,24 @@ class PCBAgent:
             controller["center"][0] += dx
             controller["center"][1] += dy
             controller = self._clamp_to_board(controller, board_width, board_length, edge_clearance)
+            print(f"[PCB_AGENT]      Applied fix offset ({dx}, {dy})mm")
         
+        print(f"[PCB_AGENT]      Placed at: {controller['center']}")
         components.append(controller)
         reserved_regions.append(controller_region)
         
         # 3. Place LEDs at top
+        led_count = len(design_spec.get("leds", []))
+        if led_count > 0:
+            print(f"[PCB_AGENT]   3. LEDs: {led_count} LED(s)")
         for led_spec in design_spec.get("leds", []):
             led_component = self._place_led(led_spec, board_width, board_length, edge_clearance)
+            print(f"[PCB_AGENT]      LED {led_spec.get('id', '?')} at: {led_component['center']}")
             components.append(led_component)
         
         # 4. Place buttons intelligently - pass fix_offsets so buttons respect them
+        button_count = len(design_spec["buttons"])
+        print(f"[PCB_AGENT]   4. Buttons: {button_count} button(s)")
         button_components = self._place_buttons_smart(
             design_spec["buttons"],
             board_width,
@@ -126,15 +149,22 @@ class PCBAgent:
             reserved_regions,
             fix_offsets
         )
+        for btn in button_components:
+            print(f"[PCB_AGENT]      {btn['id']} at: {btn['center']}")
         components.extend(button_components)
         
         # 5. Add mounting holes (avoiding all components)
+        print("[PCB_AGENT]   5. Mounting holes...")
         mounting_holes = self._create_mounting_holes_smart(
             board_width,
             board_length,
             components,
             edge_clearance
         )
+        print(f"[PCB_AGENT]      Created {len(mounting_holes)} mounting holes")
+        
+        total_components = len(components) + len(mounting_holes)
+        print(f"[PCB_AGENT] ✓ Layout complete: {total_components} total elements")
         
         return {
             "board": {

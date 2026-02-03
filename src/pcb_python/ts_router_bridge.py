@@ -1,43 +1,110 @@
 """
-TypeScript PCB Router Integration
+TypeScript PCB Router Bridge
 
-This module provides a Python wrapper to call the TypeScript PCB router
-for trace routing between components after placement is complete.
+Single clean interface to the TypeScript PCB router CLI.
+No Python fallback - errors are raised if the TS router fails.
 """
 
 from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Dict, List
+
+
+# ATMega328P-PU 28-pin DIP Pinout
+# Pin numbers go counter-clockwise from top-left (notch at top)
+ATMEGA328P_PINOUT = {
+    1: ("PC6", "RESET", ["Digital I/O"]),
+    2: ("PD0", "RXD", ["USART0 RX", "Digital I/O"]),
+    3: ("PD1", "TXD", ["USART0 TX", "Digital I/O"]),
+    4: ("PD2", "INT0", ["External Interrupt 0", "Digital I/O"]),
+    5: ("PD3", "INT1", ["External Interrupt 1", "PWM", "Digital I/O"]),
+    6: ("PD4", "XCK/T0", ["Timer0 External Clock", "Digital I/O"]),
+    7: ("VCC", "VCC", ["Supply Voltage"]),
+    8: ("GND", "GND", ["Ground"]),
+    9: ("PB6", "XTAL1", ["Crystal Oscillator", "Digital I/O"]),
+    10: ("PB7", "XTAL2", ["Crystal Oscillator", "Digital I/O"]),
+    11: ("PD5", "T1", ["Timer1 Input", "PWM", "Digital I/O"]),
+    12: ("PD6", "AIN0", ["Analog Comparator", "PWM", "Digital I/O"]),
+    13: ("PD7", "AIN1", ["Analog Comparator", "Digital I/O"]),
+    14: ("PB0", "ICP1", ["Timer1 Input Capture", "Digital I/O"]),
+    15: ("PB1", "OC1A", ["PWM", "Digital I/O"]),
+    16: ("PB2", "SS/OC1B", ["SPI Slave Select", "PWM", "Digital I/O"]),
+    17: ("PB3", "MOSI/OC2A", ["SPI MOSI", "PWM", "Digital I/O"]),
+    18: ("PB4", "MISO", ["SPI MISO", "Digital I/O"]),
+    19: ("PB5", "SCK", ["SPI Clock", "Digital I/O"]),
+    20: ("AVCC", "AVCC", ["ADC Supply Voltage"]),
+    21: ("AREF", "AREF", ["ADC Reference Voltage"]),
+    22: ("GND", "GND", ["Ground"]),
+    23: ("PC0", "ADC0", ["Analog Input 0", "Digital I/O"]),
+    24: ("PC1", "ADC1", ["Analog Input 1", "Digital I/O"]),
+    25: ("PC2", "ADC2", ["Analog Input 2", "Digital I/O"]),
+    26: ("PC3", "ADC3", ["Analog Input 3", "Digital I/O"]),
+    27: ("PC4", "ADC4/SDA", ["Analog Input 4", "I2C Data", "Digital I/O"]),
+    28: ("PC5", "ADC5/SCL", ["Analog Input 5", "I2C Clock", "Digital I/O"]),
+}
+
+
+class RouterError(Exception):
+    """Raised when the PCB router fails."""
+    pass
+
+
+class RouterNotFoundError(RouterError):
+    """Raised when the TypeScript CLI is not found."""
+    pass
+
+
+class RoutingFailedError(RouterError):
+    """Raised when routing fails for one or more nets."""
+    def __init__(self, message: str, failed_nets: List[Dict]):
+        super().__init__(message)
+        self.failed_nets = failed_nets
 
 
 class TSPCBRouter:
     """
-    Wrapper for the TypeScript PCB router.
+    Bridge to the TypeScript PCB router CLI.
     
     The TS router handles:
-    - Grid-based pathfinding for traces
-    - Net extraction and MST optimization
+    - Grid-based A* pathfinding for traces
+    - Net extraction and MST optimization  
     - DRC-aware routing with clearances
-    - Output generation (PNG, geometry)
+    - Rip-up and reroute for failed nets
     """
     
-    def __init__(self, ts_router_dir: Optional[Path] = None):
+    def __init__(self, ts_router_dir: Path = None):
         if ts_router_dir is None:
             ts_router_dir = Path(__file__).parent.parent / "pcb"
         self.ts_router_dir = ts_router_dir
-        self._ensure_built()
+        self._cli_path = None
     
-    def _ensure_built(self) -> None:
-        """Ensure the TypeScript router is compiled."""
-        dist_dir = self.ts_router_dir / "dist"
-        if not dist_dir.exists():
-            # Need to compile
-            self._run_npm_build()
+    @property
+    def cli_path(self) -> Path:
+        """Get the CLI path, building if necessary."""
+        if self._cli_path is None:
+            self._cli_path = self._find_or_build_cli()
+        return self._cli_path
     
-    def _run_npm_build(self) -> None:
-        """Run npm install and build."""
+    def _find_or_build_cli(self) -> Path:
+        """Find the CLI or build it if needed."""
+        cli_path = self.ts_router_dir / "dist" / "cli.js"
+        
+        if not cli_path.exists():
+            print("[TSPCBRouter] CLI not found, building...")
+            self._build()
+            
+        if not cli_path.exists():
+            raise RouterNotFoundError(
+                f"TypeScript router CLI not found at {cli_path}. "
+                "Run 'npm install && npm run build' in src/pcb/"
+            )
+        
+        return cli_path
+    
+    def _build(self) -> None:
+        """Build the TypeScript router."""
         try:
             subprocess.run(
                 ["npm", "install"],
@@ -53,21 +120,75 @@ class TSPCBRouter:
                 check=True,
                 shell=True
             )
+            print("[TSPCBRouter] Build completed")
         except subprocess.CalledProcessError as e:
-            print(f"Warning: Could not build TS router: {e}")
-            print(f"STDOUT: {e.stdout.decode() if e.stdout else ''}")
-            print(f"STDERR: {e.stderr.decode() if e.stderr else ''}")
+            raise RouterError(f"Failed to build TypeScript router: {e.stderr.decode() if e.stderr else str(e)}")
     
-    def convert_pcb_layout_to_router_input(self, pcb_layout: dict) -> dict:
+    def route(self, pcb_layout: dict, output_dir: Path) -> dict:
         """
-        Convert pcb_layout.json format to the TS router input format.
+        Route traces for the given PCB layout.
         
-        The TS router expects:
-        - board: { boardWidth, boardHeight, gridResolution }
-        - manufacturing: { traceWidth, traceClearance }
-        - footprints: { button, controller, battery, diode }
-        - placement: { buttons, controllers, batteries, diodes }
+        Args:
+            pcb_layout: PCB layout dict with board, components, etc.
+            output_dir: Directory for output files
+            
+        Returns:
+            Dict with 'success', 'traces', 'failed_nets'
+            
+        Raises:
+            RouterNotFoundError: If CLI not found
+            RouterError: If routing fails completely
         """
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Convert to TS router format
+        router_input = self._convert_layout(pcb_layout)
+        
+        # Save input for debugging
+        input_file = output_dir / "ts_router_input.json"
+        input_file.write_text(json.dumps(router_input, indent=2), encoding="utf-8")
+        
+        # Run CLI
+        try:
+            result = subprocess.run(
+                ["node", str(self.cli_path), "--output", str(output_dir / "pcb")],
+                cwd=self.ts_router_dir,
+                input=json.dumps(router_input),
+                capture_output=True,
+                text=True,
+                check=False,
+                shell=True
+            )
+        except FileNotFoundError:
+            raise RouterNotFoundError("Node.js not found. Install Node.js to use the PCB router.")
+        
+        # Save raw output
+        (output_dir / "ts_router_stdout.txt").write_text(result.stdout or "", encoding="utf-8")
+        (output_dir / "ts_router_stderr.txt").write_text(result.stderr or "", encoding="utf-8")
+        
+        # Parse result
+        if not result.stdout.strip():
+            raise RouterError(f"Router produced no output. stderr: {result.stderr}")
+        
+        try:
+            routing_result = json.loads(result.stdout)
+        except json.JSONDecodeError as e:
+            raise RouterError(f"Failed to parse router output: {e}\nOutput: {result.stdout[:500]}")
+        
+        # Save parsed result
+        (output_dir / "ts_router_result.json").write_text(
+            json.dumps(routing_result, indent=2), encoding="utf-8"
+        )
+        
+        return {
+            "success": routing_result.get("success", False),
+            "traces": routing_result.get("traces", []),
+            "failed_nets": routing_result.get("failedNets", [])
+        }
+    
+    def _convert_layout(self, pcb_layout: dict) -> dict:
+        """Convert pcb_layout to TS router input format."""
         # Extract board dimensions
         outline = pcb_layout["board"]["outline_polygon"]
         xs = [p[0] for p in outline]
@@ -75,13 +196,17 @@ class TSPCBRouter:
         board_width = max(xs) - min(xs)
         board_height = max(ys) - min(ys)
         
-        # Build placement from components
+        # Count buttons for controller pin assignment
+        components = pcb_layout.get("components", [])
+        total_buttons = sum(1 for c in components if c.get("type") == "button")
+        
+        # Build placement lists
         buttons = []
         controllers = []
         batteries = []
         diodes = []
         
-        for comp in pcb_layout.get("components", []):
+        for comp in components:
             comp_type = comp.get("type")
             x, y = comp["center"]
             comp_id = comp["id"]
@@ -94,20 +219,14 @@ class TSPCBRouter:
                     "signalNet": f"{comp_id}_SIG"
                 })
             elif comp_type == "controller":
-                # Build controller pins
-                pins = self._generate_controller_pins(len(buttons))
                 controllers.append({
                     "id": comp_id,
                     "x": x,
                     "y": y,
-                    "pins": pins
+                    "pins": self._generate_controller_pins(total_buttons)
                 })
             elif comp_type == "battery":
-                batteries.append({
-                    "id": comp_id,
-                    "x": x,
-                    "y": y
-                })
+                batteries.append({"id": comp_id, "x": x, "y": y})
             elif comp_type == "led":
                 diodes.append({
                     "id": comp_id,
@@ -162,107 +281,26 @@ class TSPCBRouter:
             else:
                 pins[pin] = "NC"
         
-        # Add unused pins
+        # Unused pins
         for pin in ["PC6", "PB6", "PB7"]:
             pins[pin] = "NC"
         
         return pins
-    
-    def route(self, pcb_layout: dict, output_dir: Path) -> dict:
-        """
-        Run the TS router on the given PCB layout.
-        
-        Args:
-            pcb_layout: pcb_layout.json dict
-            output_dir: Directory for output files
-        
-        Returns:
-            Routing result with traces and any failed nets
-        """
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Convert to TS router format
-        router_input = self.convert_pcb_layout_to_router_input(pcb_layout)
-        
-        # Run the TS router CLI via stdin/stdout
-        try:
-            cli_path = self.ts_router_dir / "dist" / "cli.js"
-            if not cli_path.exists():
-                # Fall back to index.js if cli.js doesn't exist
-                cli_path = self.ts_router_dir / "dist" / "index.js"
-            
-            output_path = output_dir / "pcb"
-            
-            result = subprocess.run(
-                ["node", str(cli_path), "--output", str(output_path)],
-                cwd=self.ts_router_dir,
-                input=json.dumps(router_input),
-                capture_output=True,
-                text=True,
-                check=False,  # Don't raise on non-zero exit
-                shell=True
-            )
-            
-            # Parse JSON result from stdout
-            if result.stdout.strip():
-                try:
-                    routing_result = json.loads(result.stdout)
-                    return {
-                        "success": routing_result.get("success", False),
-                        "output_dir": str(output_dir),
-                        "traces": routing_result.get("traces", []),
-                        "failed_nets": routing_result.get("failedNets", [])
-                    }
-                except json.JSONDecodeError:
-                    pass
-            
-            # Fallback if JSON parsing fails
-            print(f"TS Router output:\n{result.stdout}")
-            if result.stderr:
-                print(f"TS Router stderr:\n{result.stderr}")
-            
-            return {
-                "success": result.returncode == 0,
-                "output_dir": str(output_dir),
-                "traces": [],
-                "failed_nets": []
-            }
-            
-        except subprocess.CalledProcessError as e:
-            print(f"TS Router failed: {e}")
-            print(f"STDERR: {e.stderr}")
-            return {
-                "success": False,
-                "error": str(e),
-                "stderr": e.stderr
-            }
-        except FileNotFoundError:
-            print("Node.js not found. TS router requires Node.js to be installed.")
-            return {
-                "success": False,
-                "error": "Node.js not found"
-            }
-    
-    def route_from_file(self, pcb_layout_path: Path, output_dir: Path) -> dict:
-        """Route from a pcb_layout.json file."""
-        pcb_layout = json.loads(pcb_layout_path.read_text(encoding="utf-8"))
-        return self.route(pcb_layout, output_dir)
 
 
-def integrate_routing_into_layout(pcb_layout: dict, routing_result: dict) -> dict:
+def route_pcb(pcb_layout: dict, output_dir: Path) -> dict:
     """
-    Add routing information to the PCB layout.
+    Convenience function to route a PCB layout.
     
-    This enriches the pcb_layout with trace paths from the router.
+    Args:
+        pcb_layout: PCB layout dict
+        output_dir: Output directory for files
+        
+    Returns:
+        Routing result dict
+        
+    Raises:
+        RouterError: If routing fails
     """
-    if not routing_result.get("success"):
-        return pcb_layout
-    
-    # Add traces to layout
-    pcb_layout["traces"] = routing_result.get("traces", [])
-    pcb_layout["routing_metadata"] = {
-        "routed": True,
-        "failed_nets": routing_result.get("failed_nets", [])
-    }
-    
-    return pcb_layout
+    router = TSPCBRouter()
+    return router.route(pcb_layout, output_dir)
