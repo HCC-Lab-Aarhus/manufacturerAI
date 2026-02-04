@@ -42,8 +42,8 @@ class EnclosureParams:
     # Trace channels (for conductive filament)
     trace_channel_depth: float = 0.4  # mm depth of carved channels
     trace_channel_width: float = 1.5  # mm width of traces
-    pinhole_depth: float = 0.8  # mm depth of pinholes (2x trace depth)
-    pinhole_diameter: float = 1.0  # mm diameter of pinholes for component pins
+    pinhole_depth: float = 2.5  # mm depth of pinholes for button pins
+    pinhole_diameter: float = 1.2  # mm diameter of pinholes for component pins
     grid_resolution: float = 0.5  # mm per grid cell from router
     
     # Battery compartment (2x AAA side by side)
@@ -259,6 +259,9 @@ class Enclosure3DAgent:
         """Extract button hole specifications from layout."""
         holes = []
         
+        # Minimum button hole diameter for proper button cap fit
+        min_button_hole_diameter = 12.8
+        
         for comp in pcb_layout.get("components", []):
             if comp.get("type") == "button":
                 keepout = comp.get("keepout", {})
@@ -268,6 +271,9 @@ class Enclosure3DAgent:
                     diameter = (keepout.get("radius_mm", 5) - 1.5) * 2  # Cap is smaller than keepout
                 else:
                     diameter = 9.0  # Default
+                
+                # Ensure minimum diameter for button caps
+                diameter = max(diameter, min_button_hole_diameter)
                 
                 holes.append(ButtonHole(
                     id=comp["id"],
@@ -374,8 +380,9 @@ class Enclosure3DAgent:
         pads = []
         
         # Footprint definitions (matches ts_router_bridge.py)
+        # Standard 12x12mm tactile button: 12.5mm between left/right columns, 5.0mm between pins on same side
         footprints = {
-            "button": {"pinSpacingX": 9.0, "pinSpacingY": 6.0},  # 4 pads: corners of rectangle
+            "button": {"pinSpacingX": 14.5, "pinSpacingY": 5.0},  # 4 pads: ±6.25mm X, ±2.5mm Y from center
             "controller": {"pinSpacing": 2.5, "rowSpacing": 10.0},  # DIP-28: 2 rows of 14 pins
             "battery": {"padSpacing": 6.0},  # 2 pads
             "led": {"padSpacing": 5.0}  # 2 pads
@@ -466,17 +473,17 @@ shell_height = {p.shell_height:.2f};  // Height of top shell side walls (fits AA
 battery_guard_wall = {p.battery_guard_wall:.2f};
 
 // Snap-fit parameters
-clip_width = 8.0;
-clip_height = 2.0;
-clip_depth = 1.2;  // How far clip protrudes
+clip_width = 5.0;  // Thinner clips
+clip_height = 1.5;
+clip_depth = 1.0;  // How far clip protrudes
 
 // Snap-fit clip module - small protruding hook
 module snap_clip() {{
     // Ramped clip for easy insertion, hook for retention
     hull() {{
-        cube([clip_width, 0.5, clip_height]);
+        cube([clip_width, 0.4, clip_height]);
         translate([0, clip_depth, clip_height * 0.6])
-            cube([clip_width, 0.5, clip_height * 0.4]);
+            cube([clip_width, 0.4, clip_height * 0.4]);
     }}
 }}
 
@@ -609,11 +616,11 @@ top_shell();
         Note: No clips on back wall (where IR diode is) to avoid interference.
         """
         p = self.params
-        lines = ["    // Snap-fit clips on inside of walls"]
+        lines = ["    // Snap-fit clips on inside of walls (left and right only)"]
         
-        clip_width = 8.0
-        clip_height = 2.0
-        clip_depth = 1.2
+        clip_width = 5.0  # Thinner clips
+        clip_height = 1.5
+        clip_depth = 1.0
         
         # Position clips near the bottom of the walls (near the open edge)
         clip_z = p.shell_height - 3.0  # 3mm from bottom edge of wall
@@ -648,15 +655,7 @@ top_shell();
         lines.append(f"    translate([{clip_x:.2f}, {p.outer_length - back_inset:.2f}, {clip_z:.2f}])")
         lines.append(f"        rotate([0, 0, -90]) snap_clip();")
         
-        # Front wall clip only (Y = wall_thickness) - no back wall clip due to IR diode
-        if p.outer_width > 40:
-            clip_y = p.wall_thickness
-            mid_x = p.outer_width / 2 - clip_width / 2
-            lines.append(f"    // Front wall clip")
-            lines.append(f"    translate([{mid_x:.2f}, {clip_y:.2f}, {clip_z:.2f}])")
-            lines.append(f"        rotate([0, 0, 0]) snap_clip();")
-        
-        # No back wall clip - IR diode is there
+        # No front or back wall clips
         
         return "\n".join(lines)
     
@@ -855,6 +854,15 @@ bottom_shell();
         lines.append(f"        // Right ledge recess - hatch rests here")
         lines.append(f"        translate([{cx + width/2 - ledge_width:.2f}, {cy - height/2:.2f}, -1])")
         lines.append(f"            cube([{ledge_width:.2f}, {height:.2f}, {ledge_depth + 1:.2f}]);")
+        
+        # 3. Dent for hatch ledge notch (back end opposite spring latch)
+        # The hatch has an 8mm wide, 2mm deep, 1.5mm tall ledge that hooks into this dent
+        ledge_notch_width = 8.0
+        ledge_notch_depth = 2.0 + 0.3  # Extra clearance for fit
+        ledge_notch_height = 1.5 + 0.3  # Extra clearance
+        lines.append(f"        // Dent for hatch ledge notch (back end)")
+        lines.append(f"        translate([{cx - ledge_notch_width/2:.2f}, {cy + height/2 - ledge_notch_depth:.2f}, {ledge_depth - 0.5:.2f}])")
+        lines.append(f"            cube([{ledge_notch_width:.2f}, {ledge_notch_depth + 1:.2f}, {ledge_notch_height + 1:.2f}]);")
         
         return "\n".join(lines)
     

@@ -388,12 +388,12 @@ class PCBAgent:
         available_height = y_max_available - y_min_available
         available_width = board_width - (2 * edge_clearance)
         
-        # Default button dimensions
-        default_diam = 9.0
-        keepout_radius = default_diam / 2 + min_spacing / 2  # Button cap + half spacing
+        # Button hole diameter (must match enclosure_agent.py min_button_hole_diameter)
+        button_hole_diam = 12.8  # mm - minimum hole size for button caps
+        keepout_radius = button_hole_diam / 2 + min_spacing / 2  # Button hole + half spacing
         
         # Required center-to-center distance
-        center_spacing = default_diam + min_spacing  # e.g., 9mm cap + 3mm spacing = 12mm
+        center_spacing = button_hole_diam + min_spacing  # e.g., 12.8mm hole + 3mm spacing = 15.8mm
         
         # Calculate how many buttons fit
         num_buttons = len(buttons)
@@ -432,7 +432,7 @@ class PCBAgent:
             x = start_x + col * center_spacing
             y = start_y + row * center_spacing
             
-            diam = btn_spec.get("cap_diameter_mm", default_diam)
+            diam = btn_spec.get("cap_diameter_mm", button_hole_diam)
             
             # Create component ID
             comp_id = f"SW{i + 1}"
