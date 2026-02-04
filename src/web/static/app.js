@@ -54,57 +54,67 @@ function setPrinterStatus(connected) {
   printerStatus.classList.toggle("disconnected", !connected);
 }
 
-// Model selector for top/bottom shells
+// Model selector for previewing different parts
 function updateModelSelector(models) {
-  let selector = document.getElementById("modelSelector");
+  let container = document.getElementById("modelSelectorContainer");
   
-  // Create selector if it doesn't exist
-  if (!selector) {
-    const container = document.createElement("div");
+  // Create container if it doesn't exist
+  if (!container) {
+    container = document.createElement("div");
     container.id = "modelSelectorContainer";
     container.className = "model-selector-container";
-    container.innerHTML = `
-      <label>View: </label>
-      <select id="modelSelector">
-        <option value="top">Top Shell</option>
-        <option value="bottom">Bottom Shell (with traces)</option>
-      </select>
-    `;
     
     // Insert before the viewer element (inside the right panel)
     const viewerPanel = document.getElementById("viewer");
     viewerPanel.parentNode.insertBefore(container, viewerPanel);
-    
-    selector = document.getElementById("modelSelector");
-    selector.addEventListener("change", (e) => {
-      const modelType = e.target.value;
-      if (availableModels && availableModels[modelType]) {
-        currentModelUrl = availableModels[modelType] + `?t=${Date.now()}`;
-        loadModel(currentModelUrl);
-      } else {
-        const names = {top: 'Top shell', bottom: 'Bottom shell', hatch: 'Battery hatch'};
-        addMessage("assistant", `${names[modelType] || modelType} STL not available. Check OpenSCAD rendering.`);
-      }
-    });
   }
   
-  // Update options based on what's available
-  selector.innerHTML = "";
+  // Build dropdown and download button
+  container.innerHTML = `
+    <div class="model-controls">
+      <label>View: </label>
+      <select id="modelSelector"></select>
+    </div>
+    <button id="downloadBtn" class="download-btn" onclick="downloadModel()">
+      ⬇ Download STL
+    </button>
+  `;
+  
+  const selector = document.getElementById("modelSelector");
+  
+  // Add options based on what's available
   if (models.top) {
     selector.innerHTML += `<option value="top">Top Shell</option>`;
-  } else {
-    selector.innerHTML += `<option value="top" disabled>Top Shell (not rendered)</option>`;
+  }
+  if (models.combined) {
+    selector.innerHTML += `<option value="combined">Combined Assembly</option>`;
   }
   if (models.bottom) {
-    selector.innerHTML += `<option value="bottom">Bottom Shell (with traces)</option>`;
-  } else {
-    selector.innerHTML += `<option value="bottom" disabled>Bottom Shell (rendering...)</option>`;
+    selector.innerHTML += `<option value="bottom">Bottom Shell</option>`;
   }
   if (models.hatch) {
     selector.innerHTML += `<option value="hatch">Battery Hatch</option>`;
   }
   
-  document.getElementById("modelSelectorContainer").style.display = "flex";
+  // Handle selection change
+  selector.addEventListener("change", (e) => {
+    const modelType = e.target.value;
+    if (availableModels && availableModels[modelType]) {
+      currentModelUrl = availableModels[modelType] + `?t=${Date.now()}`;
+      loadModel(currentModelUrl);
+    } else {
+      const names = {top: 'Top shell', bottom: 'Bottom shell', hatch: 'Battery hatch', combined: 'Combined assembly'};
+      addMessage("assistant", `${names[modelType] || modelType} STL not available.`);
+    }
+  });
+  
+  container.style.display = "flex";
+}
+
+function downloadModel() {
+  const selector = document.getElementById("modelSelector");
+  const modelType = selector ? selector.value : "combined";
+  window.location.href = `/api/model/download?type=${modelType}`;
 }
 
 function hideModelSelector() {

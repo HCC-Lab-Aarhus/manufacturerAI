@@ -294,10 +294,23 @@ button:disabled {
 .model-selector-container {
   display: none;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
   padding: 10px 16px;
   background: rgba(0, 0, 0, 0.3);
   border-bottom: 1px solid var(--border);
+}
+
+.model-selector-container .model-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.model-selector-container .model-title {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
 }
 
 .model-selector-container label {
@@ -318,4 +331,21 @@ button:disabled {
 .model-selector-container select:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+.download-btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.download-btn:hover {
+  background: var(--accent);
+  color: #0b1120;
 }

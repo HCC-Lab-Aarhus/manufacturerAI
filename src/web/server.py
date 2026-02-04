@@ -277,36 +277,39 @@ def prompt_to_model(req: PromptRequest) -> PromptResponse:
             print("[SERVER] PATH: FALLBACK → No spec files found, using generic message")
             assistant_text = "Design completed. Files generated."
     
-    # Check for STL files - support both old and new workflow
+    # Check for STL files - all models rendered for preview
     print("[SERVER] Searching for STL files...")
     models_dict = None
     
-    # Check for parametric shells (new workflow)
+    # Check for all STL files
     top_stl = run_dir / "top_shell.stl"
     bottom_stl = run_dir / "bottom_shell.stl"
-    
     battery_hatch_stl = run_dir / "battery_hatch.stl"
+    combined_stl = run_dir / "combined_assembly.stl"
     
-    if top_stl.exists() or bottom_stl.exists() or battery_hatch_stl.exists():
+    if top_stl.exists() or bottom_stl.exists() or battery_hatch_stl.exists() or combined_stl.exists():
         models_dict = {}
         if top_stl.exists():
             models_dict["top"] = "/api/model/top"
             _latest_stl = top_stl
-            print(f"[SERVER] PATH: Found parametric STL → top_shell.stl")
+            print(f"[SERVER] PATH: Found STL → top_shell.stl")
         if bottom_stl.exists():
             models_dict["bottom"] = "/api/model/bottom"
             if _latest_stl is None:
                 _latest_stl = bottom_stl
-            print(f"[SERVER] PATH: Found parametric STL → bottom_shell.stl")
+            print(f"[SERVER] PATH: Found STL → bottom_shell.stl")
         if battery_hatch_stl.exists():
             models_dict["hatch"] = "/api/model/hatch"
-            print(f"[SERVER] PATH: Found parametric STL → battery_hatch.stl")
+            print(f"[SERVER] PATH: Found STL → battery_hatch.stl")
+        if combined_stl.exists():
+            models_dict["combined"] = "/api/model/combined"
+            print(f"[SERVER] PATH: Found STL → combined_assembly.stl")
     elif (run_dir / "remote_body.stl").exists():
         _latest_stl = run_dir / "remote_body.stl"
         print(f"[SERVER] PATH: Found legacy STL → remote_body.stl")
     else:
         # Check if SCAD files exist (OpenSCAD not installed)
-        scad_file = run_dir / "top_shell.scad"
+        scad_file = run_dir / "combined_assembly.scad"
         if scad_file.exists():
             print("[SERVER] PATH: FALLBACK → SCAD files only (OpenSCAD not installed)")
             assistant_text += " (OpenSCAD files ready - render manually or install OpenSCAD for STL)"
@@ -416,7 +419,7 @@ def get_latest_model():
 
 @app.get("/api/model/top")
 def get_top_shell():
-    """Serve the top shell STL (enclosure top with button holes)."""
+    """Serve the top shell STL."""
     if _latest_run_dir is None:
         raise HTTPException(status_code=404, detail="No design generated yet.")
     stl_path = _latest_run_dir / "top_shell.stl"
@@ -436,7 +439,7 @@ def get_top_shell():
 
 @app.get("/api/model/bottom")
 def get_bottom_shell():
-    """Serve the bottom shell STL (enclosure bottom with trace channels)."""
+    """Serve the bottom shell STL."""
     if _latest_run_dir is None:
         raise HTTPException(status_code=404, detail="No design generated yet.")
     stl_path = _latest_run_dir / "bottom_shell.stl"
@@ -469,6 +472,57 @@ def get_battery_hatch():
         media_type="model/stl",
         headers={
             "Content-Disposition": "inline; filename=battery_hatch.stl",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+        }
+    )
+
+
+@app.get("/api/model/combined")
+def get_combined_assembly():
+    """Serve the combined assembly STL."""
+    if _latest_run_dir is None:
+        raise HTTPException(status_code=404, detail="No design generated yet.")
+    stl_path = _latest_run_dir / "combined_assembly.stl"
+    if not stl_path.exists():
+        raise HTTPException(status_code=404, detail="Combined assembly STL not available.")
+    
+    content = stl_path.read_bytes()
+    return Response(
+        content=content,
+        media_type="model/stl",
+        headers={
+            "Content-Disposition": "inline; filename=combined_assembly.stl",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+        }
+    )
+
+
+@app.get("/api/model/download")
+def download_model(type: str = "combined"):
+    """Download an STL file. Type can be: combined, top, bottom, hatch."""
+    if _latest_run_dir is None:
+        raise HTTPException(status_code=404, detail="No design generated yet.")
+    
+    # Map type to filename
+    filenames = {
+        "combined": "combined_assembly.stl",
+        "top": "top_shell.stl",
+        "bottom": "bottom_shell.stl",
+        "hatch": "battery_hatch.stl"
+    }
+    
+    filename = filenames.get(type, "combined_assembly.stl")
+    stl_path = _latest_run_dir / filename
+    
+    if not stl_path.exists():
+        raise HTTPException(status_code=404, detail=f"{filename} not available.")
+    
+    content = stl_path.read_bytes()
+    return Response(
+        content=content,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
             "Cache-Control": "no-cache, no-store, must-revalidate",
         }
     )
