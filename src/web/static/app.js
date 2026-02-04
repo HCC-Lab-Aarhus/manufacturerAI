@@ -86,14 +86,14 @@ function updateModelSelector(models) {
   if (models.top) {
     selector.innerHTML += `<option value="top">Top Shell</option>`;
   }
-  if (models.combined) {
-    selector.innerHTML += `<option value="combined">Combined Assembly</option>`;
-  }
   if (models.bottom) {
     selector.innerHTML += `<option value="bottom">Bottom Shell</option>`;
   }
   if (models.hatch) {
     selector.innerHTML += `<option value="hatch">Battery Hatch</option>`;
+  }
+  if (models.combined) {
+    selector.innerHTML += `<option value="combined">Print Plate (All Parts)</option>`;
   }
   
   // Handle selection change
@@ -103,7 +103,7 @@ function updateModelSelector(models) {
       currentModelUrl = availableModels[modelType] + `?t=${Date.now()}`;
       loadModel(currentModelUrl);
     } else {
-      const names = {top: 'Top shell', bottom: 'Bottom shell', hatch: 'Battery hatch', combined: 'Combined assembly'};
+      const names = {top: 'Top shell', bottom: 'Bottom shell', hatch: 'Battery hatch', combined: 'Print plate'};
       addMessage("assistant", `${names[modelType] || modelType} STL not available.`);
     }
   });

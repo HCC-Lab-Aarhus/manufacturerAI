@@ -142,7 +142,7 @@ unless specifically asked.
 - If the user asks to "add a diode", "add an IR LED", "add IR", or "create a diode":
   Add an entry to the `leds` array with `"id": "LED1"` and `"placement_hint": "top"`
   IR diodes should be placed at the top of the remote so they can point outward.
-- Example: Add `"leds": [{"id": "LED1", "color": "IR", "placement_hint": "top"}]`
+- Example: Add `"leds": [{{"id": "LED1", "color": "IR", "placement_hint": "top"}}]`
 
 ## For position changes like "move button X higher/lower/left/right":
 - Use the `offset_y_mm` field for vertical movement (positive = towards top)
