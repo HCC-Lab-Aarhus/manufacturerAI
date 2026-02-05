@@ -390,10 +390,17 @@ class PCBAgent:
         
         # Button hole diameter (must match enclosure_agent.py min_button_hole_diameter)
         button_hole_diam = 12.8  # mm - minimum hole size for button caps
-        keepout_radius = button_hole_diam / 2 + min_spacing / 2  # Button hole + half spacing
         
-        # Required center-to-center distance
-        center_spacing = button_hole_diam + min_spacing  # e.g., 12.8mm hole + 3mm spacing = 15.8mm
+        # Button pin footprint extends beyond the button hole
+        # Standard 12x12mm tactile button: pins at ±7.25mm from center (14.5mm total X span)
+        button_pin_span_x = 14.5  # mm - total X distance between left and right pins
+        
+        # Required center-to-center distance must account for pin footprint + routing clearance
+        # Pins from adjacent buttons need at least 3.5mm gap for traces (traceWidth + clearance)
+        routing_clearance = 4.0  # mm - gap needed between pin edges for trace routing
+        center_spacing = button_pin_span_x + routing_clearance  # e.g., 14.5mm pins + 4mm = 18.5mm
+        
+        keepout_radius = center_spacing / 2  # Half the required center-to-center distance
         
         # Calculate how many buttons fit
         num_buttons = len(buttons)
