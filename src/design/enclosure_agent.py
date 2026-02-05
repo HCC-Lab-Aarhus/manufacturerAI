@@ -56,7 +56,7 @@ class EnclosureParams:
     # Battery hatch
     battery_hatch_clearance: float = 0.3  # Gap around hatch for fit
     battery_hatch_thickness: float = 1.5  # Thickness of hatch panel
-    spring_loop_width: float = 3.0  # Width of spring loop
+    spring_loop_width: float = 10.0  # Width of spring loop latch
     spring_loop_height: float = 8.0  # Height of spring loop arc
     spring_loop_thickness: float = 1.2  # Thickness of spring material
     
@@ -382,8 +382,8 @@ class Enclosure3DAgent:
         # Footprint definitions (matches ts_router_bridge.py)
         # Standard 12x12mm tactile button: 12.5mm between left/right columns, 5.0mm between pins on same side
         footprints = {
-            "button": {"pinSpacingX": 14.5, "pinSpacingY": 5.0},  # 4 pads: ±6.25mm X, ±2.5mm Y from center
-            "controller": {"pinSpacing": 2.5, "rowSpacing": 10.0},  # DIP-28: 2 rows of 14 pins
+            "button": {"pinSpacingX": 12.5, "pinSpacingY": 5.0},  # 4 pads: ±6.25mm X, ±2.5mm Y from center
+            "controller": {"pinSpacing": 2.5, "rowSpacing": 7.6},  # DIP-28: 2 rows of 14 pins
             "battery": {"padSpacing": 6.0},  # 2 pads
             "led": {"padSpacing": 5.0}  # 2 pads
         }
@@ -952,13 +952,14 @@ module battery_hatch() {{
         
         // Slit cutout for spring to flex through
         // Follows the spring position, allowing hook to extend beyond edge
-        translate([(hatch_width - slit_width) / 2, -hook_depth - 1, -1])
+        translate([(hatch_width - slit_width) / 2, -hook_depth - 1 + 2, -1])
             cube([slit_width, spring_total_depth + hook_depth, hatch_thickness + 2]);
     }}
     
     // Spring latch - positioned so outward arm with hook extends beyond plate edge
     // Return arm connects to plate, outward arm extends outward with hook
-    translate([(hatch_width - loop_width) / 2, 0, 0])
+    // Moved 2mm back from edge for better fit
+    translate([(hatch_width - loop_width) / 2, 2, 0])
         spring_latch();
     
     // Ledge notch on opposite end
