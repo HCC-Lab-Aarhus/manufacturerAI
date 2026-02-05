@@ -20,49 +20,66 @@
         <section class="chat" id="chat"></section>
 
         <section class="composer">
-          <textarea id="promptInput" placeholder="Describe the remote you want to create..."></textarea>
+          <div class="textarea-wrapper">
+            <textarea id="promptInput" placeholder="Describe the remote you want to create..."></textarea>
+            <button id="micBtn" class="mic-btn" title="Click to dictate">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+              </svg>
+            </button>
+          </div>
           <div class="composer-actions">
-            <label class="toggle">
-              <input type="checkbox" id="useLlm" checked />
-              <span>Use Gemini</span>
-            </label>
+            <button class="secondary" id="ttsBtn">Hear last response</button>
             <button id="sendBtn">Send</button>
           </div>
-          <button class="secondary" id="ttsBtn">Speak last response</button>
         </section>
       </aside>
 
+      <div class="resizer" id="resizer"></div>
+
       <main class="panel right">
         <div class="viewer-header">
-          <div class="status" id="printerStatus">Not connected</div>
           <div class="view-tabs">
             <button class="tab-btn active" data-view="3d">3D Model</button>
             <button class="tab-btn" data-view="debug">PCB Debug</button>
             <button class="tab-btn" data-view="masks">Masks</button>
           </div>
-          <div class="zoom-controls">
-            <button id="zoomIn">+</button>
-            <button id="zoomOut">−</button>
-          </div>
+          <button id="downloadBtn" class="download-btn disabled" title="No STL available for download">
+            ⬇ Download STL
+          </button>
         </div>
-        <div id="viewer" class="view-panel active"></div>
-        <div id="debugView" class="view-panel">
-          <img id="debugImage" alt="PCB Debug Layout" />
+        <div id="modelSelectorContainer" class="model-selector-container">
+          <label>View: </label>
+          <select id="modelSelector"></select>
         </div>
-        <div id="masksView" class="view-panel">
-          <div class="masks-grid">
-            <div class="mask-item">
-              <h3>Positive (Conductive)</h3>
-              <img id="positiveImage" alt="Positive Mask" />
-            </div>
-            <div class="mask-item">
-              <h3>Negative (Insulating)</h3>
-              <img id="negativeImage" alt="Negative Mask" />
+        <div class="view-container">
+          <div id="viewer" class="view-panel active">
+            <button class="reset-view-btn" id="reset3DView">Reset</button>
+            <div class="zoom-controls">
+              <button id="zoomIn">+</button>
+              <button id="zoomOut">−</button>
             </div>
           </div>
-        </div>
-        <div class="viewer-footer">
-          <button class="primary" id="printBtn">Print</button>
+          <div id="debugView" class="view-panel">
+            <button class="reset-view-btn" id="resetDebugView">Reset view</button>
+            <div class="zoom-controls">
+              <button class="zoom-btn" data-action="in">+</button>
+              <button class="zoom-btn" data-action="out">−</button>
+            </div>
+            <img id="debugImage" alt="PCB Debug Layout" />
+          </div>
+          <div id="masksView" class="view-panel">
+            <button class="reset-view-btn" id="resetMasksView">Reset view</button>
+            <div class="zoom-controls">
+              <button class="zoom-btn" data-action="in">+</button>
+              <button class="zoom-btn" data-action="out">−</button>
+            </div>
+            <div class="mask-viewport">
+              <img id="positiveImage" class="mask-image active" alt="Positive Mask" />
+              <img id="negativeImage" class="mask-image" alt="Negative Mask" />
+            </div>
+          </div>
         </div>
       </main>
     </div>
