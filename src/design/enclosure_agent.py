@@ -156,7 +156,7 @@ class Enclosure3DAgent:
         # Note: IR diode slits are now in bottom shell walls (diodes point outward from back wall)
         print("[ENCLOSURE] PATH: Generating OpenSCAD files...")
         top_scad = self._generate_top_shell_scad(button_holes, [], None, battery_cavity)
-        bottom_scad = self._generate_bottom_shell_scad(mounting_posts, battery_cavity, trace_channels, all_pads, ir_diodes)
+        bottom_scad = self._generate_bottom_shell_scad(mounting_posts, battery_cavity, trace_channels, all_pads, ir_diodes, pcb_layout)
         
         # Write SCAD files
         top_scad_path = output_dir / "top_shell.scad"
@@ -538,16 +538,17 @@ top_shell();
         return "\n".join(lines)
     
     def _generate_battery_guards_scad(self, battery_cavity: Optional[Dict[str, float]]) -> str:
-        """Generate OpenSCAD code for battery guards on the bottom shell.
+        """Generate OpenSCAD code for solid battery fill on the bottom shell.
         
-        Creates 4 walls forming a rectangle to hold the batteries.
-        The guards sit on the floor of the bottom shell and extend upward
-        to match the height of the surrounding walls.
+        Fills the entire space between the battery guard boundary and the
+        outer walls with solid plastic.  The battery pocket itself stays
+        open (handled by the battery cutout subtraction).
+        The fill is as tall as the surrounding walls.
         """
         if battery_cavity is None:
             return "    // No battery guards"
         
-        lines = ["    // Battery guards - 4 walls to hold 2x AAA batteries"]
+        lines = ["    // Solid fill between battery guard boundary and outer walls"]
         p = self.params
         offset_x = p.wall_thickness + p.pcb_clearance
         offset_y = p.wall_thickness + p.pcb_clearance
@@ -558,28 +559,46 @@ top_shell();
         width = battery_cavity["width"]
         height = battery_cavity["height"]
         
-        # Guard dimensions - slightly larger than battery compartment
+        # Guard boundary (slightly larger than battery compartment)
         guard_width = width + 2 * p.battery_guard_wall
         guard_height = height + 2 * p.battery_guard_wall
-        wall = p.battery_guard_wall
-        guard_z_height = p.shell_height - p.bottom_thickness  # Full height from floor to top of walls
+        guard_z_height = p.shell_height - p.bottom_thickness  # Floor to top of walls
         
-        # Guards extend upward from the floor (Z = bottom_thickness)
-        # Left wall
-        lines.append(f"    translate([{cx - guard_width/2:.2f}, {cy - guard_height/2:.2f}, bottom_thickness])")
-        lines.append(f"        cube([{wall:.2f}, {guard_height:.2f}, {guard_z_height:.2f}]);")
+        # Inner cavity bounds
+        inner_x_min = p.wall_thickness
+        inner_x_max = p.outer_width - p.wall_thickness
+        inner_y_min = p.wall_thickness
+        inner_y_max = p.outer_length - p.wall_thickness
         
-        # Right wall  
-        lines.append(f"    translate([{cx + guard_width/2 - wall:.2f}, {cy - guard_height/2:.2f}, bottom_thickness])")
-        lines.append(f"        cube([{wall:.2f}, {guard_height:.2f}, {guard_z_height:.2f}]);")
+        # Guard boundary coords
+        guard_x_min = cx - guard_width / 2
+        guard_x_max = cx + guard_width / 2
+        guard_y_min = cy - guard_height / 2
+        guard_y_max = cy + guard_height / 2
         
-        # Front wall (bottom Y)
-        lines.append(f"    translate([{cx - guard_width/2:.2f}, {cy - guard_height/2:.2f}, bottom_thickness])")
-        lines.append(f"        cube([{guard_width:.2f}, {wall:.2f}, {guard_z_height:.2f}]);")
+        # Left fill: inner wall to guard left edge, full Y
+        left_w = guard_x_min - inner_x_min
+        if left_w > 0.1:
+            lines.append(f"    translate([{inner_x_min:.2f}, {inner_y_min:.2f}, bottom_thickness])")
+            lines.append(f"        cube([{left_w:.2f}, {inner_y_max - inner_y_min:.2f}, {guard_z_height:.2f}]);")
         
-        # Back wall (top Y)
-        lines.append(f"    translate([{cx - guard_width/2:.2f}, {cy + guard_height/2 - wall:.2f}, bottom_thickness])")
-        lines.append(f"        cube([{guard_width:.2f}, {wall:.2f}, {guard_z_height:.2f}]);")
+        # Right fill: guard right edge to inner wall, full Y
+        right_w = inner_x_max - guard_x_max
+        if right_w > 0.1:
+            lines.append(f"    translate([{guard_x_max:.2f}, {inner_y_min:.2f}, bottom_thickness])")
+            lines.append(f"        cube([{right_w:.2f}, {inner_y_max - inner_y_min:.2f}, {guard_z_height:.2f}]);")
+        
+        # Front fill: guard left to guard right, inner wall to guard front
+        front_h = guard_y_min - inner_y_min
+        if front_h > 0.1:
+            lines.append(f"    translate([{guard_x_min:.2f}, {inner_y_min:.2f}, bottom_thickness])")
+            lines.append(f"        cube([{guard_width:.2f}, {front_h:.2f}, {guard_z_height:.2f}]);")
+        
+        # Back fill: guard left to guard right, guard back to inner wall
+        back_h = inner_y_max - guard_y_max
+        if back_h > 0.1:
+            lines.append(f"    translate([{guard_x_min:.2f}, {guard_y_max:.2f}, bottom_thickness])")
+            lines.append(f"        cube([{guard_width:.2f}, {back_h:.2f}, {guard_z_height:.2f}]);")
         
         return "\n".join(lines)
     
@@ -677,7 +696,8 @@ top_shell();
         battery_cavity: Optional[Dict[str, float]],
         trace_channels: Optional[List[dict]] = None,
         all_pads: Optional[List[Tuple[float, float]]] = None,
-        ir_diodes: Optional[List[Dict[str, float]]] = None
+        ir_diodes: Optional[List[Dict[str, float]]] = None,
+        pcb_layout: Optional[dict] = None
     ) -> str:
         """Generate OpenSCAD code for bottom shell with tall enclosing walls.
         
@@ -686,6 +706,7 @@ top_shell();
         - Snap-fit clips on the inside walls for the lid to click onto
         - Trace channels carved into the floor for conductive filament
         - Pinholes for component pins
+        - Component cutouts through the solid fill
         - Battery compartment cutout with ledges
         - IR diode holes through the back wall
         """
@@ -708,6 +729,9 @@ top_shell();
         
         # Generate battery guard code
         battery_guard_code = self._generate_battery_guards_scad(battery_cavity) if battery_cavity else "    // No battery guards"
+        
+        # Generate component cutouts (rectangular pockets through solid fill)
+        component_cutout_code = self._generate_component_cutouts_scad(pcb_layout) if pcb_layout else "        // No component cutouts"
         
         scad = f"""// Bottom Shell - Generated by ManufacturerAI
 // This file is parametric - edit values below to customize
@@ -750,43 +774,96 @@ module snap_clip() {{
 // Main shell (base with tall enclosing walls)
 module bottom_shell() {{
     difference() {{
-        // Outer shell with walls
-        hull() {{
-            for (x = [corner_radius, outer_width - corner_radius])
-                for (y = [corner_radius, outer_length - corner_radius])
-                    translate([x, y, 0])
-                        cylinder(r=corner_radius, h=shell_height, $fn=32);
+        union() {{
+            difference() {{
+                // Outer shell with walls
+                hull() {{
+                    for (x = [corner_radius, outer_width - corner_radius])
+                        for (y = [corner_radius, outer_length - corner_radius])
+                            translate([x, y, 0])
+                                cylinder(r=corner_radius, h=shell_height, $fn=32);
+                }}
+                
+                // Inner cavity (hollowed out, leaving walls and floor)
+                translate([wall_thickness, wall_thickness, bottom_thickness])
+                    cube([outer_width - 2*wall_thickness, 
+                          outer_length - 2*wall_thickness, 
+                          shell_height]);
+                
+                // Battery compartment cutout (for spring-loaded hatch)
+{battery_cutout_code}
+                
+                // IR diode holes through back wall
+{ir_slit_code}
+            }}
+            
+            // Snap-fit clips on inside of walls
+{snap_clips_code}
+            
+            // Solid fill between battery guard boundary and outer walls
+{battery_guard_code}
         }}
         
-        // Inner cavity (hollowed out, leaving walls and floor)
-        translate([wall_thickness, wall_thickness, bottom_thickness])
-            cube([outer_width - 2*wall_thickness, 
-                  outer_length - 2*wall_thickness, 
-                  shell_height]);
-        
-        // Battery compartment cutout (for spring-loaded hatch)
-{battery_cutout_code}
-        
-        // Trace channels carved into floor (for conductive filament)
+        // Trace channels cut through floor AND solid fill (for conductive filament)
 {trace_channel_code}
         
-        // Pinholes for component pins (deeper than traces for good contact)
+        // Pinholes cut through floor AND solid fill (for component pins)
 {pinhole_code}
         
-        // IR diode holes through back wall
-{ir_slit_code}
+        // Component cutouts through solid fill (place components after printing)
+{component_cutout_code}
     }}
-    
-    // Snap-fit clips on inside of walls
-{snap_clips_code}
-    
-    // Battery guards (4 walls to hold batteries)
-{battery_guard_code}
 }}
 
 bottom_shell();
 """
         return scad
+    
+    def _generate_component_cutouts_scad(self, pcb_layout: Optional[dict]) -> str:
+        """Generate OpenSCAD code for rectangular component cutouts.
+        
+        Creates rectangular pockets that cut through the solid fill
+        down to the floor (bottom_thickness), so components can be placed
+        into the shell after printing. Battery components are skipped
+        since they have their own dedicated cutout.
+        """
+        if not pcb_layout or "components" not in pcb_layout:
+            return "        // No component cutouts"
+        
+        lines = ["        // Component cutouts - rectangular pockets for placing components"]
+        p = self.params
+        offset_x = p.wall_thickness + p.pcb_clearance
+        offset_y = p.wall_thickness + p.pcb_clearance
+        clearance = 1.0  # 1mm clearance around each component
+        
+        for comp in pcb_layout["components"]:
+            if comp.get("type") == "battery":
+                continue  # Battery has its own dedicated cutout
+            
+            comp_id = comp.get("id", "unknown")
+            cx = comp["center"][0] + offset_x
+            cy = comp["center"][1] + offset_y
+            keepout = comp.get("keepout", {})
+            
+            if keepout.get("type") == "circle":
+                radius = keepout.get("radius_mm", 5.0)
+                # Convert circle to bounding rectangle
+                w = (radius + clearance) * 2
+                h = w
+            elif keepout.get("type") == "rectangle":
+                w = keepout.get("width_mm", 10.0) + 2 * clearance
+                h = keepout.get("height_mm", 10.0) + 2 * clearance
+            else:
+                # Default 10x10mm for unknown components
+                w = 10.0 + 2 * clearance
+                h = 10.0 + 2 * clearance
+            
+            # Cut from floor up through the full shell height
+            lines.append(f"        // {comp_id} ({comp.get('type', 'unknown')})")
+            lines.append(f"        translate([{cx - w/2:.2f}, {cy - h/2:.2f}, bottom_thickness])")
+            lines.append(f"            cube([{w:.2f}, {h:.2f}, shell_height - bottom_thickness + 0.01]);")
+        
+        return "\n".join(lines)
     
     def _generate_ir_diode_slits_scad(self, ir_diodes: List[Dict[str, float]]) -> str:
         """Generate OpenSCAD code for IR diode cutouts in the top shell.
@@ -1085,16 +1162,18 @@ battery_hatch();
                 y2 = p2["y"] * grid_res + offset_y
                 
                 # Determine if this is a horizontal or vertical segment
+                # Cut from below the floor up through the full shell height
+                # so traces pass through any solid fill above the floor
                 if abs(x2 - x1) > 0.01:  # Horizontal
                     min_x = min(x1, x2) - half_width
                     max_x = max(x1, x2) + half_width
                     lines.append(f"        translate([{min_x:.2f}, {y1 - half_width:.2f}, bottom_thickness - trace_channel_depth])")
-                    lines.append(f"            cube([{max_x - min_x:.2f}, {p.trace_channel_width:.2f}, trace_channel_depth + 0.01]);")
+                    lines.append(f"            cube([{max_x - min_x:.2f}, {p.trace_channel_width:.2f}, shell_height - bottom_thickness + trace_channel_depth + 0.01]);")
                 else:  # Vertical
                     min_y = min(y1, y2) - half_width
                     max_y = max(y1, y2) + half_width
                     lines.append(f"        translate([{x1 - half_width:.2f}, {min_y:.2f}, bottom_thickness - trace_channel_depth])")
-                    lines.append(f"            cube([{p.trace_channel_width:.2f}, {max_y - min_y:.2f}, trace_channel_depth + 0.01]);")
+                    lines.append(f"            cube([{p.trace_channel_width:.2f}, {max_y - min_y:.2f}, shell_height - bottom_thickness + trace_channel_depth + 0.01]);")
                 
                 total_segments += 1
         
@@ -1109,7 +1188,7 @@ battery_hatch();
             x = px * grid_res + offset_x
             y = py * grid_res + offset_y
             lines.append(f"        translate([{x - half_pad:.2f}, {y - half_pad:.2f}, bottom_thickness - trace_channel_depth])")
-            lines.append(f"            cube([{pad_size:.2f}, {pad_size:.2f}, trace_channel_depth + 0.01]);")
+            lines.append(f"            cube([{pad_size:.2f}, {pad_size:.2f}, shell_height - bottom_thickness + trace_channel_depth + 0.01]);")
         
         return "\n".join(lines)
     
@@ -1135,7 +1214,7 @@ battery_hatch();
             x = px * grid_res + offset_x
             y = py * grid_res + offset_y
             lines.append(f"        translate([{x:.2f}, {y:.2f}, bottom_thickness - pinhole_depth])")
-            lines.append(f"            cylinder(d=pinhole_diameter, h=pinhole_depth + 0.01, $fn=16);")
+            lines.append(f"            cylinder(d=pinhole_diameter, h=shell_height - bottom_thickness + pinhole_depth + 0.01, $fn=16);")
         
         return "\n".join(lines)
     
