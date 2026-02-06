@@ -388,7 +388,7 @@ class Enclosure3DAgent:
                 fp = footprints["controller"]
                 pin_spacing = fp["pinSpacing"]
                 row_spacing = fp["rowSpacing"]
-                num_pins_per_side = fp["controller"]["pins_per_side"]
+                num_pins_per_side = hw_footprints()["controller"]["pins_per_side"]
                 
                 # Calculate starting Y (top of chip)
                 total_height = (num_pins_per_side - 1) * pin_spacing
