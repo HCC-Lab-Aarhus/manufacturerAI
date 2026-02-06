@@ -131,8 +131,8 @@ class Enclosure3DAgent:
         button_holes = self._extract_button_holes(pcb_layout)
         battery_cavity = self._extract_battery_cavity(pcb_layout)
         led_windows = self._extract_led_windows(pcb_layout)
-        ir_diodes = self._extract_ir_diodes(pcb_layout)
-        print(f"[ENCLOSURE] Features: {len(button_holes)} buttons, {len(led_windows)} LEDs, {len(ir_diodes)} IR diodes")
+        ir_diodes = self._extract_diodes(pcb_layout)
+        print(f"[ENCLOSURE] Features: {len(button_holes)} buttons, {len(led_windows)} LEDs, {len(ir_diodes)} diodes")
         
         # Extract trace channels if routing result provided
         trace_channels = []
@@ -296,35 +296,28 @@ class Enclosure3DAgent:
         return None
     
     def _extract_led_windows(self, pcb_layout: dict) -> List[Dict[str, float]]:
-        """Extract LED window locations."""
-        windows = []
+        """Extract LED window locations.
         
-        for comp in pcb_layout.get("components", []):
-            if comp.get("type") == "led":
-                windows.append({
-                    "id": comp["id"],
-                    "center_x": comp["center"][0],
-                    "center_y": comp["center"][1],
-                    "diameter": hw_footprints()["led"]["diameter_mm"]  # Standard LED window
-                })
-        
-        return windows
+        Note: Currently returns empty list since we only have diodes (IR LED),
+        not indicator LEDs. This is kept for future use if indicator LEDs are added.
+        """
+        return []  # No indicator LEDs in current design
     
-    def _extract_ir_diodes(self, pcb_layout: dict) -> List[Dict[str, float]]:
-        """Extract IR diode locations for slit cutouts.
+    def _extract_diodes(self, pcb_layout: dict) -> List[Dict[str, float]]:
+        """Extract diode locations for slit cutouts.
         
-        IR diodes (LEDs used for IR transmission) should be at the top of the remote
+        Diodes (IR LEDs) should be at the top of the remote
         with a slit in the enclosure so the diode can point outward.
         """
         diodes = []
         
         for comp in pcb_layout.get("components", []):
-            if comp.get("type") == "led":
+            if comp.get("type") == "diode":
                 diodes.append({
                     "id": comp["id"],
                     "center_x": comp["center"][0],
                     "center_y": comp["center"][1],
-                    "diameter": hw_footprints()["ir_diode"]["diameter_mm"]  # Standard 5mm IR LED
+                    "diameter": hw_footprints()["diode"]["diameter_mm"]  # Standard 5mm IR LED
                 })
         
         return diodes
@@ -365,7 +358,7 @@ class Enclosure3DAgent:
             "button": {"pinSpacingX": fp["button"]["pin_spacing_x_mm"], "pinSpacingY": fp["button"]["pin_spacing_y_mm"]},
             "controller": {"pinSpacing": fp["controller"]["pin_spacing_mm"], "rowSpacing": fp["controller"]["row_spacing_mm"]},
             "battery": {"padSpacing": fp["battery"]["pad_spacing_mm"]},
-            "led": {"padSpacing": fp["led"]["pad_spacing_mm"]}
+            "diode": {"padSpacing": fp["diode"]["pad_spacing_mm"]}
         }
         
         for comp in pcb_layout.get("components", []):
@@ -409,9 +402,9 @@ class Enclosure3DAgent:
                 pads.append((int(center_x / grid_resolution), int((center_y - pad_spacing / 2) / grid_resolution)))
                 pads.append((int(center_x / grid_resolution), int((center_y + pad_spacing / 2) / grid_resolution)))
             
-            elif comp_type == "led":
+            elif comp_type == "diode":
                 # 2 pads along horizontal axis (matches TypeScript router: x - halfSpacing, x + halfSpacing)
-                fp = footprints["led"]
+                fp = footprints["diode"]
                 pad_spacing = fp["padSpacing"]
                 pads.append((int((center_x - pad_spacing / 2) / grid_resolution), int(center_y / grid_resolution)))
                 pads.append((int((center_x + pad_spacing / 2) / grid_resolution), int(center_y / grid_resolution)))
@@ -853,14 +846,14 @@ bottom_shell();
         if not ir_diodes:
             return "        // No IR diode slits"
         
-        lines = ["        // IR diode cutouts for IR transmission"]
+        lines = ["        // Diode cutouts for IR transmission"]
         p = self.params
         offset_x = p.wall_thickness + p.pcb_clearance
         
         for diode in ir_diodes:
             x = diode["center_x"] + offset_x
-            diameter = diode.get("diameter", hw_footprints()["ir_diode"]["diameter_mm"])
-            hole_diameter = diameter + hw_footprints()["ir_diode"]["hole_clearance_mm"]
+            diameter = diode.get("diameter", hw_footprints()["diode"]["diameter_mm"])
+            hole_diameter = diameter + hw_footprints()["diode"]["hole_clearance_mm"]
             
             # Simple cylindrical hole through the end wall
             # Positioned at the top edge (max Y), centered on diode X

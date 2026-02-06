@@ -71,7 +71,7 @@ def router_footprints() -> dict:
             "padSpacing": fp["battery"]["pad_spacing_mm"],
         },
         "diode": {
-            "padSpacing": fp["led"]["pad_spacing_mm"],
+            "padSpacing": fp["diode"]["pad_spacing_mm"],
         },
     }
 

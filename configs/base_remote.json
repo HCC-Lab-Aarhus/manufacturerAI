@@ -36,13 +36,7 @@
       "compartment_width_mm": 25.0,
       "compartment_height_mm": 48.0
     },
-    "led": {
-      "type": "LED_0805",
-      "pad_spacing_mm": 5.0,
-      "diameter_mm": 4.0,
-      "keepout_radius_mm": 2.0
-    },
-    "ir_diode": {
+    "diode": {
       "type": "IR_LED_5mm",
       "pad_spacing_mm": 5.0,
       "diameter_mm": 5.0,

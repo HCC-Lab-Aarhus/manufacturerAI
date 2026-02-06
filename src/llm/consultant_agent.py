@@ -261,9 +261,6 @@ Output **valid JSON only** matching the design_spec.schema.json structure.
             }
             assumptions.append("Battery defaulted to 2xAAA at bottom")
         
-        # LEDs (optional)
-        spec.setdefault("leds", [])
-        
         # Store assumptions
         spec["assumptions"] = assumptions
         

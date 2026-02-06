@@ -17,7 +17,7 @@ def test_trace_channels():
         'components': [
             {'id': 'SW1', 'type': 'button', 'center': [20, 60], 'keepout': {'type': 'circle', 'radius_mm': 6}},
             {'id': 'U1', 'type': 'controller', 'center': [25, 30], 'keepout': {'type': 'rectangle', 'width_mm': 12, 'height_mm': 12}},
-            {'id': 'D1', 'type': 'led', 'center': [25, 95], 'keepout': {'type': 'circle', 'radius_mm': 3}},
+            {'id': 'D1', 'type': 'diode', 'center': [25, 95], 'keepout': {'type': 'circle', 'radius_mm': 3}},
         ]
     }
     
@@ -67,11 +67,11 @@ def test_trace_channels():
             print('✗ Missing hull-based trace segments')
             return False
         
-        # Check for IR diode slit
-        if 'IR diode slit' in content:
-            print('✓ IR diode slit generated')
+        # Check for diode slit
+        if 'Diode cutouts' in content or 'diode slit' in content.lower():
+            print('✓ Diode slit generated')
         else:
-            print('✗ Missing IR diode slit')
+            print('✗ Missing diode slit')
             return False
         
         # Print a preview

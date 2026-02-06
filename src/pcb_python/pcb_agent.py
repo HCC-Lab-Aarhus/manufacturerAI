@@ -128,14 +128,11 @@ class PCBAgent:
         components.append(controller)
         reserved_regions.append(controller_region)
         
-        # 3. Place LEDs at top
-        led_count = len(design_spec.get("leds", []))
-        if led_count > 0:
-            print(f"[PCB_AGENT]   3. LEDs: {led_count} LED(s)")
-        for led_spec in design_spec.get("leds", []):
-            led_component = self._place_led(led_spec, board_width, board_length, edge_clearance)
-            print(f"[PCB_AGENT]      LED {led_spec.get('id', '?')} at: {led_component['center']}")
-            components.append(led_component)
+        # 3. Place diode at top (always included, like the controller)
+        print("[PCB_AGENT]   3. Diode: IR LED 5mm")
+        diode = self._place_diode(board_width, board_length, edge_clearance)
+        print(f"[PCB_AGENT]      Placed at: {diode['center']}")
+        components.append(diode)
         
         # 4. Place buttons intelligently - pass fix_offsets so buttons respect them
         button_count = len(design_spec["buttons"])
@@ -313,28 +310,27 @@ class PCBAgent:
         
         return component, region
     
-    def _place_led(
+    def _place_diode(
         self,
-        led_spec: dict,
         board_width: float,
         board_length: float,
         edge_clearance: float
     ) -> dict:
-        """Place LED at top."""
-        led_fp = hw_footprints()["led"]
+        """Place diode at top center (always included, like the controller)."""
+        diode_fp = hw_footprints()["diode"]
         y = board_length - edge_clearance - 3
         x = board_width / 2
         
         return {
-            "id": led_spec["id"],
-            "ref": led_spec["id"],
-            "type": "led",
-            "footprint": led_fp["type"],
+            "id": "D1",
+            "ref": "DIODE",
+            "type": "diode",
+            "footprint": diode_fp["type"],
             "center": [x, y],
             "rotation_deg": 0,
             "keepout": {
                 "type": "circle",
-                "radius_mm": led_fp["keepout_radius_mm"]
+                "radius_mm": diode_fp["diameter_mm"] / 2 + 1.0
             }
         }
     

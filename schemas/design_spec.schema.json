@@ -117,21 +117,6 @@
         }
       }
     },
-    "leds": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["id"],
-        "properties": {
-          "id": {"type": "string"},
-          "color": {"type": "string"},
-          "placement_hint": {
-            "type": "string",
-            "enum": ["top", "center", "bottom"]
-          }
-        }
-      }
-    },
     "constraints": {
       "type": "object",
       "required": ["min_button_spacing_mm", "edge_clearance_mm", "min_wall_thickness_mm"],

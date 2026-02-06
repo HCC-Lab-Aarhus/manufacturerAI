@@ -201,10 +201,10 @@ class TSPCBRouter:
         board_width = max(xs) - min(xs)
         board_height = max(ys) - min(ys)
         
-        # Count buttons and LEDs for controller pin assignment
+        # Count buttons and diodes for controller pin assignment
         components = pcb_layout.get("components", [])
         total_buttons = sum(1 for c in components if c.get("type") == "button")
-        led_components = [c for c in components if c.get("type") == "led"]
+        diode_components = [c for c in components if c.get("type") == "diode"]
         
         # Build placement lists
         buttons = []
@@ -229,11 +229,11 @@ class TSPCBRouter:
                     "id": comp_id,
                     "x": x,
                     "y": y,
-                    "pins": self._generate_controller_pins(total_buttons, led_components)
+                    "pins": self._generate_controller_pins(total_buttons, diode_components)
                 })
             elif comp_type == "battery":
                 batteries.append({"id": comp_id, "x": x, "y": y})
-            elif comp_type == "led":
+            elif comp_type == "diode":
                 diodes.append({
                     "id": comp_id,
                     "x": x,
@@ -257,24 +257,24 @@ class TSPCBRouter:
             }
         }
     
-    def _generate_controller_pins(self, button_count: int, led_components: List[dict] = None) -> Dict[str, str]:
-        """Generate controller pin assignments for buttons and LEDs."""
-        led_count = len(led_components) if led_components else 0
-        pins = generate_pin_assignments(button_count, led_count)
+    def _generate_controller_pins(self, button_count: int, diode_components: List[dict] = None) -> Dict[str, str]:
+        """Generate controller pin assignments for buttons and diodes."""
+        diode_count = len(diode_components) if diode_components else 0
+        pins = generate_pin_assignments(button_count, diode_count)
         
-        # If LEDs have specific IDs, rename the generic LED_SIG nets
-        if led_components:
+        # If diodes have specific IDs, rename the generic LED_SIG nets
+        if diode_components:
             # Find which pins got LED assignments and rename
             cp = controller_pins()
             digital = list(cp["digital_order"])
-            led_idx = 0
+            diode_idx = 0
             for pin in digital:
                 net = pins.get(pin, "")
                 if net.startswith("LED") and net.endswith("_SIG"):
-                    if led_idx < len(led_components):
-                        led_id = led_components[led_idx].get("id", f"LED{led_idx+1}")
-                        pins[pin] = f"{led_id}_SIG"
-                        led_idx += 1
+                    if diode_idx < len(diode_components):
+                        diode_id = diode_components[diode_idx].get("id", f"D{diode_idx+1}")
+                        pins[pin] = f"{diode_id}_SIG"
+                        diode_idx += 1
         
         return pins
 
