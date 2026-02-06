@@ -15,50 +15,56 @@ from pathlib import Path
 from typing import Optional, List, Dict, Tuple, Any
 from dataclasses import dataclass, field
 
+from src.core.hardware_config import (
+    board as hw_board,
+    footprints as hw_footprints,
+    manufacturing as hw_manufacturing,
+    enclosure as hw_enclosure,
+)
+
 
 @dataclass
 class EnclosureParams:
     """Parameters for enclosure generation."""
-    # From PCB
+    # From PCB (set by _configure_from_layout)
     board_width: float = 41.0
     board_length: float = 176.0
-    board_thickness: float = 1.6
+    board_thickness: float = field(default_factory=lambda: hw_board()["pcb_thickness_mm"])
     
     # Enclosure walls
-    wall_thickness: float = 1.6
-    bottom_thickness: float = 3.0
-    top_thickness: float = 1.5
+    wall_thickness: float = field(default_factory=lambda: hw_enclosure()["wall_thickness_mm"])
+    bottom_thickness: float = field(default_factory=lambda: hw_enclosure()["bottom_thickness_mm"])
+    top_thickness: float = field(default_factory=lambda: hw_enclosure()["top_thickness_mm"])
     
     # Clearances
-    pcb_clearance: float = 0.3  # Gap around PCB
-    button_hole_clearance: float = 0.4  # Gap around button caps
+    pcb_clearance: float = field(default_factory=lambda: hw_enclosure()["pcb_clearance_mm"])
+    button_hole_clearance: float = field(default_factory=lambda: hw_footprints()["button"]["hole_clearance_mm"])
     
     # Features
-    corner_radius: float = 3.0
+    corner_radius: float = field(default_factory=lambda: hw_enclosure()["corner_radius_mm"])
     standoff_height: float = 3.0
     standoff_outer_diameter: float = 6.0
     screw_hole_diameter: float = 2.5
     
     # Trace channels (for conductive filament)
-    trace_channel_depth: float = 0.4  # mm depth of carved channels
-    trace_channel_width: float = 1.5  # mm width of traces
-    pinhole_depth: float = 2.5  # mm depth of pinholes for button pins
-    pinhole_diameter: float = 1.2  # mm diameter of pinholes for component pins
-    grid_resolution: float = 0.5  # mm per grid cell from router
+    trace_channel_depth: float = field(default_factory=lambda: hw_manufacturing()["trace_channel_depth_mm"])
+    trace_channel_width: float = field(default_factory=lambda: hw_manufacturing()["trace_width_mm"])
+    pinhole_depth: float = field(default_factory=lambda: hw_manufacturing()["pinhole_depth_mm"])
+    pinhole_diameter: float = field(default_factory=lambda: hw_manufacturing()["pinhole_diameter_mm"])
+    grid_resolution: float = field(default_factory=lambda: hw_board()["grid_resolution_mm"])
     
     # Battery compartment (2x AAA side by side)
-    # AAA dimensions: 10.5mm diameter, 44.5mm length
-    battery_compartment_width: float = 25.0  # 2x AAA diameter + clearance (2*10.5 + 4)
-    battery_compartment_height: float = 48.0  # AAA length + clearance (44.5 + 3.5)
-    battery_guard_wall: float = 1.2  # Thickness of battery guard walls
-    shell_height: float = 12.0  # Height of walls (fits AAA diameter 10.5mm + clearance)
+    battery_compartment_width: float = field(default_factory=lambda: hw_footprints()["battery"]["compartment_width_mm"])
+    battery_compartment_height: float = field(default_factory=lambda: hw_footprints()["battery"]["compartment_height_mm"])
+    battery_guard_wall: float = field(default_factory=lambda: hw_enclosure()["battery_guard_wall_mm"])
+    shell_height: float = field(default_factory=lambda: hw_enclosure()["shell_height_mm"])
     
     # Battery hatch
-    battery_hatch_clearance: float = 0.3  # Gap around hatch for fit
-    battery_hatch_thickness: float = 1.5  # Thickness of hatch panel
-    spring_loop_width: float = 10.0  # Width of spring loop latch
-    spring_loop_height: float = 8.0  # Height of spring loop arc
-    spring_loop_thickness: float = 1.2  # Thickness of spring material
+    battery_hatch_clearance: float = field(default_factory=lambda: hw_enclosure()["battery_hatch_clearance_mm"])
+    battery_hatch_thickness: float = field(default_factory=lambda: hw_enclosure()["battery_hatch_thickness_mm"])
+    spring_loop_width: float = field(default_factory=lambda: hw_enclosure()["spring_loop_width_mm"])
+    spring_loop_height: float = field(default_factory=lambda: hw_enclosure()["spring_loop_height_mm"])
+    spring_loop_thickness: float = field(default_factory=lambda: hw_enclosure()["spring_loop_thickness_mm"])
     
     # Derived
     @property
@@ -149,7 +155,7 @@ class Enclosure3DAgent:
             print(f"[ENCLOSURE] Trace channels: {len(trace_channels)} nets for conductive filament")
         
         # Extract ALL pads from component footprints (including unconnected pads)
-        all_pads = self._extract_all_pads_from_layout(pcb_layout, grid_resolution=0.5)
+        all_pads = self._extract_all_pads_from_layout(pcb_layout, grid_resolution=hw_board()["grid_resolution_mm"])
         print(f"[ENCLOSURE] Component pads: {len(all_pads)} pinholes for component pins")
         
         # Generate OpenSCAD files
@@ -248,19 +254,20 @@ class Enclosure3DAgent:
         
         self.params.board_width = max(xs) - min(xs)
         self.params.board_length = max(ys) - min(ys)
-        self.params.board_thickness = pcb_layout["board"].get("thickness_mm", 1.6)
+        self.params.board_thickness = pcb_layout["board"].get("thickness_mm", hw_board()["pcb_thickness_mm"])
         
         # From design spec
         if design_spec:
             constraints = design_spec.get("constraints", {})
-            self.params.wall_thickness = constraints.get("min_wall_thickness_mm", 1.6)
+            self.params.wall_thickness = constraints.get("min_wall_thickness_mm", hw_enclosure()["wall_thickness_mm"])
     
     def _extract_button_holes(self, pcb_layout: dict) -> List[ButtonHole]:
         """Extract button hole specifications from layout."""
         holes = []
         
         # Minimum button hole diameter for proper button cap fit
-        min_button_hole_diameter = 12.8
+        btn_fp = hw_footprints()["button"]
+        min_button_hole_diameter = btn_fp["min_hole_diameter_mm"]
         
         for comp in pcb_layout.get("components", []):
             if comp.get("type") == "button":
@@ -270,7 +277,7 @@ class Enclosure3DAgent:
                 if keepout.get("type") == "circle":
                     diameter = (keepout.get("radius_mm", 5) - 1.5) * 2  # Cap is smaller than keepout
                 else:
-                    diameter = 9.0  # Default
+                    diameter = btn_fp["cap_diameter_mm"]
                 
                 # Ensure minimum diameter for button caps
                 diameter = max(diameter, min_button_hole_diameter)
@@ -293,7 +300,7 @@ class Enclosure3DAgent:
                 id=hole["id"],
                 center_x=hole["center"][0],
                 center_y=hole["center"][1],
-                hole_diameter=hole.get("drill_diameter_mm", 3.0)
+                hole_diameter=hole.get("drill_diameter_mm", hw_board()["mounting_hole_diameter_mm"])
             ))
         
         return posts
@@ -325,7 +332,7 @@ class Enclosure3DAgent:
                     "id": comp["id"],
                     "center_x": comp["center"][0],
                     "center_y": comp["center"][1],
-                    "diameter": 4.0  # Standard LED window
+                    "diameter": hw_footprints()["led"]["diameter_mm"]  # Standard LED window
                 })
         
         return windows
@@ -344,7 +351,7 @@ class Enclosure3DAgent:
                     "id": comp["id"],
                     "center_x": comp["center"][0],
                     "center_y": comp["center"][1],
-                    "diameter": 5.0  # Standard 5mm IR LED
+                    "diameter": hw_footprints()["ir_diode"]["diameter_mm"]  # Standard 5mm IR LED
                 })
         
         return diodes
@@ -379,13 +386,13 @@ class Enclosure3DAgent:
         """
         pads = []
         
-        # Footprint definitions (matches ts_router_bridge.py)
-        # Standard 12x12mm tactile button: 12.5mm between left/right columns, 5.0mm between pins on same side
+        # Footprint definitions from shared hardware config
+        fp = hw_footprints()
         footprints = {
-            "button": {"pinSpacingX": 12.5, "pinSpacingY": 5.0},  # 4 pads: ±6.25mm X, ±2.5mm Y from center
-            "controller": {"pinSpacing": 2.5, "rowSpacing": 7.6},  # DIP-28: 2 rows of 14 pins
-            "battery": {"padSpacing": 6.0},  # 2 pads
-            "led": {"padSpacing": 5.0}  # 2 pads
+            "button": {"pinSpacingX": fp["button"]["pin_spacing_x_mm"], "pinSpacingY": fp["button"]["pin_spacing_y_mm"]},
+            "controller": {"pinSpacing": fp["controller"]["pin_spacing_mm"], "rowSpacing": fp["controller"]["row_spacing_mm"]},
+            "battery": {"padSpacing": fp["battery"]["pad_spacing_mm"]},
+            "led": {"padSpacing": fp["led"]["pad_spacing_mm"]}
         }
         
         for comp in pcb_layout.get("components", []):
@@ -408,7 +415,7 @@ class Enclosure3DAgent:
                 fp = footprints["controller"]
                 pin_spacing = fp["pinSpacing"]
                 row_spacing = fp["rowSpacing"]
-                num_pins_per_side = 14
+                num_pins_per_side = fp["controller"]["pins_per_side"]
                 
                 # Calculate starting Y (top of chip)
                 total_height = (num_pins_per_side - 1) * pin_spacing
@@ -834,7 +841,7 @@ bottom_shell();
         p = self.params
         offset_x = p.wall_thickness + p.pcb_clearance
         offset_y = p.wall_thickness + p.pcb_clearance
-        clearance = 1.0  # 1mm clearance around each component
+        clearance = hw_board()["component_margin_mm"]  # clearance around each component
         
         for comp in pcb_layout["components"]:
             if comp.get("type") == "battery":
@@ -880,8 +887,8 @@ bottom_shell();
         
         for diode in ir_diodes:
             x = diode["center_x"] + offset_x
-            diameter = diode.get("diameter", 5.0)
-            hole_diameter = diameter + 1.0  # 1mm clearance around LED
+            diameter = diode.get("diameter", hw_footprints()["ir_diode"]["diameter_mm"])
+            hole_diameter = diameter + hw_footprints()["ir_diode"]["hole_clearance_mm"]
             
             # Simple cylindrical hole through the end wall
             # Positioned at the top edge (max Y), centered on diode X

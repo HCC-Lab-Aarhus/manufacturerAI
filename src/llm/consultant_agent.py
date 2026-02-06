@@ -13,6 +13,8 @@ Responsibilities:
 from __future__ import annotations
 from pathlib import Path
 import json
+
+from src.core.hardware_config import footprints as hw_footprints, enclosure as hw_enclosure
 from typing import Optional
 
 from src.llm.client import MockLLMClient, GeminiClient, LLMClient
@@ -220,12 +222,14 @@ Output **valid JSON only** matching the design_spec.schema.json structure.
             assumptions.append("Device thickness defaulted to 18mm")
         
         # Buttons
+        btn_fp = hw_footprints()["button"]
         if "buttons" not in spec or not spec["buttons"]:
             spec["buttons"] = [
                 {
                     "id": "BTN1",
-                    "switch_type": "tactile_6x6",
-                    "cap_diameter_mm": 9.0,
+                    "label": "Button 1",
+                    "switch_type": btn_fp["switch_type"],
+                    "cap_diameter_mm": btn_fp["cap_diameter_mm"],
                     "priority": "normal"
                 }
             ]
@@ -235,10 +239,12 @@ Output **valid JSON only** matching the design_spec.schema.json structure.
         for i, btn in enumerate(spec["buttons"]):
             if "id" not in btn:
                 btn["id"] = f"BTN{i+1}"
+            if "label" not in btn:
+                btn["label"] = btn.get("id", f"Button {i+1}")
             if "switch_type" not in btn:
-                btn["switch_type"] = "tactile_6x6"
+                btn["switch_type"] = btn_fp["switch_type"]
             if "cap_diameter_mm" not in btn:
-                btn["cap_diameter_mm"] = 9.0
+                btn["cap_diameter_mm"] = btn_fp["cap_diameter_mm"]
             if "priority" not in btn:
                 btn["priority"] = "normal"
         
@@ -247,10 +253,11 @@ Output **valid JSON only** matching the design_spec.schema.json structure.
             spec["constraints"] = {}
             assumptions.append("Constraints not specified, using defaults")
         
+        enc = hw_enclosure()
         constraints = spec["constraints"]
         constraints.setdefault("min_button_spacing_mm", 3.0)
         constraints.setdefault("edge_clearance_mm", 5.0)
-        constraints.setdefault("min_wall_thickness_mm", 1.6)
+        constraints.setdefault("min_wall_thickness_mm", enc["wall_thickness_mm"])
         constraints.setdefault("mounting_preference", "screws")
         
         # Battery (optional)

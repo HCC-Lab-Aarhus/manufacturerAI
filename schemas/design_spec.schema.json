@@ -3,7 +3,7 @@
   "title": "DesignSpec",
   "description": "Output of Consultant Agent - normalized requirements",
   "type": "object",
-  "required": ["units", "device_constraints", "buttons", "constraints", "assumptions"],
+  "required": ["units", "device_constraints", "buttons", "assumptions"],
   "properties": {
     "units": {
       "type": "string",
@@ -39,7 +39,7 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["id", "switch_type", "cap_diameter_mm", "priority"],
+        "required": ["id", "label"],
         "properties": {
           "id": {
             "type": "string",

@@ -4,6 +4,23 @@
 
 The codebase has been successfully refactored to follow the new architecture plan. The system now uses a clear, state-machine-based pipeline with well-defined data contracts between stages.
 
+### Hardware Configuration (Single Source of Truth)
+
+All hardware constants are centralized in [`configs/base_remote.json`](configs/base_remote.json) and accessed via [`src/core/hardware_config.py`](src/core/hardware_config.py). No module should hardcode footprint dimensions, manufacturing tolerances, or enclosure parameters — everything reads from the shared config.
+
+Key sections in `base_remote.json`:
+- **board**: PCB thickness, clearances, grid resolution, mounting holes
+- **footprints**: Button, controller, battery, LED, IR diode dimensions
+- **manufacturing**: Trace widths, clearances, pinhole specs
+- **enclosure**: Wall thickness, shell height, battery compartment, hatch
+- **controller_pins**: ATmega328P pin assignments
+
+Modules that import from `hardware_config`:
+- `pcb_agent.py` — board dims, footprint sizes, button spacing
+- `ts_router_bridge.py` — router-format footprints, manufacturing, pin assignments
+- `enclosure_agent.py` — all EnclosureParams defaults, pad extraction footprints
+- `consultant_agent.py` — button/constraint defaults for design_spec normalization
+
 ## New Architecture
 
 ### Pipeline Stages

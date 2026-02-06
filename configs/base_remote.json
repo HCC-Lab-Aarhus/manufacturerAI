@@ -1,0 +1,94 @@
+{
+  "$comment": "Single source of truth for all base remote hardware constants. Every module reads from this file instead of hardcoding values.",
+
+  "board": {
+    "enclosure_wall_clearance_mm": 2.0,
+    "pcb_thickness_mm": 1.6,
+    "grid_resolution_mm": 0.5,
+    "mounting_hole_diameter_mm": 3.0,
+    "mounting_hole_inset_mm": 6.0,
+    "component_margin_mm": 1.0
+  },
+
+  "footprints": {
+    "button": {
+      "pin_spacing_x_mm": 12.5,
+      "pin_spacing_y_mm": 5.0,
+      "switch_type": "tactile_6x6",
+      "cap_diameter_mm": 9.0,
+      "min_hole_diameter_mm": 12.8,
+      "hole_clearance_mm": 0.4,
+      "keepout_padding_mm": 3.0
+    },
+    "controller": {
+      "type": "ATMEGA328P-PU_DIP28",
+      "pin_spacing_mm": 2.54,
+      "row_spacing_mm": 7.62,
+      "pins_per_side": 14,
+      "body_width_mm": 10.0,
+      "body_height_mm": 36.0,
+      "keepout_padding_mm": 4.0
+    },
+    "battery": {
+      "type": "2xAAA",
+      "pad_spacing_mm": 6.0,
+      "holder_width_mm": 12.0,
+      "holder_height_mm": 45.0,
+      "holder_padding_mm": 2.0,
+      "compartment_width_mm": 25.0,
+      "compartment_height_mm": 48.0
+    },
+    "led": {
+      "type": "LED_0805",
+      "pad_spacing_mm": 5.0,
+      "diameter_mm": 4.0,
+      "keepout_radius_mm": 2.0
+    },
+    "ir_diode": {
+      "type": "IR_LED_5mm",
+      "pad_spacing_mm": 5.0,
+      "diameter_mm": 5.0,
+      "hole_clearance_mm": 1.0
+    }
+  },
+
+  "manufacturing": {
+    "trace_width_mm": 1.5,
+    "trace_clearance_mm": 2.0,
+    "trace_channel_depth_mm": 0.4,
+    "pinhole_depth_mm": 2.5,
+    "pinhole_diameter_mm": 1.2
+  },
+
+  "enclosure": {
+    "wall_thickness_mm": 1.6,
+    "bottom_thickness_mm": 3.0,
+    "top_thickness_mm": 1.5,
+    "pcb_clearance_mm": 0.3,
+    "corner_radius_mm": 3.0,
+    "shell_height_mm": 12.0,
+    "battery_guard_wall_mm": 1.2,
+    "battery_hatch_thickness_mm": 1.5,
+    "battery_hatch_clearance_mm": 0.3,
+    "spring_loop_width_mm": 4.0,
+    "spring_loop_height_mm": 6.0,
+    "spring_loop_thickness_mm": 0.8
+  },
+
+  "controller_pins": {
+    "$comment": "ATmega328P pin assignments. Sequential: PD0 first, then PD1, etc. Buttons assigned in order.",
+    "power": {
+      "VCC": "VCC",
+      "GND1": "GND",
+      "GND2": "GND",
+      "AVCC": "VCC",
+      "AREF": "NC"
+    },
+    "unused": ["PC6", "PB6", "PB7"],
+    "digital_order": [
+      "PD0", "PD1", "PD2", "PD3", "PD4", "PD5", "PD6", "PD7",
+      "PB0", "PB1", "PB2", "PB3", "PB4", "PB5",
+      "PC0", "PC1", "PC2", "PC3", "PC4", "PC5"
+    ]
+  }
+}

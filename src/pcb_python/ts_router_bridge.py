@@ -11,6 +11,11 @@ import subprocess
 from pathlib import Path
 from typing import Dict, List
 
+from src.core.hardware_config import (
+    router_footprints, router_manufacturing, grid_resolution,
+    generate_pin_assignments, controller_pins
+)
+
 
 # ATMega328P-PU 28-pin DIP Pinout
 # Pin numbers go counter-clockwise from top-left (notch at top)
@@ -240,18 +245,10 @@ class TSPCBRouter:
             "board": {
                 "boardWidth": board_width,
                 "boardHeight": board_height,
-                "gridResolution": 0.5
+                "gridResolution": grid_resolution()
             },
-            "manufacturing": {
-                "traceWidth": 1.5,
-                "traceClearance": 2.0
-            },
-            "footprints": {
-                "button": {"pinSpacingX": 12.5, "pinSpacingY": 5.0},
-                "controller": {"pinSpacing": 2.5, "rowSpacing": 7.6},
-                "battery": {"padSpacing": 6.0},
-                "diode": {"padSpacing": 5.0}
-            },
+            "manufacturing": router_manufacturing(),
+            "footprints": router_footprints(),
             "placement": {
                 "buttons": buttons,
                 "controllers": controllers,
@@ -262,43 +259,22 @@ class TSPCBRouter:
     
     def _generate_controller_pins(self, button_count: int, led_components: List[dict] = None) -> Dict[str, str]:
         """Generate controller pin assignments for buttons and LEDs."""
-        pins = {
-            "VCC": "VCC",
-            "GND1": "GND",
-            "GND2": "GND",
-            "AVCC": "VCC",
-            "AREF": "NC"
-        }
+        led_count = len(led_components) if led_components else 0
+        pins = generate_pin_assignments(button_count, led_count)
         
-        # Available I/O pins
-        io_pins = ["PD0", "PD1", "PD2", "PD3", "PD4", "PD5", "PD6", "PD7",
-                   "PB0", "PB1", "PB2", "PB3", "PB4", "PB5",
-                   "PC0", "PC1", "PC2", "PC3", "PC4", "PC5"]
-        
-        pin_index = 0
-        
-        # Assign pins to buttons first
-        for i in range(button_count):
-            if pin_index < len(io_pins):
-                pins[io_pins[pin_index]] = f"SW{i+1}_SIG"
-                pin_index += 1
-        
-        # Assign pins to LEDs
+        # If LEDs have specific IDs, rename the generic LED_SIG nets
         if led_components:
-            for led in led_components:
-                if pin_index < len(io_pins):
-                    led_id = led.get("id", f"LED{pin_index}")
-                    pins[io_pins[pin_index]] = f"{led_id}_SIG"
-                    pin_index += 1
-        
-        # Mark remaining pins as NC
-        while pin_index < len(io_pins):
-            pins[io_pins[pin_index]] = "NC"
-            pin_index += 1
-        
-        # Unused pins
-        for pin in ["PC6", "PB6", "PB7"]:
-            pins[pin] = "NC"
+            # Find which pins got LED assignments and rename
+            cp = controller_pins()
+            digital = list(cp["digital_order"])
+            led_idx = 0
+            for pin in digital:
+                net = pins.get(pin, "")
+                if net.startswith("LED") and net.endswith("_SIG"):
+                    if led_idx < len(led_components):
+                        led_id = led_components[led_idx].get("id", f"LED{led_idx+1}")
+                        pins[pin] = f"{led_id}_SIG"
+                        led_idx += 1
         
         return pins
 

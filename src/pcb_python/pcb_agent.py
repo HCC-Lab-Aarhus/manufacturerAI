@@ -15,6 +15,8 @@ from typing import Optional, Dict, List, Tuple
 import json
 import math
 
+from src.core.hardware_config import board as hw_board, footprints as hw_footprints, manufacturing as hw_manufacturing
+
 class PCBAgent:
     """
     PCB Agent generates component placement and board geometry.
@@ -32,11 +34,12 @@ class PCBAgent:
     """
     
     def __init__(self):
-        self.enclosure_wall_clearance = 2.0  # mm margin for enclosure walls
-        self.pcb_thickness = 1.6  # mm standard PCB thickness
-        self.mounting_hole_diameter = 3.0  # mm
-        self.mounting_hole_inset = 6.0  # mm from edges
-        self.component_margin = 1.0  # mm extra margin around components
+        brd = hw_board()
+        self.enclosure_wall_clearance = brd["enclosure_wall_clearance_mm"]
+        self.pcb_thickness = brd["pcb_thickness_mm"]
+        self.mounting_hole_diameter = brd["mounting_hole_diameter_mm"]
+        self.mounting_hole_inset = brd["mounting_hole_inset_mm"]
+        self.component_margin = brd["component_margin_mm"]
     
     def generate_layout(
         self, 
@@ -228,10 +231,11 @@ class PCBAgent:
         """Place battery and return reserved region."""
         battery_type = battery_spec.get("type", "2xAAA")
         
-        # Battery dimensions (holder size)
+        # Battery dimensions from config (holder size)
+        bat_fp = hw_footprints()["battery"]
         if battery_type == "2xAAA":
-            battery_width = 12.0
-            battery_height = 45.0
+            battery_width = bat_fp["holder_width_mm"]
+            battery_height = bat_fp["holder_height_mm"]
         elif battery_type == "CR2032":
             battery_width = 22.0
             battery_height = 22.0
@@ -239,8 +243,8 @@ class PCBAgent:
             battery_width = 15.0
             battery_height = 30.0
         
-        # Keepout padding
-        padding = 2.0
+        # Keepout padding from config
+        padding = bat_fp["holder_padding_mm"]
         
         # Place at bottom center - ensure it fits within board
         x = board_width / 2
@@ -288,9 +292,9 @@ class PCBAgent:
         edge_clearance: float
     ) -> Tuple[dict, dict]:
         """Place ATMega328P-PU DIP-28 controller below button area."""
-        # DIP-28 dimensions: 33mm length x 7.62mm row spacing + pin overhang
-        controller_width = 10.0   # Width including pins
-        controller_height = 36.0  # 14 pins * 2.54mm = 35.56mm rounded up
+        ctrl_fp = hw_footprints()["controller"]
+        controller_width = ctrl_fp["body_width_mm"]
+        controller_height = ctrl_fp["body_height_mm"]
         
         # Find y position above battery region
         y_min_available = edge_clearance
@@ -305,13 +309,13 @@ class PCBAgent:
             "id": "U1",
             "ref": "controller",
             "type": "controller",
-            "footprint": "ATMEGA328P-PU_DIP28",
+            "footprint": ctrl_fp["type"],
             "center": [x, y],
             "rotation_deg": 0,
             "keepout": {
                 "type": "rectangle",
-                "width_mm": controller_width + 4,   # Extra clearance for DIP-28
-                "height_mm": controller_height + 4
+                "width_mm": controller_width + ctrl_fp["keepout_padding_mm"],
+                "height_mm": controller_height + ctrl_fp["keepout_padding_mm"]
             }
         }
         
@@ -333,6 +337,7 @@ class PCBAgent:
         edge_clearance: float
     ) -> dict:
         """Place LED at top."""
+        led_fp = hw_footprints()["led"]
         y = board_length - edge_clearance - 3
         x = board_width / 2
         
@@ -340,12 +345,12 @@ class PCBAgent:
             "id": led_spec["id"],
             "ref": led_spec["id"],
             "type": "led",
-            "footprint": "LED_0805",
+            "footprint": led_fp["type"],
             "center": [x, y],
             "rotation_deg": 0,
             "keepout": {
                 "type": "circle",
-                "radius_mm": 2.0
+                "radius_mm": led_fp["keepout_radius_mm"]
             }
         }
     
@@ -388,17 +393,17 @@ class PCBAgent:
         available_height = y_max_available - y_min_available
         available_width = board_width - (2 * edge_clearance)
         
-        # Button hole diameter (must match enclosure_agent.py min_button_hole_diameter)
-        button_hole_diam = 12.8  # mm - minimum hole size for button caps
+        # Button dimensions from config
+        btn_fp = hw_footprints()["button"]
+        button_hole_diam = btn_fp["min_hole_diameter_mm"]
         
         # Button pin footprint extends beyond the button hole
-        # Standard 12x12mm tactile button: pins at ±7.25mm from center (14.5mm total X span)
-        button_pin_span_x = 14.5  # mm - total X distance between left and right pins
+        button_pin_span_x = btn_fp["pin_spacing_x_mm"]  # Total X distance between left and right pins
         
         # Required center-to-center distance must account for pin footprint + routing clearance
-        # Pins from adjacent buttons need at least 3.5mm gap for traces (traceWidth + clearance)
-        routing_clearance = 4.0  # mm - gap needed between pin edges for trace routing
-        center_spacing = button_pin_span_x + routing_clearance  # e.g., 14.5mm pins + 4mm = 18.5mm
+        mfg = hw_manufacturing()
+        routing_clearance = mfg["trace_width_mm"] + mfg["trace_clearance_mm"]  # gap needed between pin edges
+        center_spacing = button_pin_span_x + routing_clearance
         
         keepout_radius = center_spacing / 2  # Half the required center-to-center distance
         
@@ -486,7 +491,7 @@ class PCBAgent:
     ) -> Tuple[float, float]:
         """Convert placement hint to coordinates."""
         hint = btn_spec.get("placement_hint", {})
-        diam = btn_spec.get("cap_diameter_mm", 9.0)
+        diam = btn_spec.get("cap_diameter_mm", hw_footprints()["button"]["cap_diameter_mm"])
         
         # Default to center
         x = board_width / 2
@@ -639,7 +644,7 @@ class PCBAgent:
             "id": component_id,
             "ref": btn_spec["id"],
             "type": "button",
-            "footprint": btn_spec.get("switch_type", "tactile_6x6"),
+            "footprint": btn_spec.get("switch_type", hw_footprints()["button"]["switch_type"]),
             "center": [x, y],
             "rotation_deg": 0,
             "keepout": {
