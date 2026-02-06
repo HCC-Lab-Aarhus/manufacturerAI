@@ -18,8 +18,7 @@ def test_trace_channels():
             {'id': 'SW1', 'type': 'button', 'center': [20, 60], 'keepout': {'type': 'circle', 'radius_mm': 6}},
             {'id': 'U1', 'type': 'controller', 'center': [25, 30], 'keepout': {'type': 'rectangle', 'width_mm': 12, 'height_mm': 12}},
             {'id': 'D1', 'type': 'led', 'center': [25, 95], 'keepout': {'type': 'circle', 'radius_mm': 3}},
-        ],
-        'mounting_holes': [{'id': 'MH1', 'center': [5, 5], 'drill_diameter_mm': 3.0}]
+        ]
     }
     
     # Sample routing result with traces

@@ -5,7 +5,6 @@ Responsibilities:
 - Generate board outline from device constraints
 - Place components (buttons, controller, battery, LEDs)
 - Respect placement hints from design spec
-- Add mounting holes
 - Define keepout zones
 - Apply fixes from feasibility reports
 """
@@ -29,16 +28,13 @@ class PCBAgent:
     2. Reserve areas for battery and controller
     3. Place high-priority buttons according to hints
     4. Place remaining buttons in optimal grid within available space
-    5. Add mounting holes near corners (avoiding components)
-    6. Define keepouts around all components
+    5. Define keepouts around all components
     """
     
     def __init__(self):
         brd = hw_board()
         self.enclosure_wall_clearance = brd["enclosure_wall_clearance_mm"]
         self.pcb_thickness = brd["pcb_thickness_mm"]
-        self.mounting_hole_diameter = brd["mounting_hole_diameter_mm"]
-        self.mounting_hole_inset = brd["mounting_hole_inset_mm"]
         self.component_margin = brd["component_margin_mm"]
     
     def generate_layout(
@@ -156,18 +152,7 @@ class PCBAgent:
             print(f"[PCB_AGENT]      {btn['id']} at: {btn['center']}")
         components.extend(button_components)
         
-        # 5. Add mounting holes (avoiding all components)
-        print("[PCB_AGENT]   5. Mounting holes...")
-        mounting_holes = self._create_mounting_holes_smart(
-            board_width,
-            board_length,
-            components,
-            edge_clearance
-        )
-        print(f"[PCB_AGENT]      Created {len(mounting_holes)} mounting holes")
-        
-        total_components = len(components) + len(mounting_holes)
-        print(f"[PCB_AGENT] ✓ Layout complete: {total_components} total elements")
+        print(f"[PCB_AGENT] ✓ Layout complete: {len(components)} total elements")
         
         return {
             "board": {
@@ -176,7 +161,6 @@ class PCBAgent:
                 "origin": "bottom_left"
             },
             "components": components,
-            "mounting_holes": mounting_holes,
             "keepout_regions": [],
             "metadata": {
                 "generated_timestamp": "",
@@ -653,58 +637,6 @@ class PCBAgent:
             }
         }
     
-    def _create_mounting_holes_smart(
-        self,
-        board_width: float,
-        board_length: float,
-        components: list,
-        edge_clearance: float
-    ) -> list:
-        """Create 4 mounting holes avoiding components."""
-        inset = self.mounting_hole_inset
-        hole_radius = self.mounting_hole_diameter / 2 + 3  # Plus clearance
-        
-        # Preferred corner positions
-        corners = [
-            (inset, inset),
-            (board_width - inset, inset),
-            (board_width - inset, board_length - inset),
-            (inset, board_length - inset)
-        ]
-        
-        holes = []
-        
-        for i, (target_x, target_y) in enumerate(corners):
-            # Check for conflicts with components
-            x, y = target_x, target_y
-            
-            for comp in components:
-                cx, cy = comp["center"]
-                comp_radius = self._get_keepout_radius(comp)
-                
-                dist = math.sqrt((x - cx)**2 + (y - cy)**2)
-                min_dist = hole_radius + comp_radius + 2
-                
-                if dist < min_dist:
-                    # Move hole along the edge away from component
-                    if i in [0, 3]:  # Left edge
-                        y = cy + (min_dist + 2) if y < cy else cy - (min_dist + 2)
-                    else:  # Right edge
-                        y = cy + (min_dist + 2) if y < cy else cy - (min_dist + 2)
-            
-            # Clamp to valid range
-            x = max(inset, min(board_width - inset, x))
-            y = max(inset, min(board_length - inset, y))
-            
-            holes.append({
-                "id": f"MH{i + 1}",
-                "center": [x, y],
-                "drill_diameter_mm": self.mounting_hole_diameter,
-                "pad_diameter_mm": self.mounting_hole_diameter + 2.0
-            })
-        
-        return holes
-    
     def _get_keepout_radius(self, component: dict) -> float:
         """Get effective keepout radius for a component."""
         keepout = component.get("keepout", {})
@@ -717,50 +649,3 @@ class PCBAgent:
             return math.sqrt(w**2 + h**2) / 2
         else:
             return 5.0
-    
-    def _apply_fixes(
-        self, 
-        components: list, 
-        mounting_holes: list,
-        feasibility_report: dict,
-        board_width: float,
-        board_length: float,
-        edge_clearance: float
-    ) -> tuple[list, list]:
-        """
-        Apply fix operations from feasibility report.
-        """
-        for error in feasibility_report.get("errors", []):
-            for fix in error.get("suggested_fixes", []):
-                op = fix["operation"]
-                
-                if op == "translate":
-                    comp_id = fix.get("id")
-                    dx = fix.get("dx", 0)
-                    dy = fix.get("dy", 0)
-                    
-                    for comp in components:
-                        if comp["id"] == comp_id:
-                            new_x = comp["center"][0] + dx
-                            new_y = comp["center"][1] + dy
-                            
-                            # Clamp to board bounds
-                            radius = self._get_keepout_radius(comp)
-                            new_x = max(edge_clearance + radius, 
-                                       min(board_width - edge_clearance - radius, new_x))
-                            new_y = max(edge_clearance + radius,
-                                       min(board_length - edge_clearance - radius, new_y))
-                            
-                            comp["center"] = [new_x, new_y]
-                            break
-                
-                elif op == "swap_footprint":
-                    comp_id = fix.get("id")
-                    new_footprint = fix.get("new_footprint")
-                    
-                    for comp in components:
-                        if comp["id"] == comp_id:
-                            comp["footprint"] = new_footprint
-                            break
-        
-        return components, mounting_holes

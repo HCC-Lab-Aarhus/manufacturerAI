@@ -42,9 +42,6 @@ class EnclosureParams:
     
     # Features
     corner_radius: float = field(default_factory=lambda: hw_enclosure()["corner_radius_mm"])
-    standoff_height: float = 3.0
-    standoff_outer_diameter: float = 6.0
-    screw_hole_diameter: float = 2.5
     
     # Trace channels (for conductive filament)
     trace_channel_depth: float = field(default_factory=lambda: hw_manufacturing()["trace_channel_depth_mm"])
@@ -77,7 +74,7 @@ class EnclosureParams:
     
     @property
     def total_height(self) -> float:
-        return self.bottom_thickness + self.standoff_height + self.board_thickness + 5.0
+        return self.bottom_thickness + self.shell_height + self.board_thickness + 5.0
 
 
 @dataclass
@@ -87,15 +84,6 @@ class ButtonHole:
     center_x: float
     center_y: float
     diameter: float
-    
-    
-@dataclass
-class MountingPost:
-    """Mounting post (standoff) specification."""
-    id: str
-    center_x: float
-    center_y: float
-    hole_diameter: float
 
 
 class Enclosure3DAgent:
@@ -104,7 +92,7 @@ class Enclosure3DAgent:
     
     Reads pcb_layout.json and generates:
     - top_shell.stl (button holes, LED window)
-    - bottom_shell.stl (battery cavity, standoffs)
+    - bottom_shell.stl (battery cavity, trace channels)
     - OpenSCAD source files for customization
     """
     
@@ -141,11 +129,10 @@ class Enclosure3DAgent:
         
         # Extract features
         button_holes = self._extract_button_holes(pcb_layout)
-        mounting_posts = self._extract_mounting_posts(pcb_layout)
         battery_cavity = self._extract_battery_cavity(pcb_layout)
         led_windows = self._extract_led_windows(pcb_layout)
         ir_diodes = self._extract_ir_diodes(pcb_layout)
-        print(f"[ENCLOSURE] Features: {len(button_holes)} buttons, {len(mounting_posts)} mounting posts, {len(led_windows)} LEDs, {len(ir_diodes)} IR diodes")
+        print(f"[ENCLOSURE] Features: {len(button_holes)} buttons, {len(led_windows)} LEDs, {len(ir_diodes)} IR diodes")
         
         # Extract trace channels if routing result provided
         trace_channels = []
@@ -162,7 +149,7 @@ class Enclosure3DAgent:
         # Note: IR diode slits are now in bottom shell walls (diodes point outward from back wall)
         print("[ENCLOSURE] PATH: Generating OpenSCAD files...")
         top_scad = self._generate_top_shell_scad(button_holes, [], None, battery_cavity)
-        bottom_scad = self._generate_bottom_shell_scad(mounting_posts, battery_cavity, trace_channels, all_pads, ir_diodes, pcb_layout)
+        bottom_scad = self._generate_bottom_shell_scad(battery_cavity, trace_channels, all_pads, ir_diodes, pcb_layout)
         
         # Write SCAD files
         top_scad_path = output_dir / "top_shell.scad"
@@ -238,7 +225,7 @@ class Enclosure3DAgent:
             print("[ENCLOSURE] ⚠ Could not render combined_assembly.stl")
         
         # Also generate manifest
-        manifest = self._generate_manifest(button_holes, mounting_posts)
+        manifest = self._generate_manifest(button_holes)
         manifest_path = output_dir / "enclosure_manifest.json"
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         outputs["manifest"] = manifest_path
@@ -290,20 +277,6 @@ class Enclosure3DAgent:
                 ))
         
         return holes
-    
-    def _extract_mounting_posts(self, pcb_layout: dict) -> List[MountingPost]:
-        """Extract mounting post locations from layout."""
-        posts = []
-        
-        for hole in pcb_layout.get("mounting_holes", []):
-            posts.append(MountingPost(
-                id=hole["id"],
-                center_x=hole["center"][0],
-                center_y=hole["center"][1],
-                hole_diameter=hole.get("drill_diameter_mm", hw_board()["mounting_hole_diameter_mm"])
-            ))
-        
-        return posts
     
     def _extract_battery_cavity(self, pcb_layout: dict) -> Optional[Dict[str, float]]:
         """Extract battery cavity dimensions for 2x AAA batteries side by side."""
@@ -699,7 +672,6 @@ top_shell();
 
     def _generate_bottom_shell_scad(
         self,
-        mounting_posts: List[MountingPost],
         battery_cavity: Optional[Dict[str, float]],
         trace_channels: Optional[List[dict]] = None,
         all_pads: Optional[List[Tuple[float, float]]] = None,
@@ -1064,40 +1036,6 @@ battery_hatch();
 """
         return scad
     
-    def _generate_standoffs_scad(self, mounting_posts: List[MountingPost]) -> str:
-        """Generate OpenSCAD code for standoffs."""
-        lines = []
-        
-        offset_x = self.params.wall_thickness + self.params.pcb_clearance
-        offset_y = self.params.wall_thickness + self.params.pcb_clearance
-        
-        for post in mounting_posts:
-            x = post.center_x + offset_x
-            y = post.center_y + offset_y
-            
-            lines.append(f"            // Standoff {post.id}")
-            lines.append(f"            translate([{x:.2f}, {y:.2f}, 0])")
-            lines.append(f"                cylinder(d=standoff_od, h=bottom_thickness + standoff_height, $fn=24);")
-        
-        return "\n".join(lines)
-    
-    def _generate_screw_holes_scad(self, mounting_posts: List[MountingPost]) -> str:
-        """Generate OpenSCAD code for screw holes."""
-        lines = []
-        
-        offset_x = self.params.wall_thickness + self.params.pcb_clearance
-        offset_y = self.params.wall_thickness + self.params.pcb_clearance
-        
-        for post in mounting_posts:
-            x = post.center_x + offset_x
-            y = post.center_y + offset_y
-            
-            lines.append(f"        // Screw hole {post.id}")
-            lines.append(f"        translate([{x:.2f}, {y:.2f}, -1])")
-            lines.append(f"            cylinder(d=screw_hole_d, h=bottom_thickness + standoff_height + 2, $fn=16);")
-        
-        return "\n".join(lines)
-    
     def _generate_battery_cavity_scad(self, battery_cavity: Optional[Dict[str, float]]) -> str:
         """Generate OpenSCAD code for battery cavity."""
         if battery_cavity is None:
@@ -1308,8 +1246,7 @@ battery_hatch();
     
     def _generate_manifest(
         self,
-        button_holes: List[ButtonHole],
-        mounting_posts: List[MountingPost]
+        button_holes: List[ButtonHole]
     ) -> Dict[str, Any]:
         """Generate enclosure manifest with all parameters."""
         return {
@@ -1319,9 +1256,7 @@ battery_hatch();
                 "board_length_mm": self.params.board_length,
                 "board_thickness_mm": self.params.board_thickness,
                 "wall_thickness_mm": self.params.wall_thickness,
-                "corner_radius_mm": self.params.corner_radius,
-                "standoff_height_mm": self.params.standoff_height,
-                "screw_hole_diameter_mm": self.params.screw_hole_diameter
+                "corner_radius_mm": self.params.corner_radius
             },
             "clearances": {
                 "pcb_clearance_mm": self.params.pcb_clearance,
@@ -1335,14 +1270,6 @@ battery_hatch();
                         "diameter_mm": h.diameter
                     }
                     for h in button_holes
-                ],
-                "mounting_posts": [
-                    {
-                        "id": p.id,
-                        "center": [p.center_x, p.center_y],
-                        "hole_diameter_mm": p.hole_diameter
-                    }
-                    for p in mounting_posts
                 ]
             },
             "outer_dimensions": {

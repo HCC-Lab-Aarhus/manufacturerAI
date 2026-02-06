@@ -16,7 +16,6 @@
         "component_overlap": {"type": "boolean"},
         "edge_clearance": {"type": "boolean"},
         "button_spacing": {"type": "boolean"},
-        "mounting_holes": {"type": "boolean"},
         "board_dimensions": {"type": "boolean"}
       }
     },
@@ -33,7 +32,6 @@
               "COMPONENT_OVERLAP",
               "EDGE_CLEARANCE_VIOLATION",
               "BUTTON_SPACING_VIOLATION",
-              "MOUNTING_HOLE_TOO_CLOSE",
               "BOARD_TOO_SMALL",
               "KEEPOUT_OVERLAP",
               "INVALID_FOOTPRINT"

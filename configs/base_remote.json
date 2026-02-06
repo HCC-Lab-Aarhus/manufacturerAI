@@ -5,8 +5,6 @@
     "enclosure_wall_clearance_mm": 2.0,
     "pcb_thickness_mm": 1.6,
     "grid_resolution_mm": 0.5,
-    "mounting_hole_diameter_mm": 3.0,
-    "mounting_hole_inset_mm": 6.0,
     "component_margin_mm": 1.0
   },
 

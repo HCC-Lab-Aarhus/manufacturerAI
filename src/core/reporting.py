@@ -48,7 +48,6 @@ def write_report(
         button_count = sum(1 for c in pcb_layout.get("components", []) if c["type"] == "button")
         lines.append(f"- Total components: {component_count}")
         lines.append(f"- Buttons: {button_count}")
-        lines.append(f"- Mounting holes: {len(pcb_layout.get('mounting_holes', []))}")
         lines.append("")
     
     if feasibility_report:

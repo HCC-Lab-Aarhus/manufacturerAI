@@ -3,7 +3,7 @@
   "title": "PCBLayout",
   "description": "Output of PCB Agent - complete board geometry",
   "type": "object",
-  "required": ["board", "components", "mounting_holes"],
+  "required": ["board", "components"],
   "properties": {
     "board": {
       "type": "object",
@@ -88,30 +88,6 @@
                 }
               }
             }
-          }
-        }
-      }
-    },
-    "mounting_holes": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["id", "center", "drill_diameter_mm"],
-        "properties": {
-          "id": {"type": "string"},
-          "center": {
-            "type": "array",
-            "minItems": 2,
-            "maxItems": 2,
-            "items": {"type": "number"}
-          },
-          "drill_diameter_mm": {
-            "type": "number",
-            "default": 3.0
-          },
-          "pad_diameter_mm": {
-            "type": "number",
-            "description": "Optional pad around hole"
           }
         }
       }

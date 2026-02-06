@@ -78,7 +78,6 @@ def test_pcb_agent_from_design_spec():
     assert "board" in pcb_layout
     assert "outline_polygon" in pcb_layout["board"]
     assert "components" in pcb_layout
-    assert "mounting_holes" in pcb_layout
     
     # Count components
     buttons = [c for c in pcb_layout["components"] if c["type"] == "button"]
@@ -87,7 +86,6 @@ def test_pcb_agent_from_design_spec():
     print("✓ PCB Agent test passed")
     print(f"  Board outline: {len(pcb_layout['board']['outline_polygon'])} vertices")
     print(f"  Components: {len(pcb_layout['components'])}")
-    print(f"  Mounting holes: {len(pcb_layout['mounting_holes'])}")
     
     return pcb_layout
 
@@ -107,10 +105,6 @@ def test_routing_via_typescript():
              "center": [30, 50], "rotation_deg": 0, "keepout": {"type": "circle", "radius_mm": 6}},
             {"id": "U1", "ref": "controller", "type": "controller", "footprint": "ATMEGA328P",
              "center": [20, 100], "rotation_deg": 0, "keepout": {"type": "rectangle", "width_mm": 12, "height_mm": 12}},
-        ],
-        "mounting_holes": [
-            {"id": "MH1", "center": [5, 5], "drill_diameter_mm": 3.0},
-            {"id": "MH2", "center": [35, 5], "drill_diameter_mm": 3.0},
         ]
     }
     
