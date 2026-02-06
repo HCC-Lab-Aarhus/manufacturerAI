@@ -91,8 +91,9 @@ class Enclosure3DAgent:
     Parametric 3D enclosure generator.
     
     Reads pcb_layout.json and generates:
-    - top_shell.stl (button holes, LED window)
-    - bottom_shell.stl (battery cavity, trace channels)
+    - remote.stl (unified enclosure with button holes, trace channels, and component cutouts)
+    - battery_hatch.stl (removable battery compartment cover)
+    - print_plate.stl (all parts laid out for printing)
     - OpenSCAD source files for customization
     """
     
@@ -145,19 +146,26 @@ class Enclosure3DAgent:
         all_pads = self._extract_all_pads_from_layout(pcb_layout, grid_resolution=hw_board()["grid_resolution_mm"])
         print(f"[ENCLOSURE] Component pads: {len(all_pads)} pinholes for component pins")
         
-        # Generate OpenSCAD files
-        # Note: IR diode slits are now in bottom shell walls (diodes point outward from back wall)
-        print("[ENCLOSURE] PATH: Generating OpenSCAD files...")
-        top_scad = self._generate_top_shell_scad(button_holes, [], None, battery_cavity)
-        bottom_scad = self._generate_bottom_shell_scad(battery_cavity, trace_channels, all_pads, ir_diodes, pcb_layout)
+        # Generate unified remote SCAD (single closed shell)
+        print("[ENCLOSURE] PATH: Generating unified remote SCAD...")
+        remote_scad = self._generate_unified_remote_scad(
+            button_holes=button_holes,
+            battery_cavity=battery_cavity,
+            ir_diodes=ir_diodes,
+            trace_channels=trace_channels,
+            all_pads=all_pads,
+            pcb_layout=pcb_layout
+        )
         
-        # Write SCAD files
-        top_scad_path = output_dir / "top_shell.scad"
-        bottom_scad_path = output_dir / "bottom_shell.scad"
+        # Write remote SCAD file
+        remote_scad_path = output_dir / "remote.scad"
+        remote_scad_path.write_text(remote_scad, encoding="utf-8")
+        print(f"[ENCLOSURE] ✓ Generated remote.scad ({len(remote_scad)} chars)")
         
-        top_scad_path.write_text(top_scad, encoding="utf-8")
-        bottom_scad_path.write_text(bottom_scad, encoding="utf-8")
-        print(f"[ENCLOSURE] ✓ Generated SCAD files: top_shell.scad ({len(top_scad)} chars), bottom_shell.scad ({len(bottom_scad)} chars)")
+        # Collect SCAD outputs
+        outputs = {
+            "remote_scad": remote_scad_path
+        }
         
         # Generate battery hatch if battery present
         if battery_cavity:
@@ -165,47 +173,25 @@ class Enclosure3DAgent:
             battery_hatch_path = output_dir / "battery_hatch.scad"
             battery_hatch_path.write_text(battery_hatch_scad, encoding="utf-8")
             print(f"[ENCLOSURE] ✓ Generated battery_hatch.scad ({len(battery_hatch_scad)} chars)")
-        
-        # Collect SCAD outputs
-        outputs = {
-            "top_shell_scad": top_scad_path,
-            "bottom_shell_scad": bottom_scad_path
-        }
-        
-        if battery_cavity:
             outputs["battery_hatch_scad"] = battery_hatch_path
         
-        # Generate combined assembly (bottom + flipped top + hatch beside)
-        # Pass component and trace data so support pillars avoid them
-        combined_scad = self._generate_combined_assembly_scad(
-            battery_cavity=battery_cavity,
-            pcb_layout=pcb_layout,
-            trace_channels=trace_channels,
-            all_pads=all_pads
-        )
-        combined_scad_path = output_dir / "combined_assembly.scad"
-        combined_scad_path.write_text(combined_scad, encoding="utf-8")
-        outputs["combined_assembly_scad"] = combined_scad_path
-        print(f"[ENCLOSURE] ✓ Generated combined_assembly.scad ({len(combined_scad)} chars)")
+        # Generate print plate assembly (remote + hatch beside)
+        print_plate_scad = self._generate_print_plate_scad(battery_cavity)
+        print_plate_scad_path = output_dir / "print_plate.scad"
+        print_plate_scad_path.write_text(print_plate_scad, encoding="utf-8")
+        outputs["print_plate_scad"] = print_plate_scad_path
+        print(f"[ENCLOSURE] ✓ Generated print_plate.scad ({len(print_plate_scad)} chars)")
         
-        # Render all STLs for preview
-        print("[ENCLOSURE] PATH: Rendering all models to STL...")
+        # Render STLs for preview
+        print("[ENCLOSURE] PATH: Rendering models to STL...")
         
-        # Top shell
-        top_stl_path = output_dir / "top_shell.stl"
-        if self._render_scad_to_stl(top_scad_path, top_stl_path):
-            outputs["top_shell_stl"] = top_stl_path
-            print("[ENCLOSURE] ✓ Rendered top_shell.stl")
+        # Remote
+        remote_stl_path = output_dir / "remote.stl"
+        if self._render_scad_to_stl(remote_scad_path, remote_stl_path):
+            outputs["remote_stl"] = remote_stl_path
+            print("[ENCLOSURE] ✓ Rendered remote.stl")
         else:
-            print("[ENCLOSURE] ⚠ Could not render top_shell.stl")
-        
-        # Bottom shell
-        bottom_stl_path = output_dir / "bottom_shell.stl"
-        if self._render_scad_to_stl(bottom_scad_path, bottom_stl_path):
-            outputs["bottom_shell_stl"] = bottom_stl_path
-            print("[ENCLOSURE] ✓ Rendered bottom_shell.stl")
-        else:
-            print("[ENCLOSURE] ⚠ Could not render bottom_shell.stl")
+            print("[ENCLOSURE] ⚠ Could not render remote.stl")
         
         # Battery hatch
         if battery_cavity:
@@ -216,13 +202,13 @@ class Enclosure3DAgent:
             else:
                 print("[ENCLOSURE] ⚠ Could not render battery_hatch.stl")
         
-        # Combined assembly
-        combined_stl_path = output_dir / "combined_assembly.stl"
-        if self._render_scad_to_stl(combined_scad_path, combined_stl_path):
-            outputs["combined_assembly_stl"] = combined_stl_path
-            print("[ENCLOSURE] ✓ Rendered combined_assembly.stl")
+        # Print plate (combined)
+        print_plate_stl_path = output_dir / "print_plate.stl"
+        if self._render_scad_to_stl(print_plate_scad_path, print_plate_stl_path):
+            outputs["print_plate_stl"] = print_plate_stl_path
+            print("[ENCLOSURE] ✓ Rendered print_plate.stl")
         else:
-            print("[ENCLOSURE] ⚠ Could not render combined_assembly.stl")
+            print("[ENCLOSURE] ⚠ Could not render print_plate.stl")
         
         # Also generate manifest
         manifest = self._generate_manifest(button_holes)
@@ -411,65 +397,117 @@ class Enclosure3DAgent:
         
         return pads
     
-    def _generate_top_shell_scad(
+    def _generate_unified_remote_scad(
         self,
         button_holes: List[ButtonHole],
-        led_windows: List[Dict[str, float]],
+        battery_cavity: Optional[Dict[str, float]],
         ir_diodes: Optional[List[Dict[str, float]]] = None,
-        battery_cavity: Optional[Dict[str, float]] = None
+        trace_channels: Optional[List[dict]] = None,
+        all_pads: Optional[List[Tuple[float, float]]] = None,
+        pcb_layout: Optional[dict] = None
     ) -> str:
-        """Generate OpenSCAD code for top shell (lid) with friction-fit rim.
+        """Generate OpenSCAD code for unified remote enclosure (single piece).
         
-        The top shell is a flat lid that sits on the bottom shell with:
-        - A small inset rim for friction fit
-        - Button holes and LED windows cut through
+        The remote is a single closed shell with:
+        - Floor with trace channels and pinholes
+        - Walls around the perimeter
+        - Solid top (ceiling) with button holes cut through
+        - IR diode hole in the back wall
+        - Battery compartment with cutout for hatch
+        - Component cutouts for placing parts after printing
         """
         p = self.params
         
-        # Generate friction-fit rim on bottom of lid
-        friction_rim_code = self._generate_friction_rim_scad()
+        # Generate all the subcomponent code
+        trace_channel_code = self._generate_trace_channels_scad(trace_channels) if trace_channels else "        // No trace channels"
+        pinhole_code = self._generate_pinholes_scad(all_pads) if all_pads else "        // No pinholes"
+        battery_cutout_code = self._generate_battery_cutout_scad(battery_cavity) if battery_cavity else "        // No battery cavity"
+        ir_slit_code = self._generate_ir_diode_slits_scad(ir_diodes) if ir_diodes else "        // No IR diode slits"
+        battery_guard_code = self._generate_battery_guards_scad(battery_cavity) if battery_cavity else "    // No battery guards"
+        component_cutout_code = self._generate_component_cutouts_scad(pcb_layout) if pcb_layout else "        // No component cutouts"
+        button_holes_code = self._generate_button_holes_scad(button_holes)
         
-        scad = f"""// Top Shell (Lid) - Generated by ManufacturerAI
+        # Total height = floor + inner cavity + ceiling
+        total_height = p.bottom_thickness + p.shell_height + p.top_thickness
+        inner_height = p.shell_height  # Height of inner cavity
+        
+        scad = f"""// Unified Remote Enclosure - Generated by ManufacturerAI
+// Single-piece closed shell with button holes, trace channels, and component cutouts
 // This file is parametric - edit values below to customize
-// Flat lid with friction-fit rim that sits inside the bottom shell walls
 
-// Parameters
+// ═══════════════════════════════════════════════════════════════════════════
+// PARAMETERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Outer dimensions
 outer_width = {p.outer_width:.2f};
 outer_length = {p.outer_length:.2f};
-wall_thickness = {p.wall_thickness:.2f};
-top_thickness = {p.top_thickness:.2f};
+total_height = {total_height:.2f};
 corner_radius = {p.corner_radius:.2f};
 
-// Friction-fit rim parameters
-rim_height = 3.0;  // Height of rim that fits inside bottom shell
-rim_thickness = 1.2;  // Thickness of rim wall
-rim_clearance = 0.3;  // Clearance for friction fit
+// Wall and floor/ceiling thickness
+wall_thickness = {p.wall_thickness:.2f};
+bottom_thickness = {p.bottom_thickness:.2f};  // Floor thickness
+top_thickness = {p.top_thickness:.2f};  // Ceiling thickness
+shell_height = {p.shell_height:.2f};  // Inner cavity height
 
-// Main lid
-module top_shell() {{
+// Trace channel parameters (for conductive filament)
+trace_channel_depth = {p.trace_channel_depth:.2f};
+trace_channel_width = {p.trace_channel_width:.2f};
+pinhole_depth = {p.pinhole_depth:.2f};
+pinhole_diameter = {p.pinhole_diameter:.2f};
+
+// Battery hatch parameters
+battery_hatch_clearance = {p.battery_hatch_clearance:.2f};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MAIN MODULE
+// ═══════════════════════════════════════════════════════════════════════════
+
+module remote() {{
     difference() {{
         union() {{
-            // Flat lid plate with rounded corners
-            hull() {{
-                for (x = [corner_radius, outer_width - corner_radius])
-                    for (y = [corner_radius, outer_length - corner_radius])
-                        translate([x, y, 0])
-                            cylinder(r=corner_radius, h=top_thickness, $fn=32);
+            difference() {{
+                // Outer shell - closed box with rounded corners
+                hull() {{
+                    for (x = [corner_radius, outer_width - corner_radius])
+                        for (y = [corner_radius, outer_length - corner_radius])
+                            translate([x, y, 0])
+                                cylinder(r=corner_radius, h=total_height, $fn=32);
+                }}
+                
+                // Inner cavity (hollowed out, leaving floor, walls, and ceiling)
+                translate([wall_thickness, wall_thickness, bottom_thickness])
+                    cube([outer_width - 2*wall_thickness, 
+                          outer_length - 2*wall_thickness, 
+                          shell_height]);
+                
+                // Battery compartment cutout (for spring-loaded hatch)
+{battery_cutout_code}
+                
+                // IR diode hole through back wall
+{ir_slit_code}
             }}
             
-            // Friction-fit rim (hangs down from lid, fits inside bottom shell walls)
-{friction_rim_code}
+            // Solid fill between battery guard boundary and outer walls
+{battery_guard_code}
         }}
         
-        // Button holes
-{self._generate_button_holes_scad(button_holes)}
+        // Button holes cut through the top (ceiling)
+{button_holes_code}
         
-        // LED windows
-{self._generate_led_windows_scad(led_windows)}
+        // Trace channels carved into floor (for conductive filament)
+{trace_channel_code}
+        
+        // Pinholes for component pins
+{pinhole_code}
+        
+        // Component cutouts through solid fill
+{component_cutout_code}
     }}
 }}
 
-top_shell();
+remote();
 """
         return scad
     
@@ -535,7 +573,7 @@ top_shell();
         # Guard boundary (slightly larger than battery compartment)
         guard_width = width + 2 * p.battery_guard_wall
         guard_height = height + 2 * p.battery_guard_wall
-        guard_z_height = p.shell_height - p.bottom_thickness  # Floor to top of walls
+        guard_z_height = p.shell_height  # Fill entire inner cavity height to meet ceiling
         
         # Inner cavity bounds
         inner_x_min = p.wall_thickness
@@ -574,223 +612,7 @@ top_shell();
             lines.append(f"        cube([{guard_width:.2f}, {back_h:.2f}, {guard_z_height:.2f}]);")
         
         return "\n".join(lines)
-    
-    def _generate_snap_clips_scad(self) -> str:
-        """Generate OpenSCAD code for snap-fit clips on bottom shell walls.
-        
-        Creates small protruding hooks on the inside of the bottom shell walls
-        that the friction rim of the top shell (lid) clicks onto.
-        
-        Note: No clips on back wall (where IR diode is) to avoid interference.
-        """
-        p = self.params
-        lines = ["    // Snap-fit clips on inside of walls (left and right only)"]
-        
-        clip_width = 5.0  # Thinner clips
-        clip_height = 1.5
-        clip_depth = 1.0
-        
-        # Position clips near the top of the walls (where lid rim meets)
-        clip_z = p.shell_height - 3.0  # 3mm from top edge of wall
-        
-        # Inset from corners - keep clips away from IR diode area at back
-        front_inset = 15.0
-        back_inset = 30.0  # Larger inset from back to avoid IR diode area
-        
-        # Left wall clips (X = wall_thickness)
-        clip_x = p.wall_thickness
-        lines.append(f"    // Left wall clips")
-        lines.append(f"    translate([{clip_x:.2f}, {front_inset:.2f}, {clip_z:.2f}])")
-        lines.append(f"        rotate([0, 0, 90]) snap_clip();")
-        # Middle clip on left wall for long enclosures
-        if p.outer_length > 100:
-            mid_y = p.outer_length / 2 - clip_width / 2
-            lines.append(f"    translate([{clip_x:.2f}, {mid_y:.2f}, {clip_z:.2f}])")
-            lines.append(f"        rotate([0, 0, 90]) snap_clip();")
-        lines.append(f"    translate([{clip_x:.2f}, {p.outer_length - back_inset - clip_width:.2f}, {clip_z:.2f}])")
-        lines.append(f"        rotate([0, 0, 90]) snap_clip();")
-        
-        # Right wall clips (X = outer_width - wall_thickness)
-        clip_x = p.outer_width - p.wall_thickness - clip_depth
-        lines.append(f"    // Right wall clips")
-        lines.append(f"    translate([{clip_x:.2f}, {front_inset + clip_width:.2f}, {clip_z:.2f}])")
-        lines.append(f"        rotate([0, 0, -90]) snap_clip();")
-        # Middle clip on right wall for long enclosures
-        if p.outer_length > 100:
-            mid_y = p.outer_length / 2 + clip_width / 2
-            lines.append(f"    translate([{clip_x:.2f}, {mid_y:.2f}, {clip_z:.2f}])")
-            lines.append(f"        rotate([0, 0, -90]) snap_clip();")
-        lines.append(f"    translate([{clip_x:.2f}, {p.outer_length - back_inset:.2f}, {clip_z:.2f}])")
-        lines.append(f"        rotate([0, 0, -90]) snap_clip();")
-        
-        # No front or back wall clips
-        
-        return "\n".join(lines)
-    
-    def _generate_friction_rim_scad(self) -> str:
-        """Generate OpenSCAD code for friction-fit rim on top shell (lid).
-        
-        Creates a rim that hangs down from the lid and fits inside the 
-        bottom shell's walls. The clips on the bottom shell walls catch
-        this rim for a friction close.
-        """
-        p = self.params
-        lines = ["            // Friction-fit rim hanging down from lid"]
-        
-        rim_height = 3.0
-        rim_thickness = 1.2
-        rim_clearance = 0.3  # Clearance to fit inside bottom shell walls
-        
-        # Rim hangs down from the underside of the lid
-        # Positioned to fit just inside the bottom shell's walls
-        rim_inset = p.wall_thickness + rim_clearance
-        
-        # Left rim
-        lines.append(f"            translate([{rim_inset:.2f}, {rim_inset:.2f}, -{rim_height:.2f}])")
-        lines.append(f"                cube([{rim_thickness:.2f}, {p.outer_length - 2*rim_inset:.2f}, {rim_height:.2f}]);")
-        
-        # Right rim
-        lines.append(f"            translate([{p.outer_width - rim_inset - rim_thickness:.2f}, {rim_inset:.2f}, -{rim_height:.2f}])")
-        lines.append(f"                cube([{rim_thickness:.2f}, {p.outer_length - 2*rim_inset:.2f}, {rim_height:.2f}]);")
-        
-        # Front rim
-        lines.append(f"            translate([{rim_inset:.2f}, {rim_inset:.2f}, -{rim_height:.2f}])")
-        lines.append(f"                cube([{p.outer_width - 2*rim_inset:.2f}, {rim_thickness:.2f}, {rim_height:.2f}]);")
-        
-        # Back rim
-        lines.append(f"            translate([{rim_inset:.2f}, {p.outer_length - rim_inset - rim_thickness:.2f}, -{rim_height:.2f}])")
-        lines.append(f"                cube([{p.outer_width - 2*rim_inset:.2f}, {rim_thickness:.2f}, {rim_height:.2f}]);")
-        
-        return "\n".join(lines)
 
-    def _generate_bottom_shell_scad(
-        self,
-        battery_cavity: Optional[Dict[str, float]],
-        trace_channels: Optional[List[dict]] = None,
-        all_pads: Optional[List[Tuple[float, float]]] = None,
-        ir_diodes: Optional[List[Dict[str, float]]] = None,
-        pcb_layout: Optional[dict] = None
-    ) -> str:
-        """Generate OpenSCAD code for bottom shell with tall enclosing walls.
-        
-        The bottom shell has:
-        - Tall enclosing walls around the perimeter
-        - Snap-fit clips on the inside walls for the lid to click onto
-        - Trace channels carved into the floor for conductive filament
-        - Pinholes for component pins
-        - Component cutouts through the solid fill
-        - Battery compartment cutout with ledges
-        - IR diode holes through the back wall
-        """
-        p = self.params
-        
-        # Generate trace channel code if traces provided
-        trace_channel_code = self._generate_trace_channels_scad(trace_channels) if trace_channels else "        // No trace channels"
-        
-        # Generate pinhole code for all component pads
-        pinhole_code = self._generate_pinholes_scad(all_pads) if all_pads else "        // No pinholes"
-        
-        # Generate battery cavity cutout code
-        battery_cutout_code = self._generate_battery_cutout_scad(battery_cavity) if battery_cavity else "        // No battery cavity"
-        
-        # Generate snap-fit clips on inside of walls
-        snap_clips_code = self._generate_snap_clips_scad()
-        
-        # Generate IR diode slits (now in bottom shell walls)
-        ir_slit_code = self._generate_ir_diode_slits_scad(ir_diodes) if ir_diodes else "        // No IR diode slits"
-        
-        # Generate battery guard code
-        battery_guard_code = self._generate_battery_guards_scad(battery_cavity) if battery_cavity else "    // No battery guards"
-        
-        # Generate component cutouts (rectangular pockets through solid fill)
-        component_cutout_code = self._generate_component_cutouts_scad(pcb_layout) if pcb_layout else "        // No component cutouts"
-        
-        scad = f"""// Bottom Shell - Generated by ManufacturerAI
-// This file is parametric - edit values below to customize
-// Enclosing shell with tall walls and snap-fit clips for lid.
-// Trace channels carved into the floor are meant to be filled
-// with conductive filament after printing.
-
-// Parameters
-outer_width = {p.outer_width:.2f};
-outer_length = {p.outer_length:.2f};
-bottom_thickness = {p.bottom_thickness:.2f};
-corner_radius = {p.corner_radius:.2f};
-wall_thickness = {p.wall_thickness:.2f};
-shell_height = {p.shell_height:.2f};  // Height of enclosing walls
-
-// Trace channel parameters
-trace_channel_depth = {p.trace_channel_depth:.2f};  // Depth of conductive trace channels
-trace_channel_width = {p.trace_channel_width:.2f};  // Width of trace channels
-pinhole_depth = {p.pinhole_depth:.2f};  // Depth of pinholes for component pins (2x trace depth)
-pinhole_diameter = {p.pinhole_diameter:.2f};  // Diameter of pinholes
-
-// Battery hatch parameters
-battery_hatch_clearance = {p.battery_hatch_clearance:.2f};
-
-// Snap-fit parameters
-clip_width = 5.0;  // Thinner clips
-clip_height = 1.5;
-clip_depth = 1.0;  // How far clip protrudes
-
-// Snap-fit clip module - small protruding hook
-module snap_clip() {{
-    // Ramped clip for easy insertion, hook for retention
-    hull() {{
-        cube([clip_width, 0.4, clip_height]);
-        translate([0, clip_depth, clip_height * 0.6])
-            cube([clip_width, 0.4, clip_height * 0.4]);
-    }}
-}}
-
-// Main shell (base with tall enclosing walls)
-module bottom_shell() {{
-    difference() {{
-        union() {{
-            difference() {{
-                // Outer shell with walls
-                hull() {{
-                    for (x = [corner_radius, outer_width - corner_radius])
-                        for (y = [corner_radius, outer_length - corner_radius])
-                            translate([x, y, 0])
-                                cylinder(r=corner_radius, h=shell_height, $fn=32);
-                }}
-                
-                // Inner cavity (hollowed out, leaving walls and floor)
-                translate([wall_thickness, wall_thickness, bottom_thickness])
-                    cube([outer_width - 2*wall_thickness, 
-                          outer_length - 2*wall_thickness, 
-                          shell_height]);
-                
-                // Battery compartment cutout (for spring-loaded hatch)
-{battery_cutout_code}
-                
-                // IR diode holes through back wall
-{ir_slit_code}
-            }}
-            
-            // Snap-fit clips on inside of walls
-{snap_clips_code}
-            
-            // Solid fill between battery guard boundary and outer walls
-{battery_guard_code}
-        }}
-        
-        // Trace channels cut through floor AND solid fill (for conductive filament)
-{trace_channel_code}
-        
-        // Pinholes cut through floor AND solid fill (for component pins)
-{pinhole_code}
-        
-        // Component cutouts through solid fill (place components after printing)
-{component_cutout_code}
-    }}
-}}
-
-bottom_shell();
-"""
-        return scad
-    
     def _generate_component_cutouts_scad(self, pcb_layout: Optional[dict]) -> str:
         """Generate OpenSCAD code for rectangular component cutouts.
         
@@ -830,10 +652,10 @@ bottom_shell();
                 w = 10.0 + 2 * clearance
                 h = 10.0 + 2 * clearance
             
-            # Cut from floor up through the full shell height
+            # Cut from floor up through the full inner cavity height
             lines.append(f"        // {comp_id} ({comp.get('type', 'unknown')})")
             lines.append(f"        translate([{cx - w/2:.2f}, {cy - h/2:.2f}, bottom_thickness])")
-            lines.append(f"            cube([{w:.2f}, {h:.2f}, shell_height - bottom_thickness + 0.01]);")
+            lines.append(f"            cube([{w:.2f}, {h:.2f}, shell_height + 0.01]);")
         
         return "\n".join(lines)
     
@@ -1272,19 +1094,15 @@ battery_hatch();
             }
         }
     
-    def _generate_combined_assembly_scad(
+    def _generate_print_plate_scad(
         self,
-        battery_cavity: Optional[Dict[str, float]],
-        pcb_layout: Optional[dict] = None,
-        trace_channels: Optional[List[dict]] = None,
-        all_pads: Optional[List[Tuple[float, float]]] = None
+        battery_cavity: Optional[Dict[str, float]]
     ) -> str:
-        """Generate OpenSCAD code for combined print plate.
+        """Generate OpenSCAD code for print plate with remote and battery hatch.
         
-        Places all parts side by side for printing on one plate:
-        - Bottom shell (flat, trace channels facing up)
-        - Top shell (flat, button holes facing up)
-        - Battery hatch
+        Places parts side by side for printing on one plate:
+        - Remote enclosure (unified shell)
+        - Battery hatch (if present)
         
         Each part is in its optimal print orientation.
         """
@@ -1296,25 +1114,23 @@ battery_hatch();
         # Spacing between parts
         gap = 10.0
         
-        # Calculate positions - all parts side by side along X axis
-        bottom_x = 0
-        top_x = p.outer_width + gap
-        hatch_x = 2 * p.outer_width + 2 * gap if battery_cavity else 0
+        # Calculate positions
+        remote_x = 0
+        hatch_x = p.outer_width + gap if battery_cavity else 0
         
         hatch_placement = ''
         if battery_cavity:
             hatch_placement = f'''
-// Battery hatch - beside top shell
+// Battery hatch - beside remote
 translate([{hatch_x:.2f}, {p.outer_length/2 - battery_cavity["height"]/2:.2f}, 0])
     battery_hatch();
 '''
         
-        scad = f"""// Combined Print Plate - Generated by ManufacturerAI
-// All parts laid out side by side for single-plate printing
-// Each part is in optimal print orientation (flat)
+        scad = f"""// Print Plate - Generated by ManufacturerAI
+// Remote and battery hatch laid out side by side for single-plate printing
+// Each part is in optimal print orientation
 
-use <bottom_shell.scad>
-use <top_shell.scad>
+use <remote.scad>
 {hatch_include}
 
 // Parameters
@@ -1322,150 +1138,9 @@ outer_width = {p.outer_width:.2f};
 outer_length = {p.outer_length:.2f};
 gap = {gap:.2f};
 
-// Bottom shell - at origin, trace channels facing up
-translate([{bottom_x:.2f}, 0, 0])
-    bottom_shell();
-
-// Top shell - beside bottom shell, button holes facing up
-// No rotation needed - prints with top plate at Z=0
-translate([{top_x:.2f}, 0, 0])
-    top_shell();
+// Remote - at origin
+translate([{remote_x:.2f}, 0, 0])
+    remote();
 {hatch_placement}
 """
         return scad
-    
-    def _generate_support_pillars_scad(
-        self,
-        battery_cavity: Optional[Dict[str, float]],
-        pcb_layout: Optional[dict] = None,
-        trace_channels: Optional[List[dict]] = None,
-        all_pads: Optional[List[Tuple[float, float]]] = None
-    ) -> str:
-        """Generate OpenSCAD code for internal support pillars.
-        
-        Places cylindrical pillars at strategic locations inside the enclosure
-        to support the top shell during printing. Pillars are placed:
-        - Near the corners (but inside the walls)
-        - Along the long edges at regular intervals
-        - Avoiding battery cavity, components, traces, and pinholes
-        """
-        p = self.params
-        lines = ["// Support pillars for bridging - avoiding traces and components"]
-        
-        # Offset from PCB coordinates to enclosure coordinates
-        offset_x = p.wall_thickness + p.pcb_clearance
-        offset_y = p.wall_thickness + p.pcb_clearance
-        
-        # Pillar radius for collision detection
-        pillar_radius = 2.0  # Slightly larger than half diameter for safety margin
-        
-        # Collect all exclusion zones (circles with center and radius)
-        exclusion_zones = []
-        
-        # 1. Add component keepout zones
-        if pcb_layout and "components" in pcb_layout:
-            for comp in pcb_layout["components"]:
-                cx, cy = comp["center"]
-                # Convert to enclosure coordinates
-                cx_enc = cx + offset_x
-                cy_enc = cy + offset_y
-                
-                keepout = comp.get("keepout", {})
-                if keepout.get("type") == "circle":
-                    radius = keepout.get("radius_mm", 5.0) + 3.0  # Add margin
-                    exclusion_zones.append((cx_enc, cy_enc, radius))
-                elif keepout.get("type") == "rectangle":
-                    # Use half-diagonal as exclusion radius
-                    w = keepout.get("width_mm", 10.0) / 2 + 3.0
-                    h = keepout.get("height_mm", 10.0) / 2 + 3.0
-                    radius = (w**2 + h**2) ** 0.5
-                    exclusion_zones.append((cx_enc, cy_enc, radius))
-                else:
-                    # Default 8mm exclusion for unknown components
-                    exclusion_zones.append((cx_enc, cy_enc, 8.0))
-        
-        # 2. Add battery cavity exclusion
-        if battery_cavity:
-            bat_cx = battery_cavity["center_x"] + offset_x
-            bat_cy = battery_cavity["center_y"] + offset_y
-            bat_w = battery_cavity["width"] / 2 + 5.0
-            bat_h = battery_cavity["height"] / 2 + 5.0
-            bat_radius = (bat_w**2 + bat_h**2) ** 0.5
-            exclusion_zones.append((bat_cx, bat_cy, bat_radius))
-        
-        # 3. Add pinhole exclusion zones (smaller radius around each pad)
-        if all_pads:
-            for (px, py) in all_pads:
-                px_enc = px + offset_x
-                py_enc = py + offset_y
-                exclusion_zones.append((px_enc, py_enc, 3.0))  # 3mm around each pinhole
-        
-        # 4. Add trace exclusion zones (sample points along traces)
-        if trace_channels:
-            for trace in trace_channels:
-                segments = trace.get("segments", [])
-                for seg in segments:
-                    x1, y1 = seg.get("start", [0, 0])
-                    x2, y2 = seg.get("end", [0, 0])
-                    # Sample points along segment
-                    length = ((x2-x1)**2 + (y2-y1)**2) ** 0.5
-                    num_samples = max(2, int(length / 5.0))  # Sample every 5mm
-                    for i in range(num_samples + 1):
-                        t = i / num_samples if num_samples > 0 else 0
-                        sx = x1 + t * (x2 - x1) + offset_x
-                        sy = y1 + t * (y2 - y1) + offset_y
-                        exclusion_zones.append((sx, sy, 2.5))  # 2.5mm around traces
-        
-        # Helper function to check if position conflicts with exclusion zones
-        def is_valid_position(px, py):
-            for (ex, ey, er) in exclusion_zones:
-                dist = ((px - ex)**2 + (py - ey)**2) ** 0.5
-                if dist < er + pillar_radius:
-                    return False
-            return True
-        
-        # Generate candidate pillar positions
-        # Use a grid approach for better coverage
-        pillar_positions = []
-        
-        # Inset from walls (pillars should be inside the cavity)
-        inset = p.wall_thickness + 2.0
-        
-        # Grid spacing - place pillars every ~20mm for good support
-        grid_spacing = 18.0
-        
-        # Generate grid of candidate positions
-        x = inset
-        while x < p.outer_width - inset:
-            y = inset
-            while y < p.outer_length - inset:
-                if is_valid_position(x, y):
-                    pillar_positions.append((x, y))
-                y += grid_spacing
-            x += grid_spacing
-        
-        # Also add edge positions for better perimeter support
-        edge_positions = [
-            (inset, inset),  # Bottom-left
-            (p.outer_width - inset, inset),  # Bottom-right
-            (inset, p.outer_length - inset),  # Top-left
-            (p.outer_width - inset, p.outer_length - inset),  # Top-right
-        ]
-        for pos in edge_positions:
-            if is_valid_position(pos[0], pos[1]) and pos not in pillar_positions:
-                pillar_positions.append(pos)
-        
-        # If no valid positions found, warn and return empty
-        if not pillar_positions:
-            lines.append("// WARNING: No valid pillar positions found - all positions conflict with components/traces")
-            lines.append("// Consider using slicer-generated supports instead")
-            return "\n".join(lines)
-        
-        lines.append(f"// Generated {len(pillar_positions)} support pillars")
-        
-        # Generate SCAD for each pillar
-        for i, (px, py) in enumerate(pillar_positions):
-            lines.append(f"translate([{px:.2f}, {py:.2f}, bottom_thickness])")
-            lines.append(f"    cylinder(d=pillar_diameter, h=pillar_height, $fn=16);")
-        
-        return "\n".join(lines)

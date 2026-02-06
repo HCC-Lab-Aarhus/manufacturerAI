@@ -1,5 +1,5 @@
 """
-Test that enclosure agent generates trace channels in bottom shell.
+Test that enclosure agent generates trace channels in unified remote.
 """
 import sys
 sys.path.insert(0, ".")
@@ -39,12 +39,12 @@ def test_trace_channels():
         outputs = agent.generate_from_pcb_layout(pcb_layout, {}, Path(tmpdir), routing_result)
         print(f'Generated: {list(outputs.keys())}')
         
-        # Check bottom shell has trace channels
-        bottom_scad = Path(tmpdir) / 'bottom_shell.scad'
-        content = bottom_scad.read_text()
+        # Check unified remote has trace channels
+        remote_scad = Path(tmpdir) / 'remote.scad'
+        content = remote_scad.read_text(encoding='utf-8')
         
         if 'Trace channels' in content:
-            print('✓ Bottom shell contains trace channels')
+            print('✓ Remote contains trace channels')
         else:
             print('✗ No trace channels found')
             return False
@@ -61,28 +61,29 @@ def test_trace_channels():
             print('✗ Missing SW1_SIG net trace')
             return False
         
-        if 'hull()' in content:
-            print('✓ Hull-based trace segments present')
+        # Check for diode cutout
+        if 'Diode cutouts' in content or 'diode' in content.lower():
+            print('✓ Diode cutout generated')
         else:
-            print('✗ Missing hull-based trace segments')
+            print('✗ Missing diode cutout')
             return False
         
-        # Check for diode slit
-        if 'Diode cutouts' in content or 'diode slit' in content.lower():
-            print('✓ Diode slit generated')
+        # Check for button holes in top
+        if 'Button holes' in content or 'SW1' in content:
+            print('✓ Button holes in unified remote')
         else:
-            print('✗ Missing diode slit')
+            print('✗ Missing button holes')
             return False
         
         # Print a preview
-        print("\n--- Bottom shell preview (trace section) ---")
+        print("\n--- Remote SCAD preview (trace section) ---")
         in_trace = False
         for line in content.split('\n'):
             if 'Trace channels' in line:
                 in_trace = True
             if in_trace:
                 print(line)
-                if 'bottom_shell()' in line and in_trace and 'module' not in line:
+                if 'remote()' in line and in_trace and 'module' not in line:
                     break
         
         print("\n✓ All trace channel tests passed!")

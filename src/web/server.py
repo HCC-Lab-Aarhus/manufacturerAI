@@ -300,29 +300,49 @@ Output JSON: { "reply": "your response" }"""
     print("[SERVER] Searching for STL files...")
     models_dict = None
     
-    # Check for all STL files
+    # Check for all STL files (unified remote model)
+    remote_stl = run_dir / "remote.stl"
+    battery_hatch_stl = run_dir / "battery_hatch.stl"
+    print_plate_stl = run_dir / "print_plate.stl"
+    
+    # Legacy files for backwards compatibility
     top_stl = run_dir / "top_shell.stl"
     bottom_stl = run_dir / "bottom_shell.stl"
-    battery_hatch_stl = run_dir / "battery_hatch.stl"
     combined_stl = run_dir / "combined_assembly.stl"
     
-    if top_stl.exists() or bottom_stl.exists() or battery_hatch_stl.exists() or combined_stl.exists():
+    if remote_stl.exists() or print_plate_stl.exists() or battery_hatch_stl.exists():
+        models_dict = {}
+        if remote_stl.exists():
+            models_dict["remote"] = "/api/model/remote"
+            _latest_stl = remote_stl
+            print(f"[SERVER] PATH: Found STL → remote.stl")
+        if battery_hatch_stl.exists():
+            models_dict["hatch"] = "/api/model/hatch"
+            print(f"[SERVER] PATH: Found STL → battery_hatch.stl")
+        if print_plate_stl.exists():
+            models_dict["print_plate"] = "/api/model/print_plate"
+            print(f"[SERVER] PATH: Found STL → print_plate.stl")
+    elif top_stl.exists() or bottom_stl.exists() or combined_stl.exists():
+        # Legacy support for old format
         models_dict = {}
         if top_stl.exists():
             models_dict["top"] = "/api/model/top"
             _latest_stl = top_stl
-            print(f"[SERVER] PATH: Found STL → top_shell.stl")
+            print(f"[SERVER] PATH: Found legacy STL → top_shell.stl")
         if bottom_stl.exists():
             models_dict["bottom"] = "/api/model/bottom"
             if _latest_stl is None:
                 _latest_stl = bottom_stl
-            print(f"[SERVER] PATH: Found STL → bottom_shell.stl")
+            print(f"[SERVER] PATH: Found legacy STL → bottom_shell.stl")
         if battery_hatch_stl.exists():
             models_dict["hatch"] = "/api/model/hatch"
             print(f"[SERVER] PATH: Found STL → battery_hatch.stl")
         if combined_stl.exists():
             models_dict["combined"] = "/api/model/combined"
-            print(f"[SERVER] PATH: Found STL → combined_assembly.stl")
+            print(f"[SERVER] PATH: Found legacy STL → combined_assembly.stl")
+    elif (run_dir / "remote.stl").exists():
+        _latest_stl = run_dir / "remote.stl"
+        print(f"[SERVER] PATH: Found STL → remote.stl")
     elif (run_dir / "remote_body.stl").exists():
         _latest_stl = run_dir / "remote_body.stl"
         print(f"[SERVER] PATH: Found legacy STL → remote_body.stl")
@@ -436,9 +456,49 @@ def get_latest_model():
     )
 
 
+@app.get("/api/model/remote")
+def get_remote():
+    """Serve the unified remote STL."""
+    if _latest_run_dir is None:
+        raise HTTPException(status_code=404, detail="No design generated yet.")
+    stl_path = _latest_run_dir / "remote.stl"
+    if not stl_path.exists():
+        raise HTTPException(status_code=404, detail="Remote STL not available.")
+    
+    content = stl_path.read_bytes()
+    return Response(
+        content=content,
+        media_type="model/stl",
+        headers={
+            "Content-Disposition": "inline; filename=remote.stl",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+        }
+    )
+
+
+@app.get("/api/model/print_plate")
+def get_print_plate():
+    """Serve the print plate STL (remote + hatch laid out for printing)."""
+    if _latest_run_dir is None:
+        raise HTTPException(status_code=404, detail="No design generated yet.")
+    stl_path = _latest_run_dir / "print_plate.stl"
+    if not stl_path.exists():
+        raise HTTPException(status_code=404, detail="Print plate STL not available.")
+    
+    content = stl_path.read_bytes()
+    return Response(
+        content=content,
+        media_type="model/stl",
+        headers={
+            "Content-Disposition": "inline; filename=print_plate.stl",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+        }
+    )
+
+
 @app.get("/api/model/top")
 def get_top_shell():
-    """Serve the top shell STL."""
+    """Serve the top shell STL (legacy)."""
     if _latest_run_dir is None:
         raise HTTPException(status_code=404, detail="No design generated yet.")
     stl_path = _latest_run_dir / "top_shell.stl"
@@ -517,20 +577,23 @@ def get_combined_assembly():
 
 
 @app.get("/api/model/download")
-def download_model(type: str = "combined"):
-    """Download an STL file. Type can be: combined, top, bottom, hatch."""
+def download_model(type: str = "remote"):
+    """Download an STL file. Type can be: remote, print_plate, hatch, combined (legacy), top (legacy), bottom (legacy)."""
     if _latest_run_dir is None:
         raise HTTPException(status_code=404, detail="No design generated yet.")
     
-    # Map type to filename
+    # Map type to filename (new unified + legacy support)
     filenames = {
+        "remote": "remote.stl",
+        "print_plate": "print_plate.stl",
+        "hatch": "battery_hatch.stl",
+        # Legacy support
         "combined": "combined_assembly.stl",
         "top": "top_shell.stl",
         "bottom": "bottom_shell.stl",
-        "hatch": "battery_hatch.stl"
     }
     
-    filename = filenames.get(type, "combined_assembly.stl")
+    filename = filenames.get(type, "remote.stl")
     stl_path = _latest_run_dir / filename
     
     if not stl_path.exists():
