@@ -247,7 +247,7 @@ class TSPCBRouter:
                 "traceClearance": 2.0
             },
             "footprints": {
-                "button": {"pinSpacingX": 14.5, "pinSpacingY": 5.0},
+                "button": {"pinSpacingX": 12.5, "pinSpacingY": 5.0},
                 "controller": {"pinSpacing": 2.5, "rowSpacing": 7.6},
                 "battery": {"padSpacing": 6.0},
                 "diode": {"padSpacing": 5.0}
