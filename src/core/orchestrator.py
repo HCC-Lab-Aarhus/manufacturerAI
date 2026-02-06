@@ -182,7 +182,7 @@ class Orchestrator:
             context.routing_result = {"success": False, "traces": [], "failed_nets": [], "error": str(e)}
         
         print(f"[ORCHESTRATOR] ✓ PCB layout v{context.iteration} created")
-        self._report_progress("GENERATE_PCB", context.iteration, self.max_iterations, f"PCB layout v{context.iteration} created")
+        self._report_progress("PCB_COMPLETE", context.iteration, self.max_iterations, "PCB layout and debug images ready")
         return PipelineState.CHECK_PCB_FEASIBILITY
     
     def _check_feasibility(self, context: PipelineContext) -> PipelineState:
@@ -248,8 +248,8 @@ class Orchestrator:
         print("[ORCHESTRATOR] Stage 5: Generating enclosure...")
         print("-"*60)
         print(f"[ORCHESTRATOR] use_parametric: {self.use_parametric}")
-        self._report_progress("GENERATE_ENCLOSURE", context.iteration, self.max_iterations, 
-                              "Creating 3D model")
+        self._report_progress("RENDERING_STL", context.iteration, self.max_iterations, 
+                              "Rendering 3D model (this may take a minute)...")
         
         if self.use_parametric:
             print("[ORCHESTRATOR] PATH: Parametric enclosure (OpenSCAD)")

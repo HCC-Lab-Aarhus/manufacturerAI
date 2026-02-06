@@ -41,27 +41,23 @@
       <main class="panel right">
         <div class="viewer-header">
           <div class="view-tabs">
-            <button class="tab-btn active" data-view="3d">3D Model</button>
-            <button class="tab-btn" data-view="debug">PCB Debug</button>
+            <button class="tab-btn active" data-view="debug">PCB Debug</button>
+            <button class="tab-btn" data-view="3d">3D Model</button>
             <button class="tab-btn" data-view="masks">Masks</button>
           </div>
           <button id="downloadBtn" class="download-btn disabled" title="No STL available for download">
             ⬇ Download STL
           </button>
         </div>
-        <div id="modelSelectorContainer" class="model-selector-container">
-          <label>View: </label>
-          <select id="modelSelector"></select>
-        </div>
         <div class="view-container">
-          <div id="viewer" class="view-panel active">
+          <div id="viewer" class="view-panel">
             <button class="reset-view-btn" id="reset3DView">Reset</button>
             <div class="zoom-controls">
               <button id="zoomIn">+</button>
               <button id="zoomOut">−</button>
             </div>
           </div>
-          <div id="debugView" class="view-panel">
+          <div id="debugView" class="view-panel active">
             <button class="reset-view-btn" id="resetDebugView">Reset view</button>
             <div class="zoom-controls">
               <button class="zoom-btn" data-action="in">+</button>

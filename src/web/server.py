@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from queue import Queue
 import threading
+import traceback
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, StreamingResponse
@@ -20,9 +21,10 @@ from src.core.printer import get_printer_status, queue_print_job
 from src.design.models import RemoteParams
 
 
-# Global progress tracking for SSE
-_progress_queue: Queue = Queue()
+# Global progress tracking for SSE - per-job queues
+_job_queues: Dict[str, Queue] = {}
 _current_job: Dict[str, Any] = {}
+_job_results: Dict[str, Dict[str, Any]] = {}  # Store job results for retrieval
 
 
 def _load_env():
@@ -385,6 +387,211 @@ Output JSON: { "reply": "your response" }"""
     )
 
 
+def _run_pipeline_with_events(job_id: str, message: str, use_llm: bool, run_dir: Path, previous_design: Optional[dict]):
+    """Run the pipeline in a background thread, pushing events to job queue."""
+    global _latest_stl, _latest_run_dir, _latest_design_spec
+    
+    queue = _job_queues.get(job_id)
+    if not queue:
+        return
+    
+    # Track what we've already sent to avoid duplicates
+    debug_images_sent = False
+    
+    def send_event(event_type: str, data: dict):
+        queue.put({"type": event_type, **data})
+    
+    def check_and_send_debug_images():
+        nonlocal debug_images_sent
+        if debug_images_sent:
+            return
+        debug_file = run_dir / "pcb_debug.png"
+        if debug_file.exists():
+            debug_images = {
+                "debug": "/api/images/debug",
+                "positive": "/api/images/positive",
+                "negative": "/api/images/negative"
+            }
+            send_event("debug_images", {"urls": debug_images})
+            debug_images_sent = True
+    
+    try:
+        blender_bin = os.environ.get("BLENDER_BIN")
+        orch = Orchestrator(blender_bin=blender_bin, use_parametric=True)
+        
+        # Set up progress callback that also checks for intermediate outputs
+        def progress_callback(stage: str, iteration: int, max_iter: int, msg: Optional[str]) -> None:
+            send_event("progress", {
+                "stage": stage,
+                "iteration": iteration,
+                "max_iterations": max_iter,
+                "message": msg or ""
+            })
+            
+            # Check for debug images when PCB is complete
+            if stage == "PCB_COMPLETE":
+                check_and_send_debug_images()
+        
+        orch.set_progress_callback(progress_callback)
+        
+        # Send starting event
+        send_event("status", {"message": "Starting design generation..."})
+        
+        try:
+            new_design_spec = orch.run_from_prompt(
+                message,
+                run_dir,
+                use_llm=use_llm,
+                previous_design=previous_design
+            )
+        except Exception as e:
+            tb = traceback.format_exc()
+            send_event("error", {"message": str(e), "traceback": tb})
+            return
+        
+        # Update global state
+        _latest_run_dir = run_dir
+        _latest_design_spec = new_design_spec
+        
+        # Check for debug images one more time (in case PCB_COMPLETE didn't fire)
+        check_and_send_debug_images()
+        
+        # Check for print_plate.stl (the only STL we generate now)
+        print_plate_stl = run_dir / "print_plate.stl"
+        
+        if print_plate_stl.exists():
+            _latest_stl = print_plate_stl
+            send_event("models", {"urls": {"print_plate": "/api/model/print_plate"}})
+        
+        # Build final result message
+        design_spec_path = run_dir / "design_spec.json"
+        if design_spec_path.exists():
+            design_spec = json.loads(design_spec_path.read_text(encoding="utf-8"))
+            device = design_spec.get("device_constraints", {})
+            buttons = design_spec.get("buttons", [])
+            result_message = (
+                f"Design completed! "
+                f"Remote: {device.get('length_mm', '?')}×{device.get('width_mm', '?')}mm, "
+                f"{len(buttons)} buttons."
+            )
+        else:
+            result_message = "Design completed."
+        
+        send_event("complete", {
+            "message": result_message,
+            "model_url": "/api/model/print_plate" if print_plate_stl.exists() else None,
+            "debug_images": {
+                "debug": "/api/images/debug",
+                "positive": "/api/images/positive",
+                "negative": "/api/images/negative"
+            } if debug_images_sent else None
+        })
+        
+    except Exception as e:
+        tb = traceback.format_exc()
+        send_event("error", {"message": str(e), "traceback": tb})
+
+
+@app.post("/api/generate/stream")
+async def generate_stream(req: PromptRequest):
+    """
+    Streaming endpoint that generates a design and sends Server-Sent Events.
+    
+    Events:
+    - status: {"message": "..."}
+    - progress: {"stage": "...", "iteration": N, "max_iterations": M, "message": "..."}
+    - debug_images: {"urls": {"debug": "...", "positive": "...", "negative": "..."}}
+    - models: {"urls": {"remote": "...", "hatch": "...", "print_plate": "..."}}
+    - complete: {"message": "...", "models": {...}, "debug_images": {...}}
+    - error: {"message": "...", "traceback": "..."}
+    """
+    global _latest_run_dir, _latest_design_spec
+    
+    # Check for simple chat vs design
+    is_design = _is_design_request(req.message)
+    
+    if not is_design:
+        # Return a simple response for chat (non-streaming)
+        async def chat_response():
+            msg = {"type": "chat", "message": "Please describe a remote control to generate a design."}
+            yield f"data: {json.dumps(msg)}\n\n"
+            yield f"data: {json.dumps({'type': 'complete', 'message': 'Ready'})}\n\n"
+        
+        return StreamingResponse(
+            chat_response(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
+        )
+    
+    # Create job
+    job_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    _job_queues[job_id] = Queue()
+    
+    run_dir = _make_run_dir()
+    _latest_run_dir = run_dir
+    
+    # Check if this is a modification of existing design
+    from src.llm.consultant_agent import is_modification_request
+    previous_design = None
+    if _latest_design_spec and is_modification_request(req.message):
+        previous_design = _latest_design_spec
+    
+    # Add user message to chat log
+    _chat_log.append(ChatMessage(role="user", content=req.message.strip()))
+    
+    # Start pipeline in background thread
+    thread = threading.Thread(
+        target=_run_pipeline_with_events,
+        args=(job_id, req.message, req.use_llm, run_dir, previous_design),
+        daemon=True
+    )
+    thread.start()
+    
+    async def event_generator():
+        queue = _job_queues.get(job_id)
+        if not queue:
+            return
+        
+        try:
+            while True:
+                # Check for events
+                try:
+                    # Use loop to avoid blocking async
+                    for _ in range(10):  # Check multiple times per iteration
+                        if not queue.empty():
+                            event = queue.get_nowait()
+                            yield f"data: {json.dumps(event)}\n\n"
+                            
+                            # If complete or error, end stream
+                            if event.get("type") in ("complete", "error"):
+                                return
+                        else:
+                            await asyncio.sleep(0.05)
+                            break
+                    else:
+                        await asyncio.sleep(0.1)
+                except Exception:
+                    await asyncio.sleep(0.1)
+                
+                # Send keepalive every second
+                await asyncio.sleep(0.1)
+                
+        finally:
+            # Clean up job queue
+            if job_id in _job_queues:
+                del _job_queues[job_id]
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        }
+    )
+
+
 @app.get("/api/progress")
 async def get_progress_stream():
     """
@@ -432,53 +639,9 @@ def get_current_progress() -> Dict[str, Any]:
 
 from fastapi.responses import Response
 
-@app.get("/api/model/latest")
-def get_latest_model():
-    print(f"[DEBUG] /api/model/latest called, _latest_stl = {_latest_stl}")
-    if _latest_stl is None or not _latest_stl.exists():
-        raise HTTPException(status_code=404, detail="No model generated yet.")
-    
-    # Read file and return with no-cache headers
-    content = _latest_stl.read_bytes()
-    file_size = len(content)
-    print(f"[DEBUG] Serving STL: {_latest_stl}, size: {file_size} bytes")
-    return Response(
-        content=content,
-        media_type="model/stl",
-        headers={
-            "Content-Disposition": f"inline; filename={_latest_stl.name}",
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0",
-            "X-STL-Path": str(_latest_stl),
-            "X-STL-Size": str(file_size)
-        }
-    )
-
-
-@app.get("/api/model/remote")
-def get_remote():
-    """Serve the unified remote STL."""
-    if _latest_run_dir is None:
-        raise HTTPException(status_code=404, detail="No design generated yet.")
-    stl_path = _latest_run_dir / "remote.stl"
-    if not stl_path.exists():
-        raise HTTPException(status_code=404, detail="Remote STL not available.")
-    
-    content = stl_path.read_bytes()
-    return Response(
-        content=content,
-        media_type="model/stl",
-        headers={
-            "Content-Disposition": "inline; filename=remote.stl",
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-        }
-    )
-
-
 @app.get("/api/model/print_plate")
 def get_print_plate():
-    """Serve the print plate STL (remote + hatch laid out for printing)."""
+    """Serve the print plate STL (main output - remote + hatch combined)."""
     if _latest_run_dir is None:
         raise HTTPException(status_code=404, detail="No design generated yet.")
     stl_path = _latest_run_dir / "print_plate.stl"
@@ -496,115 +659,23 @@ def get_print_plate():
     )
 
 
-@app.get("/api/model/top")
-def get_top_shell():
-    """Serve the top shell STL (legacy)."""
-    if _latest_run_dir is None:
-        raise HTTPException(status_code=404, detail="No design generated yet.")
-    stl_path = _latest_run_dir / "top_shell.stl"
-    if not stl_path.exists():
-        raise HTTPException(status_code=404, detail="Top shell STL not available.")
-    
-    content = stl_path.read_bytes()
-    return Response(
-        content=content,
-        media_type="model/stl",
-        headers={
-            "Content-Disposition": "inline; filename=top_shell.stl",
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-        }
-    )
-
-
-@app.get("/api/model/bottom")
-def get_bottom_shell():
-    """Serve the bottom shell STL."""
-    if _latest_run_dir is None:
-        raise HTTPException(status_code=404, detail="No design generated yet.")
-    stl_path = _latest_run_dir / "bottom_shell.stl"
-    if not stl_path.exists():
-        raise HTTPException(status_code=404, detail="Bottom shell STL not available.")
-    
-    content = stl_path.read_bytes()
-    return Response(
-        content=content,
-        media_type="model/stl",
-        headers={
-            "Content-Disposition": "inline; filename=bottom_shell.stl",
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-        }
-    )
-
-
-@app.get("/api/model/hatch")
-def get_battery_hatch():
-    """Serve the battery hatch STL."""
-    if _latest_run_dir is None:
-        raise HTTPException(status_code=404, detail="No design generated yet.")
-    stl_path = _latest_run_dir / "battery_hatch.stl"
-    if not stl_path.exists():
-        raise HTTPException(status_code=404, detail="Battery hatch STL not available.")
-    
-    content = stl_path.read_bytes()
-    return Response(
-        content=content,
-        media_type="model/stl",
-        headers={
-            "Content-Disposition": "inline; filename=battery_hatch.stl",
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-        }
-    )
-
-
-@app.get("/api/model/combined")
-def get_combined_assembly():
-    """Serve the combined assembly STL."""
-    if _latest_run_dir is None:
-        raise HTTPException(status_code=404, detail="No design generated yet.")
-    stl_path = _latest_run_dir / "combined_assembly.stl"
-    if not stl_path.exists():
-        raise HTTPException(status_code=404, detail="Combined assembly STL not available.")
-    
-    content = stl_path.read_bytes()
-    return Response(
-        content=content,
-        media_type="model/stl",
-        headers={
-            "Content-Disposition": "inline; filename=combined_assembly.stl",
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-        }
-    )
-
-
 @app.get("/api/model/download")
-def download_model(type: str = "remote"):
-    """Download an STL file. Type can be: remote, print_plate, hatch, combined (legacy), top (legacy), bottom (legacy)."""
+def download_model():
+    """Download the print plate STL file."""
     if _latest_run_dir is None:
         raise HTTPException(status_code=404, detail="No design generated yet.")
     
-    # Map type to filename (new unified + legacy support)
-    filenames = {
-        "remote": "remote.stl",
-        "print_plate": "print_plate.stl",
-        "hatch": "battery_hatch.stl",
-        # Legacy support
-        "combined": "combined_assembly.stl",
-        "top": "top_shell.stl",
-        "bottom": "bottom_shell.stl",
-    }
-    
-    filename = filenames.get(type, "remote.stl")
-    stl_path = _latest_run_dir / filename
+    stl_path = _latest_run_dir / "print_plate.stl"
     
     if not stl_path.exists():
-        raise HTTPException(status_code=404, detail=f"{filename} not available.")
+        raise HTTPException(status_code=404, detail="Print plate STL not available.")
     
     content = stl_path.read_bytes()
     return Response(
         content=content,
         media_type="application/octet-stream",
         headers={
-            "Content-Disposition": f"attachment; filename={filename}",
+            "Content-Disposition": "attachment; filename=print_plate.stl",
             "Cache-Control": "no-cache, no-store, must-revalidate",
         }
     )

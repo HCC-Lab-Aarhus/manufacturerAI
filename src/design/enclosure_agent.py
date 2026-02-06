@@ -157,56 +157,32 @@ class Enclosure3DAgent:
             pcb_layout=pcb_layout
         )
         
-        # Write remote SCAD file
+        # Write remote SCAD file (needed for print_plate assembly)
         remote_scad_path = output_dir / "remote.scad"
         remote_scad_path.write_text(remote_scad, encoding="utf-8")
-        print(f"[ENCLOSURE] ✓ Generated remote.scad ({len(remote_scad)} chars)")
         
-        # Collect SCAD outputs
-        outputs = {
-            "remote_scad": remote_scad_path
-        }
+        # Collect outputs
+        outputs = {}
         
-        # Generate battery hatch if battery present
+        # Generate battery hatch if battery present (needed for print_plate assembly)
+        battery_hatch_path = None
         if battery_cavity:
             battery_hatch_scad = self._generate_battery_hatch_scad(battery_cavity)
             battery_hatch_path = output_dir / "battery_hatch.scad"
             battery_hatch_path.write_text(battery_hatch_scad, encoding="utf-8")
-            print(f"[ENCLOSURE] ✓ Generated battery_hatch.scad ({len(battery_hatch_scad)} chars)")
-            outputs["battery_hatch_scad"] = battery_hatch_path
         
-        # Generate print plate assembly (remote + hatch beside)
+        # Generate print plate assembly (the only STL we render)
         print_plate_scad = self._generate_print_plate_scad(battery_cavity)
         print_plate_scad_path = output_dir / "print_plate.scad"
         print_plate_scad_path.write_text(print_plate_scad, encoding="utf-8")
         outputs["print_plate_scad"] = print_plate_scad_path
-        print(f"[ENCLOSURE] ✓ Generated print_plate.scad ({len(print_plate_scad)} chars)")
         
-        # Render STLs for preview
-        print("[ENCLOSURE] PATH: Rendering models to STL...")
-        
-        # Remote
-        remote_stl_path = output_dir / "remote.stl"
-        if self._render_scad_to_stl(remote_scad_path, remote_stl_path):
-            outputs["remote_stl"] = remote_stl_path
-            print("[ENCLOSURE] ✓ Rendered remote.stl")
-        else:
-            print("[ENCLOSURE] ⚠ Could not render remote.stl")
-        
-        # Battery hatch
-        if battery_cavity:
-            battery_hatch_stl_path = output_dir / "battery_hatch.stl"
-            if self._render_scad_to_stl(battery_hatch_path, battery_hatch_stl_path):
-                outputs["battery_hatch_stl"] = battery_hatch_stl_path
-                print("[ENCLOSURE] ✓ Rendered battery_hatch.stl")
-            else:
-                print("[ENCLOSURE] ⚠ Could not render battery_hatch.stl")
-        
-        # Print plate (combined)
+        # Render only print_plate.stl (contains both remote and hatch)
+        print("[ENCLOSURE] Rendering print_plate.stl...")
         print_plate_stl_path = output_dir / "print_plate.stl"
         if self._render_scad_to_stl(print_plate_scad_path, print_plate_stl_path):
             outputs["print_plate_stl"] = print_plate_stl_path
-            print("[ENCLOSURE] ✓ Rendered print_plate.stl")
+            print(f"[ENCLOSURE] ✓ Rendered print_plate.stl")
         else:
             print("[ENCLOSURE] ⚠ Could not render print_plate.stl")
         

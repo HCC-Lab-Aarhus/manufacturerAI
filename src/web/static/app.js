@@ -17,50 +17,44 @@ let lastAssistantMessage = "";
 let currentModelUrl = null;
 let availableModels = null;  // {top: url, bottom: url}
 
-// Model selector elements
-const modelSelectorContainer = document.getElementById("modelSelectorContainer");
-const modelSelector = document.getElementById("modelSelector");
 const downloadBtn = document.getElementById("downloadBtn");
-let currentView = "3d";
+let currentView = "debug";
 let availableMasks = { positive: null, negative: null };
+let currentMaskType = "positive";
 
-// Tab switching
+// Tab switching function (can be called programmatically)
+function switchToTab(view) {
+  currentView = view;
+  
+  // Update active tab button
+  tabBtns.forEach(b => {
+    b.classList.toggle("active", b.dataset.view === view);
+  });
+  
+  // Update active panel
+  viewerEl.classList.toggle("active", view === "3d");
+  debugView.classList.toggle("active", view === "debug");
+  masksView.classList.toggle("active", view === "masks");
+  
+  // Update download button based on view
+  if (view === "3d" && availableModels) {
+    downloadBtn.classList.remove("disabled");
+    downloadBtn.title = "Download STL file";
+  } else if (view === "masks" && (positiveImage.src || negativeImage.src)) {
+    downloadBtn.classList.remove("disabled");
+    downloadBtn.title = "Download mask image";
+  }
+  
+  // Trigger resize to fix Three.js canvas when switching to 3D view
+  if (view === "3d") {
+    setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+  }
+}
+
+// Tab click handlers
 tabBtns.forEach(btn => {
   btn.addEventListener("click", () => {
-    const view = btn.dataset.view;
-    currentView = view;
-    
-    // Update active tab
-    tabBtns.forEach(b => b.classList.remove("active"));
-    btn.classList.add("active");
-    
-    // Update active panel
-    viewerEl.classList.toggle("active", view === "3d");
-    debugView.classList.toggle("active", view === "debug");
-    masksView.classList.toggle("active", view === "masks");
-    
-    // Update model selector visibility and content
-    if (view === "3d" && availableModels) {
-      updateModelSelector(availableModels);
-      modelSelectorContainer.classList.add("visible");
-      downloadBtn.classList.remove("disabled");
-      downloadBtn.title = "Download STL file";
-    } else if (view === "masks") {
-      updateMasksSelector();
-      modelSelectorContainer.classList.add("visible");
-      // Enable download for masks if images are loaded
-      if (positiveImage.src || negativeImage.src) {
-        downloadBtn.classList.remove("disabled");
-        downloadBtn.title = "Download mask image";
-      }
-    } else {
-      modelSelectorContainer.classList.remove("visible");
-    }
-    
-    // Trigger resize to fix Three.js canvas when switching to 3D view
-    if (view === "3d") {
-      setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
-    }
+    switchToTab(btn.dataset.view);
   });
 });
 
@@ -72,44 +66,8 @@ function addMessage(role, content) {
   chatEl.scrollTop = chatEl.scrollHeight;
 }
 
-// Model selector functions
-function updateModelSelector(models) {
-  // Clear and populate the selector for 3D models
-  modelSelector.innerHTML = "";
-  
-  if (models.top) {
-    modelSelector.innerHTML += `<option value="top">Top Shell</option>`;
-  }
-  if (models.bottom) {
-    modelSelector.innerHTML += `<option value="bottom">Bottom Shell</option>`;
-  }
-  if (models.hatch) {
-    modelSelector.innerHTML += `<option value="hatch">Battery Hatch</option>`;
-  }
-  if (models.combined) {
-    modelSelector.innerHTML += `<option value="combined">Print Plate (All Parts)</option>`;
-  }
-  
-  // Enable download button
-  downloadBtn.classList.remove("disabled");
-  downloadBtn.title = "Download STL file";
-  
-  // Show selector if on 3D view
-  if (currentView === "3d") {
-    modelSelectorContainer.classList.add("visible");
-  }
-}
-
-function updateMasksSelector() {
-  modelSelector.innerHTML = `
-    <option value="positive">Positive (Conductive)</option>
-    <option value="negative">Negative (Insulating)</option>
-  `;
-  // Show positive by default
-  showMaskImage("positive");
-}
-
 function showMaskImage(type) {
+  currentMaskType = type;
   if (type === "positive") {
     positiveImage.classList.add("active");
     negativeImage.classList.remove("active");
@@ -119,46 +77,23 @@ function showMaskImage(type) {
   }
 }
 
-// Handle model selector change
-modelSelector.addEventListener("change", (e) => {
-  const value = e.target.value;
-  
-  if (currentView === "3d") {
-    if (availableModels && availableModels[value]) {
-      currentModelUrl = availableModels[value] + `?t=${Date.now()}`;
-      loadModel(currentModelUrl);
-    } else {
-      const names = {top: 'Top shell', bottom: 'Bottom shell', hatch: 'Battery hatch', combined: 'Print plate'};
-      addMessage("assistant", `${names[value] || value} STL not available.`);
-    }
-  } else if (currentView === "masks") {
-    showMaskImage(value);
-  }
-});
-
 // Handle download button click
 downloadBtn.addEventListener("click", () => {
   if (downloadBtn.classList.contains("disabled")) return;
   
   if (currentView === "3d") {
-    const modelType = modelSelector.value || "combined";
-    window.location.href = `/api/model/download?type=${modelType}`;
+    window.location.href = `/api/model/download`;
   } else if (currentView === "masks") {
-    const maskType = modelSelector.value || "positive";
-    // Download mask image
-    const img = maskType === "positive" ? positiveImage : negativeImage;
+    // Download current mask image
+    const img = currentMaskType === "positive" ? positiveImage : negativeImage;
     if (img.src) {
       const link = document.createElement("a");
       link.href = img.src;
-      link.download = `mask_${maskType}.png`;
+      link.download = `mask_${currentMaskType}.png`;
       link.click();
     }
   }
 });
-
-function hideModelSelector() {
-  modelSelectorContainer.classList.remove("visible");
-}
 
 function loadDebugImages(debugImages) {
   if (!debugImages) {
@@ -198,35 +133,36 @@ sendBtn.addEventListener("click", async () => {
   promptInput.value = "";
   sendBtn.disabled = true;
 
-  // Add status message
+  // Track status messages in this generation session
+  const statusMessages = [];
   const statusDiv = document.createElement("div");
   statusDiv.className = "message assistant";
-  statusDiv.textContent = "Generating design... (this may take a minute)";
+  statusDiv.style.whiteSpace = "pre-line";  // Preserve line breaks
+  statusDiv.textContent = "Starting design generation...";
+  statusMessages.push("Starting design generation...");
   chatEl.appendChild(statusDiv);
 
-  try {
-    // Use AbortController with 5 minute timeout for OpenSCAD rendering
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minutes
+  function updateStatus(text) {
+    // Append new status, don't repeat if same as last
+    if (statusMessages[statusMessages.length - 1] !== text) {
+      statusMessages.push(text);
+      statusDiv.textContent = statusMessages.join("\n");
+    }
+    chatEl.scrollTop = chatEl.scrollHeight;
+  }
 
-    console.log("Sending request to /api/prompt...");
-    const res = await fetch("/api/prompt", {
+  try {
+    console.log("Starting streaming request to /api/generate/stream...");
+    
+    // Use fetch with streaming for SSE
+    const response = await fetch("/api/generate/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, use_llm: useLlm ? useLlm.checked : true }),
-      signal: controller.signal,
     });
 
-    clearTimeout(timeoutId);
-    console.log("Response received:", res.status, res.statusText);
-
-    // Remove status message
-    if (statusDiv.parentNode) statusDiv.remove();
-
-    if (!res.ok) {
-      console.log("Response not OK, reading error...");
-      const errorText = await res.text();
-      console.log("Error text:", errorText);
+    if (!response.ok) {
+      const errorText = await response.text();
       let errorDetail = "Generation failed.";
       try {
         const error = JSON.parse(errorText);
@@ -234,67 +170,138 @@ sendBtn.addEventListener("click", async () => {
       } catch (e) {
         errorDetail = errorText || errorDetail;
       }
+      if (statusDiv.parentNode) statusDiv.remove();
       addMessage("assistant", errorDetail);
       return;
     }
 
-    console.log("Reading response body...");
-    const responseText = await res.text();
-    console.log("Response text:", responseText.substring(0, 500));
-    
-    let data;
-    try {
-      data = JSON.parse(responseText);
-    } catch (parseErr) {
-      console.error("JSON parse error:", parseErr);
-      addMessage("assistant", "Error parsing server response");
-      return;
-    }
-    
-    console.log("Parsed data:", data);
-    const messages = data.messages || [];
-    const last = messages[messages.length - 1];
-    if (last && last.role === "assistant") {
-      addMessage("assistant", last.content);
-      lastAssistantMessage = last.content;
-    }
-    
-    // Load debug images if available
-    if (data.debug_images) {
-      console.log("Loading debug images:", data.debug_images);
-      loadDebugImages(data.debug_images);
-    }
-    
-    // Handle multi-part models (top/bottom shells)
-    if (data.models) {
-      console.log("Multiple models available:", data.models);
-      availableModels = data.models;
-      updateModelSelector(data.models);
+    // Read the stream
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finalMessage = null;
+    let debugImagesLoaded = false;
+    let modelsLoaded = false;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
       
-      // Load top shell by default, or bottom if top not available
-      const defaultModel = data.models.top || data.models.bottom;
-      if (defaultModel) {
-        currentModelUrl = defaultModel + `?t=${Date.now()}`;
-        loadModel(currentModelUrl);
+      // Process complete lines
+      const lines = buffer.split("\n");
+      buffer = lines.pop(); // Keep incomplete line in buffer
+
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          const jsonStr = line.slice(6);
+          if (!jsonStr.trim()) continue;
+          
+          try {
+            const event = JSON.parse(jsonStr);
+            console.log("SSE event:", event);
+
+            switch (event.type) {
+              case "status":
+                updateStatus(event.message);
+                break;
+
+              case "progress":
+                let progressText = event.message || event.stage;
+                if (event.stage === "COLLECT_REQUIREMENTS") {
+                  progressText = "Analyzing requirements...";
+                } else if (event.stage === "GENERATE_PCB") {
+                  progressText = "Creating PCB layout...";
+                } else if (event.stage === "PCB_COMPLETE") {
+                  progressText = "PCB layout ready, loading debug view...";
+                } else if (event.stage === "CHECK_FEASIBILITY") {
+                  progressText = "Checking design feasibility...";
+                } else if (event.stage === "RENDERING_STL") {
+                  progressText = "Rendering 3D model (this may take a minute)...";
+                } else if (event.stage === "DONE") {
+                  progressText = "Complete!";
+                }
+                updateStatus(progressText);
+                break;
+
+              case "debug_images":
+                if (!debugImagesLoaded && event.urls) {
+                  console.log("Loading debug images:", event.urls);
+                  loadDebugImages(event.urls);
+                  debugImagesLoaded = true;
+                  updateStatus("PCB layout ready.");
+                  // Switch to debug view to show PCB immediately
+                  switchToTab("debug");
+                }
+                break;
+
+              case "models":
+                if (!modelsLoaded && event.urls) {
+                  console.log("Loading 3D model:", event.urls);
+                  availableModels = event.urls;
+                  
+                  // Load print_plate model
+                  if (event.urls.print_plate) {
+                    currentModelUrl = event.urls.print_plate + `?t=${Date.now()}`;
+                    loadModel(currentModelUrl);
+                  }
+                  modelsLoaded = true;
+                  updateStatus("3D model ready.");
+                  // Enable download button
+                  downloadBtn.classList.remove("disabled");
+                  downloadBtn.title = "Download STL file";
+                  // Switch to 3D view to show model
+                  switchToTab("3d");
+                }
+                break;
+
+              case "complete":
+                finalMessage = event.message;
+                // Load any remaining assets
+                if (!debugImagesLoaded && event.debug_images) {
+                  loadDebugImages(event.debug_images);
+                }
+                if (!modelsLoaded && event.models) {
+                  availableModels = event.models;
+                  if (event.models.print_plate) {
+                    currentModelUrl = event.models.print_plate + `?t=${Date.now()}`;
+                    loadModel(currentModelUrl);
+                    downloadBtn.classList.remove("disabled");
+                  }
+                }
+                break;
+
+              case "error":
+                if (statusDiv.parentNode) statusDiv.remove();
+                addMessage("assistant", `Error: ${event.message}`);
+                console.error("Pipeline error:", event.message, event.traceback);
+                return;
+
+              case "chat":
+                if (statusDiv.parentNode) statusDiv.remove();
+                addMessage("assistant", event.message);
+                return;
+            }
+          } catch (parseErr) {
+            console.warn("Failed to parse SSE data:", jsonStr, parseErr);
+          }
+        }
       }
-    } else if (data.model_url) {
-      console.log("Loading model from:", data.model_url);
-      availableModels = null;
-      hideModelSelector();
-      currentModelUrl = data.model_url + `?t=${Date.now()}`;
-      loadModel(currentModelUrl);
-    } else {
-      console.log("No model_url in response");
     }
+
+    // Remove status message and show final message
+    if (statusDiv.parentNode) statusDiv.remove();
+    if (finalMessage) {
+      addMessage("assistant", finalMessage);
+      lastAssistantMessage = finalMessage;
+    }
+
   } catch (err) {
     console.error("Caught exception:", err);
     console.error("Exception stack:", err.stack);
     if (statusDiv.parentNode) statusDiv.remove();
-    if (err.name === 'AbortError') {
-      addMessage("assistant", "Request timed out. The model may still be generating.");
-    } else {
-      addMessage("assistant", `Error: ${err.name} - ${err.message}`);
-    }
+    addMessage("assistant", `Error: ${err.name} - ${err.message}`);
   } finally {
     sendBtn.disabled = false;
   }
