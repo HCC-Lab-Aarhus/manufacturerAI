@@ -25,9 +25,9 @@ Everything else is determined by the base remote hardware configuration:
 - Switch type, cap diameter, pin spacing → hardware config
 - Battery type and dimensions → hardware config
 - Wall thickness, trace widths, clearances → hardware config
-- Controller, LED, and IR diode specs → hardware config
+- Controller, LED, IR diode, and other electronics → hardware config (always included automatically)
 
-Do NOT output `switch_type`, `cap_diameter_mm`, `priority`, `constraints`, or `battery` fields unless the user specifically requests non-standard options.
+Do NOT output `switch_type`, `cap_diameter_mm`, `priority`, `constraints`, `battery`, or `leds` fields. These are handled by the hardware configuration.
 
 ## Input Interpretation Guidelines
 
@@ -90,7 +90,6 @@ You **MUST** output valid JSON matching this structure:
 
 Optional fields (only include when user requests non-standard):
 - `battery`: `{"type": "CR2032"}` — only if user wants something other than 2×AAA
-- `leds`: array of `{"id": "LED1"}` — only if user wants indicator LEDs
 - `constraints`: override spacing/clearance if user has specific needs
 
 ## Examples

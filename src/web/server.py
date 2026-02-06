@@ -115,7 +115,7 @@ def _is_design_request(text: str) -> bool:
     text_lower = text.lower()
     # Keywords that strongly suggest a design request
     design_keywords = {
-        "remote", "button", "switch", "led", "diode", "ir", "hole", "length", "width", "thick", "mm",
+        "remote", "button", "switch", "hole", "length", "width", "thick", "mm",
         "print", "stl", "model", "design", "make", "create", "generate", "cad", "rows", "cols",
         "add", "remove", "modify", "change", "move"
     }
