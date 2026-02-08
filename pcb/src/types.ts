@@ -2,6 +2,8 @@ export interface BoardParameters {
   boardWidth: number
   boardHeight: number
   gridResolution: number
+  /** Optional polygon outline (list of [x,y] vertices). If provided, cells outside the polygon are blocked. */
+  boardOutline?: number[][]
 }
 
 export interface ManufacturingConstraints {

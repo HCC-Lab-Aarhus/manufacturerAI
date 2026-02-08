@@ -398,6 +398,12 @@ export class Router {
         this.blockUnrelatedPads(netPadCoords)
         this.blockUnrelatedTraces(netName, completedTraces, netPadCoords)
 
+        // Ensure current net's pad cells are free (they may have been
+        // blocked by the polygon edge clearance zone)
+        for (const pad of pads) {
+          this.grid.freeCell(pad.center.x, pad.center.y)
+        }
+
         const pathfinder = new Pathfinder(this.grid)
         const path = pathfinder.findPathToTree(targetPad, routedCells)
 

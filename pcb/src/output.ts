@@ -48,6 +48,9 @@ export class OutputGenerator {
   }
 
   private createBoardOutline(): Polygon {
+    if (this.board.boardOutline && this.board.boardOutline.length >= 3) {
+      return this.board.boardOutline.map(p => ({ x: p[0], y: p[1] }))
+    }
     return [
       { x: 0, y: 0 },
       { x: this.board.boardWidth, y: 0 },
