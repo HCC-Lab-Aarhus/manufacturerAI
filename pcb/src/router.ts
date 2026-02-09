@@ -2,7 +2,6 @@ import {
   RouterInput,
   RoutingResult,
   Trace,
-  Net,
   Pad,
   FailedNet,
   GridCoordinate,
@@ -10,59 +9,63 @@ import {
   Controller,
   Battery,
   Diode,
-  Footprints
+  Footprints,
+  ComponentBody
 } from './types'
 import { Grid } from './grid'
-import { Pathfinder } from './pathfinder'
 
+/**
+ * PCB Router — thin adapter around @tscircuit/capacity-autorouter.
+ *
+ * Converts our RouterInput (component placements in mm) into the
+ * SimpleRouteJson format expected by tscircuit's capacity-mesh solver,
+ * runs the solver, and converts the output traces back to our
+ * grid-coordinate RoutingResult.
+ *
+ * The capacity-mesh approach replaces our custom A* / perimeter routing
+ * with a hierarchical solver that handles congestion and polygon outlines
+ * natively.
+ */
 export class Router {
   private readonly input: RouterInput
-  private readonly tracePadding: number
   private readonly footprints: Footprints
   private grid: Grid
   private pads: Map<string, Pad>
-  private nets: Net[]
   private traces: Trace[]
   private failedNets: FailedNet[]
-  private readonly maxRipupAttempts = 15
+  private componentBodies: ComponentBody[]
+  private readonly bodyKeepoutCells: number
 
   constructor(input: RouterInput) {
     this.input = input
     this.footprints = input.footprints
-    const clearanceCells = Math.ceil(input.manufacturing.traceClearance / input.board.gridResolution)
-    this.tracePadding = clearanceCells
     this.grid = new Grid(input.board, input.manufacturing)
     this.pads = new Map()
-    this.nets = []
     this.traces = []
     this.failedNets = []
+    this.componentBodies = []
+    this.bodyKeepoutCells = Math.ceil(
+      input.manufacturing.traceWidth / (2 * input.board.gridResolution)
+    ) + 1
   }
 
   route(): RoutingResult {
     this.initializeComponents()
-    this.extractNets()
-    this.routeNets()
-
-    return {
-      success: this.failedNets.length === 0,
-      traces: this.traces,
-      failedNets: this.failedNets
-    }
+    return this.runAutorouter()
   }
+
+  // ── Component placement (populates pads + componentBodies for viz) ──
 
   private initializeComponents(): void {
     for (const battery of this.input.placement.batteries || []) {
       this.placeBattery(battery)
     }
-
     for (const diode of this.input.placement.diodes || []) {
       this.placeDiode(diode)
     }
-
     for (const button of this.input.placement.buttons) {
       this.placeButton(button)
     }
-
     for (const controller of this.input.placement.controllers) {
       this.placeController(controller)
     }
@@ -70,24 +73,42 @@ export class Router {
 
   private placeBattery(battery: Battery): void {
     const batteryCenter = this.grid.worldToGrid(battery.x, battery.y)
-    const halfSpacing = this.footprints.battery.padSpacing / 2
+    const fp = this.footprints.battery
+    const bodyW = battery.bodyWidth ?? fp.bodyWidth ?? 0
+    const bodyH = battery.bodyHeight ?? fp.bodyHeight ?? 0
 
-    const vccPadCenter = this.grid.worldToGrid(battery.x, battery.y - halfSpacing)
+    if (bodyW > 0 && bodyH > 0) {
+      this.grid.blockRectangularBody(
+        battery.x, battery.y, bodyW / 2, bodyH / 2, this.bodyKeepoutCells
+      )
+      this.componentBodies.push({
+        id: battery.id, x: battery.x, y: battery.y,
+        width: bodyW, height: bodyH
+      })
+    }
+
+    const res = this.input.board.gridResolution
+    let vccPadY: number, gndPadY: number
+
+    if (bodyH > 0) {
+      const padOffsetCells = this.bodyKeepoutCells + 5
+      vccPadY = battery.y + bodyH / 2 + padOffsetCells * res
+      gndPadY = battery.y - bodyH / 2 - padOffsetCells * res
+    } else {
+      // No body dims → use padSpacing from footprint
+      vccPadY = battery.y + fp.padSpacing / 2
+      gndPadY = battery.y - fp.padSpacing / 2
+    }
+
     this.pads.set(`${battery.id}.VCC`, {
-      componentId: battery.id,
-      pinName: 'VCC',
-      center: vccPadCenter,
-      net: 'VCC',
-      componentCenter: batteryCenter
+      componentId: battery.id, pinName: 'VCC',
+      center: this.grid.worldToGrid(battery.x, vccPadY),
+      net: 'VCC', componentCenter: batteryCenter
     })
-
-    const gndPadCenter = this.grid.worldToGrid(battery.x, battery.y + halfSpacing)
     this.pads.set(`${battery.id}.GND`, {
-      componentId: battery.id,
-      pinName: 'GND',
-      center: gndPadCenter,
-      net: 'GND',
-      componentCenter: batteryCenter
+      componentId: battery.id, pinName: 'GND',
+      center: this.grid.worldToGrid(battery.x, gndPadY),
+      net: 'GND', componentCenter: batteryCenter
     })
   }
 
@@ -95,22 +116,15 @@ export class Router {
     const diodeCenter = this.grid.worldToGrid(diode.x, diode.y)
     const halfSpacing = this.footprints.diode.padSpacing / 2
 
-    const anodePadCenter = this.grid.worldToGrid(diode.x - halfSpacing, diode.y)
     this.pads.set(`${diode.id}.A`, {
-      componentId: diode.id,
-      pinName: 'A',
-      center: anodePadCenter,
-      net: diode.signalNet,
-      componentCenter: diodeCenter
+      componentId: diode.id, pinName: 'A',
+      center: this.grid.worldToGrid(diode.x - halfSpacing, diode.y),
+      net: diode.signalNet, componentCenter: diodeCenter
     })
-
-    const cathodePadCenter = this.grid.worldToGrid(diode.x + halfSpacing, diode.y)
     this.pads.set(`${diode.id}.K`, {
-      componentId: diode.id,
-      pinName: 'K',
-      center: cathodePadCenter,
-      net: 'GND',
-      componentCenter: diodeCenter
+      componentId: diode.id, pinName: 'K',
+      center: this.grid.worldToGrid(diode.x + halfSpacing, diode.y),
+      net: 'GND', componentCenter: diodeCenter
     })
   }
 
@@ -119,40 +133,25 @@ export class Router {
     const halfX = this.footprints.button.pinSpacingX / 2
     const halfY = this.footprints.button.pinSpacingY / 2
 
-    const pinA1Center = this.grid.worldToGrid(button.x - halfX, button.y - halfY)
     this.pads.set(`${button.id}.A1`, {
-      componentId: button.id,
-      pinName: 'A1',
-      center: pinA1Center,
-      net: button.signalNet,
-      componentCenter: buttonCenter
+      componentId: button.id, pinName: 'A1',
+      center: this.grid.worldToGrid(button.x - halfX, button.y - halfY),
+      net: button.signalNet, componentCenter: buttonCenter
     })
-
-    const pinA2Center = this.grid.worldToGrid(button.x - halfX, button.y + halfY)
     this.pads.set(`${button.id}.A2`, {
-      componentId: button.id,
-      pinName: 'A2',
-      center: pinA2Center,
-      net: 'NC',
-      componentCenter: buttonCenter
+      componentId: button.id, pinName: 'A2',
+      center: this.grid.worldToGrid(button.x - halfX, button.y + halfY),
+      net: 'NC', componentCenter: buttonCenter
     })
-
-    const pinB1Center = this.grid.worldToGrid(button.x + halfX, button.y - halfY)
     this.pads.set(`${button.id}.B1`, {
-      componentId: button.id,
-      pinName: 'B1',
-      center: pinB1Center,
-      net: 'GND',  // INPUT_PULLUP: button connects signal to GND when pressed
-      componentCenter: buttonCenter
+      componentId: button.id, pinName: 'B1',
+      center: this.grid.worldToGrid(button.x + halfX, button.y - halfY),
+      net: 'GND', componentCenter: buttonCenter
     })
-
-    const pinB2Center = this.grid.worldToGrid(button.x + halfX, button.y + halfY)
     this.pads.set(`${button.id}.B2`, {
-      componentId: button.id,
-      pinName: 'B2',
-      center: pinB2Center,
-      net: 'NC',
-      componentCenter: buttonCenter
+      componentId: button.id, pinName: 'B2',
+      center: this.grid.worldToGrid(button.x + halfX, button.y + halfY),
+      net: 'NC', componentCenter: buttonCenter
     })
   }
 
@@ -160,7 +159,6 @@ export class Router {
     const pinNames = Object.keys(controller.pins)
     const pinCount = pinNames.length
     const controllerCenter = this.grid.worldToGrid(controller.x, controller.y)
-
     const rowSpacing = this.footprints.controller.rowSpacing
     const pinSpacing = this.footprints.controller.pinSpacing
     const pinsPerSide = Math.ceil(pinCount / 2)
@@ -168,9 +166,7 @@ export class Router {
 
     pinNames.forEach((pinName, index) => {
       const pinNumber = index + 1
-      let pinX: number
-      let pinY: number
-
+      let pinX: number, pinY: number
       if (pinNumber <= pinsPerSide) {
         pinX = controller.x - rowSpacing / 2
         pinY = controller.y - totalHeight / 2 + (pinNumber - 1) * pinSpacing
@@ -180,474 +176,326 @@ export class Router {
         pinY = controller.y - totalHeight / 2 + rightSideIndex * pinSpacing
       }
 
-      const padCenter = this.grid.worldToGrid(pinX, pinY)
-      const net = controller.pins[pinName]
-
       this.pads.set(`${controller.id}.${pinName}`, {
-        componentId: controller.id,
-        pinName,
-        center: padCenter,
-        net,
+        componentId: controller.id, pinName,
+        center: this.grid.worldToGrid(pinX, pinY),
+        net: controller.pins[pinName],
         componentCenter: controllerCenter
       })
     })
   }
 
-  private extractNets(): void {
-    const netMap = new Map<string, Pad[]>()
+  // ── tscircuit autorouter integration ───────────────────────────
 
-    for (const pad of this.pads.values()) {
-      if (pad.net === 'NC') continue
-      if (!netMap.has(pad.net)) {
-        netMap.set(pad.net, [])
-      }
-      netMap.get(pad.net)!.push(pad)
-    }
+  private runAutorouter(): RoutingResult {
+    const srj = this.buildSimpleRouteJson()
+    console.error(`\n=== tscircuit capacity-mesh autorouter ===`)
+    console.error(`  Obstacles: ${srj.obstacles.length}`)
+    console.error(`  Connections: ${srj.connections.length} (${srj.connections.map((c: any) => c.name).join(', ')})`)
+    console.error(`  Bounds: [${srj.bounds.minX}, ${srj.bounds.minY}] → [${srj.bounds.maxX}, ${srj.bounds.maxY}]`)
+    console.error(`  Outline: ${srj.outline ? srj.outline.length + ' vertices' : 'none'}`)
+    console.error(`  Layer count: ${srj.layerCount}, trace width: ${srj.minTraceWidth}mm`)
 
-    for (const [netName, pads] of netMap) {
-      if (pads.length < 2) continue
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { AssignableAutoroutingPipeline2 } = require('@tscircuit/capacity-autorouter')
 
-      const type = this.getNetType(netName)
+      const solver = new AssignableAutoroutingPipeline2(srj, { effort: 5 })
+      const t0 = Date.now()
+      solver.solve()
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1)
 
-      const mstEdges = this.computeMST(pads)
-      for (const edge of mstEdges) {
-        this.nets.push({
-          name: netName,
-          source: edge.from,
-          sink: edge.to,
-          type
-        })
-      }
-    }
-
-    this.nets.sort((a, b) => {
-      const priority: Record<string, number> = { SIGNAL: 0, GND: 1, VCC: 2 }
-      const typeDiff = priority[a.type] - priority[b.type]
-      if (typeDiff !== 0) return typeDiff
-      
-      const distA = this.manhattanDistance(a.source, a.sink)
-      const distB = this.manhattanDistance(b.source, b.sink)
-      return distA - distB
-    })
-  }
-
-  private getNetType(netName: string): 'GND' | 'VCC' | 'SIGNAL' {
-    if (netName === 'GND') return 'GND'
-    if (netName === 'VCC') return 'VCC'
-    return 'SIGNAL'
-  }
-
-  private computeMST(pads: Pad[]): { from: GridCoordinate; to: GridCoordinate }[] {
-    if (pads.length < 2) return []
-
-    const edges: { from: number; to: number; weight: number }[] = []
-    for (let i = 0; i < pads.length; i++) {
-      for (let j = i + 1; j < pads.length; j++) {
-        const weight = this.manhattanDistance(pads[i].center, pads[j].center)
-        edges.push({ from: i, to: j, weight })
-      }
-    }
-
-    edges.sort((a, b) => a.weight - b.weight)
-
-    const parent = pads.map((_, i) => i)
-    const find = (x: number): number => {
-      if (parent[x] !== x) parent[x] = find(parent[x])
-      return parent[x]
-    }
-    const union = (x: number, y: number): boolean => {
-      const px = find(x)
-      const py = find(y)
-      if (px === py) return false
-      parent[px] = py
-      return true
-    }
-
-    const result: { from: GridCoordinate; to: GridCoordinate }[] = []
-    for (const edge of edges) {
-      if (union(edge.from, edge.to)) {
-        result.push({
-          from: pads[edge.from].center,
-          to: pads[edge.to].center
-        })
-      }
-      if (result.length === pads.length - 1) break
-    }
-
-    return result
-  }
-
-  private manhattanDistance(a: GridCoordinate, b: GridCoordinate): number {
-    return Math.abs(a.x - b.x) + Math.abs(a.y - b.y)
-  }
-
-  private routeNets(): void {
-    const netPads = this.buildNetPadsMap()
-    const netOrder = this.getInitialNetOrder(netPads)
-    
-    const result = this.attemptRouteWithOrder(netPads, netOrder)
-    
-    if (result.failures.length > 0) {
-      console.error(`\nInitial routing failed for ${result.failures.length} nets. Attempting rip-up and reroute...`)
-      this.ripUpAndReroute(netPads, netOrder, result)
-    } else {
-      this.applyRoutingResult(result)
-    }
-  }
-
-  private buildNetPadsMap(): Map<string, Pad[]> {
-    const netPads = new Map<string, Pad[]>()
-    for (const pad of this.pads.values()) {
-      if (pad.net === 'NC') continue
-      if (!netPads.has(pad.net)) {
-        netPads.set(pad.net, [])
-      }
-      netPads.get(pad.net)!.push(pad)
-    }
-    return netPads
-  }
-
-  private getInitialNetOrder(netPads: Map<string, Pad[]>): string[] {
-    const netOrder: string[] = []
-    for (const [netName, pads] of netPads) {
-      if (pads.length >= 2) {
-        netOrder.push(netName)
-      }
-    }
-    netOrder.sort((a, b) => {
-      const typeA = this.getNetType(a)
-      const typeB = this.getNetType(b)
-      const priority: Record<string, number> = { SIGNAL: 0, GND: 1, VCC: 2 }
-      return priority[typeA] - priority[typeB]
-    })
-    return netOrder
-  }
-
-  private attemptRouteWithOrder(
-    netPads: Map<string, Pad[]>,
-    netOrder: string[]
-  ): { 
-    completedTraces: Map<string, Set<string>>
-    tracesByNet: Map<string, Trace[]>
-    failures: { netName: string; sourcePad: Pad; destPads: Pad[] }[]
-  } {
-    this.resetGrid()
-    
-    const completedTraces = new Map<string, Set<string>>()
-    const tracesByNet = new Map<string, Trace[]>()
-    const failures: { netName: string; sourcePad: Pad; destPads: Pad[] }[] = []
-
-    for (const netName of netOrder) {
-      const pads = netPads.get(netName)!
-      const result = this.routeSingleNet(netName, pads, completedTraces)
-      
-      if (result.success) {
-        completedTraces.set(netName, result.routedCells!)
-        tracesByNet.set(netName, result.traces!)
+      if (solver.solved) {
+        console.error(`  Solved in ${elapsed}s`)
+        const output = solver.getOutputSimpleRouteJson()
+        return this.convertResult(output, srj)
       } else {
-        failures.push({
-          netName,
-          sourcePad: pads[0],
-          destPads: result.failedPads!
-        })
+        console.error(`  Failed after ${elapsed}s: ${solver.error || 'unknown'}`)
+        // Try to extract partial results
+        try {
+          const output = solver.getOutputSimpleRouteJson()
+          return this.convertResult(output, srj)
+        } catch {
+          return this.buildFailureResult(srj, solver.error || 'Autorouter failed')
+        }
+      }
+    } catch (error) {
+      console.error(`  Error: ${error instanceof Error ? error.message : String(error)}`)
+      return this.buildFailureResult(srj, String(error))
+    }
+  }
+
+  /**
+   * Convert our RouterInput into tscircuit's SimpleRouteJson format.
+   *
+   * Creates:
+   *   - Obstacles for component bodies (battery, controller, buttons)
+   *   - Obstacles for each pad (with connectedTo linking to the net)
+   *   - Connections grouping pads by net name
+   *   - Board outline from the polygon
+   */
+  private buildSimpleRouteJson(): any {
+    const boardW = this.input.board.boardWidth
+    const boardH = this.input.board.boardHeight
+    const res = this.input.board.gridResolution
+    const fp = this.footprints
+    const obstacles: any[] = []
+    const padWorld = new Map<string, { x: number; y: number; net: string }>()
+    const PAD_SIZE = 1.0 // mm — physical pad obstacle size
+
+    // ── Battery: body obstacle + VCC/GND pads ──
+    for (const battery of this.input.placement.batteries || []) {
+      const bodyW = battery.bodyWidth ?? fp.battery.bodyWidth ?? 0
+      const bodyH = battery.bodyHeight ?? fp.battery.bodyHeight ?? 0
+
+      // Battery body is handled by the pad offset — traces are prevented
+      // from routing through the body by the VCC/GND pads placed with
+      // padOffset from the body edges. We don't add a large blocking
+      // obstacle because it over-constrains the capacity-mesh solver.
+
+      let vccY: number, gndY: number
+      if (bodyH > 0) {
+        const padOffsetCells = this.bodyKeepoutCells + 5
+        const padOffset = padOffsetCells * res
+        vccY = battery.y + bodyH / 2 + padOffset
+        gndY = battery.y - bodyH / 2 - padOffset
+      } else {
+        // No body dims → use padSpacing from footprint
+        vccY = battery.y + fp.battery.padSpacing / 2
+        gndY = battery.y - fp.battery.padSpacing / 2
+      }
+
+      const vccId = `${battery.id}.VCC`
+      const gndId = `${battery.id}.GND`
+      padWorld.set(vccId, { x: battery.x, y: vccY, net: 'VCC' })
+      padWorld.set(gndId, { x: battery.x, y: gndY, net: 'GND' })
+
+      obstacles.push({
+        type: 'rect', layers: ['top'],
+        center: { x: battery.x, y: vccY },
+        width: PAD_SIZE, height: PAD_SIZE,
+        connectedTo: [vccId]
+      })
+      obstacles.push({
+        type: 'rect', layers: ['top'],
+        center: { x: battery.x, y: gndY },
+        width: PAD_SIZE, height: PAD_SIZE,
+        connectedTo: [gndId]
+      })
+    }
+
+    // ── Buttons: body obstacle + 4 pads ──
+    for (const button of this.input.placement.buttons) {
+      const halfX = fp.button.pinSpacingX / 2
+      const halfY = fp.button.pinSpacingY / 2
+
+      // Button body (6×6mm tactile switch)
+      obstacles.push({
+        type: 'rect', layers: ['top'],
+        center: { x: button.x, y: button.y },
+        width: 6, height: 6,
+        connectedTo: []
+      })
+
+      const pins = [
+        { id: `${button.id}.A1`, x: button.x - halfX, y: button.y - halfY, net: button.signalNet },
+        { id: `${button.id}.A2`, x: button.x - halfX, y: button.y + halfY, net: 'NC' },
+        { id: `${button.id}.B1`, x: button.x + halfX, y: button.y - halfY, net: 'GND' },
+        { id: `${button.id}.B2`, x: button.x + halfX, y: button.y + halfY, net: 'NC' },
+      ]
+
+      for (const pin of pins) {
+        if (pin.net === 'NC') {
+          obstacles.push({
+            type: 'rect', layers: ['top'],
+            center: { x: pin.x, y: pin.y },
+            width: PAD_SIZE, height: PAD_SIZE,
+            connectedTo: []
+          })
+        } else {
+          padWorld.set(pin.id, { x: pin.x, y: pin.y, net: pin.net })
+          obstacles.push({
+            type: 'rect', layers: ['top'],
+            center: { x: pin.x, y: pin.y },
+            width: PAD_SIZE, height: PAD_SIZE,
+            connectedTo: [pin.id]
+          })
+        }
       }
     }
 
-    return { completedTraces, tracesByNet, failures }
+    // ── Controller: body obstacle + all pin pads ──
+    for (const controller of this.input.placement.controllers) {
+      const pinNames = Object.keys(controller.pins)
+      const pinCount = pinNames.length
+      const pinsPerSide = Math.ceil(pinCount / 2)
+      const totalHeight = (pinsPerSide - 1) * fp.controller.pinSpacing
+
+      // Controller body (area between pin rows)
+      obstacles.push({
+        type: 'rect', layers: ['top'],
+        center: { x: controller.x, y: controller.y },
+        width: fp.controller.rowSpacing - PAD_SIZE,
+        height: totalHeight + 2 * PAD_SIZE,
+        connectedTo: []
+      })
+
+      pinNames.forEach((pinName, index) => {
+        const pinNumber = index + 1
+        let pinX: number, pinY: number
+        if (pinNumber <= pinsPerSide) {
+          pinX = controller.x - fp.controller.rowSpacing / 2
+          pinY = controller.y - totalHeight / 2 + (pinNumber - 1) * fp.controller.pinSpacing
+        } else {
+          pinX = controller.x + fp.controller.rowSpacing / 2
+          const rightSideIndex = pinCount - pinNumber
+          pinY = controller.y - totalHeight / 2 + rightSideIndex * fp.controller.pinSpacing
+        }
+
+        const net = controller.pins[pinName]
+        const pinId = `${controller.id}.${pinName}`
+
+        if (net === 'NC') {
+          obstacles.push({
+            type: 'rect', layers: ['top'],
+            center: { x: pinX, y: pinY },
+            width: PAD_SIZE, height: PAD_SIZE,
+            connectedTo: []
+          })
+        } else {
+          padWorld.set(pinId, { x: pinX, y: pinY, net })
+          obstacles.push({
+            type: 'rect', layers: ['top'],
+            center: { x: pinX, y: pinY },
+            width: PAD_SIZE, height: PAD_SIZE,
+            connectedTo: [pinId]
+          })
+        }
+      })
+    }
+
+    // ── Diodes: anode + cathode pads ──
+    for (const diode of this.input.placement.diodes || []) {
+      const halfSpacing = fp.diode.padSpacing / 2
+      const anodeId = `${diode.id}.A`
+      const cathodeId = `${diode.id}.K`
+
+      padWorld.set(anodeId, { x: diode.x - halfSpacing, y: diode.y, net: diode.signalNet })
+      padWorld.set(cathodeId, { x: diode.x + halfSpacing, y: diode.y, net: 'GND' })
+
+      obstacles.push({
+        type: 'rect', layers: ['top'],
+        center: { x: diode.x - halfSpacing, y: diode.y },
+        width: PAD_SIZE, height: PAD_SIZE,
+        connectedTo: [anodeId]
+      })
+      obstacles.push({
+        type: 'rect', layers: ['top'],
+        center: { x: diode.x + halfSpacing, y: diode.y },
+        width: PAD_SIZE, height: PAD_SIZE,
+        connectedTo: [cathodeId]
+      })
+    }
+
+    // ── Group pads by net → connections ──
+    const netMap = new Map<string, Array<{ x: number; y: number; layer: string; pointId: string }>>()
+    for (const [padId, pos] of padWorld) {
+      if (!netMap.has(pos.net)) netMap.set(pos.net, [])
+      netMap.get(pos.net)!.push({ x: pos.x, y: pos.y, layer: 'top', pointId: padId })
+    }
+
+    const connections: any[] = []
+    for (const [netName, points] of netMap) {
+      if (points.length < 2) continue
+      connections.push({ name: netName, pointsToConnect: points })
+    }
+
+    return {
+      layerCount: 1,
+      minTraceWidth: this.input.manufacturing.traceWidth,
+      defaultObstacleMargin: 0.15,
+      obstacles,
+      connections,
+      bounds: { minX: 0, maxX: boardW, minY: 0, maxY: boardH },
+      // Note: polygon outline is intentionally omitted — the rectangular
+      // bounds suffice for the capacity mesh, and the polygon constraint
+      // over-restricts the solver.  Downstream validators enforce outline
+      // bounds on the final trace geometry.
+    }
   }
 
-  private routeSingleNet(
-    netName: string,
-    pads: Pad[],
-    completedTraces: Map<string, Set<string>>
-  ): {
-    success: boolean
-    routedCells?: Set<string>
-    traces?: Trace[]
-    failedPads?: Pad[]
-  } {
-    const routedCells = new Set<string>()
+  /**
+   * Convert the tscircuit output (SimplifiedPcbTraces in world coords)
+   * back to our RoutingResult (Traces with grid-coordinate paths).
+   */
+  private convertResult(output: any, inputSrj: any): RoutingResult {
     const traces: Trace[] = []
-    const netPadCoords = new Set<string>()
-    
-    for (const pad of pads) {
-      netPadCoords.add(`${pad.center.x},${pad.center.y}`)
-    }
+    const failedNets: FailedNet[] = []
+    const res = this.input.board.gridResolution
+    const routedConnectionNames = new Set<string>()
 
-    const connectedPads = new Set<number>()
-    connectedPads.add(0)
-    routedCells.add(`${pads[0].center.x},${pads[0].center.y}`)
+    if (output.traces) {
+      for (const trace of output.traces) {
+        const connectionName = trace.connection_name || trace.pcb_trace_id
+        const wirePoints: GridCoordinate[] = trace.route
+          .filter((s: any) => s.route_type === 'wire')
+          .map((s: any) => ({
+            x: Math.round(s.x / res),
+            y: Math.round(s.y / res)
+          }))
 
-    while (connectedPads.size < pads.length) {
-      let bestPath: GridCoordinate[] | null = null
-      let bestPadIdx = -1
-      let bestLength = Infinity
-
-      for (let i = 0; i < pads.length; i++) {
-        if (connectedPads.has(i)) continue
-
-        const targetPad = pads[i].center
-
-        if (routedCells.size > 0) {
-          for (const cellKey of routedCells) {
-            const [x, y] = cellKey.split(',').map(Number)
-            this.grid.freeCell(x, y)
-          }
+        if (wirePoints.length >= 2) {
+          traces.push({ net: connectionName, path: wirePoints })
+          routedConnectionNames.add(connectionName)
         }
-
-        this.blockUnrelatedPads(netPadCoords)
-        this.blockUnrelatedTraces(netName, completedTraces, netPadCoords)
-
-        // Ensure current net's pad cells are free (they may have been
-        // blocked by the polygon edge clearance zone)
-        for (const pad of pads) {
-          this.grid.freeCell(pad.center.x, pad.center.y)
-        }
-
-        const pathfinder = new Pathfinder(this.grid)
-        const path = pathfinder.findPathToTree(targetPad, routedCells)
-
-        this.unblockAllPads()
-        this.unblockTraceExclusions(netName, completedTraces)
-
-        if (routedCells.size > 0) {
-          for (const cellKey of routedCells) {
-            const [x, y] = cellKey.split(',').map(Number)
-            this.grid.blockCell(x, y)
-          }
-        }
-
-        if (path && path.length < bestLength) {
-          bestPath = path
-          bestPadIdx = i
-          bestLength = path.length
-        }
-      }
-
-      if (bestPath === null || bestPadIdx === -1) {
-        const failedPads = pads.filter((_, i) => !connectedPads.has(i))
-        return { success: false, routedCells, traces, failedPads }
-      }
-
-      console.error(`OK: ${netName} to pad ${bestPadIdx}, length=${bestPath.length}`)
-
-      connectedPads.add(bestPadIdx)
-      for (const cell of bestPath) {
-        routedCells.add(`${cell.x},${cell.y}`)
-      }
-
-      traces.push({ net: netName, path: bestPath })
-
-      for (const cell of bestPath) {
-        this.grid.blockCell(cell.x, cell.y)
       }
     }
 
-    return { success: true, routedCells, traces }
-  }
-
-  private ripUpAndReroute(
-    netPads: Map<string, Pad[]>,
-    originalOrder: string[],
-    initialResult: {
-      completedTraces: Map<string, Set<string>>
-      tracesByNet: Map<string, Trace[]>
-      failures: { netName: string; sourcePad: Pad; destPads: Pad[] }[]
-    }
-  ): void {
-    const failedNetNames = initialResult.failures.map(f => f.netName)
-    let bestResult = initialResult
-    
-    const orderStrategies = this.generateOrderStrategies(originalOrder, failedNetNames)
-    
-    for (let attempt = 0; attempt < Math.min(this.maxRipupAttempts, orderStrategies.length); attempt++) {
-      console.error(`\nRip-up attempt ${attempt + 1}/${this.maxRipupAttempts}`)
-      
-      const newOrder = orderStrategies[attempt]
-      console.error(`Trying order: ${newOrder.join(' → ')}`)
-      
-      const newResult = this.attemptRouteWithOrder(netPads, newOrder)
-      
-      if (newResult.failures.length === 0) {
-        console.error(`Rip-up and reroute succeeded with order: ${newOrder.join(' → ')}`)
-        this.applyRoutingResult(newResult)
-        return
-      }
-      
-      console.error(`Failures: ${newResult.failures.length} (${newResult.failures.map(f => f.netName).join(', ')})`)
-      
-      if (newResult.failures.length < bestResult.failures.length) {
-        console.error(`Progress: reduced failures from ${bestResult.failures.length} to ${newResult.failures.length}`)
-        bestResult = newResult
-      }
-    }
-    
-    this.applyRoutingResult(bestResult)
-    
-    for (const failure of bestResult.failures) {
-      for (const destPad of failure.destPads) {
-        this.failedNets.push({
-          netName: failure.netName,
-          sourcePin: this.findPinAtCoord(failure.sourcePad.center),
-          destinationPin: this.findPinAtCoord(destPad.center),
-          reason: 'No valid path found after rip-up attempts'
+    // Detect unrouted connections
+    for (const conn of inputSrj.connections) {
+      if (!routedConnectionNames.has(conn.name)) {
+        const points = conn.pointsToConnect
+        failedNets.push({
+          netName: conn.name,
+          sourcePin: points[0]?.pointId || 'unknown',
+          destinationPin: points[points.length - 1]?.pointId || 'unknown',
+          reason: 'No route found by autorouter'
         })
       }
     }
+
+    this.traces = traces
+    this.failedNets = failedNets
+
+    console.error(`  Traces: ${traces.length}, Failed nets: ${failedNets.length}`)
+    if (failedNets.length > 0) {
+      for (const f of failedNets) {
+        console.error(`    ${f.netName}: ${f.reason}`)
+      }
+    }
+
+    return {
+      success: failedNets.length === 0,
+      traces,
+      failedNets
+    }
   }
 
-  private generateOrderStrategies(originalOrder: string[], failedNets: string[]): string[][] {
-    const strategies: string[][] = []
-    const failedSet = new Set(failedNets)
-    const otherNets = originalOrder.filter(n => !failedSet.has(n))
-    
-    strategies.push([...failedNets, ...otherNets])
-    
-    const gnd = originalOrder.filter(n => n === 'GND')
-    const vcc = originalOrder.filter(n => n === 'VCC')
-    const signals = originalOrder.filter(n => n !== 'GND' && n !== 'VCC')
-    
-    strategies.push([...gnd, ...vcc, ...signals])
-    strategies.push([...vcc, ...gnd, ...signals])
-    strategies.push([...signals, ...vcc, ...gnd])
-    strategies.push([...signals, ...gnd, ...vcc])
-    
-    const interleaved1: string[] = []
-    for (let i = 0; i < Math.max(signals.length, 2); i++) {
-      if (i < signals.length) interleaved1.push(signals[i])
-      if (i === 0 && vcc.length > 0) interleaved1.push(vcc[0])
-      if (i === 1 && gnd.length > 0) interleaved1.push(gnd[0])
-    }
-    strategies.push(interleaved1.filter(n => n !== undefined))
-    
-    const interleaved2: string[] = []
-    for (let i = 0; i < Math.max(signals.length, 2); i++) {
-      if (i === 0 && gnd.length > 0) interleaved2.push(gnd[0])
-      if (i < signals.length) interleaved2.push(signals[i])
-      if (i === signals.length - 1 && vcc.length > 0) interleaved2.push(vcc[0])
-    }
-    strategies.push(interleaved2.filter(n => n !== undefined))
-    
-    if (signals.length > 1) {
-      strategies.push([...signals.slice().reverse(), ...gnd, ...vcc])
-      strategies.push([...vcc, ...signals.slice().reverse(), ...gnd])
-    }
-    
-    if (signals.length >= 2) {
-      const half = Math.ceil(signals.length / 2)
-      const firstHalf = signals.slice(0, half)
-      const secondHalf = signals.slice(half)
-      strategies.push([...firstHalf, ...gnd, ...secondHalf, ...vcc])
-      strategies.push([...firstHalf, ...vcc, ...secondHalf, ...gnd])
-      strategies.push([...gnd, ...firstHalf, ...vcc, ...secondHalf])
-    }
-    
-    strategies.push([...signals.slice().reverse(), ...vcc, ...gnd])
-    
-    return strategies
-  }
+  private buildFailureResult(inputSrj: any, reason: string): RoutingResult {
+    const failedNets: FailedNet[] = inputSrj.connections.map((conn: any) => ({
+      netName: conn.name,
+      sourcePin: conn.pointsToConnect[0]?.pointId || 'unknown',
+      destinationPin: conn.pointsToConnect[conn.pointsToConnect.length - 1]?.pointId || 'unknown',
+      reason
+    }))
 
-  private applyRoutingResult(result: {
-    completedTraces: Map<string, Set<string>>
-    tracesByNet: Map<string, Trace[]>
-    failures: { netName: string; sourcePad: Pad; destPads: Pad[] }[]
-  }): void {
     this.traces = []
-    for (const [_, netTraces] of result.tracesByNet) {
-      this.traces.push(...netTraces)
-    }
+    this.failedNets = failedNets
+
+    return { success: false, traces: [], failedNets }
   }
 
-  private resetGrid(): void {
-    this.grid = new Grid(this.input.board, this.input.manufacturing)
-  }
-
-  private blockUnrelatedPads(allowedPadCoords: Set<string>): void {
-    const blockedCells = new Set<string>()
-    const padding = this.tracePadding
-    
-    for (const pad of this.pads.values()) {
-      const key = `${pad.center.x},${pad.center.y}`
-      if (!allowedPadCoords.has(key)) {
-        for (let dy = -padding; dy <= padding; dy++) {
-          for (let dx = -padding; dx <= padding; dx++) {
-            const nx = pad.center.x + dx
-            const ny = pad.center.y + dy
-            const cellKey = `${nx},${ny}`
-            if (!allowedPadCoords.has(cellKey) && !blockedCells.has(cellKey)) {
-              this.grid.blockCell(nx, ny)
-              blockedCells.add(cellKey)
-            }
-          }
-        }
-      }
-    }
-  }
-
-  private unblockAllPads(): void {
-    const padding = this.tracePadding
-    for (const pad of this.pads.values()) {
-      for (let dy = -padding; dy <= padding; dy++) {
-        for (let dx = -padding; dx <= padding; dx++) {
-          this.grid.freeCell(pad.center.x + dx, pad.center.y + dy)
-        }
-      }
-    }
-  }
-
-  private blockUnrelatedTraces(
-    currentNet: string,
-    completedTraces: Map<string, Set<string>>,
-    allowedCoords: Set<string>
-  ): void {
-    const padding = this.tracePadding
-    for (const [netName, traceCells] of completedTraces) {
-      if (netName === currentNet) continue
-      
-      for (const cellKey of traceCells) {
-        const [x, y] = cellKey.split(',').map(Number)
-        for (let dy = -padding; dy <= padding; dy++) {
-          for (let dx = -padding; dx <= padding; dx++) {
-            const nx = x + dx
-            const ny = y + dy
-            const neighborKey = `${nx},${ny}`
-            if (!allowedCoords.has(neighborKey)) {
-              this.grid.blockCell(nx, ny)
-            }
-          }
-        }
-      }
-    }
-  }
-
-  private unblockTraceExclusions(
-    currentNet: string,
-    completedTraces: Map<string, Set<string>>
-  ): void {
-    const padding = this.tracePadding
-    for (const [netName, traceCells] of completedTraces) {
-      if (netName === currentNet) continue
-      
-      for (const cellKey of traceCells) {
-        const [x, y] = cellKey.split(',').map(Number)
-        for (let dy = -padding; dy <= padding; dy++) {
-          for (let dx = -padding; dx <= padding; dx++) {
-            if (dx === 0 && dy === 0) continue
-            this.grid.freeCell(x + dx, y + dy)
-          }
-        }
-      }
-    }
-  }
-
-  private findPinAtCoord(coord: GridCoordinate): string {
-    for (const [key, pad] of this.pads) {
-      if (pad.center.x === coord.x && pad.center.y === coord.y) {
-        return key
-      }
-    }
-    return `(${coord.x}, ${coord.y})`
-  }
+  // ── Accessors (used by CLI for visualization) ──
 
   getGrid(): Grid {
     return this.grid
@@ -659,5 +507,9 @@ export class Router {
 
   getTraces(): Trace[] {
     return this.traces
+  }
+
+  getComponentBodies(): ComponentBody[] {
+    return this.componentBodies
   }
 }

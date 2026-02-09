@@ -109,39 +109,55 @@ def place_components(
             "hh": hw.button["pin_spacing_y_mm"] / 2,
         })
 
-    # ── 2. Battery ──────────────────────────────────────────────────
+    # ── 2. Battery compartment ───────────────────────────────────────
     bat_fp = hw.battery
-    bat_w = bat_fp["holder_width_mm"]
-    bat_h = bat_fp["holder_height_mm"]
-    bat_pad = bat_fp["holder_padding_mm"]
+    # Use compartment size — the full keepout zone where no traces may go
+    comp_w = bat_fp["compartment_width_mm"]
+    comp_h = bat_fp["compartment_height_mm"]
 
-    # Use body half-size + component margin for scan (not holder_padding)
-    bat_scan_hw = bat_w / 2 + margin
-    bat_scan_hh = bat_h / 2 + margin
+    # The TS router blocks the body + a small keepout margin around it.
+    # body_keepout ≈ ceil(traceWidth / (2*gridRes)) + 1 cells, in mm.
+    body_keepout = (
+        math.ceil(hw.trace_width / (2 * hw.grid_resolution)) + 1
+    ) * hw.grid_resolution  # ≈ 1.5 mm with current values
+
+    # Battery pads are placed on opposite sides (VCC above, GND below)
+    # in the router, so the pad_offset extends symmetrically.
+    pad_offset = (
+        math.ceil(hw.trace_width / (2 * hw.grid_resolution)) + 1 + 2
+    ) * hw.grid_resolution  # ≈ 2.5 mm with current values
+
+    # Scan with compartment + body keepout + margin (width)
+    # and compartment + pad offset + margin (height, pads extend both sides)
+    bat_scan_hw = comp_w / 2 + body_keepout + margin
+    bat_scan_hh = comp_h / 2 + pad_offset + margin
 
     bat_pos = _grid_scan_best(
         board_inset, occupied,
         half_w=bat_scan_hw, half_h=bat_scan_hh,
         prefer="bottom", step=2.0, margin=margin,
+        body_outline=ccw, body_hw=comp_w / 2, body_hh=comp_h / 2,
     )
     if not bat_pos:
-        # Retry with finer step and tighter margin
+        # Retry with finer step and tighter margin, but keep body keepout
         bat_pos = _grid_scan_best(
             board_inset, occupied,
-            half_w=bat_w / 2, half_h=bat_h / 2,
+            half_w=comp_w / 2 + body_keepout,
+            half_h=comp_h / 2 + body_keepout,
             prefer="bottom", step=1.0, margin=0.5,
+            body_outline=ccw, body_hw=comp_w / 2, body_hh=comp_h / 2,
         )
     if bat_pos:
         bx, by = bat_pos
     else:
         raise PlacementError(
             component="battery",
-            dimensions={"width_mm": bat_w, "height_mm": bat_h},
+            dimensions={"width_mm": comp_w, "height_mm": comp_h},
             available={"width_mm": board_width, "height_mm": board_height},
             occupied=list(occupied),
             suggestion=(
-                "The battery holder requires a clear area of "
-                f"{bat_w:.0f} x {bat_h:.0f} mm. "
+                "The battery compartment requires a clear area of "
+                f"{comp_w:.0f} x {comp_h:.0f} mm. "
                 "Widen the outline or move buttons further apart "
                 "to free enough contiguous space."
             ),
@@ -154,13 +170,17 @@ def place_components(
         "footprint": battery_type,
         "center": [bx, by],
         "rotation_deg": 0,
+        "body_width_mm": comp_w,
+        "body_height_mm": comp_h,
         "keepout": {
             "type": "rectangle",
-            "width_mm": bat_w + bat_pad * 2,
-            "height_mm": bat_h + bat_pad * 2,
+            "width_mm": comp_w,
+            "height_mm": comp_h,
         },
     })
-    occupied.append({"cx": bx, "cy": by, "hw": bat_w / 2 + bat_pad, "hh": bat_h / 2 + bat_pad})
+    occupied.append({"cx": bx, "cy": by,
+                     "hw": comp_w / 2 + body_keepout,
+                     "hh": comp_h / 2 + pad_offset})
 
     # ── 3. Controller ──────────────────────────────────────────────
     ctrl = hw.controller
@@ -177,6 +197,7 @@ def place_components(
         board_inset, occupied,
         half_w=ctrl_scan_hw, half_h=ctrl_scan_hh,
         prefer="center", step=2.0, margin=margin,
+        body_outline=ccw, body_hw=ctrl_w / 2, body_hh=ctrl_h / 2,
     )
     if not ctrl_pos:
         # Retry with finer step and tighter margin
@@ -184,6 +205,7 @@ def place_components(
             board_inset, occupied,
             half_w=ctrl_w / 2, half_h=ctrl_h / 2,
             prefer="center", step=1.0, margin=0.5,
+            body_outline=ccw, body_hw=ctrl_w / 2, body_hh=ctrl_h / 2,
         )
     if ctrl_pos:
         cx, cy = ctrl_pos
@@ -273,6 +295,9 @@ def _grid_scan_best(
     prefer: str = "center",
     step: float = 2.0,
     margin: float = 1.0,
+    body_outline: list[list[float]] | None = None,
+    body_hw: float | None = None,
+    body_hh: float | None = None,
 ) -> tuple[float, float] | None:
     """
     Scan a coarse grid inside *polygon*, find best position for a component
@@ -282,9 +307,14 @@ def _grid_scan_best(
     footprint extents.  Using a single shared margin avoids double-
     counting when both the new component and existing occupied entries
     already include padding.
+
+    If *body_outline* is given (together with *body_hw* / *body_hh*),
+    an extra check ensures the physical body corners stay inside that
+    polygon (typically the original remote outline).
     """
     min_x, min_y, max_x, max_y = polygon_bounds(polygon)
     ccw = ensure_ccw(polygon)
+    outline_ccw = ensure_ccw(body_outline) if body_outline else None
     best: tuple[float, float] | None = None
     best_score = -1e18
 
@@ -301,6 +331,17 @@ def _grid_scan_best(
             if not corners_ok:
                 y += step
                 continue
+
+            # body corners inside original outline?
+            if outline_ccw and body_hw is not None and body_hh is not None:
+                body_ok = all(
+                    point_in_polygon(x + dx, y + dy, outline_ccw)
+                    for dx in (-body_hw, body_hw)
+                    for dy in (-body_hh, body_hh)
+                )
+                if not body_ok:
+                    y += step
+                    continue
 
             # no overlap with occupied (using shared margin)
             overlaps = False
@@ -321,6 +362,8 @@ def _grid_scan_best(
                 mid_x = (min_x + max_x) / 2
                 mid_y = (min_y + max_y) / 2
                 score = -(abs(x - mid_x) + abs(y - mid_y))
+            elif prefer == "top":
+                score = y - min_y  # maximize y (higher is better)
 
             # bonus: distance from occupied
             min_dist = min(
@@ -337,6 +380,88 @@ def _grid_scan_best(
         x += step
 
     return best
+
+
+def _grid_scan_top_n(
+    polygon: list[list[float]],
+    occupied: list[dict],
+    half_w: float,
+    half_h: float,
+    n: int = 3,
+    step: float = 2.0,
+    margin: float = 1.0,
+    body_outline: list[list[float]] | None = None,
+    body_hw: float | None = None,
+    body_hh: float | None = None,
+) -> list[tuple[float, float]]:
+    """
+    Return up to *n* valid positions spread across different regions.
+
+    Instead of returning just the single "best" position, this function
+    divides the board into vertical bands and picks the best position
+    from each band.  This gives variety in placement for multi-placement
+    trials.
+    """
+    min_x, min_y, max_x, max_y = polygon_bounds(polygon)
+    ccw = ensure_ccw(polygon)
+    outline_ccw = ensure_ccw(body_outline) if body_outline else None
+
+    # Collect ALL valid positions
+    valid_positions: list[tuple[float, float]] = []
+    x = min_x + half_w
+    while x <= max_x - half_w:
+        y = min_y + half_h
+        while y <= max_y - half_h:
+            corners_ok = all(
+                point_in_polygon(x + dx, y + dy, ccw)
+                for dx in (-half_w, half_w)
+                for dy in (-half_h, half_h)
+            )
+            if not corners_ok:
+                y += step
+                continue
+            if outline_ccw and body_hw is not None and body_hh is not None:
+                body_ok = all(
+                    point_in_polygon(x + dx, y + dy, outline_ccw)
+                    for dx in (-body_hw, body_hw)
+                    for dy in (-body_hh, body_hh)
+                )
+                if not body_ok:
+                    y += step
+                    continue
+            overlaps = False
+            for occ in occupied:
+                if (abs(x - occ["cx"]) < half_w + occ["hw"] + margin and
+                        abs(y - occ["cy"]) < half_h + occ["hh"] + margin):
+                    overlaps = True
+                    break
+            if not overlaps:
+                valid_positions.append((x, y))
+            y += step
+        x += step
+
+    if not valid_positions:
+        return []
+
+    # Divide into n vertical bands and pick the best per band
+    ys = [p[1] for p in valid_positions]
+    band_height = (max(ys) - min(ys) + 0.01) / max(n, 1)
+    bands: dict[int, list[tuple[float, float]]] = {}
+    for pos in valid_positions:
+        band = int((pos[1] - min(ys)) / band_height)
+        bands.setdefault(band, []).append(pos)
+
+    # From each band, pick the position closest to horizontal center
+    mid_x = (min_x + max_x) / 2
+    result: list[tuple[float, float]] = []
+    for band_key in sorted(bands.keys()):
+        band_positions = bands[band_key]
+        best = min(band_positions, key=lambda p: abs(p[0] - mid_x))
+        result.append(best)
+        if len(result) >= n:
+            break
+
+    return result
 
 
 def _polygon_width_at_y(polygon: list[list[float]], y: float) -> float:
@@ -455,3 +580,180 @@ def build_optimization_report(
         "placed_components": placed,
         "routing_summary": routing_summary,
     }
+
+
+# ── Multi-placement candidate generation ──────────────────────────
+
+
+def generate_placement_candidates(
+    outline: list[list[float]],
+    button_positions: list[dict],
+    battery_type: str = "2xAAA",
+    max_candidates: int = 8,
+) -> list[dict]:
+    """
+    Generate multiple placement layouts for the same outline/buttons.
+
+    Each candidate places the battery and controller at different positions
+    (bottom / center / top preference) and returns the resulting layout.
+    Candidates that fail placement are silently skipped.
+
+    Returns a list of layout dicts (same format as ``place_components``).
+    """
+    ccw = ensure_ccw(outline)
+    board_inset = inset_polygon(ccw, hw.wall_clearance)
+    min_x, min_y, max_x, max_y = polygon_bounds(board_inset)
+
+    components_base: list[dict] = []
+    occupied_base: list[dict] = []
+    margin = hw.component_margin
+
+    # ── 1. Buttons (fixed) ──────────────────────────────────────────
+    for btn in button_positions:
+        comp = {
+            "id": btn["id"],
+            "ref": btn["id"],
+            "type": "button",
+            "footprint": hw.button["switch_type"],
+            "center": [btn["x"], btn["y"]],
+            "rotation_deg": 0,
+            "keepout": {
+                "type": "circle",
+                "radius_mm": hw.button["cap_diameter_mm"] / 2 + hw.button["keepout_padding_mm"],
+            },
+        }
+        components_base.append(comp)
+        occupied_base.append({
+            "cx": btn["x"], "cy": btn["y"],
+            "hw": hw.button["pin_spacing_x_mm"] / 2,
+            "hh": hw.button["pin_spacing_y_mm"] / 2,
+        })
+
+    # ── Battery dimensions ──────────────────────────────────────────
+    bat_fp = hw.battery
+    comp_w = bat_fp["compartment_width_mm"]
+    comp_h = bat_fp["compartment_height_mm"]
+    body_keepout = (
+        math.ceil(hw.trace_width / (2 * hw.grid_resolution)) + 1
+    ) * hw.grid_resolution
+    pad_offset = (
+        math.ceil(hw.trace_width / (2 * hw.grid_resolution)) + 1 + 2
+    ) * hw.grid_resolution
+    bat_scan_hw = comp_w / 2 + body_keepout + margin
+    bat_scan_hh = comp_h / 2 + pad_offset + margin
+
+    # ── Controller dimensions ───────────────────────────────────────
+    ctrl = hw.controller
+    ctrl_w = ctrl["body_width_mm"]
+    ctrl_h = ctrl["body_height_mm"]
+    ctrl_scan_hw = ctrl_w / 2 + margin
+    ctrl_scan_hh = ctrl_h / 2 + margin
+
+    # ── Get candidate battery positions (spread across vertical range) ──
+    bat_positions = _grid_scan_top_n(
+        board_inset, occupied_base,
+        half_w=bat_scan_hw, half_h=bat_scan_hh,
+        n=3, step=2.0, margin=margin,
+        body_outline=ccw, body_hw=comp_w / 2, body_hh=comp_h / 2,
+    )
+    if not bat_positions:
+        # Fallback: tight scan
+        bat_positions = _grid_scan_top_n(
+            board_inset, occupied_base,
+            half_w=comp_w / 2 + body_keepout,
+            half_h=comp_h / 2 + body_keepout,
+            n=2, step=1.0, margin=0.5,
+            body_outline=ccw, body_hw=comp_w / 2, body_hh=comp_h / 2,
+        )
+    if not bat_positions:
+        return []  # can't place battery at all
+
+    # ── Diode (shared across all candidates — always at top) ────────
+    d_diam = hw.diode["diameter_mm"]
+    d_pad_spacing = hw.diode["pad_spacing_mm"]
+    shell_clearance = 5.0
+    diode_hw = d_diam / 2 + shell_clearance
+    diode_hh = d_pad_spacing / 2 + shell_clearance
+    diode_pos = _find_top_edge_center(ccw, half_w=diode_hw, half_h=diode_hh)
+
+    # ── Generate candidates: battery_pos × controller_prefer ────────
+    candidates: list[dict] = []
+    controller_prefs = ["center", "bottom", "top"]
+    seen_placements: set[tuple[int, int, int, int]] = set()
+
+    for bx, by in bat_positions:
+        # Occupied with this battery position
+        occupied = list(occupied_base)
+        occupied.append({
+            "cx": bx, "cy": by,
+            "hw": comp_w / 2 + body_keepout,
+            "hh": comp_h / 2 + pad_offset,
+        })
+
+        for cpref in controller_prefs:
+            ctrl_pos = _grid_scan_best(
+                board_inset, occupied,
+                half_w=ctrl_scan_hw, half_h=ctrl_scan_hh,
+                prefer=cpref, step=2.0, margin=margin,
+                body_outline=ccw, body_hw=ctrl_w / 2, body_hh=ctrl_h / 2,
+            )
+            if not ctrl_pos:
+                ctrl_pos = _grid_scan_best(
+                    board_inset, occupied,
+                    half_w=ctrl_w / 2, half_h=ctrl_h / 2,
+                    prefer=cpref, step=1.0, margin=0.5,
+                    body_outline=ccw, body_hw=ctrl_w / 2, body_hh=ctrl_h / 2,
+                )
+            if not ctrl_pos:
+                continue
+
+            cx, cy = ctrl_pos
+
+            # Dedup: round to 2mm grid
+            key = (int(bx / 2), int(by / 2), int(cx / 2), int(cy / 2))
+            if key in seen_placements:
+                continue
+            seen_placements.add(key)
+
+            # Build layout
+            components = list(components_base)
+            components.append({
+                "id": "BAT1", "ref": "battery", "type": "battery",
+                "footprint": battery_type,
+                "center": [bx, by], "rotation_deg": 0,
+                "body_width_mm": comp_w, "body_height_mm": comp_h,
+                "keepout": {"type": "rectangle", "width_mm": comp_w, "height_mm": comp_h},
+            })
+            components.append({
+                "id": "U1", "ref": "controller", "type": "controller",
+                "footprint": ctrl["type"],
+                "center": [cx, cy], "rotation_deg": 0,
+                "keepout": {
+                    "type": "rectangle",
+                    "width_mm": ctrl_w + ctrl["keepout_padding_mm"],
+                    "height_mm": ctrl_h + ctrl["keepout_padding_mm"],
+                },
+            })
+            dx, dy = diode_pos
+            components.append({
+                "id": "D1", "ref": "DIODE", "type": "diode",
+                "footprint": hw.diode["type"],
+                "center": [dx, dy], "rotation_deg": 0,
+                "keepout": {"type": "circle", "radius_mm": d_diam / 2 + 1.0},
+            })
+
+            layout = {
+                "board": {
+                    "outline_polygon": [[v[0], v[1]] for v in board_inset],
+                    "thickness_mm": hw.pcb_thickness,
+                    "origin": "bottom_left",
+                },
+                "components": components,
+                "keepout_regions": [],
+                "metadata": {"battery_prefer": "auto", "controller_prefer": cpref},
+            }
+            candidates.append(layout)
+            if len(candidates) >= max_candidates:
+                return candidates
+
+    return candidates

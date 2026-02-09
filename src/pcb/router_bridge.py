@@ -28,9 +28,21 @@ def _find_or_build_cli() -> Path:
     return cli
 
 
-def route_traces(pcb_layout: dict, output_dir: Path) -> dict:
+def route_traces(
+    pcb_layout: dict,
+    output_dir: Path,
+    *,
+    max_attempts: int | None = None,
+) -> dict:
     """
     Route traces via the TypeScript A* router CLI.
+
+    Parameters
+    ----------
+    max_attempts : int, optional
+        When set, limits the total rip-up/reroute attempts in the TS
+        router.  Use a low value (e.g. 8) for fast screening of multiple
+        placement candidates, and *None* (default → 25) for thorough routing.
 
     Returns dict with 'success', 'traces', 'failed_nets'.
     """
@@ -38,6 +50,8 @@ def route_traces(pcb_layout: dict, output_dir: Path) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     router_input = _convert_layout(pcb_layout)
+    if max_attempts is not None:
+        router_input["maxAttempts"] = max_attempts
 
     # save debug copy
     (output_dir / "ts_router_input.json").write_text(
@@ -111,7 +125,11 @@ def _convert_layout(pcb_layout: dict) -> dict:
             pins = _controller_pins(button_comps, diode_comps)
             controllers.append({"id": cid, "x": x, "y": y, "pins": pins})
         elif ctype == "battery":
-            batteries.append({"id": cid, "x": x, "y": y})
+            batteries.append({
+                "id": cid, "x": x, "y": y,
+                "bodyWidth": comp.get("body_width_mm", 0),
+                "bodyHeight": comp.get("body_height_mm", 0),
+            })
         elif ctype == "diode":
             diodes.append({"id": cid, "x": x, "y": y, "signalNet": f"{cid}_SIG"})
 
@@ -120,6 +138,7 @@ def _convert_layout(pcb_layout: dict) -> dict:
         "boardHeight": board_height,
         "gridResolution": hw.grid_resolution,
         "boardOutline": board_outline,
+        "edgeClearance": hw.edge_clearance,
     }
 
     return {

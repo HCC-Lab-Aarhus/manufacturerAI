@@ -124,7 +124,7 @@ class TestImpossiblePlacement:
 
     def test_tiny_board_battery_fails(self):
         """
-        A 15×15 board can't fit even the battery (12×45 mm).
+        A 15×15 board can't fit even the battery compartment (25×48 mm).
         """
         outline = _rect_outline(15, 15)
         buttons: list[dict] = []
@@ -133,10 +133,10 @@ class TestImpossiblePlacement:
 
     def test_tiny_board_no_buttons_fails(self):
         """
-        A 20×50 board: battery fits, but no room for the controller (10×36).
-        After the battery eats most of the height, controller can't fit.
+        A 30×55 board: battery compartment (25×48) barely fits,
+        but no room for the controller (10×36).
         """
-        outline = _rect_outline(20, 50)
+        outline = _rect_outline(30, 55)
         buttons: list[dict] = []
         with pytest.raises(PlacementError):
             place_components(outline, buttons)
@@ -145,7 +145,7 @@ class TestImpossiblePlacement:
         """
         30×200 board with 5 buttons down the centre.
         The center column of buttons leaves no room beside them
-        for the 12mm-wide battery holder + 10mm controller.
+        for the 25mm-wide battery compartment + 10mm controller.
         """
         outline = _rect_outline(30, 200)
         buttons = _centered_buttons(30, 200, count=5, spacing_y=30)
@@ -186,35 +186,35 @@ class TestNearImpossiblePlacement:
 
     def test_board_1mm_too_narrow_for_battery(self):
         """
-        The battery holder is 12mm wide; with 2mm wall clearance on
-        each side, 16mm is the absolute minimum board width.  At 15mm
+        The battery compartment is 25mm wide; with 2mm wall clearance on
+        each side, 29mm is the absolute minimum board width.  At 28mm
         (1mm less) the battery cannot physically fit.
         """
-        outline = _rect_outline(15, 200)
+        outline = _rect_outline(28, 200)
         buttons: list[dict] = []
         with pytest.raises(PlacementError, match="battery"):
             place_components(outline, buttons)
 
     def test_board_1mm_too_short_for_battery(self):
         """
-        The battery holder is 45mm tall.  A 40x48 board has only ~44mm
+        The battery compartment is 48mm tall.  A 40×51 board has only ~47mm
         usable height after wall inset — 1mm short.
         """
-        outline = _rect_outline(40, 48)
+        outline = _rect_outline(40, 51)
         buttons: list[dict] = []
         with pytest.raises(PlacementError, match="battery"):
             place_components(outline, buttons)
 
     def test_just_at_boundary_width_succeeds(self):
-        """17mm-wide board barely fits the battery (12mm + margins)."""
-        outline = _rect_outline(17, 200)
+        """38mm-wide board fits the battery compartment (25mm + routing clearance + margins)."""
+        outline = _rect_outline(38, 200)
         buttons: list[dict] = []
         layout = place_components(outline, buttons)
         assert "BAT1" in _component_ids(layout)
 
     def test_just_at_boundary_height_succeeds(self):
-        """40x50 board barely fits the battery (45mm tall + margins)."""
-        outline = _rect_outline(40, 50)
+        """40×105 board fits battery compartment (48mm) + controller (36mm)."""
+        outline = _rect_outline(40, 105)
         buttons: list[dict] = []
         layout = place_components(outline, buttons)
         assert "BAT1" in _component_ids(layout)
@@ -279,14 +279,14 @@ class TestNoFallbackRegression:
 
     def test_controller_never_on_button(self):
         """
-        56mm board with centered buttons — the exact scenario that
+        80mm board with centered buttons — the exact scenario that
         used to produce an overlap.
         """
-        outline = _rect_outline(60, 200)
+        outline = _rect_outline(80, 200)
         buttons = [
-            {"id": "btn_1", "label": "P", "x": 30, "y": 50},
-            {"id": "btn_2", "label": "V", "x": 30, "y": 100},
-            {"id": "btn_3", "label": "D", "x": 30, "y": 150},
+            {"id": "btn_1", "label": "P", "x": 40, "y": 80},
+            {"id": "btn_2", "label": "V", "x": 40, "y": 120},
+            {"id": "btn_3", "label": "D", "x": 40, "y": 160},
         ]
         layout = place_components(outline, buttons)
 

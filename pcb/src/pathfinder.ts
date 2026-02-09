@@ -1,6 +1,14 @@
 import { GridCoordinate } from './types'
 import { Grid } from './grid'
 
+/**
+ * Optional per-cell cost callback.
+ * Returned value is added to the A* g-score for each expanded cell,
+ * allowing the caller to bias routing toward specific board regions
+ * (e.g. edges for power nets) without hard-blocking.
+ */
+export type CellCostFn = (x: number, y: number) => number
+
 export class Pathfinder {
   private readonly grid: Grid
 
@@ -174,7 +182,11 @@ export class Pathfinder {
     return minDist
   }
 
-  findPathToTree(source: GridCoordinate, treeSet: Set<string>): GridCoordinate[] | null {
+  findPathToTree(
+    source: GridCoordinate,
+    treeSet: Set<string>,
+    cellCost?: CellCostFn
+  ): GridCoordinate[] | null {
     if (treeSet.has(`${source.x},${source.y}`)) {
       return [source]
     }
@@ -229,8 +241,9 @@ export class Pathfinder {
         const newDir = `${dir.x},${dir.y}`
         const isTurn = current.direction !== null && current.direction !== newDir
         const turnPenalty = isTurn ? 5 : 0
+        const extraCost = cellCost ? cellCost(nx, ny) : 0
 
-        const tentativeG = current.g + 1 + turnPenalty
+        const tentativeG = current.g + 1 + turnPenalty + extraCost
         const existingG = gScores.get(neighborKey)
 
         if (existingG === undefined || tentativeG < existingG) {

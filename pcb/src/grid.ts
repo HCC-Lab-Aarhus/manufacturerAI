@@ -13,6 +13,7 @@ export class Grid {
   private readonly permanentlyBlocked: boolean[][]
   private readonly gridResolution: number
   private readonly blockedRadius: number
+  private readonly edgeBlockedRadius: number
 
   constructor(
     board: BoardParameters,
@@ -24,6 +25,11 @@ export class Grid {
     this.blockedRadius = Math.ceil(
       (manufacturing.traceWidth / 2 + manufacturing.traceClearance) / board.gridResolution
     )
+    // Edge buffer: use the larger of blockedRadius or the explicit edgeClearance
+    const edgeClearanceCells = board.edgeClearance
+      ? Math.ceil(board.edgeClearance / board.gridResolution)
+      : this.blockedRadius
+    this.edgeBlockedRadius = Math.max(this.blockedRadius, edgeClearanceCells)
 
     this.cells = Array.from({ length: this.height }, () =>
       Array.from({ length: this.width }, () => CellState.FREE)
@@ -78,7 +84,7 @@ export class Grid {
         const wx = (gx + 0.5) * this.gridResolution
         const wy = (gy + 0.5) * this.gridResolution
         const dist = this.distToPolygonEdge(wx, wy, outline, n)
-        if (dist < this.blockedRadius * this.gridResolution) {
+        if (dist < this.edgeBlockedRadius * this.gridResolution) {
           this.cells[gy][gx] = CellState.BLOCKED
           this.permanentlyBlocked[gy][gx] = true
         }
@@ -118,13 +124,13 @@ export class Grid {
 
   private blockBoardEdges(): void {
     for (let x = 0; x < this.width; x++) {
-      for (let r = 0; r < this.blockedRadius; r++) {
+      for (let r = 0; r < this.edgeBlockedRadius; r++) {
         if (r < this.height) { this.cells[r][x] = CellState.BLOCKED; this.permanentlyBlocked[r][x] = true }
         if (this.height - 1 - r >= 0) { this.cells[this.height - 1 - r][x] = CellState.BLOCKED; this.permanentlyBlocked[this.height - 1 - r][x] = true }
       }
     }
     for (let y = 0; y < this.height; y++) {
-      for (let r = 0; r < this.blockedRadius; r++) {
+      for (let r = 0; r < this.edgeBlockedRadius; r++) {
         if (r < this.width) { this.cells[y][r] = CellState.BLOCKED; this.permanentlyBlocked[y][r] = true }
         if (this.width - 1 - r >= 0) { this.cells[y][this.width - 1 - r] = CellState.BLOCKED; this.permanentlyBlocked[y][this.width - 1 - r] = true }
       }
@@ -170,6 +176,13 @@ export class Grid {
     }
   }
 
+  permanentlyBlockCell(x: number, y: number): void {
+    if (this.isInBounds(x, y)) {
+      this.cells[y][x] = CellState.BLOCKED
+      this.permanentlyBlocked[y][x] = true
+    }
+  }
+
   freeCell(x: number, y: number): void {
     if (this.isInBounds(x, y) && !this.permanentlyBlocked[y][x]) {
       this.cells[y][x] = CellState.FREE
@@ -200,6 +213,42 @@ export class Grid {
     this.blockArea(center.x, center.y, gridRadius)
   }
 
+  /**
+   * Block a rectangular body area (in world-mm) plus a keepout margin.
+   * Cells are permanently blocked so freeCell() cannot unblock them.
+   *
+   * Computes world-space edges first, then finds all grid cells whose
+   * centres fall within that rectangle — this keeps the keepout
+   * symmetric regardless of where the body centre lands on the grid.
+   *
+   * @param keepoutCells  Override margin in grid cells (defaults to blockedRadius).
+   */
+  blockRectangularBody(
+    worldX: number, worldY: number,
+    halfWidthMm: number, halfHeightMm: number,
+    keepoutCells?: number
+  ): void {
+    const keepoutMm = (keepoutCells ?? this.blockedRadius) * this.gridResolution
+    const left   = worldX - halfWidthMm - keepoutMm
+    const right  = worldX + halfWidthMm + keepoutMm
+    const bottom = worldY - halfHeightMm - keepoutMm
+    const top    = worldY + halfHeightMm + keepoutMm
+
+    // Block every cell whose centre falls within [left, right] × [bottom, top].
+    // Cell gx has its centre at (gx + 0.5) * res.
+    const res = this.gridResolution
+    const gxMin = Math.ceil(left / res - 0.5)
+    const gxMax = Math.floor(right / res - 0.5)
+    const gyMin = Math.ceil(bottom / res - 0.5)
+    const gyMax = Math.floor(top / res - 0.5)
+
+    for (let gy = gyMin; gy <= gyMax; gy++) {
+      for (let gx = gxMin; gx <= gxMax; gx++) {
+        this.permanentlyBlockCell(gx, gy)
+      }
+    }
+  }
+
   blockPad(pad: Pad, padRadius: number): void {
     const gridRadius = Math.ceil(padRadius / this.gridResolution) + this.blockedRadius
     this.blockArea(pad.center.x, pad.center.y, gridRadius)
@@ -224,6 +273,7 @@ export class Grid {
       height: this.height,
       gridResolution: this.gridResolution,
       blockedRadius: this.blockedRadius,
+      edgeBlockedRadius: this.edgeBlockedRadius,
       cells: this.cells.map(row => [...row]),
       permanentlyBlocked: this.permanentlyBlocked.map(row => [...row])
     })
@@ -256,5 +306,113 @@ export class Grid {
 
   getCellArray(): CellState[][] {
     return this.cells.map(row => [...row])
+  }
+
+  /**
+   * Return the ordered perimeter ring — free cells adjacent to the
+   * permanently-blocked edge/outline zone.  These cells form the
+   * innermost routable ring around the board edge.
+   *
+   * The ring is extracted by BFS from a seed cell and ordered so
+   * consecutive entries are grid-adjacent (4-connected).
+   */
+  getPerimeterRing(): GridCoordinate[] {
+    // Step 1: find all free cells that have at least one permanently-
+    // blocked neighbour (meaning they sit right at the edge of the
+    // routable area).
+    const perimeterSet = new Set<string>()
+    const perimeterCells: GridCoordinate[] = []
+    const dirs: [number, number][] = [[1,0],[-1,0],[0,1],[0,-1]]
+
+    for (let y = 0; y < this.height; y++) {
+      for (let x = 0; x < this.width; x++) {
+        if (this.cells[y][x] !== CellState.FREE) continue
+        let onEdge = false
+        for (const [dx, dy] of dirs) {
+          const nx = x + dx, ny = y + dy
+          if (!this.isInBounds(nx, ny) || this.permanentlyBlocked[ny][nx]) {
+            onEdge = true
+            break
+          }
+        }
+        if (onEdge) {
+          perimeterSet.add(`${x},${y}`)
+          perimeterCells.push({ x, y })
+        }
+      }
+    }
+
+    if (perimeterCells.length === 0) return []
+
+    // Step 2: order the ring by walking from an arbitrary seed.
+    // Use greedy walk: always pick the unvisited neighbour (including
+    // diagonals for connectivity) that is also in perimeterSet.
+    const ordered: GridCoordinate[] = []
+    const visited = new Set<string>()
+    const allDirs: [number, number][] = [
+      [1,0],[-1,0],[0,1],[0,-1],
+      [1,1],[1,-1],[-1,1],[-1,-1]
+    ]
+
+    // Seed: top-most, then left-most perimeter cell
+    perimeterCells.sort((a, b) => a.y - b.y || a.x - b.x)
+    let current = perimeterCells[0]
+    visited.add(`${current.x},${current.y}`)
+    ordered.push(current)
+
+    for (let i = 0; i < perimeterCells.length; i++) {
+      let found = false
+      for (const [dx, dy] of allDirs) {
+        const nx = current.x + dx, ny = current.y + dy
+        const key = `${nx},${ny}`
+        if (perimeterSet.has(key) && !visited.has(key)) {
+          current = { x: nx, y: ny }
+          visited.add(key)
+          ordered.push(current)
+          found = true
+          break
+        }
+      }
+      if (!found) break
+    }
+
+    return ordered
+  }
+
+  /**
+   * Return the distance (in grid cells) from a cell to the nearest
+   * permanently-blocked cell.  0 means the cell itself is perm-blocked.
+   */
+  distToEdge(x: number, y: number): number {
+    if (!this.isInBounds(x, y)) return 0
+    if (this.permanentlyBlocked[y][x]) return 0
+    // BFS outward until we hit a permanently blocked cell
+    const q: [number, number, number][] = [[x, y, 0]]
+    const seen = new Set<string>()
+    seen.add(`${x},${y}`)
+    const dirs: [number, number][] = [[1,0],[-1,0],[0,1],[0,-1]]
+    while (q.length > 0) {
+      const [cx, cy, d] = q.shift()!
+      for (const [dx, dy] of dirs) {
+        const nx = cx + dx, ny = cy + dy
+        if (!this.isInBounds(nx, ny)) return d + 1
+        if (this.permanentlyBlocked[ny][nx]) return d + 1
+        const key = `${nx},${ny}`
+        if (!seen.has(key)) {
+          seen.add(key)
+          q.push([nx, ny, d + 1])
+        }
+      }
+    }
+    return Infinity
+  }
+
+  get edgeClearanceCells(): number {
+    return this.edgeBlockedRadius
+  }
+
+  isPermanentlyBlocked(x: number, y: number): boolean {
+    if (!this.isInBounds(x, y)) return true
+    return this.permanentlyBlocked[y][x]
   }
 }

@@ -83,7 +83,9 @@ async function main(): Promise<void> {
       await visualizer.saveToFile(
         `${options.outputPath}_debug.png`,
         router.getTraces(),
-        router.getPads()
+        router.getPads(),
+        {},
+        router.getComponentBodies()
       )
 
       if (result.success) {

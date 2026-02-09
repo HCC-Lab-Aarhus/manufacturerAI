@@ -36,7 +36,9 @@ export async function routeAndVisualize(
   await visualizer.saveToFile(
     `${outputPath}_debug.png`,
     router.getTraces(),
-    router.getPads()
+    router.getPads(),
+    {},
+    router.getComponentBodies()
   )
 
   if (result.success) {

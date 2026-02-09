@@ -51,6 +51,10 @@ class _HW:
     def component_margin(self) -> float:
         return _load()["board"]["component_margin_mm"]
 
+    @property
+    def edge_clearance(self) -> float:
+        return _load()["board"].get("edge_clearance_mm", 5.0)
+
     # ── footprints ──────────────────────────────────────────────────
     @property
     def button(self) -> dict:
@@ -131,7 +135,11 @@ class _HW:
                 "pinSpacing": fp["controller"]["pin_spacing_mm"],
                 "rowSpacing": fp["controller"]["row_spacing_mm"],
             },
-            "battery": {"padSpacing": fp["battery"]["pad_spacing_mm"]},
+            "battery": {
+                "padSpacing": fp["battery"]["pad_spacing_mm"],
+                "bodyWidth": fp["battery"]["compartment_width_mm"],
+                "bodyHeight": fp["battery"]["compartment_height_mm"],
+            },
             "diode": {"padSpacing": fp["diode"]["pad_spacing_mm"]},
         }
 

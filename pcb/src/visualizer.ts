@@ -4,7 +4,8 @@ import {
   Pad,
   VisualizationOptions,
   CellState,
-  GridCoordinate
+  GridCoordinate,
+  ComponentBody
 } from './types'
 import { Grid } from './grid'
 
@@ -32,7 +33,8 @@ const COLORS = {
     { r: 200, g: 100, b: 255, a: 255 },
     { r: 100, g: 255, b: 200, a: 255 }
   ],
-  highlight: { r: 255, g: 255, b: 0, a: 255 }
+  highlight: { r: 255, g: 255, b: 0, a: 255 },
+  componentBody: { r: 255, g: 140, b: 0, a: 255 }
 } as const
 
 const FONT: Record<string, number[]> = {
@@ -121,7 +123,8 @@ export class Visualizer {
   async renderComplete(
     traces: Trace[],
     pads: Map<string, Pad>,
-    options: Partial<VisualizationOptions> = {}
+    options: Partial<VisualizationOptions> = {},
+    componentBodies: ComponentBody[] = []
   ): Promise<Buffer> {
     const opts: VisualizationOptions = {
       showGrid: true,
@@ -144,6 +147,10 @@ export class Visualizer {
 
     if (opts.showPads) {
       this.drawPadCircles(pixels, pads)
+    }
+
+    if (componentBodies.length > 0) {
+      this.drawComponentBodies(pixels, componentBodies)
     }
 
     if (opts.showGrid) {
@@ -469,6 +476,57 @@ export class Visualizer {
     }
   }
 
+  private drawComponentBodies(
+    pixels: Uint8ClampedArray,
+    bodies: ComponentBody[]
+  ): void {
+    const color = COLORS.componentBody
+    const res = this.grid.resolution
+
+    for (const body of bodies) {
+      // Convert world mm to pixel coordinates
+      const left = Math.round((body.x - body.width / 2) / res * this.cellSize)
+      const right = Math.round((body.x + body.width / 2) / res * this.cellSize)
+      const top = Math.round((body.y - body.height / 2) / res * this.cellSize)
+      const bottom = Math.round((body.y + body.height / 2) / res * this.cellSize)
+
+      // Draw rectangle outline (2px thick)
+      for (let t = 0; t < 2; t++) {
+        // Top edge
+        for (let px = left; px <= right; px++) {
+          this.setPixel(pixels, px, top + t, color)
+        }
+        // Bottom edge
+        for (let px = left; px <= right; px++) {
+          this.setPixel(pixels, px, bottom - t, color)
+        }
+        // Left edge
+        for (let py = top; py <= bottom; py++) {
+          this.setPixel(pixels, left + t, py, color)
+        }
+        // Right edge
+        for (let py = top; py <= bottom; py++) {
+          this.setPixel(pixels, right - t, py, color)
+        }
+      }
+
+      // Draw cross lines through center for visibility
+      const cx = Math.round(body.x / res * this.cellSize)
+      const cy = Math.round(body.y / res * this.cellSize)
+      const halfCross = 6
+      for (let d = -halfCross; d <= halfCross; d++) {
+        this.setPixel(pixels, cx + d, cy, color)
+        this.setPixel(pixels, cx, cy + d, color)
+      }
+
+      // Draw label above the rectangle
+      const labelText = body.id
+      const labelX = left + 2
+      const labelY = top - CHAR_HEIGHT - 3
+      this.drawText(pixels, labelText, labelX, labelY, color, COLORS.textShadow)
+    }
+  }
+
   private fillCell(
     pixels: Uint8ClampedArray,
     gx: number,
@@ -517,10 +575,11 @@ export class Visualizer {
     path: string,
     traces: Trace[] = [],
     pads: Map<string, Pad> = new Map(),
-    options: Partial<VisualizationOptions> = {}
+    options: Partial<VisualizationOptions> = {},
+    componentBodies: ComponentBody[] = []
   ): Promise<void> {
     const buffer = traces.length > 0 || pads.size > 0
-      ? await this.renderComplete(traces, pads, options)
+      ? await this.renderComplete(traces, pads, options, componentBodies)
       : await this.renderGrid(options)
 
     await sharp(buffer).toFile(path)
