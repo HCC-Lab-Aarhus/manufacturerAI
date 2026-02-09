@@ -123,7 +123,7 @@ def run_turn(
     history: list,
     emit: EmitFn,
     output_dir: str | Path,
-    model_name: str = "gemini-2.0-flash",
+    model_name: str = "gemini-2.5-pro",
 ) -> list:
     """
     Run a single conversational turn.
