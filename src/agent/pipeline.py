@@ -33,6 +33,7 @@ from src.scad.shell import (
     generate_battery_hatch_scad,
     generate_print_plate_scad,
 )
+from src.scad.cutouts import build_cutouts
 from src.scad.compiler import compile_scad
 
 log = logging.getLogger("manufacturerAI.pipeline")
@@ -392,7 +393,9 @@ def run_pipeline(
     log.info("Pipeline step 5: generate SCAD")
 
     try:
-        enclosure_scad = generate_enclosure_scad(outline=outline)
+        cutouts = build_cutouts(layout, routing_result)
+        log.info("Built %d cutouts for shell subtraction", len(cutouts))
+        enclosure_scad = generate_enclosure_scad(outline=outline, cutouts=cutouts)
         (p1 := output_dir / "enclosure.scad").write_text(
             enclosure_scad, encoding="utf-8"
         )
@@ -429,7 +432,19 @@ def run_pipeline(
     stl_files = {}
     all_ok = True
 
-    for scad_path in output_dir.glob("*.scad"):
+    # Compile in deterministic order: enclosure & battery_hatch first,
+    # then print_plate last (it imports the other STLs).
+    scad_order = ["enclosure", "battery_hatch", "print_plate"]
+    ordered_scads = []
+    for name in scad_order:
+        p = output_dir / f"{name}.scad"
+        if p.exists():
+            ordered_scads.append(p)
+    for extra in sorted(output_dir.glob("*.scad")):
+        if extra not in ordered_scads:
+            ordered_scads.append(extra)
+
+    for scad_path in ordered_scads:
         stl_path = scad_path.with_suffix(".stl")
         try:
             ok, msg, out = compile_scad(scad_path, stl_path)
@@ -439,9 +454,13 @@ def run_pipeline(
         stl_results[scad_path.stem] = {"ok": ok, "message": msg}
         if ok and out:
             stl_files[scad_path.stem] = str(out)
-            emit("model", {"name": scad_path.stem, "path": str(out)})
         else:
             all_ok = False
+
+    # Emit a single model event for the 3D viewer (enclosure is the
+    # primary preview; other STLs are available via the download API).
+    if "enclosure" in stl_files:
+        emit("model", {"name": "enclosure", "path": stl_files["enclosure"]})
 
     if not all_ok:
         return {

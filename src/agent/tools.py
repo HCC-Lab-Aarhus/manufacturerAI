@@ -18,6 +18,7 @@ from src.geometry.polygon import validate_outline as _validate, ensure_ccw, poly
 from src.pcb.placer import place_components as _place, build_optimization_report, PlacementError
 from src.pcb.router_bridge import route_traces as _route, RouterError
 from src.scad.shell import generate_enclosure_scad, generate_battery_hatch_scad, generate_print_plate_scad
+from src.scad.cutouts import build_cutouts
 from src.scad.compiler import compile_scad, check_scad
 
 
@@ -229,8 +230,9 @@ def generate_enclosure(
     btn_pos = [{"id": b["id"], "x": b["x"], "y": b["y"]} for b in button_positions]
 
     try:
-        # Solid enclosure extrusion
-        enclosure_scad = generate_enclosure_scad(outline=outline)
+        # Build polygon cutouts from layout + routing, then generate SCAD
+        cutouts = build_cutouts(layout, routing)
+        enclosure_scad = generate_enclosure_scad(outline=outline, cutouts=cutouts)
         (p1 := _output_dir / "enclosure.scad").write_text(enclosure_scad, encoding="utf-8")
 
         # Battery hatch
