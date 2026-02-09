@@ -112,23 +112,15 @@ export class Router {
       })
     }
 
-    // Place VCC pad ABOVE the body, GND pad BELOW.
-    // VCC is a small 2-pad net that routes quickly from the wider
-    // upper region.  GND below keeps the narrower bottom free for
-    // short signal crossings (btn_1).  The round-robin routing phase
-    // handles GND's multi-pad spanning tree with bridge strategies.
-    //
-    // padOffset must be large enough that the horizontal entry path
-    // a trace uses to reach the pad doesn't block OTHER traces from
-    // entering the adjacent vertical channel.  With keepout + 5 cells,
-    // there's a 4-cell gap between the body edge and the pad's
-    // approach zone, letting 1-2 additional traces slip through.
+    // Place VCC and GND pads on the SAME side (below the body),
+    // separated horizontally by padSpacing.  This keeps one side of
+    // the battery completely free for trace routing.
     const res = this.input.board.gridResolution
     const padOffsetCells = this.bodyKeepoutCells + 5
-    const vccPadY = battery.y + bodyH / 2 + padOffsetCells * res
-    const gndPadY = battery.y - bodyH / 2 - padOffsetCells * res
+    const padY = battery.y - bodyH / 2 - padOffsetCells * res
+    const halfPadSpacing = this.footprints.battery.padSpacing / 2
 
-    const vccPadCenter = this.grid.worldToGrid(battery.x, vccPadY)
+    const vccPadCenter = this.grid.worldToGrid(battery.x - halfPadSpacing, padY)
     this.pads.set(`${battery.id}.VCC`, {
       componentId: battery.id,
       pinName: 'VCC',
@@ -137,7 +129,7 @@ export class Router {
       componentCenter: batteryCenter
     })
 
-    const gndPadCenter = this.grid.worldToGrid(battery.x, gndPadY)
+    const gndPadCenter = this.grid.worldToGrid(battery.x + halfPadSpacing, padY)
     this.pads.set(`${battery.id}.GND`, {
       componentId: battery.id,
       pinName: 'GND',
