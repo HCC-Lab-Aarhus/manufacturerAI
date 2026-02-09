@@ -146,8 +146,11 @@ def _extract_pads(layout: dict) -> list[PadInfo]:
                 math.ceil(hw.trace_width / (2 * hw.grid_resolution)) + 1
             )
             pad_offset = (body_keepout_cells + 5) * hw.grid_resolution
-            pads.append(PadInfo(cx, cy + bh / 2 + pad_offset, "VCC", cid, "VCC"))
-            pads.append(PadInfo(cx, cy - bh / 2 - pad_offset, "GND", cid, "GND"))
+            half_pad_spacing = hw.battery["pad_spacing_mm"] / 2
+            # Both pads on the same side (below), separated horizontally
+            pad_y = cy - bh / 2 - pad_offset
+            pads.append(PadInfo(cx - half_pad_spacing, pad_y, "VCC", cid, "VCC"))
+            pads.append(PadInfo(cx + half_pad_spacing, pad_y, "GND", cid, "GND"))
 
         elif ctype == "controller":
             row_spacing = hw.controller["row_spacing_mm"]
