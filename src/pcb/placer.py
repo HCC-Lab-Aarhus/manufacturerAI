@@ -223,7 +223,7 @@ def place_components(
     # outlines where the polygon narrows dramatically near the top.
     diode_x = (min_x + max_x) / 2
     pad_half = hw.diode.get("pad_spacing_mm", 5.0) / 2  # pad offset from center
-    required_clearance = hw.edge_clearance + 0.5  # router blocks < edge_clearance; add margin
+    required_clearance = hw.edge_clearance + 2.5  # router blocks < edge_clearance; add margin
     diode_y = max_y - hw.edge_clearance  # starting guess
     # Walk downward in 0.5mm steps until both pads are safely inside
     for _step in range(200):
@@ -704,7 +704,7 @@ def generate_placement_candidates(
             dmin_x, _, dmax_x, dmax_y = polygon_bounds(board_inset)
             diode_cx = (dmin_x + dmax_x) / 2
             d_pad_half = hw.diode.get("pad_spacing_mm", 5.0) / 2
-            d_req_clr = hw.edge_clearance + 0.5
+            d_req_clr = hw.edge_clearance + 2.5
             ddy = dmax_y - hw.edge_clearance
             for _ds in range(200):
                 dl = _dist_to_polygon(diode_cx - d_pad_half, ddy, board_inset)
