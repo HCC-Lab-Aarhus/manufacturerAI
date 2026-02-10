@@ -28,9 +28,7 @@ export class Router {
   private componentBodies: ComponentBody[]
   private readonly maxRipupAttempts: number
   private readonly bodyKeepoutCells: number
-  private traceBlockPadding: number
-  private readonly normalTraceBlockPadding: number
-  private readonly relaxedTraceBlockPadding: number
+  private readonly traceBlockPadding: number
 
   constructor(input: RouterInput) {
     this.input = input
@@ -40,13 +38,9 @@ export class Router {
     // Keep-out radius around completed traces and unrelated pads.
     // Set to approximately the MC pin spacing so that traces maintain
     // a full pin-pitch clearance from other conductors.
-    this.normalTraceBlockPadding = Math.round(
+    this.traceBlockPadding = Math.round(
       input.footprints.controller.pinSpacing / input.board.gridResolution
     )        // round(2.54 / 0.5) = 5 cells = 2.5 mm ≈ pin pitch
-    this.relaxedTraceBlockPadding = Math.round(
-      input.footprints.controller.pinSpacing / input.board.gridResolution
-    ) - 1    // 4 cells = 2.0 mm — tighter fallback
-    this.traceBlockPadding = this.normalTraceBlockPadding
     this.maxRipupAttempts = input.maxAttempts ?? 50
     this.grid = new Grid(input.board, input.manufacturing)
     this.pads = new Map()
@@ -343,109 +337,91 @@ export class Router {
 
   // ── Main routing orchestrator ──────────────────────────────────
   //
-  // Two-phase architecture:
-  //   Phase 1 — Route power nets (GND, VCC) with a perimeter-biased
-  //             cost function so they hug the board edge and keep the
-  //             interior free for signals.
-  //   Phase 2 — Route signal nets through the freed interior with
-  //             simple ordering rip-up.
-  //
-  // This eliminates the fundamental problem of GND's spanning tree
-  // partitioning the board and blocking signal crossings.
+  // Flat rip-up: shuffle all nets randomly, route each via A*, stop
+  // on the first ordering that routes everything.  A hash set skips
+  // duplicate orderings.
 
   private routeNets(): void {
     const netPads = this.buildNetPadsMap()
-    const signalNets = [...netPads.keys()].filter(n => this.getNetType(n) === 'SIGNAL')
+    const allNets = [...netPads.keys()].filter(n => {
+      const pads = netPads.get(n)
+      return pads !== undefined && pads.length >= 2
+    })
 
-    // Try both power orderings and pick the one with fewest total failures
-    const powerOrderings: string[][] = [
-      ['GND', 'VCC'],
-      ['VCC', 'GND'],
-    ]
+    if (allNets.length === 0) return
 
-    let bestTotalFails = Infinity
+    const tried = new Set<string>()
     let bestTraces: Trace[] = []
     let bestFailed: FailedNet[] = []
+    let bestFailCount = Infinity
 
-    for (const powerOrder of powerOrderings) {
-      console.error(`\n=== Trying power order: ${powerOrder.join(' → ')} ===`)
+    // Fisher-Yates shuffle
+    const shuffle = (arr: string[]): string[] => {
+      const a = [...arr]
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1))
+        ;[a[i], a[j]] = [a[j], a[i]]
+      }
+      return a
+    }
 
-      // Phase 1: Route power nets along the perimeter
+    for (let attempt = 0; attempt < this.maxRipupAttempts; attempt++) {
+      const order = shuffle(allNets)
+      const key = order.join(',')
+      if (tried.has(key)) continue
+      tried.add(key)
+
+      console.error(`\n  attempt ${tried.size}: ${order.join(' → ')}`)
       this.resetGrid()
-      const powerTraces = new Map<string, Set<string>>()
-      const powerTraceList: Trace[] = []
-      let powerFails = 0
-      const powerFailedNets: FailedNet[] = []
 
-      for (const netName of powerOrder) {
-        const pads = netPads.get(netName)
-        if (!pads || pads.length < 2) continue
+      const completedTraces = new Map<string, Set<string>>()
+      const tracesByNet = new Map<string, Trace[]>()
+      const failures: FailedNet[] = []
 
-        const result = this.routePowerNetPerimeter(netName, pads, powerTraces)
+      for (const netName of order) {
+        const pads = netPads.get(netName)!
+        const isPower = this.getNetType(netName) !== 'SIGNAL'
+        const result = isPower
+          ? this.routePowerNetPerimeter(netName, pads, completedTraces)
+          : this.routeNetDirect(netName, pads, completedTraces)
+
         if (result.success) {
-          powerTraces.set(netName, result.routedCells!)
-          powerTraceList.push(...result.traces!)
-          console.error(`  ${netName}: OK (${result.traces!.length} segments)`)
+          completedTraces.set(netName, result.routedCells!)
+          tracesByNet.set(netName, result.traces!)
         } else {
-          console.error(`  ${netName}: perimeter failed, trying direct A*`)
-          const fallback = this.routeNetDirect(netName, pads, powerTraces)
-          if (fallback.success) {
-            powerTraces.set(netName, fallback.routedCells!)
-            powerTraceList.push(...fallback.traces!)
-            console.error(`  ${netName}: direct fallback OK`)
-          } else {
-            powerTraces.set(netName, fallback.routedCells ?? new Set())
-            if (fallback.traces) powerTraceList.push(...fallback.traces)
-            for (const fp of fallback.failedPads ?? []) {
-              powerFails++
-              powerFailedNets.push({
-                netName,
-                sourcePin: this.findPinAtCoord(pads[0].center),
-                destinationPin: this.findPinAtCoord(fp.center),
-                reason: 'Power net could not reach all pads'
-              })
-            }
-            console.error(`  ${netName}: FAILED (${fallback.failedPads?.length ?? 0} unreachable pads)`)
+          completedTraces.set(netName, result.routedCells ?? new Set())
+          tracesByNet.set(netName, result.traces ?? [])
+          for (const fp of result.failedPads ?? []) {
+            failures.push({
+              netName,
+              sourcePin: this.findPinAtCoord(pads[0].center),
+              destinationPin: this.findPinAtCoord(fp.center),
+              reason: 'No path found'
+            })
           }
         }
       }
 
-      // Phase 2: Route signal nets through the interior
-      console.error('\n  Signal routing...')
-      const signalResult = this.routeSignalsWithRipup(signalNets, netPads, powerTraces)
+      console.error(`  Failures: ${failures.length}`)
 
-      let signalFails = 0
-      const signalFailedNets: FailedNet[] = []
-      for (const failure of signalResult.failures) {
-        for (const destPad of failure.destPads) {
-          signalFails++
-          signalFailedNets.push({
-            netName: failure.netName,
-            sourcePin: this.findPinAtCoord(failure.sourcePad.center),
-            destinationPin: this.findPinAtCoord(destPad.center),
-            reason: 'No path found for signal trace'
-          })
-        }
+      if (failures.length < bestFailCount) {
+        bestFailCount = failures.length
+        bestTraces = []
+        for (const [_, t] of tracesByNet) bestTraces.push(...t)
+        bestFailed = failures
       }
 
-      const totalFails = powerFails + signalFails
-      console.error(`  Total failures: ${totalFails} (power: ${powerFails}, signal: ${signalFails})`)
-
-      if (totalFails < bestTotalFails) {
-        bestTotalFails = totalFails
-        bestTraces = [...powerTraceList]
-        for (const [_n, t] of signalResult.tracesByNet) bestTraces.push(...t)
-        bestFailed = [...powerFailedNets, ...signalFailedNets]
-      }
-
-      if (totalFails === 0) {
-        console.error('  Full routing succeeded!')
-        break
+      if (bestFailCount === 0) {
+        console.error('  Routing succeeded!')
+        this.traces = bestTraces
+        this.failedNets = bestFailed
+        return
       }
     }
 
     this.traces = bestTraces
     this.failedNets = bestFailed
+    console.error(`\n  Best: ${bestFailCount} failures after ${tried.size} attempts`)
   }
 
   private buildNetPadsMap(): Map<string, Pad[]> {
@@ -680,164 +656,6 @@ export class Router {
     return { success: true, routedCells, traces }
   }
 
-  // ── Signal routing with rip-up ─────────────────────────────────
-
-  /**
-   * Route all signal nets with simple rip-up: try multiple orderings.
-   * Power traces are already placed and treated as fixed obstacles.
-   */
-  private routeSignalsWithRipup(
-    signalNets: string[],
-    netPads: Map<string, Pad[]>,
-    powerTraces: Map<string, Set<string>>
-  ): {
-    tracesByNet: Map<string, Trace[]>
-    failures: { netName: string; sourcePad: Pad; destPads: Pad[] }[]
-  } {
-    const orderings = this.generateSignalOrderings(signalNets)
-
-    let bestResult: {
-      tracesByNet: Map<string, Trace[]>
-      failures: { netName: string; sourcePad: Pad; destPads: Pad[] }[]
-    } | null = null
-    let bestFailCount = Infinity
-
-    const budget = Math.min(this.maxRipupAttempts, orderings.length)
-
-    for (let attempt = 0; attempt < budget; attempt++) {
-      const order = orderings[attempt]
-      console.error(`\n  Signal attempt ${attempt + 1}/${budget}: ${order.join(' → ')}`)
-
-      this.resetGridWithPower(powerTraces)
-
-      const completedTraces = new Map<string, Set<string>>()
-      // Include power traces so signal routing respects them
-      for (const [name, cells] of powerTraces) {
-        completedTraces.set(name, cells)
-      }
-      const tracesByNet = new Map<string, Trace[]>()
-      const failures: { netName: string; sourcePad: Pad; destPads: Pad[] }[] = []
-
-      for (const netName of order) {
-        const pads = netPads.get(netName)
-        if (!pads || pads.length < 2) continue
-
-        const result = this.routeNetDirect(netName, pads, completedTraces)
-        if (result.success) {
-          completedTraces.set(netName, result.routedCells!)
-          tracesByNet.set(netName, result.traces!)
-        } else {
-          completedTraces.set(netName, result.routedCells ?? new Set())
-          tracesByNet.set(netName, result.traces ?? [])
-          failures.push({
-            netName,
-            sourcePad: pads[0],
-            destPads: result.failedPads!
-          })
-        }
-      }
-
-      const failStr = failures.length > 0 ? ` (${failures.map(f => f.netName).join(', ')})` : ''
-      console.error(`  Failures: ${failures.length}${failStr}`)
-
-      if (failures.length === 0) {
-        console.error('  Signal routing succeeded!')
-        return { tracesByNet, failures }
-      }
-
-      if (failures.length < bestFailCount) {
-        bestFailCount = failures.length
-        bestResult = { tracesByNet, failures }
-      }
-    }
-
-    // Retry with relaxed clearance
-    if (this.relaxedTraceBlockPadding < this.normalTraceBlockPadding) {
-      console.error('\n  --- Relaxing trace clearance ---')
-      this.traceBlockPadding = this.relaxedTraceBlockPadding
-
-      for (let attempt = 0; attempt < budget; attempt++) {
-        const order = orderings[attempt % orderings.length]
-        console.error(`\n  Relaxed attempt ${attempt + 1}: ${order.join(' → ')}`)
-
-        this.resetGridWithPower(powerTraces)
-
-        const completedTraces = new Map<string, Set<string>>()
-        for (const [name, cells] of powerTraces) {
-          completedTraces.set(name, cells)
-        }
-        const tracesByNet = new Map<string, Trace[]>()
-        const failures: { netName: string; sourcePad: Pad; destPads: Pad[] }[] = []
-
-        for (const netName of order) {
-          const pads = netPads.get(netName)
-          if (!pads || pads.length < 2) continue
-
-          const result = this.routeNetDirect(netName, pads, completedTraces)
-          if (result.success) {
-            completedTraces.set(netName, result.routedCells!)
-            tracesByNet.set(netName, result.traces!)
-          } else {
-            completedTraces.set(netName, result.routedCells ?? new Set())
-            tracesByNet.set(netName, result.traces ?? [])
-            failures.push({
-              netName,
-              sourcePad: pads[0],
-              destPads: result.failedPads!
-            })
-          }
-        }
-
-        console.error(`  Failures: ${failures.length}`)
-
-        if (failures.length === 0) {
-          console.error('  Relaxed signal routing succeeded!')
-          this.traceBlockPadding = this.normalTraceBlockPadding
-          return { tracesByNet, failures }
-        }
-
-        if (failures.length < bestFailCount) {
-          bestFailCount = failures.length
-          bestResult = { tracesByNet, failures }
-        }
-      }
-
-      this.traceBlockPadding = this.normalTraceBlockPadding
-    }
-
-    return bestResult ?? {
-      tracesByNet: new Map(),
-      failures: signalNets.map(n => ({
-        netName: n,
-        sourcePad: netPads.get(n)![0],
-        destPads: netPads.get(n)!.slice(1)
-      }))
-    }
-  }
-
-  private generateSignalOrderings(signalNets: string[]): string[][] {
-    const result: string[][] = []
-    result.push([...signalNets])
-    result.push([...signalNets].reverse())
-    const sorted = [...signalNets].sort()
-    result.push(sorted)
-    result.push([...sorted].reverse())
-
-    // Rotate each signal to front
-    for (let i = 1; i < signalNets.length; i++) {
-      result.push([...signalNets.slice(i), ...signalNets.slice(0, i)])
-    }
-
-    // De-duplicate
-    const seen = new Set<string>()
-    return result.filter(order => {
-      const key = order.join(',')
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
-  }
-
   private resetGrid(): void {
     this.grid = new Grid(this.input.board, this.input.manufacturing)
     // Re-block component bodies that were established during initializeComponents
@@ -845,25 +663,6 @@ export class Router {
       this.grid.blockRectangularBody(
         body.x, body.y, body.width / 2, body.height / 2, this.bodyKeepoutCells
       )
-    }
-  }
-
-  /**
-   * Reset the grid and re-block power traces as permanent obstacles.
-   * Used before each signal routing attempt — power traces are fixed.
-   */
-  private resetGridWithPower(powerTraces: Map<string, Set<string>>): void {
-    this.resetGrid()
-    const padding = this.traceBlockPadding
-    for (const [_netName, cells] of powerTraces) {
-      for (const cellKey of cells) {
-        const [x, y] = cellKey.split(',').map(Number)
-        for (let dy = -padding; dy <= padding; dy++) {
-          for (let dx = -padding; dx <= padding; dx++) {
-            this.grid.blockCell(x + dx, y + dy)
-          }
-        }
-      }
     }
   }
 
