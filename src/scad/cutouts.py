@@ -258,11 +258,17 @@ def _add_pad_pinholes(
             pin_spacing = hw.controller["pin_spacing_mm"]
             row_spacing = hw.controller["row_spacing_mm"]
             total_h = (pins_per_side - 1) * pin_spacing
-            start_y = cy - total_h / 2
+            rotated = comp.get("rotation_deg", 0) == 90
             for i in range(pins_per_side):
-                y = start_y + i * pin_spacing
                 for side in (-1, 1):
-                    x = cx + side * row_spacing / 2
+                    if rotated:
+                        # 90°: rows along Y, pins along X
+                        x = cx - total_h / 2 + i * pin_spacing
+                        y = cy + side * row_spacing / 2
+                    else:
+                        # 0°: rows along X, pins along Y
+                        x = cx + side * row_spacing / 2
+                        y = cy - total_h / 2 + i * pin_spacing
                     poly = _rect(x, y, ps, ps)
                     cuts.append(Cutout(polygon=poly, depth=depth, z_base=z_base,
                                        label=f"pin {cid}"))

@@ -123,7 +123,11 @@ def _convert_layout(pcb_layout: dict) -> dict:
             buttons.append({"id": cid, "x": x, "y": y, "signalNet": f"{cid}_SIG"})
         elif ctype == "controller":
             pins = _controller_pins(button_comps, diode_comps)
-            controllers.append({"id": cid, "x": x, "y": y, "pins": pins})
+            ctrl_entry: dict = {"id": cid, "x": x, "y": y, "pins": pins}
+            rot = comp.get("rotation_deg", 0)
+            if rot:
+                ctrl_entry["rotation"] = rot
+            controllers.append(ctrl_entry)
         elif ctype == "battery":
             batteries.append({
                 "id": cid, "x": x, "y": y,

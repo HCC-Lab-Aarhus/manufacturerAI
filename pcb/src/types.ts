@@ -75,6 +75,8 @@ export interface Controller {
   x: number
   y: number
   pins: ControllerPins
+  /** Rotation in degrees (0 or 90). When 90, rows run along Y and pins along X. */
+  rotation?: number
 }
 
 export interface ComponentPlacement {

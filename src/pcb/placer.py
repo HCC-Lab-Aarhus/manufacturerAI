@@ -117,11 +117,11 @@ def place_components(
     bat_w = bat_fp["compartment_width_mm"]
     bat_h = bat_fp["compartment_height_mm"]
 
-    bat_pos = _place_rect(
+    bat_pos, _ = _place_rect(
         board_inset, occupied,
         bat_w, bat_h, margin, prefer="bottom",
     )
-    if not bat_pos:
+    if bat_pos is None:
         raise PlacementError(
             component="battery",
             dimensions={"width_mm": bat_w, "height_mm": bat_h},
@@ -154,16 +154,24 @@ def place_components(
     occupied.append({"cx": bx, "cy": by, "hw": bat_w / 2, "hh": bat_h / 2})
 
     # ── 3. Controller ──────────────────────────────────────────────
+    #      Smart placement: avoid putting the MC in the button Y-band
+    #      and try both orientations (0° and 90°) to find the best fit.
     ctrl = hw.controller
-    ctrl_w = ctrl["body_width_mm"]
-    ctrl_h = ctrl["body_height_mm"]
+    ctrl_w = ctrl["body_width_mm"]   # 10 mm (narrow side)
+    ctrl_h = ctrl["body_height_mm"]  # 36 mm (long side)
     ctrl_pad = ctrl["keepout_padding_mm"]
 
-    ctrl_pos = _place_rect(
+    # Compute the button Y-band so we can penalise placement inside it.
+    btn_band = _button_y_band(button_positions, margin)
+
+    # Try both orientations: 0° (w×h) and 90° (h×w), keep best scoring.
+    ctrl_pos, ctrl_rot = _place_rect_with_rotation(
         board_inset, occupied,
-        ctrl_w, ctrl_h, margin, prefer="center",
+        ctrl_w, ctrl_h, margin,
+        prefer="center",
+        avoid_y_band=btn_band,
     )
-    if not ctrl_pos:
+    if ctrl_pos is None:
         raise PlacementError(
             component="controller",
             dimensions={"width_mm": ctrl_w, "height_mm": ctrl_h},
@@ -179,36 +187,46 @@ def place_components(
         )
 
     cx, cy = ctrl_pos
+    # When rotated 90°, the keepout dimensions swap.
+    if ctrl_rot == 90:
+        ko_w = ctrl_h + ctrl_pad
+        ko_h = ctrl_w + ctrl_pad
+        occ_hw, occ_hh = ctrl_h / 2, ctrl_w / 2
+    else:
+        ko_w = ctrl_w + ctrl_pad
+        ko_h = ctrl_h + ctrl_pad
+        occ_hw, occ_hh = ctrl_w / 2, ctrl_h / 2
+
     components.append({
         "id": "U1",
         "ref": "controller",
         "type": "controller",
         "footprint": ctrl["type"],
         "center": [cx, cy],
-        "rotation_deg": 0,
+        "rotation_deg": ctrl_rot,
         "keepout": {
             "type": "rectangle",
-            "width_mm": ctrl_w + ctrl_pad,
-            "height_mm": ctrl_h + ctrl_pad,
+            "width_mm": ko_w,
+            "height_mm": ko_h,
         },
     })
-    occupied.append({"cx": cx, "cy": cy, "hw": ctrl_w / 2, "hh": ctrl_h / 2})
+    occupied.append({"cx": cx, "cy": cy, "hw": occ_hw, "hh": occ_hh})
 
     # ── 4. Diode (IR LED) — prefer top, but respect clearances ────
     d_diam = hw.diode["diameter_mm"]
     d_r = d_diam / 2 + 1.0  # keepout radius
 
     # Try placing in the top 25% first, fall back to full board
-    diode_pos = _place_rect(
+    diode_pos, _ = _place_rect(
         board_inset, occupied,
         d_diam, d_diam, margin, prefer="top", y_zone=(0.75, 1.0),
     )
-    if not diode_pos:
-        diode_pos = _place_rect(
+    if diode_pos is None:
+        diode_pos, _ = _place_rect(
             board_inset, occupied,
             d_diam, d_diam, margin, prefer="top",
         )
-    if not diode_pos:
+    if diode_pos is None:
         # Last resort: polygon center
         diode_pos = ((min_x + max_x) / 2, (min_y + max_y) / 2)
 
@@ -283,6 +301,64 @@ def _rect_edge_clearance(
     return min(_dist_to_polygon(px, py, polygon) for px, py in samples)
 
 
+def _button_y_band(
+    button_positions: list[dict],
+    margin: float,
+) -> tuple[float, float] | None:
+    """Return (y_min, y_max) of the button band, expanded by margin.
+
+    Returns None if there are no buttons.
+    """
+    if not button_positions:
+        return None
+    ys = [b["y"] for b in button_positions]
+    # Include button keepout radius so band covers the full button area
+    r = hw.button["cap_diameter_mm"] / 2 + hw.button["keepout_padding_mm"]
+    return (min(ys) - r - margin, max(ys) + r + margin)
+
+
+def _y_overlap(cy: float, hh: float, band: tuple[float, float] | None) -> float:
+    """How many mm of the rect [cy-hh, cy+hh] overlap with *band*.
+
+    Returns 0 if band is None or there is no overlap.
+    """
+    if band is None:
+        return 0.0
+    lo = max(cy - hh, band[0])
+    hi = min(cy + hh, band[1])
+    return max(0.0, hi - lo)
+
+
+def _place_rect_with_rotation(
+    polygon: list[list[float]],
+    occupied: list[dict],
+    width: float,
+    height: float,
+    margin: float,
+    prefer: str = "center",
+    avoid_y_band: tuple[float, float] | None = None,
+) -> tuple[tuple[float, float] | None, int]:
+    """
+    Try both 0° and 90° orientations and return the best position
+    and rotation (0 or 90).  The *avoid_y_band* area is penalised.
+    """
+    best_pos: tuple[float, float] | None = None
+    best_score = -1e18
+    best_rot = 0
+
+    for rot, w, h in [(0, width, height), (90, height, width)]:
+        pos, score = _place_rect(
+            polygon, occupied, w, h, margin,
+            prefer=prefer, avoid_y_band=avoid_y_band,
+        )
+        if pos is not None and score > best_score:
+            best_pos = pos
+            best_score = score
+            best_rot = rot
+
+    return best_pos, best_rot
+
+
 def _place_rect(
     polygon: list[list[float]],
     occupied: list[dict],
@@ -292,7 +368,8 @@ def _place_rect(
     prefer: str = "center",
     step: float = 1.0,
     y_zone: tuple[float, float] | None = None,
-) -> tuple[float, float] | None:
+    avoid_y_band: tuple[float, float] | None = None,
+) -> tuple[tuple[float, float] | None, float]:
     """
     Find the best position for a *width* × *height* rectangle inside
     *polygon*, maximising the minimum clearance to **both** polygon
@@ -310,6 +387,13 @@ def _place_rect(
     y_zone : optional (lo_frac, hi_frac) to restrict the Y scan range
              as a fraction of the polygon height, e.g. (0.75, 1.0)
              for the top quarter.  Falls through to None on no fit.
+    avoid_y_band : optional (y_lo, y_hi) — penalise any position whose
+             Y extent overlaps this band (used to keep the controller
+             out of the button row).
+
+    Returns
+    -------
+    (best_position, best_score) — position is None if no fit found.
     """
     ccw = ensure_ccw(polygon)
     min_x, min_y, max_x, max_y = polygon_bounds(ccw)
@@ -323,7 +407,7 @@ def _place_rect(
         scan_y_max = min(scan_y_max, min_y + range_y * y_zone[1])
 
     if scan_y_min > scan_y_max:
-        return None
+        return None, -1e18
 
     best: tuple[float, float] | None = None
     best_score = -1e18
@@ -365,6 +449,15 @@ def _place_rect(
             else:
                 score = poly_dist
 
+            # Penalise overlap with the button Y-band (strong).
+            # Each mm of overlap costs 1.0 points — much stronger
+            # than the directional tiebreaker (0.01/mm) so the
+            # placer will strongly prefer positions outside the
+            # button band but can still use it as a last resort.
+            overlap = _y_overlap(cy, hh2, avoid_y_band)
+            if overlap > 0:
+                score -= overlap * 1.0
+
             # Weak directional tiebreaker (never overrides clearance)
             if prefer == "bottom":
                 score -= (cy - min_y) * 0.01
@@ -382,7 +475,7 @@ def _place_rect(
             cy += step
         cx += step
 
-    return best
+    return best, best_score
 
 
 # ── Reporting ──────────────────────────────────────────────────────
@@ -500,15 +593,17 @@ def generate_placement_candidates(
     battery_prefs = ["bottom", "center", "top"]
     controller_prefs = ["center", "bottom", "top"]
 
+    btn_band = _button_y_band(button_positions, margin)
+
     candidates: list[dict] = []
-    seen: set[tuple[int, int, int, int]] = set()
+    seen: set[tuple[int, int, int, int, int]] = set()
 
     for bpref in battery_prefs:
-        bat_pos = _place_rect(
+        bat_pos, _ = _place_rect(
             board_inset, occupied_base,
             bat_w, bat_h, margin, prefer=bpref,
         )
-        if not bat_pos:
+        if bat_pos is None:
             continue
         bx, by = bat_pos
 
@@ -516,34 +611,45 @@ def generate_placement_candidates(
         occupied_with_bat.append({"cx": bx, "cy": by, "hw": bat_w / 2, "hh": bat_h / 2})
 
         for cpref in controller_prefs:
-            ctrl_pos = _place_rect(
+            # Try both orientations via _place_rect_with_rotation
+            ctrl_pos, ctrl_rot = _place_rect_with_rotation(
                 board_inset, occupied_with_bat,
                 ctrl_w, ctrl_h, margin, prefer=cpref,
+                avoid_y_band=btn_band,
             )
-            if not ctrl_pos:
+            if ctrl_pos is None:
                 continue
             cx, cy = ctrl_pos
 
-            # Dedup on 2mm grid
-            key = (int(bx / 2), int(by / 2), int(cx / 2), int(cy / 2))
+            if ctrl_rot == 90:
+                occ_hw, occ_hh = ctrl_h / 2, ctrl_w / 2
+                ko_w = ctrl_h + ctrl_pad
+                ko_h = ctrl_w + ctrl_pad
+            else:
+                occ_hw, occ_hh = ctrl_w / 2, ctrl_h / 2
+                ko_w = ctrl_w + ctrl_pad
+                ko_h = ctrl_h + ctrl_pad
+
+            # Dedup on 2mm grid (include rotation)
+            key = (int(bx / 2), int(by / 2), int(cx / 2), int(cy / 2), ctrl_rot)
             if key in seen:
                 continue
             seen.add(key)
 
             occupied_all = list(occupied_with_bat)
-            occupied_all.append({"cx": cx, "cy": cy, "hw": ctrl_w / 2, "hh": ctrl_h / 2})
+            occupied_all.append({"cx": cx, "cy": cy, "hw": occ_hw, "hh": occ_hh})
 
             # Diode — prefer top zone, then full board
-            diode_pos = _place_rect(
+            diode_pos, _ = _place_rect(
                 board_inset, occupied_all,
                 d_diam, d_diam, margin, prefer="top", y_zone=(0.75, 1.0),
             )
-            if not diode_pos:
-                diode_pos = _place_rect(
+            if diode_pos is None:
+                diode_pos, _ = _place_rect(
                     board_inset, occupied_all,
                     d_diam, d_diam, margin, prefer="top",
                 )
-            if not diode_pos:
+            if diode_pos is None:
                 min_x, min_y, max_x, max_y = polygon_bounds(board_inset)
                 diode_pos = ((min_x + max_x) / 2, (min_y + max_y) / 2)
 
@@ -560,11 +666,11 @@ def generate_placement_candidates(
             comps.append({
                 "id": "U1", "ref": "controller", "type": "controller",
                 "footprint": ctrl["type"],
-                "center": [cx, cy], "rotation_deg": 0,
+                "center": [cx, cy], "rotation_deg": ctrl_rot,
                 "keepout": {
                     "type": "rectangle",
-                    "width_mm": ctrl_w + ctrl_pad,
-                    "height_mm": ctrl_h + ctrl_pad,
+                    "width_mm": ko_w,
+                    "height_mm": ko_h,
                 },
             })
             comps.append({
@@ -582,7 +688,11 @@ def generate_placement_candidates(
                 },
                 "components": comps,
                 "keepout_regions": [],
-                "metadata": {"battery_prefer": bpref, "controller_prefer": cpref},
+                "metadata": {
+                    "battery_prefer": bpref,
+                    "controller_prefer": cpref,
+                    "controller_rotation": ctrl_rot,
+                },
             }
             candidates.append(layout)
             if len(candidates) >= max_candidates:

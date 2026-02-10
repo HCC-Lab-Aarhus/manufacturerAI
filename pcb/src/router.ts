@@ -213,19 +213,33 @@ export class Router {
     const pinSpacing = this.footprints.controller.pinSpacing
     const pinsPerSide = Math.ceil(pinCount / 2)
     const totalHeight = (pinsPerSide - 1) * pinSpacing
+    const rotated = (controller.rotation ?? 0) === 90
 
     pinNames.forEach((pinName, index) => {
       const pinNumber = index + 1
       let pinX: number
       let pinY: number
 
-      if (pinNumber <= pinsPerSide) {
-        pinX = controller.x - rowSpacing / 2
-        pinY = controller.y - totalHeight / 2 + (pinNumber - 1) * pinSpacing
+      if (rotated) {
+        // 90°: rows run along Y, pins along X
+        if (pinNumber <= pinsPerSide) {
+          pinY = controller.y - rowSpacing / 2
+          pinX = controller.x - totalHeight / 2 + (pinNumber - 1) * pinSpacing
+        } else {
+          pinY = controller.y + rowSpacing / 2
+          const rightSideIndex = pinCount - pinNumber
+          pinX = controller.x - totalHeight / 2 + rightSideIndex * pinSpacing
+        }
       } else {
-        pinX = controller.x + rowSpacing / 2
-        const rightSideIndex = pinCount - pinNumber
-        pinY = controller.y - totalHeight / 2 + rightSideIndex * pinSpacing
+        // 0°: rows run along X, pins along Y (default DIP orientation)
+        if (pinNumber <= pinsPerSide) {
+          pinX = controller.x - rowSpacing / 2
+          pinY = controller.y - totalHeight / 2 + (pinNumber - 1) * pinSpacing
+        } else {
+          pinX = controller.x + rowSpacing / 2
+          const rightSideIndex = pinCount - pinNumber
+          pinY = controller.y - totalHeight / 2 + rightSideIndex * pinSpacing
+        }
       }
 
       const padCenter = this.grid.worldToGrid(pinX, pinY)
