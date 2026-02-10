@@ -8,8 +8,11 @@ one with the most breathing room.
 """
 
 from __future__ import annotations
+import logging
 import math
 from typing import Optional
+
+log = logging.getLogger("manufacturerAI.placer")
 
 from src.config.hardware import hw
 from src.geometry.polygon import (
@@ -758,3 +761,104 @@ def generate_placement_candidates(
                 return candidates
 
     return candidates
+
+
+# ── Optimal placement (maximize spacing) ───────────────────────────
+
+
+def _component_half_extents(comp: dict) -> tuple[float, float]:
+    """Return (half_width, half_height) based on the component's keepout."""
+    ko = comp.get("keepout", {})
+    if ko.get("type") == "rectangle":
+        return ko["width_mm"] / 2, ko["height_mm"] / 2
+    elif ko.get("type") == "circle":
+        r = ko["radius_mm"]
+        return r, r
+    return 2.0, 2.0
+
+
+def _score_layout_spacing(layout: dict) -> tuple[float, float]:
+    """
+    Score a layout by how well-spaced the components are.
+
+    Computes the gap between every component and the polygon boundary,
+    and between every pair of components.  Returns ``(min_gap, mean_gap)``.
+
+    *  Higher ``min_gap``  → components are further from the tightest
+       constraint (edge or neighbour).
+    *  Higher ``mean_gap`` (as tiebreaker) → gaps are more uniformly
+       distributed, meaning no single component is squeezed.
+    """
+    polygon = layout["board"]["outline_polygon"]
+    components = layout["components"]
+    gaps: list[float] = []
+
+    # Component-to-edge gaps
+    for comp in components:
+        cx, cy = comp["center"]
+        hw2, hh2 = _component_half_extents(comp)
+        edge_gap = _rect_edge_clearance(cx, cy, hw2, hh2, polygon)
+        gaps.append(edge_gap)
+
+    # Pairwise component-to-component gaps
+    for i in range(len(components)):
+        a = components[i]
+        ax, ay = a["center"]
+        a_hw, a_hh = _component_half_extents(a)
+        for j in range(i + 1, len(components)):
+            b = components[j]
+            bx, by = b["center"]
+            b_hw, b_hh = _component_half_extents(b)
+            gap = max(
+                abs(ax - bx) - a_hw - b_hw,
+                abs(ay - by) - a_hh - b_hh,
+            )
+            gaps.append(gap)
+
+    min_gap = min(gaps) if gaps else 0.0
+    mean_gap = sum(gaps) / len(gaps) if gaps else 0.0
+    return min_gap, mean_gap
+
+
+def place_components_optimal(
+    outline: list[list[float]],
+    button_positions: list[dict],
+    battery_type: str = "2xAAA",
+) -> dict | None:
+    """
+    Find the single placement that maximizes the minimum gap between
+    all components and the polygon boundary, optimizing for the most
+    equal spacing throughout.
+
+    Generates varied placement candidates (different battery/controller
+    position preferences) and picks the one with the best global
+    spacing score.  This is fast — pure geometry, no routing.
+    """
+    candidates = generate_placement_candidates(
+        outline, button_positions,
+        battery_type=battery_type,
+        max_candidates=50,
+    )
+
+    if not candidates:
+        # Fallback to greedy sequential placement
+        try:
+            return place_components(outline, button_positions, battery_type)
+        except PlacementError:
+            return None
+
+    best_layout = None
+    best_score = (-1e18, -1e18)
+
+    for layout in candidates:
+        score = _score_layout_spacing(layout)
+        if score > best_score:
+            best_score = score
+            best_layout = layout
+
+    log.info(
+        "Optimal placement: min_gap=%.1f mm, mean_gap=%.1f mm "
+        "(from %d candidates)",
+        best_score[0], best_score[1], len(candidates),
+    )
+    return best_layout

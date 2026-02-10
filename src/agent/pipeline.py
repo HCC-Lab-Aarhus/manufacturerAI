@@ -21,8 +21,7 @@ from src.geometry.polygon import (
     polygon_bounds,
 )
 from src.pcb.placer import (
-    place_components as _place,
-    generate_placement_candidates,
+    place_components_optimal,
     build_optimization_report,
     PlacementError,
 )
@@ -50,10 +49,6 @@ def _load_printer_limits() -> dict:
 
 _PRINTER_LIMITS = _load_printer_limits()
 
-# Module-level counter so the pipeline result can report how many
-# placement candidates were tried in the most recent run.
-_last_tried_count: int = 1
-
 
 def _save_winning_result(
     layout: dict,
@@ -74,144 +69,53 @@ def _save_winning_result(
         emit("debug_image", {"path": str(pcb_debug), "label": pcb_debug.stem})
 
 
-def _multi_placement_route(
+def _place_and_route(
     outline: list[list[float]],
     bpos: list[dict],
     output_dir: Path,
     emit: EmitFn,
 ) -> tuple[dict | None, dict | None]:
     """
-    Try multiple component placements and route each, returning the
-    first successful (layout, routing_result).  If none succeed,
-    return the best partial result.
+    Place components with optimal spacing, then route once.
 
-    The candidates are scored by an estimated routability metric
-    (channel-width analysis) and routed best-first.
+    The placer generates several candidate layouts (varying battery /
+    controller position preferences) and picks the single one that
+    maximizes the minimum gap between all components and the polygon
+    boundary.  That layout is then routed once with the full rip-up
+    budget.
     """
-    global _last_tried_count
+    # ── Optimal placement (instant, pure geometry) ───────────────
+    emit("progress", {"stage": "Optimizing component placement..."})
+    log.info("Finding optimal component placement...")
 
-    # Generate candidates with varied battery/controller positions
-    candidates = generate_placement_candidates(outline, bpos)
-    log.info("Generated %d placement candidates", len(candidates))
+    try:
+        layout = place_components_optimal(outline, bpos)
+    except PlacementError:
+        layout = None
 
-    if not candidates:
-        # Fallback: try the legacy single-placement path
-        try:
-            layout = _place(outline, bpos)
-            candidates = [layout]
-        except PlacementError:
-            _last_tried_count = 0
-            return (None, None)
+    if layout is None:
+        return (None, None)
 
-    # Score each candidate by estimated routability
-    scored: list[tuple[float, dict]] = []
-    for layout in candidates:
-        try:
-            score, _bottlenecks = score_placement(layout, outline)
-        except Exception:
-            score = -999
-        scored.append((score, layout))
-
-    # Sort best-first (highest score = most likely to route)
-    scored.sort(key=lambda s: s[0], reverse=True)
-    log.info(
-        "Candidate scores: %s",
-        [round(s, 1) for s, _ in scored],
+    # Save placement result
+    (output_dir / "pcb_layout.json").write_text(
+        json.dumps(layout, indent=2), encoding="utf-8"
     )
+    emit("pcb_layout", layout)
 
-    best_layout: dict | None = None
-    best_routing: dict | None = None
-    best_routed_count = -1
+    # ── Route traces (single attempt, full budget) ───────────────
+    emit("progress", {"stage": "Routing traces..."})
+    log.info("Routing traces...")
 
-    # --- Phase A: Fast screen with limited rip-up budget ----------
-    # Use a low maxAttempts to quickly check each candidate (~10-15s
-    # each instead of ~260s).  This finds candidates that route easily.
-    SCREEN_ATTEMPTS = 8
-    _last_tried_count = 0
-    screen_ranking: list[tuple[int, int, dict, dict]] = []  # (routed, idx, layout, result)
+    try:
+        routing_result = _route(layout, output_dir)
+    except (RouterError, Exception) as e:
+        log.warning("Routing failed: %s", e)
+        return (layout, None)
 
-    for i, (score, layout) in enumerate(scored):
-        _last_tried_count += 1
+    if routing_result.get("success", False):
+        _save_winning_result(layout, routing_result, output_dir, emit)
 
-        # Skip obviously bad candidates
-        if score < -20 and i > 2:
-            log.info("Skipping candidate %d (score %.1f)", i, score)
-            continue
-
-        log.info("Screening candidate %d/%d (score=%.1f)...",
-                 i + 1, len(scored), score)
-        emit("progress", {
-            "stage": f"Screening placement {i + 1}/{len(scored)}..."
-        })
-
-        try:
-            routing_result = _route(layout, output_dir, max_attempts=SCREEN_ATTEMPTS)
-        except (RouterError, Exception) as e:
-            log.warning("Screening candidate %d failed: %s", i, e)
-            if best_layout is None:
-                best_layout = layout
-            continue
-
-        routed_count = len(routing_result.get("traces", []))
-
-        if routing_result.get("success", False):
-            # Winner found during fast screen!
-            log.info("Candidate %d succeeded in fast screen! (%d traces)", i, routed_count)
-            _save_winning_result(layout, routing_result, output_dir, emit)
-            return (layout, routing_result)
-
-        screen_ranking.append((routed_count, i, layout, routing_result))
-        if routed_count > best_routed_count:
-            best_routed_count = routed_count
-            best_layout = layout
-            best_routing = routing_result
-
-    # --- Phase B: Thorough routing on top candidates ---------------
-    # Take the top 2 candidates from screening and give them the full
-    # rip-up budget (default 25 attempts incl. round-robin).
-    screen_ranking.sort(key=lambda t: t[0], reverse=True)
-    thorough_candidates = screen_ranking[:2]
-
-    for routed, idx, layout, _screen_result in thorough_candidates:
-        log.info("Thorough routing candidate %d (screened %d traces)...", idx, routed)
-        emit("progress", {
-            "stage": f"Thorough routing placement {idx + 1}..."
-        })
-
-        try:
-            routing_result = _route(layout, output_dir)  # full budget (25)
-        except (RouterError, Exception) as e:
-            log.warning("Thorough routing candidate %d failed: %s", idx, e)
-            continue
-
-        routed_count = len(routing_result.get("traces", []))
-
-        if routing_result.get("success", False):
-            log.info("Candidate %d succeeded with thorough routing! (%d traces)",
-                     idx, routed_count)
-            _save_winning_result(layout, routing_result, output_dir, emit)
-            return (layout, routing_result)
-
-        if routed_count > best_routed_count:
-            best_routed_count = routed_count
-            best_layout = layout
-            best_routing = routing_result
-
-    # No candidate succeeded — save best partial result
-    if best_layout:
-        (output_dir / "pcb_layout.json").write_text(
-            json.dumps(best_layout, indent=2), encoding="utf-8"
-        )
-        emit("pcb_layout", best_layout)
-    if best_routing:
-        (output_dir / "routing_result.json").write_text(
-            json.dumps(best_routing, indent=2), encoding="utf-8"
-        )
-        pcb_debug = output_dir / "pcb_debug.png"
-        if pcb_debug.exists():
-            emit("debug_image", {"path": str(pcb_debug), "label": pcb_debug.stem})
-
-    return (best_layout, best_routing)
+    return (layout, routing_result)
 
 
 def _normalize_outline(
@@ -329,15 +233,12 @@ def run_pipeline(
 
     # ── 3 + 4. Place components & route traces ─────────────────────
     #
-    # Instead of a single placement attempt, we generate multiple
-    # placement candidates (varying battery/controller position),
-    # score each by estimated routability, and route them best-first.
-    # This avoids burning LLM turns on mechanically retrying
-    # unroutable placements.
+    # Optimal placement picks the single layout with the best global
+    # spacing, then routes it once.
     emit("progress", {"stage": "Placing components & routing traces..."})
-    log.info("Pipeline step 3+4: multi-placement routing")
+    log.info("Pipeline step 3+4: optimal placement + single route")
 
-    layout, routing_result = _multi_placement_route(
+    layout, routing_result = _place_and_route(
         outline, bpos, output_dir, emit,
     )
 
@@ -367,7 +268,7 @@ def run_pipeline(
         feedback = format_feedback(
             bottlenecks=bottlenecks,
             crossings=crossings,
-            tried_placements=_last_tried_count,
+            tried_placements=1,
             best_routed=len((routing_result or {}).get("traces", [])),
             total_nets=(
                 len((routing_result or {}).get("traces", []))
