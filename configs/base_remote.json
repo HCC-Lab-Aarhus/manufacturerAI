@@ -48,7 +48,7 @@
   "manufacturing": {
     "trace_width_mm": 1.5,
     "trace_clearance_mm": 2.0,
-    "trace_channel_depth_mm": 0.4,
+    "trace_channel_depth_mm": 5.0,
     "pinhole_depth_mm": 2.5,
     "pinhole_diameter_mm": 1.2
   },
@@ -63,7 +63,7 @@
     "battery_guard_wall_mm": 1.2,
     "battery_hatch_thickness_mm": 1.5,
     "battery_hatch_clearance_mm": 0.3,
-    "spring_loop_width_mm": 4.0,
+    "spring_loop_width_mm": 15.0,
     "spring_loop_height_mm": 6.0,
     "spring_loop_thickness_mm": 0.8
   },
