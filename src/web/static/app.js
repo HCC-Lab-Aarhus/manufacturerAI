@@ -12,14 +12,67 @@ const outlineSvg   = document.getElementById("outlineSvg");
 const outlineLabel = document.getElementById("outlineLabel");
 const debugView    = document.getElementById("debugView");
 const debugImage   = document.getElementById("debugImage");
+const negativeImage = document.getElementById("negativeImage");
+const debugLabel   = document.getElementById("debugLabel");
+const debugImageSelect = document.getElementById("debugImageSelect");
 const viewerEl     = document.getElementById("viewer");
+const modelLabel   = document.getElementById("modelLabel");
 
 const tabBtns = document.querySelectorAll(".tab-btn");
+const progressSection = document.getElementById("progressSection");
+const progressLabel = document.getElementById("progressLabel");
+const progressFill = document.getElementById("progressFill");
 let currentView = "outline";
 
+// ── Progress bar helpers ──────────────────────────────────────────
+
+const PROGRESS_STAGES = {
+  "Validating outline...": 5,
+  "Placing components & routing traces...": 15,
+  "Generating enclosure...": 70,
+  "Compiling STL models...": 85,
+  "Pipeline complete!": 100,
+};
+
+function updateProgress(stage) {
+  progressSection.style.display = "block";
+  progressLabel.textContent = stage;
+
+  // Check for exact match first
+  if (PROGRESS_STAGES[stage] !== undefined) {
+    progressFill.style.width = PROGRESS_STAGES[stage] + "%";
+    return;
+  }
+
+  // Check for screening/routing patterns
+  const screenMatch = stage.match(/Screening placement (\d+)\/(\d+)/);
+  if (screenMatch) {
+    const current = parseInt(screenMatch[1]);
+    const total = parseInt(screenMatch[2]);
+    // Screening goes from 15% to 55%
+    const pct = 15 + (current / total) * 40;
+    progressFill.style.width = pct + "%";
+    return;
+  }
+
+  const thoroughMatch = stage.match(/Thorough routing placement/);
+  if (thoroughMatch) {
+    // Thorough routing is 55-70%
+    progressFill.style.width = "60%";
+    return;
+  }
+}
+
+function hideProgress() {
+  progressSection.style.display = "none";
+  progressFill.style.width = "0%";
+}
+
 // ── Debug log ─────────────────────────────────────────────────────
+// DEBUG: This section is to be removed later
 
 const debugLog = document.getElementById("debugLog");
+const debugToggleBtn = document.getElementById("debugToggleBtn");
 
 function logDebug(msg) {
   console.log(`[DEBUG] ${msg}`);
@@ -29,6 +82,13 @@ function logDebug(msg) {
     debugLog.appendChild(line);
     debugLog.scrollTop = debugLog.scrollHeight;
   }
+}
+
+// DEBUG: Toggle switch handler - TO BE REMOVED
+if (debugToggleBtn && debugLog) {
+  debugToggleBtn.addEventListener("change", () => {
+    debugLog.style.display = debugToggleBtn.checked ? "block" : "none";
+  });
 }
 
 // ── Tab switching ─────────────────────────────────────────────────
@@ -104,8 +164,10 @@ function addToolCall(name) {
 }
 
 function setStatus(text, type) {
-  statusBadge.textContent = text;
-  statusBadge.className = `status ${type || ""}`;
+  if (statusBadge) {
+    statusBadge.textContent = text;
+    statusBadge.className = `status ${type || ""}`;
+  }
 }
 
 // ── Outline SVG rendering ─────────────────────────────────────────
@@ -157,6 +219,7 @@ function renderOutline(outline, buttons, label) {
   }
 
   outlineLabel.textContent = label || "Outline preview";
+  outlineLabel.style.display = "none";  // Hide label when outline is rendered
   switchTab("outline");
 }
 
@@ -207,6 +270,9 @@ function loadModel(url) {
     controls.target.set(0, 0, 0);
     controls.update();
 
+    // Hide placeholder label
+    if (modelLabel) modelLabel.style.display = "none";
+
     downloadBtn.classList.remove("disabled");
     switchTab("3d");
   });
@@ -243,9 +309,158 @@ document.getElementById("reset3DView").addEventListener("click", () => {
   controls.update();
 });
 
+// ── Image zoom and drag state ─────────────────────────────────────
+
+let debugZoom = 1;
+let outlineZoom = 1;
+
+const imageDragStates = {
+  debug: { translateX: 0, translateY: 0 },
+  negative: { translateX: 0, translateY: 0 },
+  outline: { translateX: 0, translateY: 0 }
+};
+
+function applyImageTransform(img, zoom, dragState) {
+  img.style.transform = `scale(${zoom}) translate(${dragState.translateX / zoom}px, ${dragState.translateY / zoom}px)`;
+  img.style.transformOrigin = "center center";
+}
+
+function applyOutlineTransform() {
+  const state = imageDragStates.outline;
+  outlineSvg.style.transform = `scale(${outlineZoom}) translate(${state.translateX / outlineZoom}px, ${state.translateY / outlineZoom}px)`;
+  outlineSvg.style.transformOrigin = "center center";
+}
+
 // Debug view reset
 document.getElementById("resetDebugView").addEventListener("click", () => {
-  debugImage.style.transform = "";
+  debugZoom = 1;
+  imageDragStates.debug.translateX = 0;
+  imageDragStates.debug.translateY = 0;
+  imageDragStates.negative.translateX = 0;
+  imageDragStates.negative.translateY = 0;
+  applyImageTransform(debugImage, debugZoom, imageDragStates.debug);
+  applyImageTransform(negativeImage, debugZoom, imageDragStates.negative);
+});
+
+// Outline view reset
+document.getElementById("resetOutlineView").addEventListener("click", () => {
+  outlineZoom = 1;
+  imageDragStates.outline.translateX = 0;
+  imageDragStates.outline.translateY = 0;
+  applyOutlineTransform();
+});
+
+// Debug image dropdown toggle
+debugImageSelect.addEventListener("change", () => {
+  // Only toggle images if content has been loaded (label is hidden)
+  if (debugLabel && debugLabel.style.display === "none") {
+    if (debugImageSelect.value === "debug") {
+      debugImage.style.display = "";
+      negativeImage.style.display = "none";
+    } else {
+      debugImage.style.display = "none";
+      negativeImage.style.display = "";
+    }
+  }
+});
+
+// ── Zoom button handlers ──────────────────────────────────────────
+
+document.querySelectorAll(".zoom-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const view = btn.dataset.view;
+    const action = btn.dataset.action;
+    
+    if (view === "debug") {
+      if (action === "in") {
+        debugZoom = Math.min(debugZoom * 1.25, 5);
+      } else {
+        debugZoom = Math.max(debugZoom / 1.25, 0.2);
+      }
+      applyImageTransform(debugImage, debugZoom, imageDragStates.debug);
+      applyImageTransform(negativeImage, debugZoom, imageDragStates.negative);
+    } else if (view === "outline") {
+      if (action === "in") {
+        outlineZoom = Math.min(outlineZoom * 1.25, 5);
+      } else {
+        outlineZoom = Math.max(outlineZoom / 1.25, 0.2);
+      }
+      applyOutlineTransform();
+    }
+  });
+});
+
+// ── Wheel zoom for views ──────────────────────────────────────────
+
+debugView.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  if (e.deltaY < 0) {
+    debugZoom = Math.min(debugZoom * 1.1, 5);
+  } else {
+    debugZoom = Math.max(debugZoom / 1.1, 0.2);
+  }
+  applyImageTransform(debugImage, debugZoom, imageDragStates.debug);
+  applyImageTransform(negativeImage, debugZoom, imageDragStates.negative);
+}, { passive: false });
+
+outlineView.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  if (e.deltaY < 0) {
+    outlineZoom = Math.min(outlineZoom * 1.1, 5);
+  } else {
+    outlineZoom = Math.max(outlineZoom / 1.1, 0.2);
+  }
+  applyOutlineTransform();
+}, { passive: false });
+
+// ── Drag functionality for images ─────────────────────────────────
+
+function setupImageDrag(element, stateKey, getZoom, applyFn) {
+  const state = imageDragStates[stateKey];
+  let isDragging = false;
+  let startX = 0;
+  let startY = 0;
+  
+  element.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    isDragging = true;
+    startX = e.clientX - state.translateX;
+    startY = e.clientY - state.translateY;
+    element.style.cursor = "grabbing";
+  });
+  
+  document.addEventListener("mousemove", (e) => {
+    if (!isDragging) return;
+    state.translateX = e.clientX - startX;
+    state.translateY = e.clientY - startY;
+    applyFn(element, getZoom(), state);
+  });
+  
+  document.addEventListener("mouseup", () => {
+    if (isDragging) {
+      isDragging = false;
+      element.style.cursor = "grab";
+    }
+  });
+  
+  // Double-click to reset position
+  element.addEventListener("dblclick", () => {
+    state.translateX = 0;
+    state.translateY = 0;
+    applyFn(element, getZoom(), state);
+  });
+  
+  element.style.cursor = "grab";
+}
+
+// Setup drag for debug images
+setupImageDrag(debugImage, "debug", () => debugZoom, applyImageTransform);
+setupImageDrag(negativeImage, "negative", () => debugZoom, applyImageTransform);
+
+// Setup drag for outline SVG
+setupImageDrag(outlineSvg, "outline", () => outlineZoom, (el, zoom, state) => {
+  el.style.transform = `scale(${zoom}) translate(${state.translateX / zoom}px, ${state.translateY / zoom}px)`;
+  el.style.transformOrigin = "center center";
 });
 
 // Download
@@ -264,8 +479,43 @@ if (resetBtn) {
     setStatus("Ready", "");
     outlineSvg.innerHTML = "";
     outlineLabel.textContent = "No outline yet";
+    outlineLabel.style.display = "";
+    // Reset debug view
+    debugImage.src = "";
+    debugImage.style.display = "none";
+    negativeImage.src = "";
+    negativeImage.style.display = "none";
+    if (debugLabel) {
+      debugLabel.textContent = "No PCB layout yet";
+      debugLabel.style.display = "";
+    }
+    debugImageSelect.value = "debug";
+    // Reset 3D view
+    if (currentMesh) {
+      scene.remove(currentMesh);
+      currentMesh.geometry.dispose();
+      currentMesh.material.dispose();
+      currentMesh = null;
+    }
+    if (modelLabel) {
+      modelLabel.textContent = "No 3D model yet";
+      modelLabel.style.display = "";
+    }
     latestModelName = null;
     downloadBtn.classList.add("disabled");
+    hideProgress();
+    // Reset zoom and drag states
+    debugZoom = 1;
+    outlineZoom = 1;
+    imageDragStates.debug.translateX = 0;
+    imageDragStates.debug.translateY = 0;
+    imageDragStates.negative.translateX = 0;
+    imageDragStates.negative.translateY = 0;
+    imageDragStates.outline.translateX = 0;
+    imageDragStates.outline.translateY = 0;
+    applyImageTransform(debugImage, 1, imageDragStates.debug);
+    applyImageTransform(negativeImage, 1, imageDragStates.negative);
+    applyOutlineTransform();
   });
 }
 
@@ -283,6 +533,7 @@ sendBtn.addEventListener("click", async () => {
   promptInput.value = "";
   sendBtn.disabled = true;
   setStatus("Generating…", "working");
+  progressFill.style.width = "0%";
   logDebug(`Sending: "${msg}"`);
 
   try {
@@ -352,6 +603,11 @@ sendBtn.addEventListener("click", async () => {
 
           case "debug_image":
             debugImage.src = `/api/images/${ev.label}?t=${Date.now()}`;
+            negativeImage.src = `/api/images/negative?t=${Date.now()}`;
+            // Show debug image, hide label
+            debugImage.style.display = "";
+            if (debugLabel) debugLabel.style.display = "none";
+            debugImageSelect.value = "debug";
             switchTab("debug");
             break;
 
@@ -370,12 +626,14 @@ sendBtn.addEventListener("click", async () => {
 
           case "progress":
             setStatus(ev.stage || "Working…", "working");
+            updateProgress(ev.stage || "Working…");
             break;
 
           case "error":
             logDebug(`ERROR event: ${ev.message}`);
             addMessage("assistant", `Error: ${ev.message}`);
             setStatus("Error", "error");
+            hideProgress();
             break;
 
           default:
@@ -388,10 +646,15 @@ sendBtn.addEventListener("click", async () => {
     logDebug(`Fetch/stream exception: ${err.message}\n${err.stack}`);
     addMessage("assistant", `Network error: ${err.message}`);
     setStatus("Error", "error");
+    hideProgress();
   } finally {
     logDebug(`Finally block — re-enabling send button`);
     sendBtn.disabled = false;
-    if (statusBadge.textContent === "Generating…") setStatus("Ready", "");
+    if (statusBadge?.textContent === "Generating…") setStatus("Ready", "");
+    // Hide progress bar after a short delay if complete
+    setTimeout(() => {
+      if (progressFill.style.width === "100%") hideProgress();
+    }, 1500);
   }
 });
 
@@ -419,3 +682,92 @@ document.addEventListener("mousemove", (e) => {
 document.addEventListener("mouseup", () => {
   if (resizing) { resizing = false; document.body.style.cursor = ""; document.body.style.userSelect = ""; }
 });
+
+// ── Speech-to-text (dictation) ────────────────────────────────────
+
+const micBtn = document.getElementById("micBtn");
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+if (SpeechRecognition && micBtn) {
+  const recognition = new SpeechRecognition();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = "en-US";
+  
+  let isListening = false;
+  let finalTranscript = "";
+  let textBeforeDictation = "";
+  let isUpdatingFromSpeech = false;
+  
+  // Detect manual edits during dictation and reset transcript
+  promptInput.addEventListener("input", () => {
+    if (isListening && !isUpdatingFromSpeech) {
+      // User manually edited - reset and use current text as new base
+      finalTranscript = "";
+      textBeforeDictation = promptInput.value.replace(/\s*\[.*\]$/, "").trim();
+    }
+  });
+  
+  micBtn.addEventListener("click", () => {
+    if (isListening) {
+      recognition.stop();
+    } else {
+      finalTranscript = "";
+      textBeforeDictation = promptInput.value.trim();
+      recognition.start();
+    }
+  });
+  
+  recognition.addEventListener("start", () => {
+    isListening = true;
+    micBtn.classList.add("listening");
+    micBtn.title = "Listening... Click to stop";
+  });
+  
+  recognition.addEventListener("end", () => {
+    isListening = false;
+    micBtn.classList.remove("listening");
+    micBtn.title = "Click to dictate";
+    // Clean up any interim markers
+    promptInput.value = promptInput.value.replace(/\s*\[.*\]$/, "").trim();
+  });
+  
+  recognition.addEventListener("result", (e) => {
+    let interimTranscript = "";
+    
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const transcript = e.results[i][0].transcript;
+      if (e.results[i].isFinal) {
+        finalTranscript += transcript + " ";
+      } else {
+        interimTranscript += transcript;
+      }
+    }
+    
+    // Build the full text: original text + transcribed text
+    const prefix = textBeforeDictation ? textBeforeDictation + " " : "";
+    
+    isUpdatingFromSpeech = true;
+    if (interimTranscript) {
+      promptInput.value = prefix + finalTranscript + "[" + interimTranscript + "]";
+    } else {
+      promptInput.value = prefix + finalTranscript.trim();
+    }
+    isUpdatingFromSpeech = false;
+  });
+  
+  recognition.addEventListener("error", (e) => {
+    console.error("Speech recognition error:", e.error);
+    isListening = false;
+    micBtn.classList.remove("listening");
+    micBtn.title = "Click to dictate";
+    
+    if (e.error === "not-allowed") {
+      addMessage("assistant", "Microphone access denied. Please allow microphone access in your browser settings.");
+    }
+  });
+} else if (micBtn) {
+  // Browser doesn't support speech recognition
+  micBtn.style.display = "none";
+  console.warn("Speech recognition not supported in this browser");
+}

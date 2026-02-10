@@ -20,15 +20,36 @@
 
       <section class="chat" id="chat"></section>
 
-      <section class="debug-log" id="debugLog" style="max-height:120px;overflow-y:auto;font-size:11px;font-family:monospace;color:#9ca3af;background:#0b1120;border:1px solid #1f2937;border-radius:8px;padding:6px 8px;white-space:pre-wrap;word-break:break-all;"></section>
+      <!-- DEBUG: Debug log section - TO BE REMOVED -->
+      <section class="debug-log" id="debugLog" style="display:none;max-height:120px;overflow-y:auto;font-size:11px;font-family:monospace;color:#9ca3af;background:#0b1120;border:1px solid #1f2937;border-radius:8px;padding:6px 8px;white-space:pre-wrap;word-break:break-all;"></section>
+
+      <section class="progress-section" id="progressSection" style="display: none;">
+        <div class="progress-label" id="progressLabel">Starting...</div>
+        <div class="progress-bar-container">
+          <div class="progress-bar-fill" id="progressFill"></div>
+        </div>
+      </section>
 
       <section class="composer">
         <div class="textarea-wrapper">
           <textarea id="promptInput" placeholder="Describe the remote you want..."></textarea>
+          <button id="micBtn" class="mic-btn" title="Click to dictate">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+              <line x1="12" y1="19" x2="12" y2="23"/>
+              <line x1="8" y1="23" x2="16" y2="23"/>
+            </svg>
+          </button>
         </div>
         <div class="composer-actions">
-          <span class="status" id="statusBadge">Ready</span>
           <button id="resetBtn" class="reset-btn" title="New conversation">Reset</button>
+          <!-- DEBUG: Toggle switch - TO BE REMOVED -->
+          <label class="debug-toggle" title="Toggle debug log">
+            <input type="checkbox" id="debugToggleBtn">
+            <span class="debug-toggle-slider"></span>
+            <span class="debug-toggle-label">Debug</span>
+          </label>
           <button id="sendBtn">Send</button>
         </div>
       </section>
@@ -52,23 +73,45 @@
       <div class="view-container">
         <!-- Outline preview (SVG) -->
         <div id="outlineView" class="view-panel active">
+          <div class="view-controls">
+            <button class="reset-view-btn" id="resetOutlineView">Reset view</button>
+            <div class="zoom-controls">
+              <button class="zoom-btn" data-view="outline" data-action="in">+</button>
+              <button class="zoom-btn" data-view="outline" data-action="out">−</button>
+            </div>
+          </div>
           <svg id="outlineSvg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet"></svg>
-          <div class="outline-label" id="outlineLabel">No outline yet</div>
+          <div class="view-label" id="outlineLabel">No outline yet</div>
         </div>
 
         <!-- PCB debug images -->
         <div id="debugView" class="view-panel">
-          <button class="reset-view-btn" id="resetDebugView">Reset</button>
-          <img id="debugImage" alt="PCB Debug" />
+          <select id="debugImageSelect" class="debug-image-select">
+            <option value="debug">Debug Image</option>
+            <option value="negative">PCB Negative</option>
+          </select>
+          <div class="view-controls">
+            <button class="reset-view-btn" id="resetDebugView">Reset view</button>
+            <div class="zoom-controls">
+              <button class="zoom-btn" data-view="debug" data-action="in">+</button>
+              <button class="zoom-btn" data-view="debug" data-action="out">−</button>
+            </div>
+          </div>
+          <img id="debugImage" alt="PCB Debug" style="display: none;" />
+          <img id="negativeImage" alt="PCB Negative" style="display: none;" />
+          <div class="view-label" id="debugLabel">No PCB layout yet</div>
         </div>
 
         <!-- 3D model viewer -->
         <div id="viewer" class="view-panel">
-          <button class="reset-view-btn" id="reset3DView">Reset</button>
-          <div class="zoom-controls">
-            <button id="zoomIn">+</button>
-            <button id="zoomOut">−</button>
+          <div class="view-controls">
+            <button class="reset-view-btn" id="reset3DView">Reset view</button>
+            <div class="zoom-controls">
+              <button id="zoomIn">+</button>
+              <button id="zoomOut">−</button>
+            </div>
           </div>
+          <div class="view-label" id="modelLabel">No 3D model yet</div>
         </div>
       </div>
     </main>

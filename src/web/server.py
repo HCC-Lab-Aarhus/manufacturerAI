@@ -200,6 +200,7 @@ def get_image(name: str):
         _run_dir / "pcb" / f"{name}.png",
         _run_dir / f"{name}.png",
         _run_dir / "pcb" / f"pcb_{name}.png",
+        _run_dir / f"pcb_{name}.png",
     ]:
         if candidate.exists():
             return FileResponse(candidate, media_type="image/png")
