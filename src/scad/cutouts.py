@@ -134,22 +134,21 @@ def build_cutouts(
         keepout = comp.get("keepout", {})
 
         if ctype == "button":
-            # a) Circular through-hole in top 2 mm (for button cap)
-            cap_d = hw.button["cap_diameter_mm"] + hw.button["hole_clearance_mm"]
+            # a) Circular cylinder for button cap press-fit (8.3 mm deep from top)
+            cap_d = hw.button["min_hole_diameter_mm"]
+            cap_depth = 8.3
             cap_poly = _circle_poly(cx, cy, cap_d / 2)
             cuts.append(Cutout(
                 polygon=cap_poly,
-                depth=TOP_SOLID,
-                z_base=h - TOP_SOLID,
+                depth=cap_depth,
+                z_base=h - cap_depth,
                 label=f"button hole {cid}",
             ))
 
             # b) Rectangular body pocket from 3 mm to h-2 mm
-            #    (same as MC/battery — space for the tactile switch body)
-            pin_sx = hw.button["pin_spacing_x_mm"]
-            pin_sy = hw.button["pin_spacing_y_mm"]
-            body_w = pin_sx + 2 * margin
-            body_h = pin_sy + 2 * margin
+            #    Sized to fit the actual 12×12mm switch body, not pin spacing.
+            body_w = 12.0 + 2 * margin
+            body_h = 12.0 + 2 * margin
             body_poly = _rect(cx, cy, body_w, body_h)
             cuts.append(Cutout(
                 polygon=body_poly,
@@ -160,10 +159,120 @@ def build_cutouts(
             continue
 
         if ctype == "diode":
-            # Diode cutout deferred — skip for now
+            # a) Body pocket in cavity zone (space for the LED body)
+            d_diam = hw.diode["diameter_mm"]
+            d_clr = hw.diode["hole_clearance_mm"]
+            hole_d = d_diam + d_clr               # 6.0 mm
+            body_w = d_diam + 2 * margin
+            body_poly = _rect(cx, cy, body_w, body_w)
+            cuts.append(Cutout(
+                polygon=body_poly,
+                depth=pocket_depth,
+                z_base=CAVITY_START,
+                label=f"diode body {cid}",
+            ))
+
+            # b) Wall-through slot for IR transmission.
+            #    A rectangle extending from inside the board past the
+            #    max-Y wall so the IR LED can shine outward.
+            #    board_outline here is the board_inset polygon (2mm
+            #    inside the actual outline).  The shell wall extends
+            #    wall_clearance + wall_thickness beyond that, so we
+            #    add enough margin to punch fully through.
+            _, _, _, outline_max_y = polygon_bounds(board_outline)
+            wall_extra = hw.wall_clearance + hw.wall_thickness + 1.0
+            wall_poly = [
+                [cx - hole_d / 2, cy - d_diam / 2],
+                [cx + hole_d / 2, cy - d_diam / 2],
+                [cx + hole_d / 2, outline_max_y + wall_extra],
+                [cx - hole_d / 2, outline_max_y + wall_extra],
+            ]
+            cuts.append(Cutout(
+                polygon=wall_poly,
+                depth=hole_d,
+                z_base=CAVITY_START,
+                label=f"diode wall hole {cid}",
+            ))
             continue
 
-        # Non-button, non-diode component → rectangular pocket, 3 mm to h-2 mm
+        if ctype == "battery":
+            # Battery compartment → hatch opening in the floor.
+            #
+            # Creates a stepped cutout from the bottom:
+            #   1. Main through-hole (full floor depth, narrower for ledges)
+            #   2. Side ledge recesses on long edges (hatch panel rests here)
+            #   3. Back notch dent (for hatch latch hook)
+            bat_w = comp.get("body_width_mm", keepout.get("width_mm", 25.0))
+            bat_h = comp.get("body_height_mm", keepout.get("height_mm", 48.0))
+            enc = hw.enclosure
+            hatch_thickness = enc["battery_hatch_thickness_mm"]   # 1.5
+            ledge_width = 2.5         # ledge on each long side
+            ledge_depth = hatch_thickness + 0.3  # recess for panel
+
+            # a) Main through-hole (narrower by ledge on each side, full height)
+            hole_w = bat_w - 2 * ledge_width
+            cuts.append(Cutout(
+                polygon=_rect(cx, cy, hole_w, bat_h),
+                depth=CAVITY_START + 1.0, # cut through full 3mm floor + overlap
+                z_base=-0.5,              # start below z=0 for clean boolean
+                label=f"battery through-hole {cid}",
+            ))
+
+            # b) Left ledge recess
+            cuts.append(Cutout(
+                polygon=_rect(cx - bat_w / 2 + ledge_width / 2, cy,
+                              ledge_width, bat_h),
+                depth=ledge_depth,
+                z_base=0.0,
+                label=f"battery left ledge {cid}",
+            ))
+
+            # c) Right ledge recess
+            cuts.append(Cutout(
+                polygon=_rect(cx + bat_w / 2 - ledge_width / 2, cy,
+                              ledge_width, bat_h),
+                depth=ledge_depth,
+                z_base=0.0,
+                label=f"battery right ledge {cid}",
+            ))
+
+            # d) Front notch dent (for spring latch hook, at -Y end)
+            notch_w = 8.0
+            notch_d = 2.3       # depth into shell
+            notch_h = 1.8       # height of notch
+            cuts.append(Cutout(
+                polygon=_rect(cx, cy - bat_h / 2 + notch_d / 2,
+                              notch_w, notch_d),
+                depth=notch_h,
+                z_base=ledge_depth,
+                label=f"battery hook notch {cid}",
+            ))
+
+            # d2) Back ledge notch slot (for hatch ledge tab, at +Y end)
+            #     The hatch has an 8×2×1.5mm tab on top at its far end;
+            #     this slot lets it hook under the shell floor.
+            tab_w = 8.0
+            tab_d = 2.0         # matches hatch cube depth
+            tab_h = 1.5 + 0.3   # tab height + clearance
+            cuts.append(Cutout(
+                polygon=_rect(cx, cy + bat_h / 2 - tab_d / 2,
+                              tab_w, tab_d),
+                depth=tab_h,
+                z_base=ledge_depth,
+                label=f"battery ledge slot {cid}",
+            ))
+
+            # e) Cavity pocket above the floor (same as other components)
+            poly = _rect(cx, cy, bat_w + 2 * margin, bat_h + 2 * margin)
+            cuts.append(Cutout(
+                polygon=poly,
+                depth=pocket_depth,
+                z_base=CAVITY_START,
+                label=f"battery pocket {cid}",
+            ))
+            continue
+
+        # Non-button, non-diode, non-battery component → rectangular pocket
         if keepout.get("type") == "rectangle":
             w = keepout["width_mm"] + 2 * margin
             ht = keepout["height_mm"] + 2 * margin

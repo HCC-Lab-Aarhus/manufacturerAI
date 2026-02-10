@@ -212,23 +212,27 @@ def place_components(
     })
     occupied.append({"cx": cx, "cy": cy, "hw": occ_hw, "hh": occ_hh})
 
-    # ── 4. Diode (IR LED) — prefer top, but respect clearances ────
+    # ── 4. Diode (IR LED) — at top center, facing outward ─────────
     d_diam = hw.diode["diameter_mm"]
     d_r = d_diam / 2 + 1.0  # keepout radius
 
-    # Try placing in the top 25% first, fall back to full board
-    diode_pos, _ = _place_rect(
-        board_inset, occupied,
-        d_diam, d_diam, margin, prefer="top", y_zone=(0.75, 1.0),
-    )
-    if diode_pos is None:
-        diode_pos, _ = _place_rect(
-            board_inset, occupied,
-            d_diam, d_diam, margin, prefer="top",
-        )
-    if diode_pos is None:
-        # Last resort: polygon center
-        diode_pos = ((min_x + max_x) / 2, (min_y + max_y) / 2)
+    # Place at top center — the diode must face outward through the
+    # end wall.  We scan downward from max_y until both pads have
+    # sufficient perpendicular distance to the polygon boundary so
+    # the router won't block them.  This handles capsule / rounded
+    # outlines where the polygon narrows dramatically near the top.
+    diode_x = (min_x + max_x) / 2
+    pad_half = hw.diode.get("pad_spacing_mm", 5.0) / 2  # pad offset from center
+    required_clearance = hw.edge_clearance + 0.5  # router blocks < edge_clearance; add margin
+    diode_y = max_y - hw.edge_clearance  # starting guess
+    # Walk downward in 0.5mm steps until both pads are safely inside
+    for _step in range(200):
+        pad_l_dist = _dist_to_polygon(diode_x - pad_half, diode_y, board_inset)
+        pad_r_dist = _dist_to_polygon(diode_x + pad_half, diode_y, board_inset)
+        if min(pad_l_dist, pad_r_dist) >= required_clearance:
+            break
+        diode_y -= 0.5
+    diode_pos = (diode_x, diode_y)
 
     dx, dy = diode_pos
     components.append({
@@ -315,6 +319,57 @@ def _button_y_band(
     # Include button keepout radius so band covers the full button area
     r = hw.button["cap_diameter_mm"] / 2 + hw.button["keepout_padding_mm"]
     return (min(ys) - r - margin, max(ys) + r + margin)
+
+
+def _outline_width_at_y(polygon: list[list[float]], y: float) -> float:
+    """X-span of the polygon at a given Y level via ray-casting."""
+    n = len(polygon)
+    xs: list[float] = []
+    for i in range(n):
+        x1, y1 = polygon[i]
+        x2, y2 = polygon[(i + 1) % n]
+        if y1 == y2:
+            continue
+        if (y1 <= y < y2) or (y2 <= y < y1):
+            t = (y - y1) / (y2 - y1)
+            xs.append(x1 + t * (x2 - x1))
+    if len(xs) < 2:
+        return 0.0
+    return max(xs) - min(xs)
+
+
+def _bottleneck_penalty(
+    polygon: list[list[float]],
+    cx: float, cy: float,
+    hw2: float, hh2: float,
+    min_channel: float = 10.0,
+) -> float:
+    """Penalise positions where the outline narrows around the component.
+
+    Scans the outline width across the component's Y span and computes
+    the minimum routing channel on either side, accounting for the
+    router's edge clearance zone.  If the narrowest usable channel is
+    less than *min_channel* mm, returns a penalty proportional to the
+    deficit (2 pts per mm).
+
+    This drives large components away from indents and bottlenecks,
+    leaving routing channels open for traces to pass.
+    """
+    edge_clr = hw.edge_clearance  # router blocks this zone near walls
+    comp_w = hw2 * 2
+    worst_channel = float("inf")
+    y = cy - hh2
+    while y <= cy + hh2 + 0.01:
+        outline_w = _outline_width_at_y(polygon, y)
+        if outline_w > 0:
+            usable_w = outline_w - 2 * edge_clr
+            channel = (usable_w - comp_w) / 2
+            if channel < worst_channel:
+                worst_channel = channel
+        y += 2.0
+    if worst_channel < min_channel:
+        return (min_channel - worst_channel) * 2.0
+    return 0.0
 
 
 def _y_overlap(cy: float, hh: float, band: tuple[float, float] | None) -> float:
@@ -457,6 +512,12 @@ def _place_rect(
             overlap = _y_overlap(cy, hh2, avoid_y_band)
             if overlap > 0:
                 score -= overlap * 1.0
+
+            # Penalise bottleneck positions — if the outline narrows
+            # across the component's Y span, traces can't pass on the
+            # sides.  Drives large components away from indents.
+            bp = _bottleneck_penalty(ccw, cx, cy, hw2, hh2)
+            score -= bp
 
             # Weak directional tiebreaker (never overrides clearance)
             if prefer == "bottom":
@@ -639,21 +700,19 @@ def generate_placement_candidates(
             occupied_all = list(occupied_with_bat)
             occupied_all.append({"cx": cx, "cy": cy, "hw": occ_hw, "hh": occ_hh})
 
-            # Diode — prefer top zone, then full board
-            diode_pos, _ = _place_rect(
-                board_inset, occupied_all,
-                d_diam, d_diam, margin, prefer="top", y_zone=(0.75, 1.0),
-            )
-            if diode_pos is None:
-                diode_pos, _ = _place_rect(
-                    board_inset, occupied_all,
-                    d_diam, d_diam, margin, prefer="top",
-                )
-            if diode_pos is None:
-                min_x, min_y, max_x, max_y = polygon_bounds(board_inset)
-                diode_pos = ((min_x + max_x) / 2, (min_y + max_y) / 2)
-
-            ddx, ddy = diode_pos
+            # Diode — at top center; scan down until pads clear edge zone
+            dmin_x, _, dmax_x, dmax_y = polygon_bounds(board_inset)
+            diode_cx = (dmin_x + dmax_x) / 2
+            d_pad_half = hw.diode.get("pad_spacing_mm", 5.0) / 2
+            d_req_clr = hw.edge_clearance + 0.5
+            ddy = dmax_y - hw.edge_clearance
+            for _ds in range(200):
+                dl = _dist_to_polygon(diode_cx - d_pad_half, ddy, board_inset)
+                dr = _dist_to_polygon(diode_cx + d_pad_half, ddy, board_inset)
+                if min(dl, dr) >= d_req_clr:
+                    break
+                ddy -= 0.5
+            ddx = diode_cx
 
             comps = list(components_base)
             comps.append({

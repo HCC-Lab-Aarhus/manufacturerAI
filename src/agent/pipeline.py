@@ -457,9 +457,12 @@ def run_pipeline(
         else:
             all_ok = False
 
-    # Emit a single model event for the 3D viewer (enclosure is the
-    # primary preview; other STLs are available via the download API).
-    if "enclosure" in stl_files:
+    # Emit print_plate as the 3D preview (shows enclosure + battery
+    # hatch side by side, ready for printing).  Fall back to enclosure
+    # if print_plate failed.
+    if "print_plate" in stl_files:
+        emit("model", {"name": "print_plate", "path": stl_files["print_plate"]})
+    elif "enclosure" in stl_files:
         emit("model", {"name": "enclosure", "path": stl_files["enclosure"]})
 
     if not all_ok:
