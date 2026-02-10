@@ -28,44 +28,34 @@ let currentView = "outline";
 
 const PROGRESS_STAGES = {
   "Validating outline...": 5,
-  "Placing components & routing traces...": 15,
+  "Placing components & routing traces...": 10,
+  "Optimizing component placement...": 15,
+  "Routing traces...": 30,
   "Generating enclosure...": 70,
   "Compiling STL models...": 85,
   "Pipeline complete!": 100,
 };
 
+let _lastProgressPct = 0;
+
 function updateProgress(stage) {
   progressSection.style.display = "block";
   progressLabel.textContent = stage;
 
-  // Check for exact match first
   if (PROGRESS_STAGES[stage] !== undefined) {
-    progressFill.style.width = PROGRESS_STAGES[stage] + "%";
-    return;
-  }
-
-  // Check for screening/routing patterns
-  const screenMatch = stage.match(/Screening placement (\d+)\/(\d+)/);
-  if (screenMatch) {
-    const current = parseInt(screenMatch[1]);
-    const total = parseInt(screenMatch[2]);
-    // Screening goes from 15% to 55%
-    const pct = 15 + (current / total) * 40;
-    progressFill.style.width = pct + "%";
-    return;
-  }
-
-  const thoroughMatch = stage.match(/Thorough routing placement/);
-  if (thoroughMatch) {
-    // Thorough routing is 55-70%
-    progressFill.style.width = "60%";
-    return;
+    const pct = PROGRESS_STAGES[stage];
+    // Never go backwards
+    if (pct >= _lastProgressPct) {
+      _lastProgressPct = pct;
+      progressFill.style.width = pct + "%";
+    }
   }
 }
 
 function hideProgress() {
   progressSection.style.display = "none";
   progressFill.style.width = "0%";
+  _lastProgressPct = 0;
 }
 
 // ── Debug log ─────────────────────────────────────────────────────
@@ -220,6 +210,94 @@ function renderOutline(outline, buttons, label) {
 
   outlineLabel.textContent = label || "Outline preview";
   outlineLabel.style.display = "none";  // Hide label when outline is rendered
+  switchTab("outline");
+}
+
+// ── Render outline with placed components ─────────────────────────
+
+const COMP_COLORS = {
+  battery:    { fill: "rgba(234,179,8,0.15)",  stroke: "#eab308" },
+  controller: { fill: "rgba(16,185,129,0.15)", stroke: "#10b981" },
+  diode:      { fill: "rgba(168,85,247,0.15)", stroke: "#a855f7" },
+  button:     { fill: "rgba(239,68,68,0.15)",  stroke: "#ef4444" },
+};
+const DEFAULT_COMP_COLOR = { fill: "rgba(148,163,184,0.15)", stroke: "#94a3b8" };
+
+function renderOutlineWithComponents(layout) {
+  const outline = layout.board && layout.board.outline_polygon;
+  const components = layout.components || [];
+  if (!outline || outline.length < 3) return;
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [x, y] of outline) {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  const pad = 10;
+  const vw = maxX - minX + pad * 2;
+  const vh = maxY - minY + pad * 2;
+  outlineSvg.setAttribute("viewBox", `${minX - pad} ${minY - pad} ${vw} ${vh}`);
+  outlineSvg.innerHTML = "";
+
+  // Polygon outline
+  const pts = outline.map(([x, y]) => `${x},${y}`).join(" ");
+  const poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+  poly.setAttribute("points", pts);
+  poly.setAttribute("fill", "rgba(59,130,246,0.10)");
+  poly.setAttribute("stroke", "#3b82f6");
+  poly.setAttribute("stroke-width", String(Math.max(0.5, vw / 200)));
+  outlineSvg.appendChild(poly);
+
+  const fontSize = Math.max(2, vw / 60);
+  const sw = Math.max(0.3, vw / 300);
+
+  for (const comp of components) {
+    const [cx, cy] = comp.center;
+    const colors = COMP_COLORS[comp.type] || DEFAULT_COMP_COLOR;
+    const ko = comp.keepout || {};
+
+    if (ko.type === "rectangle") {
+      const w = ko.width_mm;
+      const h = ko.height_mm;
+      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      rect.setAttribute("x", cx - w / 2);
+      rect.setAttribute("y", cy - h / 2);
+      rect.setAttribute("width", w);
+      rect.setAttribute("height", h);
+      rect.setAttribute("rx", Math.min(1, w / 10));
+      rect.setAttribute("fill", colors.fill);
+      rect.setAttribute("stroke", colors.stroke);
+      rect.setAttribute("stroke-width", sw);
+      outlineSvg.appendChild(rect);
+    } else if (ko.type === "circle") {
+      const r = ko.radius_mm;
+      const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      circle.setAttribute("cx", cx);
+      circle.setAttribute("cy", cy);
+      circle.setAttribute("r", r);
+      circle.setAttribute("fill", colors.fill);
+      circle.setAttribute("stroke", colors.stroke);
+      circle.setAttribute("stroke-width", sw);
+      outlineSvg.appendChild(circle);
+    }
+
+    // Label
+    const label = comp.ref || comp.id;
+    const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    t.setAttribute("x", cx);
+    t.setAttribute("y", cy + fontSize * 0.35);
+    t.setAttribute("text-anchor", "middle");
+    t.setAttribute("fill", colors.stroke);
+    t.setAttribute("font-size", fontSize);
+    t.setAttribute("font-weight", "600");
+    t.textContent = label;
+    outlineSvg.appendChild(t);
+  }
+
+  outlineLabel.textContent = "Component placement";
+  outlineLabel.style.display = "none";
   switchTab("outline");
 }
 
@@ -534,6 +612,7 @@ sendBtn.addEventListener("click", async () => {
   sendBtn.disabled = true;
   setStatus("Generating…", "working");
   progressFill.style.width = "0%";
+  _lastProgressPct = 0;
   logDebug(`Sending: "${msg}"`);
 
   try {
@@ -599,6 +678,10 @@ sendBtn.addEventListener("click", async () => {
 
           case "outline_preview":
             renderOutline(ev.outline, ev.buttons, ev.label);
+            break;
+
+          case "pcb_layout":
+            renderOutlineWithComponents(ev);
             break;
 
           case "debug_image":
