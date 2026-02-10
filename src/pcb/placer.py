@@ -777,17 +777,26 @@ def _component_half_extents(comp: dict) -> tuple[float, float]:
     return 2.0, 2.0
 
 
-def _score_layout_spacing(layout: dict) -> tuple[float, float]:
+def _score_layout_spacing(
+    layout: dict,
+    button_positions: list[dict] | None = None,
+) -> tuple[float, float]:
     """
     Score a layout by how well-spaced the components are.
 
     Computes the gap between every component and the polygon boundary,
-    and between every pair of components.  Returns ``(min_gap, mean_gap)``.
+    and between every pair of components.  Returns
+    ``(min_gap, mean_gap, mc_button_bonus)``.
 
     *  Higher ``min_gap``  → components are further from the tightest
        constraint (edge or neighbour).
     *  Higher ``mean_gap`` (as tiebreaker) → gaps are more uniformly
        distributed, meaning no single component is squeezed.
+    *  Higher ``mc_button_bonus`` (final tiebreaker) → the controller
+       is closer to the buttons than the battery is, which is
+       preferred for shorter traces.  Computed as the difference
+       ``battery_dist − controller_dist`` so that layouts where the
+       MC is closer to the buttons score higher.
     """
     polygon = layout["board"]["outline_polygon"]
     components = layout["components"]
@@ -817,7 +826,39 @@ def _score_layout_spacing(layout: dict) -> tuple[float, float]:
 
     min_gap = min(gaps) if gaps else 0.0
     mean_gap = sum(gaps) / len(gaps) if gaps else 0.0
-    return min_gap, mean_gap
+
+    # MC-closer-to-buttons bonus — folded into mean_gap so it can
+    # tip the balance between candidates with similar spacing.
+    # Weight of 0.3 means each mm of MC-closer-than-battery advantage
+    # is worth 0.3 mm of mean_gap.  This is enough to prefer MC-near-
+    # buttons when spacing is comparable, but won't override a layout
+    # that has genuinely better clearance.
+    mc_bonus = 0.0
+    if button_positions:
+        btn_cx = sum(b["x"] for b in button_positions) / len(button_positions)
+        btn_cy = sum(b["y"] for b in button_positions) / len(button_positions)
+
+        ctrl_dist = None
+        bat_dist = None
+        for comp in components:
+            cx, cy = comp["center"]
+            if comp.get("type") == "controller":
+                ctrl_dist = math.hypot(cx - btn_cx, cy - btn_cy)
+            elif comp.get("type") == "battery":
+                bat_dist = math.hypot(cx - btn_cx, cy - btn_cy)
+
+        if ctrl_dist is not None and bat_dist is not None:
+            # Positive when battery is further from buttons than MC
+            mc_bonus = bat_dist - ctrl_dist
+
+    # min_gap stays untouched — never sacrifice worst-case clearance.
+    # MC proximity only boosts mean_gap (secondary sort) with a strong
+    # additive bonus so it can differentiate between candidates that
+    # have similar min_gap values.  2mm bonus per mm of advantage.
+    MC_PROXIMITY_WEIGHT = 2.0
+    adjusted_mean = mean_gap + mc_bonus * MC_PROXIMITY_WEIGHT
+
+    return min_gap, adjusted_mean
 
 
 def place_components_optimal(
@@ -851,13 +892,13 @@ def place_components_optimal(
     best_score = (-1e18, -1e18)
 
     for layout in candidates:
-        score = _score_layout_spacing(layout)
+        score = _score_layout_spacing(layout, button_positions)
         if score > best_score:
             best_score = score
             best_layout = layout
 
     log.info(
-        "Optimal placement: min_gap=%.1f mm, mean_gap=%.1f mm "
+        "Optimal placement: min_gap=%.1f mm, adjusted_mean=%.1f mm "
         "(from %d candidates)",
         best_score[0], best_score[1], len(candidates),
     )
