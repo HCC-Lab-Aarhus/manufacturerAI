@@ -79,9 +79,10 @@ def _body_width_at_y(
             bw = comp.get("body_width_mm", 0)
             bh = comp.get("body_height_mm", 0)
             if bw > 0 and bh > 0:
-                # Body keepout extends a margin around the body
+                # Body keepout ≈ MC pin pitch so traces stay one pitch away
+                pin_pitch = hw.controller["pin_spacing_mm"]
                 keepout = (
-                    math.ceil(hw.trace_width / (2 * hw.grid_resolution)) + 1
+                    round(pin_pitch / hw.grid_resolution)
                 ) * hw.grid_resolution
                 if abs(y - cy) <= bh / 2 + keepout:
                     total += bw + 2 * keepout
@@ -90,8 +91,9 @@ def _body_width_at_y(
             ctrl = hw.controller
             cw = ctrl["body_width_mm"]
             ch = ctrl["body_height_mm"]
+            pin_pitch = ctrl["pin_spacing_mm"]
             keepout = (
-                math.ceil(hw.trace_width / (2 * hw.grid_resolution)) + 1
+                round(pin_pitch / hw.grid_resolution)
             ) * hw.grid_resolution
             if abs(y - cy) <= ch / 2 + keepout:
                 total += cw + 2 * keepout

@@ -37,16 +37,15 @@ export class Router {
     this.footprints = input.footprints
     const clearanceCells = Math.ceil(input.manufacturing.traceClearance / input.board.gridResolution)
     this.tracePadding = clearanceCells
-    // Tighter padding for blocking around completed traces.
-    // Uses half the trace width + 1 cell, which keeps trace centres
-    // far enough apart without creating wide impassable corridors
-    // on narrow board sections.
-    this.normalTraceBlockPadding = Math.ceil(
-      input.manufacturing.traceWidth / (2 * input.board.gridResolution)
-    ) + 1   // 2 + 1 = 3 cells = 1.5 mm with defaults
-    this.relaxedTraceBlockPadding = Math.ceil(
-      input.manufacturing.traceWidth / (2 * input.board.gridResolution)
-    )        // 2 cells = 1.0 mm — tighter but prevents overlap
+    // Keep-out radius around completed traces and unrelated pads.
+    // Set to approximately the MC pin spacing so that traces maintain
+    // a full pin-pitch clearance from other conductors.
+    this.normalTraceBlockPadding = Math.round(
+      input.footprints.controller.pinSpacing / input.board.gridResolution
+    )        // round(2.54 / 0.5) = 5 cells = 2.5 mm ≈ pin pitch
+    this.relaxedTraceBlockPadding = Math.round(
+      input.footprints.controller.pinSpacing / input.board.gridResolution
+    ) - 1    // 4 cells = 2.0 mm — tighter fallback
     this.traceBlockPadding = this.normalTraceBlockPadding
     this.maxRipupAttempts = input.maxAttempts ?? 50
     this.grid = new Grid(input.board, input.manufacturing)
@@ -55,11 +54,10 @@ export class Router {
     this.traces = []
     this.failedNets = []
     this.componentBodies = []
-    // Body keepout: just enough so traces don't clip the body edge
-    // (half trace width + 1 cell margin)
-    this.bodyKeepoutCells = Math.ceil(
-      input.manufacturing.traceWidth / (2 * input.board.gridResolution)
-    ) + 1   // = 3 cells = 1.5 mm with default values
+    // Body keepout: keep traces one pin-pitch away from component edges
+    this.bodyKeepoutCells = Math.round(
+      input.footprints.controller.pinSpacing / input.board.gridResolution
+    )        // round(2.54 / 0.5) = 5 cells = 2.5 mm ≈ pin pitch
   }
 
   route(): RoutingResult {
@@ -521,7 +519,7 @@ export class Router {
         }
         this.blockUnrelatedPads(netPadCoords)
         this.blockUnrelatedTraces(netName, existingTraces, netPadCoords)
-        this.freeApproachZones(pads)
+        this.freeApproachZones(pads, netPadCoords)
 
         const pathfinder = new Pathfinder(this.grid)
         const path = pathfinder.findPathToTree(pads[i].center, routedCells, perimeterCost)
@@ -645,7 +643,7 @@ export class Router {
         }
         this.blockUnrelatedPads(netPadCoords)
         this.blockUnrelatedTraces(netName, existingTraces, netPadCoords)
-        this.freeApproachZones(pads)
+        this.freeApproachZones(pads, netPadCoords)
 
         const pathfinder = new Pathfinder(this.grid)
         const path = pathfinder.findPathToTree(pads[i].center, routedCells)
@@ -872,14 +870,38 @@ export class Router {
   /**
    * Free the approach zone around each pad in the current net so the
    * pathfinder can reach pads even when adjacent blocking zones would
-   * otherwise isolate them.
+   * otherwise isolate them.  Cells that fall inside the keep-out radius
+   * of an unrelated pad are NOT freed so traces never hug foreign pins.
    */
-  private freeApproachZones(pads: Pad[]): void {
+  private freeApproachZones(pads: Pad[], netPadCoords: Set<string>): void {
     const padApproach = this.tracePadding
+    const keepout = this.traceBlockPadding
+
+    // Collect centres of unrelated pads for fast proximity checks
+    const unrelatedCentres: GridCoordinate[] = []
+    for (const pad of this.pads.values()) {
+      const key = `${pad.center.x},${pad.center.y}`
+      if (!netPadCoords.has(key)) {
+        unrelatedCentres.push(pad.center)
+      }
+    }
+
     for (const pad of pads) {
       for (let dy = -padApproach; dy <= padApproach; dy++) {
         for (let dx = -padApproach; dx <= padApproach; dx++) {
-          this.grid.freeCell(pad.center.x + dx, pad.center.y + dy)
+          const nx = pad.center.x + dx
+          const ny = pad.center.y + dy
+          // Skip if this cell is inside the keep-out zone of any unrelated pad
+          let tooClose = false
+          for (const uc of unrelatedCentres) {
+            if (Math.abs(nx - uc.x) <= keepout && Math.abs(ny - uc.y) <= keepout) {
+              tooClose = true
+              break
+            }
+          }
+          if (!tooClose) {
+            this.grid.freeCell(nx, ny)
+          }
         }
       }
     }
@@ -887,23 +909,13 @@ export class Router {
 
   private blockUnrelatedPads(allowedPadCoords: Set<string>): void {
     const blockedCells = new Set<string>()
-    // Use the (smaller) trace-block padding instead of the full trace
-    // clearance so that the blocking zone between adjacent controller
-    // pins leaves a 1-2 cell gap for through-traffic.  The pad approach
-    // zone (tracePadding) is still wider and overrides this for current-net
-    // pads, keeping them fully reachable.
-    //
-    // NC pads (unused pins) get only minimal keep-out (1 cell for the
-    // physical pin hole).  Without this, the right-side NC pins on a
-    // DIP28 controller create a continuous blocked wall that prevents
-    // GND traces from crossing from button B1 pads to controller GND pins.
-    const fullPadding = this.traceBlockPadding
-    const ncPadding = 1  // just the pin-hole itself
+    // Every pin (including NC) gets the full trace-block keep-out so
+    // that traces never route too close to any physical pin hole.
+    const padding = this.traceBlockPadding
     
     for (const pad of this.pads.values()) {
       const key = `${pad.center.x},${pad.center.y}`
       if (!allowedPadCoords.has(key)) {
-        const padding = pad.net === 'NC' ? ncPadding : fullPadding
         for (let dy = -padding; dy <= padding; dy++) {
           for (let dx = -padding; dx <= padding; dx++) {
             const nx = pad.center.x + dx
