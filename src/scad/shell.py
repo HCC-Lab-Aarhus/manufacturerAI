@@ -12,6 +12,7 @@ any part of the pipeline can append cutouts without touching SCAD logic.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from src.config.hardware import hw
 
@@ -52,10 +53,91 @@ def _fmt_poly(pts: list[list[float]]) -> str:
 # ── SCAD generators ────────────────────────────────────────────────
 
 
+# ── rounded-top helpers ─────────────────────────────────────────────
+
+_CURVE_STEPS = 10  # number of hull segments for the smooth fillet
+
+
+def _body_lines(
+    pts_var: str,
+    h: float,
+    curve_length: float,
+    curve_height: float,
+    indent: str = "",
+) -> list[str]:
+    """Return SCAD lines for the shell body.
+
+    When *curve_length* and *curve_height* are both > 0 the top edge is
+    rounded with a quarter-circle fillet profile (``1 − cos``).  Adjacent
+    profile slices are connected with ``hull()`` so the surface is
+    perfectly smooth — no stair-stepping.  The profile is tangent to the
+    vertical wall at its base and tangent to the horizontal top surface
+    at its peak, giving C1 continuity at both ends.
+    """
+    if curve_length <= 0 or curve_height <= 0:
+        return [
+            f"{indent}linear_extrude(height = {h:.3f})",
+            f"{indent}    polygon(points = {pts_var});",
+        ]
+
+    h_below = h - curve_height
+    steps = _CURVE_STEPS
+
+    # Build profile control points using an elliptical quarter-arc
+    # parametrized by sweep angle θ ∈ [0, π/2].
+    #
+    #   inset(θ) = curve_length · (1 − cos θ)
+    #   z(θ)     = h_below + curve_height · sin θ
+    #
+    # At θ=0:   inset=0, dz/dθ>0, d(inset)/dz=0  → vertical  (flush with wall)
+    # At θ=π/2: inset=curve_length, d(inset)/dz→∞ → horizontal (flush with top)
+    #
+    # This guarantees C1 (tangent) continuity at both ends of the fillet
+    # regardless of height, curve_length, or curve_height values.
+    profile: list[tuple[float, float]] = []
+    for i in range(steps + 1):
+        theta = (i / steps) * (math.pi / 2)
+        inset = curve_length * (1.0 - math.cos(theta))
+        z = h_below + curve_height * math.sin(theta)
+        profile.append((z, inset))
+
+    lines: list[str] = [
+        f"{indent}// Shell body with rounded top edge (smooth hull-based fillet)",
+        f"{indent}// curve_length = {curve_length:.2f} mm, "
+        f"curve_height = {curve_height:.2f} mm",
+        f"{indent}union() {{",
+        f"{indent}    // Straight wall below curve zone",
+        f"{indent}    linear_extrude(height = {h_below:.3f})",
+        f"{indent}        polygon(points = {pts_var});",
+    ]
+
+    for i in range(steps):
+        z0, inset0 = profile[i]
+        z1, inset1 = profile[i + 1]
+        lines += [
+            f"{indent}    // fillet segment {i}",
+            f"{indent}    hull() {{",
+            f"{indent}        translate([0, 0, {z0:.3f}])",
+            f"{indent}            linear_extrude(height = 0.001)",
+            f"{indent}                offset(r = {-inset0:.4f})",
+            f"{indent}                    polygon(points = {pts_var});",
+            f"{indent}        translate([0, 0, {z1:.3f}])",
+            f"{indent}            linear_extrude(height = 0.001)",
+            f"{indent}                offset(r = {-inset1:.4f})",
+            f"{indent}                    polygon(points = {pts_var});",
+            f"{indent}    }}",
+        ]
+
+    lines.append(f"{indent}}}")
+    return lines
+
+
 def generate_enclosure_scad(
     outline: list[list[float]],
     height: float | None = None,
     cutouts: list[Cutout] | None = None,
+    top_curve_length: float = 0.0,
+    top_curve_height: float = 0.0,
     **_kwargs,
 ) -> str:
     """Generate OpenSCAD for the solid enclosure shell.
@@ -64,31 +146,46 @@ def generate_enclosure_scad(
     ``linear_extrude`` of the outline.  Otherwise a ``difference()``
     block subtracts every cutout polygon at its respective z / depth.
 
+    Parameters
+    ----------
+    top_curve_length : float
+        How far inward (mm) the rounded edge extends from the outer
+        perimeter at the very top.  0 disables rounding.
+    top_curve_height : float
+        Vertical extent (mm) of the rounded zone measured down from
+        the top of the shell.  0 disables rounding.
+
     Extra keyword arguments are accepted (and ignored) for
     forward-compatibility.
     """
     h = height or DEFAULT_HEIGHT_MM
+    pts_str = f"[{_fmt_poly(outline)}]"
+
+    has_curve = top_curve_length > 0 and top_curve_height > 0
 
     if not cutouts:
-        pts = _fmt_poly(outline)
-        return (
-            f"// Auto-generated solid enclosure\n"
-            f"// Height: {h:.1f} mm\n"
-            f"$fn = 32;\n\n"
-            f"linear_extrude(height = {h:.3f})\n"
-            f"    polygon(points = [{pts}]);\n"
-        )
+        lines: list[str] = [
+            "// Auto-generated solid enclosure",
+            f"// Height: {h:.1f} mm",
+            "$fn = 32;",
+            "",
+            f"outline_pts = {pts_str};",
+            "",
+        ]
+        lines += _body_lines("outline_pts", h, top_curve_length, top_curve_height)
+        return "\n".join(lines) + "\n"
 
-    lines: list[str] = [
+    lines = [
         "// Auto-generated enclosure with cutouts",
         f"// Height: {h:.1f} mm  —  {len(cutouts)} cutout(s)",
         "$fn = 32;",
         "",
-        "difference() {",
-        f"    linear_extrude(height = {h:.3f})",
-        f"        polygon(points = [{_fmt_poly(outline)}]);",
+        f"outline_pts = {pts_str};",
         "",
+        "difference() {",
     ]
+    lines += _body_lines("outline_pts", h, top_curve_length, top_curve_height, indent="    ")
+    lines.append("")
 
     for i, c in enumerate(cutouts):
         tag = c.label or f"cutout_{i}"

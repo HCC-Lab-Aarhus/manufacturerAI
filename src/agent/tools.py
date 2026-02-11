@@ -211,6 +211,9 @@ def route_traces(
 def generate_enclosure(
     outline: list[list[float]],
     button_positions: list[dict],
+    *,
+    top_curve_length: float = 0.0,
+    top_curve_height: float = 0.0,
 ) -> dict:
     """
     Generate the full OpenSCAD enclosure from outline + PCB layout + routing.
@@ -232,7 +235,12 @@ def generate_enclosure(
     try:
         # Build polygon cutouts from layout + routing, then generate SCAD
         cutouts = build_cutouts(layout, routing)
-        enclosure_scad = generate_enclosure_scad(outline=outline, cutouts=cutouts)
+        enclosure_scad = generate_enclosure_scad(
+            outline=outline,
+            cutouts=cutouts,
+            top_curve_length=top_curve_length,
+            top_curve_height=top_curve_height,
+        )
         (p1 := _output_dir / "enclosure.scad").write_text(enclosure_scad, encoding="utf-8")
 
         # Battery hatch

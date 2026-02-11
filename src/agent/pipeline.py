@@ -149,6 +149,9 @@ def run_pipeline(
     button_positions: list[dict],
     emit: EmitFn,
     output_dir: Path,
+    *,
+    top_curve_length: float = 0.0,
+    top_curve_height: float = 0.0,
 ) -> dict:
     """
     Execute the full manufacturing pipeline.
@@ -160,6 +163,13 @@ def run_pipeline(
         4. Route PCB traces
         5. Generate OpenSCAD enclosure files
         6. Compile SCAD → STL
+
+    Parameters
+    ----------
+    top_curve_length : float
+        Inward extent (mm) of the rounded top edge.  0 = no rounding.
+    top_curve_height : float
+        Vertical extent (mm) of the rounded zone from the top.  0 = no rounding.
 
     Returns:
         Result dict with ``status`` ("success" or "error") and details.
@@ -296,7 +306,12 @@ def run_pipeline(
     try:
         cutouts = build_cutouts(layout, routing_result)
         log.info("Built %d cutouts for shell subtraction", len(cutouts))
-        enclosure_scad = generate_enclosure_scad(outline=outline, cutouts=cutouts)
+        enclosure_scad = generate_enclosure_scad(
+            outline=outline,
+            cutouts=cutouts,
+            top_curve_length=top_curve_length,
+            top_curve_height=top_curve_height,
+        )
         (p1 := output_dir / "enclosure.scad").write_text(
             enclosure_scad, encoding="utf-8"
         )
