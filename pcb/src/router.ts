@@ -36,12 +36,12 @@ export class Router {
     const clearanceCells = Math.ceil(input.manufacturing.traceClearance / input.board.gridResolution)
     this.tracePadding = clearanceCells
     // Keep-out radius around completed traces and unrelated pads.
-    // Set to approximately the MC pin spacing so that traces maintain
-    // a full pin-pitch clearance from other conductors.
+    // Just under one pin-pitch so traces can squeeze between adjacent
+    // MC pins with a tiny bit of clearance.
     this.traceBlockPadding = Math.round(
       input.footprints.controller.pinSpacing / input.board.gridResolution
-    )        // round(2.54 / 0.5) = 5 cells = 2.5 mm ≈ pin pitch
-    this.maxRipupAttempts = input.maxAttempts ?? 50
+    ) - 1    // round(2.54 / 0.5) - 1 = 4 cells = 2.0 mm (just under pin pitch)
+    this.maxRipupAttempts = input.maxAttempts ?? 30
     this.grid = new Grid(input.board, input.manufacturing)
     this.pads = new Map()
     this.nets = []
