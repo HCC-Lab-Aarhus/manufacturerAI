@@ -423,6 +423,8 @@ def run_pipeline(
         "component_count": len(layout.get("components", [])),
         "routed_traces": len(routing_result.get("traces", [])),
         "pin_mapping": pin_mapping,
+        "top_curve_length": top_curve_length,
+        "top_curve_height": top_curve_height,
         "message": (
             f"Design manufactured successfully! "
             f"{len(stl_files)} STL models generated."
