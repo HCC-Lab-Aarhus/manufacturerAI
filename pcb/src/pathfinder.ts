@@ -9,6 +9,65 @@ import { Grid } from './grid'
  */
 export type CellCostFn = (x: number, y: number) => number
 
+// ── Binary min-heap for A* open set ──────────────────────────────
+
+class MinHeap {
+  private heap: AStarNode[] = []
+
+  get size(): number { return this.heap.length }
+
+  push(node: AStarNode): void {
+    this.heap.push(node)
+    this.bubbleUp(this.heap.length - 1)
+  }
+
+  pop(): AStarNode | undefined {
+    const heap = this.heap
+    if (heap.length === 0) return undefined
+    const top = heap[0]
+    const last = heap.pop()!
+    if (heap.length > 0) {
+      heap[0] = last
+      this.sinkDown(0)
+    }
+    return top
+  }
+
+  private bubbleUp(i: number): void {
+    const heap = this.heap
+    while (i > 0) {
+      const parent = (i - 1) >> 1
+      if (heap[i].f >= heap[parent].f) break
+      ;[heap[i], heap[parent]] = [heap[parent], heap[i]]
+      i = parent
+    }
+  }
+
+  private sinkDown(i: number): void {
+    const heap = this.heap
+    const n = heap.length
+    while (true) {
+      let smallest = i
+      const l = 2 * i + 1
+      const r = 2 * i + 2
+      if (l < n && heap[l].f < heap[smallest].f) smallest = l
+      if (r < n && heap[r].f < heap[smallest].f) smallest = r
+      if (smallest === i) break
+      ;[heap[i], heap[smallest]] = [heap[smallest], heap[i]]
+      i = smallest
+    }
+  }
+}
+
+// ── Directions (shared constant) ─────────────────────────────────
+
+const DIRS: readonly GridCoordinate[] = [
+  { x: 1, y: 0 },
+  { x: -1, y: 0 },
+  { x: 0, y: 1 },
+  { x: 0, y: -1 }
+]
+
 export class Pathfinder {
   private readonly grid: Grid
 
@@ -95,34 +154,29 @@ export class Pathfinder {
   }
 
   private aStarFallback(source: GridCoordinate, sink: GridCoordinate): GridCoordinate[] | null {
-    const openSet: AStarNode[] = []
-    const closedSet = new Set<string>()
-    const gScores = new Map<string, number>()
+    const openSet = new MinHeap()
+    const closedSet = new Set<number>()
+    const gScores = new Map<number, number>()
+    const W = this.grid.gridWidth
+
+    const encode = (x: number, y: number): number => y * W + x
 
     const startNode: AStarNode = {
       x: source.x,
       y: source.y,
       g: 0,
-      h: this.manhattanDistance(source, sink),
-      f: this.manhattanDistance(source, sink),
+      h: Math.abs(source.x - sink.x) + Math.abs(source.y - sink.y),
+      f: Math.abs(source.x - sink.x) + Math.abs(source.y - sink.y),
       parent: null,
-      direction: null
+      direction: -1
     }
 
     openSet.push(startNode)
-    gScores.set(this.coordKey(source.x, source.y), 0)
+    gScores.set(encode(source.x, source.y), 0)
 
-    const directions: GridCoordinate[] = [
-      { x: 1, y: 0 },
-      { x: -1, y: 0 },
-      { x: 0, y: 1 },
-      { x: 0, y: -1 }
-    ]
-
-    while (openSet.length > 0) {
-      openSet.sort((a, b) => a.f - b.f)
-      const current = openSet.shift()!
-      const currentKey = this.coordKey(current.x, current.y)
+    while (openSet.size > 0) {
+      const current = openSet.pop()!
+      const currentKey = encode(current.x, current.y)
 
       if (current.x === sink.x && current.y === sink.y) {
         return this.reconstructPath(current)
@@ -131,55 +185,33 @@ export class Pathfinder {
       if (closedSet.has(currentKey)) continue
       closedSet.add(currentKey)
 
-      for (const dir of directions) {
-        const nx = current.x + dir.x
-        const ny = current.y + dir.y
-        const neighborKey = this.coordKey(nx, ny)
+      for (let d = 0; d < 4; d++) {
+        const nx = current.x + DIRS[d].x
+        const ny = current.y + DIRS[d].y
 
         if (!this.grid.isInBounds(nx, ny)) continue
-        if (!this.grid.isFree(nx, ny) && !(nx === sink.x && ny === sink.y)) continue
+        const neighborKey = encode(nx, ny)
         if (closedSet.has(neighborKey)) continue
+        if (!this.grid.isFree(nx, ny) && !(nx === sink.x && ny === sink.y)) continue
 
-        const newDir = `${dir.x},${dir.y}`
-        const isTurn = current.direction !== null && current.direction !== newDir
+        const isTurn = current.direction !== -1 && current.direction !== d
         const turnPenalty = isTurn ? 10 : 0
 
         const tentativeG = current.g + 1 + turnPenalty
         const existingG = gScores.get(neighborKey)
 
         if (existingG === undefined || tentativeG < existingG) {
-          const h = this.manhattanDistance({ x: nx, y: ny }, sink)
-          const neighbor: AStarNode = {
-            x: nx,
-            y: ny,
-            g: tentativeG,
-            h,
-            f: tentativeG + h,
-            parent: current,
-            direction: newDir
-          }
-
+          const h = Math.abs(nx - sink.x) + Math.abs(ny - sink.y)
+          openSet.push({
+            x: nx, y: ny, g: tentativeG, h, f: tentativeG + h,
+            parent: current, direction: d
+          })
           gScores.set(neighborKey, tentativeG)
-          openSet.push(neighbor)
         }
       }
     }
 
     return null
-  }
-
-  private manhattanDistance(a: GridCoordinate, b: GridCoordinate): number {
-    return Math.abs(a.x - b.x) + Math.abs(a.y - b.y)
-  }
-
-  private minManhattanToSet(point: GridCoordinate, targets: Set<string>): number {
-    let minDist = Infinity
-    for (const key of targets) {
-      const [tx, ty] = key.split(',').map(Number)
-      const dist = Math.abs(point.x - tx) + Math.abs(point.y - ty)
-      if (dist < minDist) minDist = dist
-    }
-    return minDist
   }
 
   findPathToTree(
@@ -187,88 +219,132 @@ export class Pathfinder {
     treeSet: Set<string>,
     cellCost?: CellCostFn
   ): GridCoordinate[] | null {
+    return this.findPathToTreeInternal(source, treeSet, cellCost, false)
+  }
+
+  /**
+   * Find a path to the tree that is allowed to cross blocked cells
+   * (existing traces).  Crossing cells incur a heavy penalty but are
+   * not forbidden.  Returns the path AND the set of cell keys that
+   * were blocked (i.e. cells where it crosses existing traces).
+   */
+  findPathMinCrossings(
+    source: GridCoordinate,
+    treeSet: Set<string>,
+    cellCost?: CellCostFn
+  ): { path: GridCoordinate[]; crossedCells: Set<string> } | null {
+    const result = this.findPathToTreeInternal(source, treeSet, cellCost, true)
+    if (!result) return null
+
+    // Identify which cells in the path were blocked (= crossings)
+    const crossedCells = new Set<string>()
+    for (const cell of result) {
+      const key = `${cell.x},${cell.y}`
+      if (!treeSet.has(key) && !this.grid.isFree(cell.x, cell.y)) {
+        crossedCells.add(key)
+      }
+    }
+    return { path: result, crossedCells }
+  }
+
+  private findPathToTreeInternal(
+    source: GridCoordinate,
+    treeSet: Set<string>,
+    cellCost: CellCostFn | undefined,
+    allowCrossings: boolean
+  ): GridCoordinate[] | null {
+    const W = this.grid.gridWidth
+    const encode = (x: number, y: number): number => y * W + x
+
     if (treeSet.has(`${source.x},${source.y}`)) {
       return [source]
     }
 
-    const openSet: AStarNode[] = []
-    const closedSet = new Set<string>()
-    const gScores = new Map<string, number>()
+    // Convert string treeSet to numeric set + coordinate arrays for speed
+    const treeNumeric = new Set<number>()
+    const treeXs: Int16Array = new Int16Array(treeSet.size)
+    const treeYs: Int16Array = new Int16Array(treeSet.size)
+    let ti = 0
+    for (const key of treeSet) {
+      const comma = key.indexOf(',')
+      const tx = parseInt(key.substring(0, comma))
+      const ty = parseInt(key.substring(comma + 1))
+      treeXs[ti] = tx
+      treeYs[ti] = ty
+      treeNumeric.add(ty * W + tx)
+      ti++
+    }
+    const treeCount = ti
 
-    const startNode: AStarNode = {
-      x: source.x,
-      y: source.y,
-      g: 0,
-      h: this.minManhattanToSet(source, treeSet),
-      f: this.minManhattanToSet(source, treeSet),
-      parent: null,
-      direction: null
+    const minH = (x: number, y: number): number => {
+      let best = Infinity
+      for (let i = 0; i < treeCount; i++) {
+        const d = Math.abs(x - treeXs[i]) + Math.abs(y - treeYs[i])
+        if (d < best) best = d
+        if (d === 0) return 0
+      }
+      return best
     }
 
-    openSet.push(startNode)
-    gScores.set(this.coordKey(source.x, source.y), 0)
+    const openSet = new MinHeap()
+    const closedSet = new Set<number>()
+    const gScores = new Map<number, number>()
 
-    const directions: GridCoordinate[] = [
-      { x: 1, y: 0 },
-      { x: -1, y: 0 },
-      { x: 0, y: 1 },
-      { x: 0, y: -1 }
-    ]
+    const h0 = minH(source.x, source.y)
+    const startKey = encode(source.x, source.y)
+    openSet.push({
+      x: source.x, y: source.y,
+      g: 0, h: h0, f: h0,
+      parent: null, direction: -1
+    })
+    gScores.set(startKey, 0)
 
-    while (openSet.length > 0) {
-      openSet.sort((a, b) => a.f - b.f)
-      const current = openSet.shift()!
-      const currentKey = this.coordKey(current.x, current.y)
+    while (openSet.size > 0) {
+      const current = openSet.pop()!
+      const currentKey = encode(current.x, current.y)
 
-      if (treeSet.has(currentKey)) {
+      if (treeNumeric.has(currentKey)) {
         return this.reconstructPath(current)
       }
 
       if (closedSet.has(currentKey)) continue
       closedSet.add(currentKey)
 
-      for (const dir of directions) {
-        const nx = current.x + dir.x
-        const ny = current.y + dir.y
-        const neighborKey = this.coordKey(nx, ny)
+      for (let d = 0; d < 4; d++) {
+        const nx = current.x + DIRS[d].x
+        const ny = current.y + DIRS[d].y
 
         if (!this.grid.isInBounds(nx, ny)) continue
+        const neighborKey = encode(nx, ny)
         if (closedSet.has(neighborKey)) continue
-        
-        const isTreeCell = treeSet.has(neighborKey)
-        if (!this.grid.isFree(nx, ny) && !isTreeCell) continue
 
-        const newDir = `${dir.x},${dir.y}`
-        const isTurn = current.direction !== null && current.direction !== newDir
+        const isTreeCell = treeNumeric.has(neighborKey)
+        const cellFree = this.grid.isFree(nx, ny)
+
+        if (!cellFree && !isTreeCell) {
+          if (!allowCrossings || this.grid.isPermanentlyBlocked(nx, ny)) continue
+        }
+
+        const isTurn = current.direction !== -1 && current.direction !== d
         const turnPenalty = isTurn ? 5 : 0
         const extraCost = cellCost ? cellCost(nx, ny) : 0
+        const crossingPenalty = (!cellFree && !isTreeCell) ? 500 : 0
 
-        const tentativeG = current.g + 1 + turnPenalty + extraCost
+        const tentativeG = current.g + 1 + turnPenalty + extraCost + crossingPenalty
         const existingG = gScores.get(neighborKey)
 
         if (existingG === undefined || tentativeG < existingG) {
-          const h = this.minManhattanToSet({ x: nx, y: ny }, treeSet)
-          const neighbor: AStarNode = {
-            x: nx,
-            y: ny,
-            g: tentativeG,
-            h,
-            f: tentativeG + h,
-            parent: current,
-            direction: newDir
-          }
-
+          const h = minH(nx, ny)
+          openSet.push({
+            x: nx, y: ny, g: tentativeG, h, f: tentativeG + h,
+            parent: current, direction: d
+          })
           gScores.set(neighborKey, tentativeG)
-          openSet.push(neighbor)
         }
       }
     }
 
     return null
-  }
-
-  private coordKey(x: number, y: number): string {
-    return `${x},${y}`
   }
 
   private reconstructPath(node: AStarNode): GridCoordinate[] {
@@ -289,5 +365,5 @@ interface AStarNode {
   h: number
   f: number
   parent: AStarNode | null
-  direction: string | null
+  direction: number  // index into DIRS, or -1 for start
 }

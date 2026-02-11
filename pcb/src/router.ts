@@ -337,9 +337,16 @@ export class Router {
 
   // ── Main routing orchestrator ──────────────────────────────────
   //
-  // Flat rip-up: shuffle all nets randomly, route each via A*, stop
-  // on the first ordering that routes everything.  A hash set skips
-  // duplicate orderings.
+  // Outer loop: try random net orderings.
+  // Phase 1: route all nets in order, skip failures.
+  // Phase 2 (inner rip-up loop, up to INNER_LIMIT iterations):
+  //   - For each failed net, find minimum-crossing A* path
+  //   - Rip up all traces it crosses
+  //   - Re-route all unrouted nets (incl. ripped) in random order,
+  //     skipping any that can't route without crossings
+  //   - Repeat until all routed or iterations exhausted
+  // On inner exhaustion, record failing prefix to block future
+  // outer orderings that start with the same prefix.
 
   private routeNets(): void {
     const netPads = this.buildNetPadsMap()
@@ -351,9 +358,14 @@ export class Router {
     if (allNets.length === 0) return
 
     const tried = new Set<string>()
+    const blockedPrefixes: string[][] = []
     let bestTraces: Trace[] = []
     let bestFailed: FailedNet[] = []
     let bestFailCount = Infinity
+
+    const INNER_LIMIT = 20
+    const TIME_BUDGET_MS = 30_000  // bail after 30 seconds
+    const startTime = Date.now()
 
     // Fisher-Yates shuffle
     const shuffle = (arr: string[]): string[] => {
@@ -365,18 +377,41 @@ export class Router {
       return a
     }
 
+    const startsWithPrefix = (order: string[], prefix: string[]): boolean => {
+      if (prefix.length > order.length) return false
+      for (let i = 0; i < prefix.length; i++) {
+        if (order[i] !== prefix[i]) return false
+      }
+      return true
+    }
+
     for (let attempt = 0; attempt < this.maxRipupAttempts; attempt++) {
+      if (Date.now() - startTime > TIME_BUDGET_MS) {
+        console.error(`  Time budget exhausted (${TIME_BUDGET_MS}ms)`)
+        break
+      }
       const order = shuffle(allNets)
       const key = order.join(',')
       if (tried.has(key)) continue
+
+      // Check if this ordering starts with any blocked prefix
+      let prefixBlocked = false
+      for (const prefix of blockedPrefixes) {
+        if (startsWithPrefix(order, prefix)) {
+          prefixBlocked = true
+          break
+        }
+      }
+      if (prefixBlocked) continue
+
       tried.add(key)
-
       console.error(`\n  attempt ${tried.size}: ${order.join(' → ')}`)
-      this.resetGrid()
 
+      // ── Phase 1: Route all nets in order, skip failures ──────
+      this.resetGrid()
       const completedTraces = new Map<string, Set<string>>()
       const tracesByNet = new Map<string, Trace[]>()
-      const failures: FailedNet[] = []
+      const failedSet = new Set<string>()
 
       for (const netName of order) {
         const pads = netPads.get(netName)!
@@ -389,33 +424,238 @@ export class Router {
           completedTraces.set(netName, result.routedCells!)
           tracesByNet.set(netName, result.traces!)
         } else {
+          // Still register partial results
           completedTraces.set(netName, result.routedCells ?? new Set())
           tracesByNet.set(netName, result.traces ?? [])
-          for (const fp of result.failedPads ?? []) {
-            failures.push({
-              netName,
-              sourcePin: this.findPinAtCoord(pads[0].center),
-              destinationPin: this.findPinAtCoord(fp.center),
-              reason: 'No path found'
-            })
-          }
+          failedSet.add(netName)
         }
       }
 
-      console.error(`  Failures: ${failures.length}`)
+      console.error(`  Phase 1 failures: ${failedSet.size}`)
+
+      if (failedSet.size === 0) {
+        // All routed on first pass!
+        const allTraces: Trace[] = []
+        for (const [_, t] of tracesByNet) allTraces.push(...t)
+        this.traces = allTraces
+        this.failedNets = []
+        console.error('  Routing succeeded (phase 1)!')
+        return
+      }
+
+      // ── Phase 2: Inner rip-up loop ────────────────────────────
+      let innerSuccess = false
+      let lastFailedOrder: string[] = []
+
+      for (let innerIter = 0; innerIter < INNER_LIMIT; innerIter++) {
+        if (failedSet.size === 0) {
+          innerSuccess = true
+          break
+        }
+        if (Date.now() - startTime > TIME_BUDGET_MS) break
+
+        // Pick a failed net and try minimum-crossing A* path
+        const failedNets = [...failedSet]
+        let crossRouted = false
+
+        for (const failedNet of failedNets) {
+          const pads = netPads.get(failedNet)!
+
+          // Set up grid for this net's crossing search
+          this.resetGrid()
+          // Re-block all completed traces
+          for (const [netName, cells] of completedTraces) {
+            for (const cellKey of cells) {
+              const [x, y] = cellKey.split(',').map(Number)
+              this.grid.blockCell(x, y)
+            }
+          }
+
+          const netPadCoords = new Set<string>()
+          for (const pad of pads) {
+            netPadCoords.add(`${pad.center.x},${pad.center.y}`)
+          }
+          this.blockUnrelatedPads(netPadCoords)
+          this.freeApproachZones(pads, netPadCoords)
+
+          // Build a tree from the first pad
+          const treeSet = new Set<string>()
+          treeSet.add(`${pads[0].center.x},${pads[0].center.y}`)
+
+          // Free own tree cells so pathfinder can reach them
+          for (const cellKey of treeSet) {
+            const [x, y] = cellKey.split(',').map(Number)
+            this.grid.freeCell(x, y)
+          }
+
+          const isPower = this.getNetType(failedNet) !== 'SIGNAL'
+          const perimCost = isPower ? this.buildPerimeterCostFn() : undefined
+
+          const pathfinder = new Pathfinder(this.grid)
+          let allCrossedCells = new Set<string>()
+          let allPathCells: GridCoordinate[][] = []
+          let routeOk = true
+
+          // Connect each remaining pad to the tree
+          const connected = new Set<number>([0])
+          while (connected.size < pads.length) {
+            let bestResult: { path: GridCoordinate[]; crossedCells: Set<string> } | null = null
+            let bestPadIdx = -1
+            let bestCost = Infinity
+
+            for (let i = 0; i < pads.length; i++) {
+              if (connected.has(i)) continue
+              const pf = new Pathfinder(this.grid)
+              const r = pf.findPathMinCrossings(pads[i].center, treeSet, perimCost)
+              if (r && r.path.length < bestCost) {
+                bestResult = r
+                bestPadIdx = i
+                bestCost = r.path.length
+              }
+            }
+
+            if (!bestResult || bestPadIdx === -1) {
+              routeOk = false
+              break
+            }
+
+            connected.add(bestPadIdx)
+            for (const cell of bestResult.path) {
+              treeSet.add(`${cell.x},${cell.y}`)
+            }
+            allPathCells.push(bestResult.path)
+            for (const c of bestResult.crossedCells) allCrossedCells.add(c)
+          }
+
+          if (!routeOk || allCrossedCells.size === 0) continue
+
+          // Identify which nets were crossed
+          const rippedNets = new Set<string>()
+          for (const crossedKey of allCrossedCells) {
+            for (const [netName, cells] of completedTraces) {
+              if (netName === failedNet) continue
+              if (cells.has(crossedKey)) {
+                rippedNets.add(netName)
+              }
+            }
+          }
+
+          if (rippedNets.size === 0) continue
+
+          console.error(`    Inner ${innerIter}: ${failedNet} crosses ${rippedNets.size} nets → rip up`)
+
+          // Rip up crossed nets
+          for (const rippedNet of rippedNets) {
+            completedTraces.delete(rippedNet)
+            tracesByNet.delete(rippedNet)
+            failedSet.add(rippedNet)
+          }
+
+          // Place the crossing net's traces
+          failedSet.delete(failedNet)
+          const newCells = new Set<string>()
+          const newTraces: Trace[] = []
+          for (const pathCells of allPathCells) {
+            for (const cell of pathCells) {
+              newCells.add(`${cell.x},${cell.y}`)
+            }
+            newTraces.push({ net: failedNet, path: pathCells })
+          }
+          completedTraces.set(failedNet, newCells)
+          tracesByNet.set(failedNet, newTraces)
+          crossRouted = true
+          break  // restart inner loop to re-route ripped nets
+        }
+
+        if (!crossRouted) {
+          // No crossing route found for any failed net
+          break
+        }
+
+        // Now try to route the remaining failed nets (incl. ripped)
+        // in a random order, without allowing crossings
+        const unrouted = shuffle([...failedSet])
+        lastFailedOrder = unrouted
+
+        // Rebuild the grid with all currently completed traces
+        this.resetGrid()
+        for (const [netName, cells] of completedTraces) {
+          for (const cellKey of cells) {
+            const [x, y] = cellKey.split(',').map(Number)
+            this.grid.blockCell(x, y)
+          }
+        }
+
+        for (const netName of unrouted) {
+          const pads = netPads.get(netName)!
+          const isPower = this.getNetType(netName) !== 'SIGNAL'
+          const result = isPower
+            ? this.routePowerNetPerimeter(netName, pads, completedTraces)
+            : this.routeNetDirect(netName, pads, completedTraces)
+
+          if (result.success) {
+            completedTraces.set(netName, result.routedCells!)
+            tracesByNet.set(netName, result.traces!)
+            failedSet.delete(netName)
+          } else {
+            completedTraces.set(netName, result.routedCells ?? new Set())
+            tracesByNet.set(netName, result.traces ?? [])
+          }
+        }
+
+        console.error(`    Inner ${innerIter}: ${failedSet.size} still failed`)
+      }
+
+      // Collect results from this attempt
+      const allTraces: Trace[] = []
+      for (const [_, t] of tracesByNet) allTraces.push(...t)
+      const failures: FailedNet[] = []
+      for (const netName of failedSet) {
+        const pads = netPads.get(netName)!
+        for (let i = 1; i < pads.length; i++) {
+          failures.push({
+            netName,
+            sourcePin: this.findPinAtCoord(pads[0].center),
+            destinationPin: this.findPinAtCoord(pads[i].center),
+            reason: 'No path found'
+          })
+        }
+      }
+
+      if (innerSuccess) {
+        this.traces = allTraces
+        this.failedNets = []
+        console.error('  Routing succeeded (phase 2)!')
+        return
+      }
 
       if (failures.length < bestFailCount) {
         bestFailCount = failures.length
-        bestTraces = []
-        for (const [_, t] of tracesByNet) bestTraces.push(...t)
+        bestTraces = allTraces
         bestFailed = failures
       }
 
-      if (bestFailCount === 0) {
-        console.error('  Routing succeeded!')
-        this.traces = bestTraces
-        this.failedNets = bestFailed
-        return
+      // Block future orderings that start with the same prefix as
+      // the initial order up to the point where failures begin.
+      // We use the initial order up to the first net that ended up
+      // failing, so any future ordering starting with that prefix
+      // of successfully-routed nets followed by the same first
+      // failure will be skipped.
+      if (lastFailedOrder.length > 0 && failedSet.size > 0) {
+        // Find longest prefix of 'order' that was successfully routed
+        const successPrefix: string[] = []
+        for (const n of order) {
+          if (failedSet.has(n)) break
+          successPrefix.push(n)
+        }
+        if (successPrefix.length > 0) {
+          // Block: successPrefix + first failure
+          const firstFail = order.find(n => failedSet.has(n))
+          if (firstFail) {
+            const blocked = [...successPrefix, firstFail]
+            blockedPrefixes.push(blocked)
+          }
+        }
       }
     }
 
