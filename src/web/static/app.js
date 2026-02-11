@@ -582,6 +582,10 @@ if (resetBtn) {
     latestModelName = null;
     downloadBtn.classList.add("disabled");
     hideProgress();
+    // Reset curve editor
+    curveEditor.style.display = "none";
+    _curveLength = 0;
+    _curveHeight = 0;
     // Reset zoom and drag states
     debugZoom = 1;
     outlineZoom = 1;
@@ -595,6 +599,307 @@ if (resetBtn) {
     applyImageTransform(negativeImage, 1, imageDragStates.negative);
     applyOutlineTransform();
   });
+}
+
+// ── Curve editor — interactive fillet profile control ──────────────
+
+const curveEditor    = document.getElementById("curveEditor");
+const curveCanvas    = document.getElementById("curveCanvas");
+const curveCtx       = curveCanvas.getContext("2d");
+const curveLengthLbl = document.getElementById("curveLengthLabel");
+const curveHeightLbl = document.getElementById("curveHeightLabel");
+const curveToggleBtn = document.getElementById("curveEditorToggle");
+const curveBody      = document.getElementById("curveEditorBody");
+const recompileOverlay = document.getElementById("recompileOverlay");
+
+// Physical limits (mm)
+let _shellHeight  = 16.5;      // updated from backend
+const MAX_CURVE_DIM = 10;      // max mm for both length & height (equal axes)
+
+// Current curve state
+let _curveLength = 0;
+let _curveHeight = 0;
+let _curveDragging = false;
+
+// Fetch true shell height from backend
+async function _fetchShellHeight() {
+  try {
+    const r = await fetch("/api/shell_height");
+    if (r.ok) {
+      const d = await r.json();
+      if (d.height_mm) _shellHeight = d.height_mm;
+    }
+  } catch (_) { /* fallback to default */ }
+}
+
+// Set curve to model-chosen values and show the widget
+function showCurveEditor(length, height) {
+  _curveLength = length || 0;
+  _curveHeight = height || 0;
+  curveEditor.style.display = "";
+  _drawCurveProfile();
+}
+
+// Toggle collapse
+curveToggleBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  curveBody.classList.toggle("collapsed");
+  curveToggleBtn.textContent = curveBody.classList.contains("collapsed") ? "▸" : "▾";
+});
+
+// ── Draw the profile visualization ────────────────────────────────
+// Canvas shows the top-right corner of the shell cross-section at 1:1 mm scale.
+// X axis (right→left) = inward from perimeter.  Y axis (top→bottom) = distance from top.
+// Both axes share the same scale so proportions match the physical fillet.
+
+function _drawCurveProfile() {
+  const dpr = window.devicePixelRatio || 1;
+  const cw = 152, ch = 140;
+  curveCanvas.width  = cw * dpr;
+  curveCanvas.height = ch * dpr;
+  curveCanvas.style.width  = cw + "px";
+  curveCanvas.style.height = ch + "px";
+  curveCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  curveCtx.clearRect(0, 0, cw, ch);
+
+  // Equal-scale square drawing area
+  const scale = Math.min(cw - 40, ch - 40) / MAX_CURVE_DIM;  // px per mm
+  const used  = MAX_CURVE_DIM * scale;                        // px extent
+
+  // Center in canvas
+  const mx = (cw - used) / 2;
+  const my = (ch - used) / 2;
+
+  // Origin: top-right corner of the shell.
+  // Right edge = perimeter wall (inset 0).  Top edge = shell top surface.
+  const ox = mx + used;  // right  (perimeter)
+  const oy = my;         // top    (shell top)
+
+  // ── Grid ──
+  curveCtx.strokeStyle = "rgba(148,163,184,0.08)";
+  curveCtx.lineWidth = 0.5;
+  for (let mm = 0; mm <= MAX_CURVE_DIM; mm += 2) {
+    const p = mm * scale;
+    // horizontal (height from top)
+    curveCtx.beginPath(); curveCtx.moveTo(ox - used, oy + p); curveCtx.lineTo(ox, oy + p); curveCtx.stroke();
+    // vertical (inset from perimeter)
+    curveCtx.beginPath(); curveCtx.moveTo(ox - p, oy); curveCtx.lineTo(ox - p, oy + used); curveCtx.stroke();
+  }
+
+  // ── Axis labels ──
+  curveCtx.fillStyle = "rgba(148,163,184,0.4)";
+  curveCtx.font = "9px system-ui";
+  curveCtx.textAlign = "center";
+  curveCtx.fillText(`← ${MAX_CURVE_DIM} mm inset`, mx + used / 2, oy + used + 13);
+  curveCtx.save();
+  curveCtx.translate(ox + 14, oy + used / 2);
+  curveCtx.rotate(-Math.PI / 2);
+  curveCtx.fillText(`${MAX_CURVE_DIM} mm ↓`, 0, 0);
+  curveCtx.restore();
+
+  // ── Straight wall (right edge, from bottom up to curve start) ──
+  curveCtx.strokeStyle = "rgba(59,130,246,0.5)";
+  curveCtx.lineWidth = 2;
+  curveCtx.beginPath();
+  curveCtx.moveTo(ox, oy + used);                        // bottom of visible area
+  curveCtx.lineTo(ox, oy + _curveHeight * scale);        // where curve begins
+  curveCtx.stroke();
+
+  if (_curveLength > 0 && _curveHeight > 0) {
+    // ── Fillet curve (elliptical quarter-arc, same math as SCAD) ──
+    // θ=0: bottom of curve (flush with wall), θ=π/2: top (flush with surface)
+    const steps = 48;
+    curveCtx.strokeStyle = "#3b82f6";
+    curveCtx.lineWidth = 2.5;
+    curveCtx.beginPath();
+    for (let i = 0; i <= steps; i++) {
+      const theta = (i / steps) * (Math.PI / 2);
+      const inset      = _curveLength * (1 - Math.cos(theta));
+      const hFromTop   = _curveHeight * (1 - Math.sin(theta));
+      const px = ox - inset * scale;
+      const py = oy + hFromTop * scale;
+      if (i === 0) curveCtx.moveTo(px, py); else curveCtx.lineTo(px, py);
+    }
+    curveCtx.stroke();
+
+    // ── Top surface (from curve end leftward) ──
+    curveCtx.strokeStyle = "rgba(59,130,246,0.5)";
+    curveCtx.lineWidth = 2;
+    curveCtx.beginPath();
+    curveCtx.moveTo(ox - _curveLength * scale, oy);
+    curveCtx.lineTo(ox - used, oy);
+    curveCtx.stroke();
+
+    // ── Filled shell body ──
+    curveCtx.fillStyle = "rgba(59,130,246,0.07)";
+    curveCtx.beginPath();
+    curveCtx.moveTo(ox, oy + used);
+    curveCtx.lineTo(ox, oy + _curveHeight * scale);
+    for (let i = 0; i <= steps; i++) {
+      const theta = (i / steps) * (Math.PI / 2);
+      const inset    = _curveLength * (1 - Math.cos(theta));
+      const hFromTop = _curveHeight * (1 - Math.sin(theta));
+      curveCtx.lineTo(ox - inset * scale, oy + hFromTop * scale);
+    }
+    curveCtx.lineTo(ox - used, oy);
+    curveCtx.lineTo(ox - used, oy + used);
+    curveCtx.closePath();
+    curveCtx.fill();
+
+    // ── Drag handle at θ = π/4 ──
+    const ht = Math.PI / 4;
+    const hx = ox - _curveLength * (1 - Math.cos(ht)) * scale;
+    const hy = oy + _curveHeight * (1 - Math.sin(ht)) * scale;
+    curveCtx.fillStyle = "#3b82f6";
+    curveCtx.strokeStyle = "white";
+    curveCtx.lineWidth = 1.5;
+    curveCtx.beginPath();
+    curveCtx.arc(hx, hy, 6, 0, Math.PI * 2);
+    curveCtx.fill();
+    curveCtx.stroke();
+  } else {
+    // No curve — flat top + straight wall all the way up
+    curveCtx.beginPath();
+    curveCtx.moveTo(ox, oy + used);
+    curveCtx.lineTo(ox, oy);
+    curveCtx.stroke();
+
+    curveCtx.strokeStyle = "rgba(59,130,246,0.5)";
+    curveCtx.lineWidth = 2;
+    curveCtx.beginPath();
+    curveCtx.moveTo(ox, oy);
+    curveCtx.lineTo(ox - used, oy);
+    curveCtx.stroke();
+
+    curveCtx.fillStyle = "rgba(59,130,246,0.07)";
+    curveCtx.fillRect(ox - used, oy, used, used);
+  }
+
+  // ── Value labels ──
+  curveLengthLbl.textContent = `Length: ${_curveLength.toFixed(1)} mm`;
+  curveHeightLbl.textContent = `Height: ${_curveHeight.toFixed(1)} mm`;
+}
+
+// ── Mouse → mm mapping (equal-scale axes) ─────────────────────────
+
+function _canvasToMm(e) {
+  const rect = curveCanvas.getBoundingClientRect();
+  const cssX = e.clientX - rect.left;
+  const cssY = e.clientY - rect.top;
+
+  const cw = 152, ch = 140;
+  const scale = Math.min(cw - 40, ch - 40) / MAX_CURVE_DIM;
+  const used  = MAX_CURVE_DIM * scale;
+  const mx = (cw - used) / 2;
+  const my = (ch - used) / 2;
+  const ox = mx + used;
+  const oy = my;
+
+  const lengthMm = (ox - cssX) / scale;   // distance left from right edge
+  const heightMm = (cssY - oy) / scale;   // distance down from top edge
+
+  return {
+    length: Math.max(0, Math.min(MAX_CURVE_DIM, lengthMm)),
+    height: Math.max(0, Math.min(MAX_CURVE_DIM, heightMm)),
+  };
+}
+
+curveCanvas.addEventListener("mousedown", (e) => {
+  if (_curveCompiling) return;  // locked while compiling
+  e.preventDefault();
+  _curveDragging = true;
+  _onCurveDrag(e);
+});
+
+document.addEventListener("mousemove", (e) => {
+  if (!_curveDragging) return;
+  _onCurveDrag(e);
+});
+
+document.addEventListener("mouseup", () => {
+  if (_curveDragging) {
+    _curveDragging = false;
+    _sendCurveUpdate();
+  }
+});
+
+function _onCurveDrag(e) {
+  const mm = _canvasToMm(e);
+  _curveLength = Math.round(mm.length * 2) / 2;  // snap 0.5 mm
+  _curveHeight = Math.round(mm.height * 2) / 2;
+  _drawCurveProfile();
+}
+
+// Double-click to reset to zero
+curveCanvas.addEventListener("dblclick", () => {
+  if (_curveCompiling) return;
+  _curveLength = 0;
+  _curveHeight = 0;
+  _drawCurveProfile();
+  _sendCurveUpdate();
+});
+
+// ── Send curve update to backend (SCAD-only regen) ────────────────
+
+let _curveCompiling = false;  // true while a compile is in-flight
+// Track pending params if user changes during compile
+let _curvePending = null;
+
+function _showRecompiling(show) {
+  if (recompileOverlay) {
+    recompileOverlay.classList.toggle("active", show);
+  }
+  curveEditor.classList.toggle("updating", show);
+  // Block pointer events on canvas while compiling
+  curveCanvas.style.pointerEvents = show ? "none" : "";
+  curveCanvas.style.opacity = show ? "0.5" : "";
+}
+
+async function _sendCurveUpdate() {
+  // If already compiling, stash the latest params — they'll be sent
+  // when the current compile finishes (only the last one matters).
+  if (_curveCompiling) {
+    _curvePending = { length: _curveLength, height: _curveHeight };
+    return;
+  }
+
+  _curveCompiling = true;
+  _curvePending = null;
+  _showRecompiling(true);
+
+  try {
+    const res = await fetch("/api/update_curve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        top_curve_length: _curveLength,
+        top_curve_height: _curveHeight,
+      }),
+    });
+    if (!res.ok) {
+      console.warn("Curve update failed:", await res.text());
+      return;
+    }
+    const data = await res.json();
+    if (data.model_name) {
+      loadModel(`/api/model/${data.model_name}?t=${Date.now()}`);
+    }
+  } catch (err) {
+    console.warn("Curve update error:", err);
+  } finally {
+    _curveCompiling = false;
+    _showRecompiling(false);
+
+    // If user changed the curve while we were compiling, fire one
+    // more compile with the latest values.
+    if (_curvePending) {
+      _curveLength = _curvePending.length;
+      _curveHeight = _curvePending.height;
+      _curvePending = null;
+      _drawCurveProfile();
+      _sendCurveUpdate();
+    }
+  }
 }
 
 // ── SSE streaming ─────────────────────────────────────────────────
@@ -697,6 +1002,10 @@ sendBtn.addEventListener("click", async () => {
           case "model":
             latestModelName = ev.name;
             loadModel(`/api/model/${ev.name}?t=${Date.now()}`);
+            // Show curve editor when model loads; use model's curve params if available
+            _fetchShellHeight().then(() => {
+              showCurveEditor(ev.top_curve_length || 0, ev.top_curve_height || 0);
+            });
             break;
 
           case "tool_call":

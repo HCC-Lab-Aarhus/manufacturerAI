@@ -489,3 +489,122 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   cursor: grab;
   user-select: none;
 }
+
+/* ── Curve editor widget ───────────────────────────────────────── */
+
+.curve-editor {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  z-index: 20;
+  background: rgba(11, 17, 32, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0;
+  backdrop-filter: blur(8px);
+  width: 176px;
+  user-select: none;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+  transition: width 0.2s;
+}
+
+.curve-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.curve-editor-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.curve-editor-toggle {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 14px;
+  padding: 0 2px;
+  cursor: pointer;
+  line-height: 1;
+}
+.curve-editor-toggle:hover { color: var(--text); }
+
+.curve-editor-body {
+  padding: 0 12px 10px;
+}
+
+.curve-editor-body.collapsed {
+  display: none;
+}
+
+#curveCanvas {
+  display: block;
+  width: 152px;
+  height: 140px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(31, 41, 55, 0.6);
+  cursor: crosshair;
+}
+
+.curve-editor-values {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.curve-editor.updating #curveCanvas {
+  border-color: var(--accent);
+}
+
+/* ── Recompile overlay ─────────────────────────────────────────── */
+
+.recompile-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(11, 17, 32, 0.6);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 15;
+  border-radius: 16px;
+  backdrop-filter: blur(2px);
+}
+
+.recompile-overlay.active {
+  display: flex;
+}
+
+.recompile-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  background: rgba(17, 24, 39, 0.9);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.recompile-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(59,130,246,0.3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

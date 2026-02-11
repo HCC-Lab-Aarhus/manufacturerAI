@@ -377,9 +377,19 @@ def run_pipeline(
     # hatch side by side, ready for printing).  Fall back to enclosure
     # if print_plate failed.
     if "print_plate" in stl_files:
-        emit("model", {"name": "print_plate", "path": stl_files["print_plate"]})
+        emit("model", {
+            "name": "print_plate",
+            "path": stl_files["print_plate"],
+            "top_curve_length": top_curve_length,
+            "top_curve_height": top_curve_height,
+        })
     elif "enclosure" in stl_files:
-        emit("model", {"name": "enclosure", "path": stl_files["enclosure"]})
+        emit("model", {
+            "name": "enclosure",
+            "path": stl_files["enclosure"],
+            "top_curve_length": top_curve_length,
+            "top_curve_height": top_curve_height,
+        })
 
     if not all_ok:
         return {

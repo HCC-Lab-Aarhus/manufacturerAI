@@ -111,6 +111,30 @@
               <button id="zoomOut">−</button>
             </div>
           </div>
+
+          <!-- Recompile overlay -->
+          <div class="recompile-overlay" id="recompileOverlay">
+            <div class="recompile-inner">
+              <div class="recompile-spinner"></div>
+              <span>Recompiling model…</span>
+            </div>
+          </div>
+
+          <!-- Curve editor widget -->
+          <div class="curve-editor" id="curveEditor" style="display:none;">
+            <div class="curve-editor-header">
+              <span class="curve-editor-title">Edge Profile</span>
+              <button class="curve-editor-toggle" id="curveEditorToggle" title="Collapse">▾</button>
+            </div>
+            <div class="curve-editor-body" id="curveEditorBody">
+              <canvas id="curveCanvas" width="160" height="140"></canvas>
+              <div class="curve-editor-values">
+                <span id="curveLengthLabel">Length: 0.0 mm</span>
+                <span id="curveHeightLabel">Height: 0.0 mm</span>
+              </div>
+            </div>
+          </div>
+
           <div class="view-label" id="modelLabel">No 3D model yet</div>
         </div>
       </div>

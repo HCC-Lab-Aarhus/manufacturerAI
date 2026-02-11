@@ -21,6 +21,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from src.agent.loop import run_turn
+from src.scad.shell import generate_enclosure_scad, generate_battery_hatch_scad, generate_print_plate_scad, DEFAULT_HEIGHT_MM
+from src.scad.cutouts import build_cutouts
+from src.scad.compiler import compile_scad
 
 # ── .env loader ────────────────────────────────────────────────────
 
@@ -69,6 +72,11 @@ class GenerateRequest(BaseModel):
     message: str
 
 
+class CurveUpdateRequest(BaseModel):
+    top_curve_length: float = 0.0
+    top_curve_height: float = 0.0
+
+
 # ── Routes ─────────────────────────────────────────────────────────
 
 @app.get("/")
@@ -83,6 +91,67 @@ def reset_session():
     _conversation_history = []
     _run_dir = None
     return {"status": "ok"}
+
+
+@app.get("/api/shell_height")
+def get_shell_height():
+    """Return the default shell height so the UI knows the max."""
+    return {"height_mm": DEFAULT_HEIGHT_MM}
+
+
+@app.post("/api/update_curve")
+def update_curve(req: CurveUpdateRequest):
+    """Re-generate SCAD + STL with new curve params only.
+
+    Does NOT re-run placement or routing — uses cached data.
+    """
+    if _run_dir is None:
+        raise HTTPException(400, "No run yet — generate a design first.")
+
+    layout_path = _run_dir / "pcb_layout.json"
+    routing_path = _run_dir / "routing_result.json"
+    if not layout_path.exists():
+        raise HTTPException(400, "No layout data — generate a design first.")
+
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    outline = layout.get("board", {}).get("outline_polygon", [])
+    if not outline:
+        raise HTTPException(400, "No outline in layout.")
+
+    routing = {}
+    if routing_path.exists():
+        routing = json.loads(routing_path.read_text(encoding="utf-8"))
+
+    # Rebuild cutouts + SCAD
+    cutouts = build_cutouts(layout, routing)
+    enclosure_scad = generate_enclosure_scad(
+        outline=outline,
+        cutouts=cutouts,
+        top_curve_length=req.top_curve_length,
+        top_curve_height=req.top_curve_height,
+    )
+    (_run_dir / "enclosure.scad").write_text(enclosure_scad, encoding="utf-8")
+
+    hatch_scad = generate_battery_hatch_scad()
+    (_run_dir / "battery_hatch.scad").write_text(hatch_scad, encoding="utf-8")
+    plate_scad = generate_print_plate_scad()
+    (_run_dir / "print_plate.scad").write_text(plate_scad, encoding="utf-8")
+
+    # Compile STLs
+    stl_results = {}
+    for name in ["enclosure", "battery_hatch", "print_plate"]:
+        scad_p = _run_dir / f"{name}.scad"
+        stl_p = scad_p.with_suffix(".stl")
+        if scad_p.exists():
+            ok, msg, _ = compile_scad(scad_p, stl_p)
+            stl_results[name] = {"ok": ok, "message": msg}
+
+    model_name = "print_plate" if (_run_dir / "print_plate.stl").exists() else "enclosure"
+    return {
+        "status": "ok",
+        "model_name": model_name,
+        "stl_results": stl_results,
+    }
 
 
 @app.post("/api/generate/stream")
