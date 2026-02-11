@@ -494,8 +494,8 @@ export class Router {
           this.grid.freeCell(x, y)
         }
         this.blockUnrelatedPads(netPadCoords)
-        this.blockUnrelatedTraces(netName, existingTraces, netPadCoords)
         this.freeApproachZones(pads, netPadCoords)
+        this.blockUnrelatedTraces(netName, existingTraces, netPadCoords)
 
         const pathfinder = new Pathfinder(this.grid)
         const path = pathfinder.findPathToTree(pads[i].center, routedCells, perimeterCost)
@@ -618,8 +618,8 @@ export class Router {
           this.grid.freeCell(x, y)
         }
         this.blockUnrelatedPads(netPadCoords)
-        this.blockUnrelatedTraces(netName, existingTraces, netPadCoords)
         this.freeApproachZones(pads, netPadCoords)
+        this.blockUnrelatedTraces(netName, existingTraces, netPadCoords)
 
         const pathfinder = new Pathfinder(this.grid)
         const path = pathfinder.findPathToTree(pads[i].center, routedCells)
