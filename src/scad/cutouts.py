@@ -201,59 +201,56 @@ def build_cutouts(
         if ctype == "battery":
             # Battery compartment → hatch opening in the floor.
             #
-            # Creates a stepped cutout from the bottom:
-            #   1. Main through-hole (full floor depth, narrower for ledges,
-            #      shortened at front/back to leave solid bridges for the
-            #      spring hook and ledge tab to catch on)
-            #   2. Side ledge recesses on long edges (hatch panel rests here)
-            #   3. Front notch dent (for spring latch hook)
-            #   4. Back slot (for hatch ledge tab)
+            # Layers (from z=0 upward):
+            #   1. Full hatch recess — exact footprint of the hatch body
+            #      (bat_w − 2·clearance) × (bat_h − 2·clearance), depth =
+            #      hatch_thickness + 0.3 mm.  The hatch panel drops in flush.
+            #   2. Centre through-hole — narrower rectangle that punches
+            #      all the way through the floor for battery access.
+            #      Shortened at front/back to leave solid bridges.
+            #   3. Hook notch — small pocket at the front (−Y) bridge,
+            #      above the hatch recess, for the spring latch hook.
+            #   4. Tab slot — small pocket at the back (+Y) bridge,
+            #      above the hatch recess, for the ledge tab.
+            #   5. Cavity pocket — standard pocket above the floor.
             bat_w = comp.get("body_width_mm", keepout.get("width_mm", 25.0))
             bat_h = comp.get("body_height_mm", keepout.get("height_mm", 48.0))
             enc = hw.enclosure
+            hatch_clr = enc["battery_hatch_clearance_mm"]   # 0.3
             hatch_thickness = enc["battery_hatch_thickness_mm"]   # 1.5
             ledge_width = 2.5         # ledge on each long side
-            ledge_depth = hatch_thickness + 0.3  # recess for panel
+            ledge_depth = hatch_thickness + 0.3  # recess depth
 
             # Bridges at front/back of through-hole so spring hook and
             # ledge tab have solid material to engage.
             front_bridge = 4.0   # mm of floor kept at front (−Y) for hook
             back_bridge  = 3.0   # mm of floor kept at back  (+Y) for tab
 
-            # a) Main through-hole (narrower by ledge on each side,
-            #    shortened by bridges at front and back)
+            # a) Full hatch recess — the hatch body sits here flush
+            hatch_w = bat_w - 2 * hatch_clr
+            hatch_h = bat_h - 2 * hatch_clr
+            cuts.append(Cutout(
+                polygon=_rect(cx, cy, hatch_w, hatch_h),
+                depth=ledge_depth,
+                z_base=0.0,
+                label=f"battery hatch recess {cid}",
+            ))
+
+            # b) Centre through-hole (narrower by ledge, shortened by bridges)
             hole_w = bat_w - 2 * ledge_width
             hole_h = bat_h - front_bridge - back_bridge
             hole_cy = cy + (front_bridge - back_bridge) / 2  # re-centre
             cuts.append(Cutout(
                 polygon=_rect(cx, hole_cy, hole_w, hole_h),
-                depth=CAVITY_START + 1.0, # cut through full 3mm floor + overlap
-                z_base=-0.5,              # start below z=0 for clean boolean
+                depth=CAVITY_START + 1.0,  # through full floor + overlap
+                z_base=-0.5,
                 label=f"battery through-hole {cid}",
             ))
 
-            # b) Left ledge recess
-            cuts.append(Cutout(
-                polygon=_rect(cx - bat_w / 2 + ledge_width / 2, cy,
-                              ledge_width, bat_h),
-                depth=ledge_depth,
-                z_base=0.0,
-                label=f"battery left ledge {cid}",
-            ))
-
-            # c) Right ledge recess
-            cuts.append(Cutout(
-                polygon=_rect(cx + bat_w / 2 - ledge_width / 2, cy,
-                              ledge_width, bat_h),
-                depth=ledge_depth,
-                z_base=0.0,
-                label=f"battery right ledge {cid}",
-            ))
-
-            # d) Front notch dent (for spring latch hook, at -Y end)
+            # c) Hook notch (front bridge, above hatch recess)
             notch_w = 8.0
-            notch_d = 2.3       # depth into shell
-            notch_h = 1.8       # height of notch
+            notch_d = 2.3       # depth into bridge
+            notch_h = 1.8       # height of pocket
             cuts.append(Cutout(
                 polygon=_rect(cx, cy - bat_h / 2 + notch_d / 2,
                               notch_w, notch_d),
@@ -262,48 +259,16 @@ def build_cutouts(
                 label=f"battery hook notch {cid}",
             ))
 
-            # d2) Back ledge notch slot (for hatch ledge tab, at +Y end)
-            #     The hatch has an 8×2×1.5mm tab on top at its far end;
-            #     this slot lets it hook under the shell floor.
+            # d) Tab slot (back bridge, above hatch recess)
             tab_w = 8.0
-            tab_d = 2.0         # matches hatch cube depth
+            tab_d = 2.0
             tab_h = 1.5 + 0.3   # tab height + clearance
             cuts.append(Cutout(
                 polygon=_rect(cx, cy + bat_h / 2 - tab_d / 2,
                               tab_w, tab_d),
                 depth=tab_h,
                 z_base=ledge_depth,
-                label=f"battery ledge slot {cid}",
-            ))
-
-            # d3) Full-perimeter hatch lip recess
-            #     A shallow recess the exact size of the hatch body
-            #     (+ clearance) so the hatch panel drops in flush
-            #     with the bottom surface.  The side ledges already
-            #     handle the long edges; this adds the short (front
-            #     and back) edges of the lip.
-            hatch_clr = enc["battery_hatch_clearance_mm"]
-            lip_w = bat_w - 2 * hatch_clr  # matches hatch_width
-            lip_h = bat_h - 2 * hatch_clr  # matches hatch_height
-            lip_recess = ledge_depth        # same depth as side ledges
-
-            # Front lip edge (−Y side, between through-hole and hatch perimeter)
-            front_edge_d = ledge_width      # same width as side ledge
-            cuts.append(Cutout(
-                polygon=_rect(cx, cy - bat_h / 2 + front_edge_d / 2,
-                              lip_w, front_edge_d),
-                depth=lip_recess,
-                z_base=0.0,
-                label=f"battery front lip {cid}",
-            ))
-
-            # Back lip edge (+Y side)
-            cuts.append(Cutout(
-                polygon=_rect(cx, cy + bat_h / 2 - front_edge_d / 2,
-                              lip_w, front_edge_d),
-                depth=lip_recess,
-                z_base=0.0,
-                label=f"battery back lip {cid}",
+                label=f"battery tab slot {cid}",
             ))
 
             # e) Cavity pocket above the floor (same as other components)

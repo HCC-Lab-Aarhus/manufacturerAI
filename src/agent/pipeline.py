@@ -33,7 +33,7 @@ from src.scad.shell import (
     generate_print_plate_scad,
 )
 from src.scad.cutouts import build_cutouts
-from src.scad.compiler import compile_scad
+from src.scad.compiler import compile_scad, merge_stl_files
 
 log = logging.getLogger("manufacturerAI.pipeline")
 
@@ -356,34 +356,51 @@ def run_pipeline(
     stl_files = {}
     all_ok = True
 
-    # Compile in deterministic order: enclosure & battery_hatch first,
-    # then print_plate last (it imports the other STLs).
-    scad_order = ["enclosure", "battery_hatch", "print_plate"]
-    ordered_scads = []
-    for name in scad_order:
-        p = output_dir / f"{name}.scad"
-        if p.exists():
-            ordered_scads.append(p)
-    for extra in sorted(output_dir.glob("*.scad")):
-        if extra not in ordered_scads:
-            ordered_scads.append(extra)
-
-    for scad_path in ordered_scads:
+    # Compile enclosure and battery_hatch (skip print_plate — it will
+    # be built by merging the two binary STLs, avoiding CGAL failures).
+    for name in ["enclosure", "battery_hatch"]:
+        scad_path = output_dir / f"{name}.scad"
+        if not scad_path.exists():
+            continue
         stl_path = scad_path.with_suffix(".stl")
         try:
             ok, msg, out = compile_scad(scad_path, stl_path)
         except Exception as e:
             ok, msg, out = False, str(e), None
 
-        stl_results[scad_path.stem] = {"ok": ok, "message": msg}
+        stl_results[name] = {"ok": ok, "message": msg}
         if ok and out:
-            stl_files[scad_path.stem] = str(out)
+            stl_files[name] = str(out)
         else:
             all_ok = False
 
-    # Emit enclosure as the 3D preview (print_plate uses STL import
-    # which CGAL silently drops with complex meshes).
-    if "enclosure" in stl_files:
+    # Merge enclosure + battery_hatch into print_plate.stl
+    # (binary STL merge with the hatch translated beside the enclosure)
+    if "enclosure" in stl_files and "battery_hatch" in stl_files:
+        plate_stl = output_dir / "print_plate.stl"
+        merged = merge_stl_files([
+            (Path(stl_files["enclosure"]), (0.0, 0.0, 0.0)),
+            (Path(stl_files["battery_hatch"]), (80.0, 0.0, 0.0)),
+        ], plate_stl)
+        if merged and plate_stl.exists():
+            stl_files["print_plate"] = str(plate_stl)
+            stl_results["print_plate"] = {"ok": True, "message": "merged"}
+        else:
+            stl_results["print_plate"] = {"ok": False, "message": "STL merge failed"}
+            all_ok = False
+
+    # Emit print_plate as the 3D preview (enclosure + hatch side by side).
+    # Falls back to enclosure-only if merge failed.
+    if "print_plate" in stl_files:
+        emit("model", {
+            "name": "print_plate",
+            "path": stl_files["print_plate"],
+            "top_curve_length": top_curve_length,
+            "top_curve_height": top_curve_height,
+            "bottom_curve_length": bottom_curve_length,
+            "bottom_curve_height": bottom_curve_height,
+        })
+    elif "enclosure" in stl_files:
         emit("model", {
             "name": "enclosure",
             "path": stl_files["enclosure"],

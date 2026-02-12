@@ -3,6 +3,7 @@ OpenSCAD compiler wrapper — runs openscad CLI for syntax checking and STL rend
 """
 
 from __future__ import annotations
+import struct
 import subprocess
 import shutil
 from pathlib import Path
@@ -84,3 +85,95 @@ def compile_scad(scad_path: Path, stl_path: Path | None = None) -> tuple[bool, s
 def _is_windows() -> bool:
     import sys
     return sys.platform == "win32"
+
+
+def _parse_stl(data: bytes) -> list[tuple[tuple[float,...], tuple[float,...], tuple[float,...], tuple[float,...]]]:
+    """Parse an STL file (binary or ASCII) into a list of triangles.
+
+    Each triangle is (normal, v1, v2, v3) where each is (x, y, z).
+    """
+    triangles = []
+
+    # Detect ASCII vs binary: ASCII starts with 'solid'
+    if data[:5] == b"solid" and b"\n" in data[:256]:
+        import re
+        text = data.decode("ascii", errors="replace")
+        # Match each facet block
+        facet_re = re.compile(
+            r"facet\s+normal\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)\s+"
+            r"outer\s+loop\s+"
+            r"vertex\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)\s+"
+            r"vertex\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)\s+"
+            r"vertex\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)\s+"
+            r"endloop\s+endfacet",
+            re.IGNORECASE,
+        )
+        for m in facet_re.finditer(text):
+            vals = [float(m.group(i)) for i in range(1, 13)]
+            triangles.append((
+                tuple(vals[0:3]),
+                tuple(vals[3:6]),
+                tuple(vals[6:9]),
+                tuple(vals[9:12]),
+            ))
+    else:
+        # Binary STL: 80-byte header, 4-byte count, 50 bytes per triangle
+        if len(data) < 84:
+            return []
+        n = struct.unpack_from("<I", data, 80)[0]
+        off = 84
+        for _ in range(n):
+            if off + 50 > len(data):
+                break
+            vals = struct.unpack_from("<12f", data, off)
+            triangles.append((
+                tuple(vals[0:3]),
+                tuple(vals[3:6]),
+                tuple(vals[6:9]),
+                tuple(vals[9:12]),
+            ))
+            off += 50
+    return triangles
+
+
+def merge_stl_files(
+    stl_paths: list[tuple[Path, tuple[float, float, float]]],
+    output_path: Path,
+) -> bool:
+    """Merge multiple STL files (binary or ASCII) into one binary STL,
+    applying XYZ translation offsets.
+
+    Parameters
+    ----------
+    stl_paths : list of (path, (dx, dy, dz))
+        Each entry is an STL file and a translation offset.
+    output_path : Path
+        Where to write the merged binary STL.
+
+    Returns True on success, False if any input is missing/invalid.
+    """
+    all_packed: list[bytes] = []
+
+    for stl_path, (dx, dy, dz) in stl_paths:
+        if not stl_path.exists():
+            return False
+        data = stl_path.read_bytes()
+        triangles = _parse_stl(data)
+        if not triangles:
+            return False
+        for normal, v1, v2, v3 in triangles:
+            vals = list(normal) + [
+                v1[0] + dx, v1[1] + dy, v1[2] + dz,
+                v2[0] + dx, v2[1] + dy, v2[2] + dz,
+                v3[0] + dx, v3[1] + dy, v3[2] + dz,
+            ]
+            all_packed.append(struct.pack("<12fH", *vals, 0))
+
+    # Write merged binary STL
+    header = b"\x00" * 80
+    with open(output_path, "wb") as f:
+        f.write(header)
+        f.write(struct.pack("<I", len(all_packed)))
+        for tri in all_packed:
+            f.write(tri)
+    return True
