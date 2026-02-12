@@ -120,10 +120,26 @@ def place_components(
     bat_w = bat_fp["compartment_width_mm"]
     bat_h = bat_fp["compartment_height_mm"]
 
+    # Try placing in the bottom 40% first — the battery belongs at
+    # the bottom of the remote.  Use a low bottleneck channel (3 mm)
+    # because traces route above the battery, not alongside it.
     bat_pos, _ = _place_rect(
         board_inset, occupied,
         bat_w, bat_h, margin, prefer="bottom",
+        prefer_weight=0.15,
+        clearance_cap=3.0,
+        y_zone=(0.0, 0.40),
+        bottleneck_channel=3.0,
     )
+    # Fallback: full board area if bottom 40% is too narrow
+    if bat_pos is None:
+        bat_pos, _ = _place_rect(
+            board_inset, occupied,
+            bat_w, bat_h, margin, prefer="bottom",
+            prefer_weight=0.15,
+            clearance_cap=3.0,
+            bottleneck_channel=3.0,
+        )
     if bat_pos is None:
         raise PlacementError(
             component="battery",
@@ -427,6 +443,9 @@ def _place_rect(
     step: float = 1.0,
     y_zone: tuple[float, float] | None = None,
     avoid_y_band: tuple[float, float] | None = None,
+    prefer_weight: float = 0.01,
+    clearance_cap: float | None = None,
+    bottleneck_channel: float = 10.0,
 ) -> tuple[tuple[float, float] | None, float]:
     """
     Find the best position for a *width* × *height* rectangle inside
@@ -448,6 +467,17 @@ def _place_rect(
     avoid_y_band : optional (y_lo, y_hi) — penalise any position whose
              Y extent overlaps this band (used to keep the controller
              out of the button row).
+    prefer_weight : strength of the directional preference (default
+             0.01 = very weak tiebreaker; use 0.05+ to make the
+             component strongly prefer the given direction).
+    clearance_cap : if set, edge clearance beyond this threshold
+             yields only 10% of its value.  This prevents large
+             clearance at the center from overriding directional
+             preference.
+    bottleneck_channel : minimum routing channel (mm) beside the
+             component before a penalty applies (default 10.0).
+             Use a lower value for components that don't need
+             side channels (e.g. battery = 3.0).
 
     Returns
     -------
@@ -507,11 +537,17 @@ def _place_rect(
             else:
                 score = poly_dist
 
+            # Cap excessive edge clearance so it doesn't overwhelm
+            # the directional preference.  Beyond the cap, extra
+            # clearance only counts at 10%.
+            if clearance_cap is not None and score > clearance_cap:
+                score = clearance_cap + (score - clearance_cap) * 0.1
+
             # Penalise overlap with the button Y-band (strong).
             # Each mm of overlap costs 1.0 points — much stronger
-            # than the directional tiebreaker (0.01/mm) so the
-            # placer will strongly prefer positions outside the
-            # button band but can still use it as a last resort.
+            # than the directional tiebreaker so the placer will
+            # strongly prefer positions outside the button band
+            # but can still use it as a last resort.
             overlap = _y_overlap(cy, hh2, avoid_y_band)
             if overlap > 0:
                 score -= overlap * 1.0
@@ -519,18 +555,19 @@ def _place_rect(
             # Penalise bottleneck positions — if the outline narrows
             # across the component's Y span, traces can't pass on the
             # sides.  Drives large components away from indents.
-            bp = _bottleneck_penalty(ccw, cx, cy, hw2, hh2)
+            bp = _bottleneck_penalty(ccw, cx, cy, hw2, hh2,
+                                     min_channel=bottleneck_channel)
             score -= bp
 
-            # Weak directional tiebreaker (never overrides clearance)
+            # Directional preference
             if prefer == "bottom":
-                score -= (cy - min_y) * 0.01
+                score -= (cy - min_y) * prefer_weight
             elif prefer == "top":
-                score += (cy - min_y) * 0.01
+                score += (cy - min_y) * prefer_weight
             elif prefer == "center":
                 center_x = (min_x + max_x) / 2
                 center_y = (min_y + max_y) / 2
-                score -= (abs(cy - center_y) + abs(cx - center_x)) * 0.01
+                score -= (abs(cy - center_y) + abs(cx - center_x)) * prefer_weight
 
             if score > best_score:
                 best_score = score

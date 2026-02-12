@@ -21,6 +21,8 @@ DONE The agent should always mention the rounding parameters it chose, and the a
 
 The placer is still not placing the MC closest to the buttons. This should be the first priority, not just weighted higher.
 
+DONE The placer now places the battery compartment a little further back so that there is pace for the mc. 
+
 The router is still sometimes placing routes too close. Specifically, sometimes a single cell. It also doenst always find a solution, even when there is one.
 
 Use a faster 3d model generator to the web, only compile to stl after generating the faster view. Also only generate build plate stl, but generate others on demand.
@@ -32,7 +34,7 @@ Increase button top hole diameter a few mm. They are also not showing in the mod
 DONE Tracing shell cutout should extend higher. As high as the other components go.
 Add gap for hatch lip, so it fits into the bottom.
 
-Find the notch on the spring on the end of the battery compartment cover, and move it further down towards the build plate. It should also be only half the height and width is is now.
+DONE I THINK Find the notch on the spring on the end of the battery compartment cover, and move it further down towards the build plate. It should also be only half the height and width is is now.
 
 DONE I THINK Add slider for how many edges the llm should output in the edge polygon. Include number in system prompt.
 
