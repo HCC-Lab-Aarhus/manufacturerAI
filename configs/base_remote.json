@@ -15,7 +15,7 @@
       "pin_spacing_y_mm": 5.0,
       "switch_type": "tactile_6x6",
       "cap_diameter_mm": 9.0,
-      "min_hole_diameter_mm": 12.8,
+      "min_hole_diameter_mm": 13.0,
       "hole_clearance_mm": 0.4,
       "keepout_padding_mm": 3.0,
       "pinhole_diameter_mm": 1.2
