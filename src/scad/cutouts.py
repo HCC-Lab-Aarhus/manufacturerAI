@@ -202,9 +202,12 @@ def build_cutouts(
             # Battery compartment → hatch opening in the floor.
             #
             # Creates a stepped cutout from the bottom:
-            #   1. Main through-hole (full floor depth, narrower for ledges)
+            #   1. Main through-hole (full floor depth, narrower for ledges,
+            #      shortened at front/back to leave solid bridges for the
+            #      spring hook and ledge tab to catch on)
             #   2. Side ledge recesses on long edges (hatch panel rests here)
-            #   3. Back notch dent (for hatch latch hook)
+            #   3. Front notch dent (for spring latch hook)
+            #   4. Back slot (for hatch ledge tab)
             bat_w = comp.get("body_width_mm", keepout.get("width_mm", 25.0))
             bat_h = comp.get("body_height_mm", keepout.get("height_mm", 48.0))
             enc = hw.enclosure
@@ -212,10 +215,18 @@ def build_cutouts(
             ledge_width = 2.5         # ledge on each long side
             ledge_depth = hatch_thickness + 0.3  # recess for panel
 
-            # a) Main through-hole (narrower by ledge on each side, full height)
+            # Bridges at front/back of through-hole so spring hook and
+            # ledge tab have solid material to engage.
+            front_bridge = 4.0   # mm of floor kept at front (−Y) for hook
+            back_bridge  = 3.0   # mm of floor kept at back  (+Y) for tab
+
+            # a) Main through-hole (narrower by ledge on each side,
+            #    shortened by bridges at front and back)
             hole_w = bat_w - 2 * ledge_width
+            hole_h = bat_h - front_bridge - back_bridge
+            hole_cy = cy + (front_bridge - back_bridge) / 2  # re-centre
             cuts.append(Cutout(
-                polygon=_rect(cx, cy, hole_w, bat_h),
+                polygon=_rect(cx, hole_cy, hole_w, hole_h),
                 depth=CAVITY_START + 1.0, # cut through full 3mm floor + overlap
                 z_base=-0.5,              # start below z=0 for clean boolean
                 label=f"battery through-hole {cid}",

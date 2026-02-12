@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from shapely.geometry import Polygon as ShapelyPolygon
 from src.config.hardware import hw
 
 # Default extrusion height (mm): floor + cavity + ceiling.
@@ -55,7 +56,26 @@ def _fmt_poly(pts: list[list[float]]) -> str:
 
 # ── rounded-top helpers ─────────────────────────────────────────────
 
-_CURVE_STEPS = 10  # number of stacked layers for the fillet profile
+_CURVE_STEPS = 15  # number of stacked layers for the fillet profile
+
+
+def _inset_polygon(outline: list[list[float]], inset: float) -> str | None:
+    """Shrink *outline* inward by *inset* mm using Shapely.
+
+    Returns the formatted points string for an OpenSCAD ``polygon()``,
+    or ``None`` if the inset collapses the polygon entirely.
+    """
+    if inset <= 0:
+        return _fmt_poly(outline)
+    poly = ShapelyPolygon(outline)
+    shrunk = poly.buffer(-inset, join_style="mitre", mitre_limit=5.0)
+    if shrunk.is_empty:
+        return None
+    # buffer() can return a MultiPolygon; take the largest piece
+    if shrunk.geom_type == "MultiPolygon":
+        shrunk = max(shrunk.geoms, key=lambda g: g.area)
+    coords = list(shrunk.exterior.coords)[:-1]  # drop closing duplicate
+    return ", ".join(f"[{x:.3f}, {y:.3f}]" for x, y in coords)
 
 
 def _body_lines(
@@ -66,23 +86,23 @@ def _body_lines(
     indent: str = "",
     bottom_curve_length: float = 0.0,
     bottom_curve_height: float = 0.0,
+    outline: list[list[float]] | None = None,
 ) -> list[str]:
     """Return SCAD lines for the shell body.
 
     When *curve_length* and *curve_height* are both > 0 the top edge is
     rounded with a quarter-circle fillet profile (``1 − cos``).  The
     fillet is built from stacked ``linear_extrude`` layers — each layer
-    is the outline polygon shrunk by ``offset(r = -inset)`` and extruded
-    to the height of that profile step.  This preserves concave features
-    in the outline (unlike ``hull()``, which computes a *convex* hull
-    and fills in concavities).
+    is a pre-computed inset polygon (computed in Python via Shapely)
+    extruded to the height of that profile step.
 
-    Similarly, *bottom_curve_length* / *bottom_curve_height* round the
-    bottom edge using the same stacked-layer approach, mirrored.
+    Pre-computing polygon insets in Python (instead of using OpenSCAD's
+    ``offset()``) eliminates the most expensive CGAL operation and lets
+    us use many more layers for a smoother profile without meaningful
+    compile-time cost.
 
-    With 10 layers over a typical 8 mm curve height each step is
-    ~0.8 mm — below typical 0.4 mm FDM nozzle width, and keeps
-    OpenSCAD compile time well under the 180 s timeout.
+    When *outline* is provided the inset polygons are pre-computed in
+    Python; otherwise falls back to ``offset(delta=...)`` in SCAD.
     """
     has_top = curve_length > 0 and curve_height > 0
     has_bottom = bottom_curve_length > 0 and bottom_curve_height > 0
@@ -93,11 +113,11 @@ def _body_lines(
             f"{indent}    polygon(points = {pts_var});",
         ]
 
-    # Use fewer steps when both curves are active to keep compile
-    # time under the 300 s timeout (each layer adds CSG complexity).
+    # With pre-computed insets we can afford many more steps
+    use_precomputed = outline is not None
     if has_top and has_bottom:
-        bottom_steps = 5
-        top_steps = 5
+        bottom_steps = _CURVE_STEPS if use_precomputed else 5
+        top_steps = _CURVE_STEPS if use_precomputed else 5
     else:
         bottom_steps = _CURVE_STEPS
         top_steps = _CURVE_STEPS
@@ -148,20 +168,31 @@ def _body_lines(
         f"{indent}union() {{",
     ]
 
-    # Bottom fillet layers (delta offset — faster than r offset,
-    # no rounded corners since the fillet is already discrete layers)
+    # Bottom fillet layers (pre-computed inset polygons when available,
+    # otherwise fallback to offset(delta=...) in SCAD)
     if has_bottom:
         for i in range(bottom_steps):
             z0, inset0 = bottom_profile[i]
             z1, _inset1 = bottom_profile[i + 1]
             dz = z1 - z0
-            lines += [
-                f"{indent}    // bottom fillet layer {i}",
-                f"{indent}    translate([0, 0, {z0:.3f}])",
-                f"{indent}        linear_extrude(height = {dz:.3f})",
-                f"{indent}            offset(delta = {-inset0:.4f})",
-                f"{indent}                polygon(points = {pts_var});",
-            ]
+            if use_precomputed:
+                pts_str = _inset_polygon(outline, inset0)
+                if pts_str is None:
+                    continue  # polygon collapsed at this inset
+                lines += [
+                    f"{indent}    // bottom fillet layer {i}",
+                    f"{indent}    translate([0, 0, {z0:.3f}])",
+                    f"{indent}        linear_extrude(height = {dz:.3f})",
+                    f"{indent}            polygon(points = [{pts_str}]);",
+                ]
+            else:
+                lines += [
+                    f"{indent}    // bottom fillet layer {i}",
+                    f"{indent}    translate([0, 0, {z0:.3f}])",
+                    f"{indent}        linear_extrude(height = {dz:.3f})",
+                    f"{indent}            offset(delta = {-inset0:.4f})",
+                    f"{indent}                polygon(points = {pts_var});",
+                ]
 
     # Straight wall between curves
     if wall_h > 0:
@@ -178,13 +209,24 @@ def _body_lines(
             z0, inset0 = top_profile[i]
             z1, _inset1 = top_profile[i + 1]
             dz = z1 - z0
-            lines += [
-                f"{indent}    // top fillet layer {i}",
-                f"{indent}    translate([0, 0, {z0:.3f}])",
-                f"{indent}        linear_extrude(height = {dz:.3f})",
-                f"{indent}            offset(delta = {-inset0:.4f})",
-                f"{indent}                polygon(points = {pts_var});",
-            ]
+            if use_precomputed:
+                pts_str = _inset_polygon(outline, inset0)
+                if pts_str is None:
+                    continue
+                lines += [
+                    f"{indent}    // top fillet layer {i}",
+                    f"{indent}    translate([0, 0, {z0:.3f}])",
+                    f"{indent}        linear_extrude(height = {dz:.3f})",
+                    f"{indent}            polygon(points = [{pts_str}]);",
+                ]
+            else:
+                lines += [
+                    f"{indent}    // top fillet layer {i}",
+                    f"{indent}    translate([0, 0, {z0:.3f}])",
+                    f"{indent}        linear_extrude(height = {dz:.3f})",
+                    f"{indent}            offset(delta = {-inset0:.4f})",
+                    f"{indent}                polygon(points = {pts_var});",
+                ]
 
     lines.append(f"{indent}}}")
     return lines
@@ -240,6 +282,7 @@ def generate_enclosure_scad(
             "outline_pts", h, top_curve_length, top_curve_height,
             bottom_curve_length=bottom_curve_length,
             bottom_curve_height=bottom_curve_height,
+            outline=outline,
         )
         return "\n".join(lines) + "\n"
 
@@ -257,6 +300,7 @@ def generate_enclosure_scad(
         indent="    ",
         bottom_curve_length=bottom_curve_length,
         bottom_curve_height=bottom_curve_height,
+        outline=outline,
     )
     lines.append("")
 

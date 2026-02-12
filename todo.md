@@ -29,12 +29,12 @@ The visualizations on the web are upside down. Both the layout, pcb debug and 3d
 
 Increase button top hole diameter a few mm. They are also not showing in the model, but does show when sliced, fix that.
 
-Tracing shell cutout should extend higher. As high as the other components go.
+DONE Tracing shell cutout should extend higher. As high as the other components go.
 Add gap for hatch lip, so it fits into the bottom.
 
 Find the notch on the spring on the end of the battery compartment cover, and move it further down towards the build plate. It should also be only half the height and width is is now.
 
-Add slider for how many edges the llm should output in the edge polygon. Include number in system prompt.
+DONE I THINK Add slider for how many edges the llm should output in the edge polygon. Include number in system prompt.
 
 Router should be able to auto select mc pins and button pins during rip ups. Should just report back which pins were assigned to what, which i think there already is some functionality for. Take a look in the pcb folder, which is a optimized but older version of the ts T* router in the manufacturerAI folder. Implement the optimizations from that, but apply it to our current implementation in a way that it integrates properly.
 
