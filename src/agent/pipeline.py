@@ -152,6 +152,8 @@ def run_pipeline(
     *,
     top_curve_length: float = 0.0,
     top_curve_height: float = 0.0,
+    bottom_curve_length: float = 0.0,
+    bottom_curve_height: float = 0.0,
 ) -> dict:
     """
     Execute the full manufacturing pipeline.
@@ -170,6 +172,10 @@ def run_pipeline(
         Inward extent (mm) of the rounded top edge.  0 = no rounding.
     top_curve_height : float
         Vertical extent (mm) of the rounded zone from the top.  0 = no rounding.
+    bottom_curve_length : float
+        Inward extent (mm) of the rounded bottom edge.  0 = no rounding.
+    bottom_curve_height : float
+        Vertical extent (mm) of the rounded zone from the bottom.  0 = no rounding.
 
     Returns:
         Result dict with ``status`` ("success" or "error") and details.
@@ -311,6 +317,8 @@ def run_pipeline(
             cutouts=cutouts,
             top_curve_length=top_curve_length,
             top_curve_height=top_curve_height,
+            bottom_curve_length=bottom_curve_length,
+            bottom_curve_height=bottom_curve_height,
         )
         (p1 := output_dir / "enclosure.scad").write_text(
             enclosure_scad, encoding="utf-8"
@@ -373,22 +381,16 @@ def run_pipeline(
         else:
             all_ok = False
 
-    # Emit print_plate as the 3D preview (shows enclosure + battery
-    # hatch side by side, ready for printing).  Fall back to enclosure
-    # if print_plate failed.
-    if "print_plate" in stl_files:
-        emit("model", {
-            "name": "print_plate",
-            "path": stl_files["print_plate"],
-            "top_curve_length": top_curve_length,
-            "top_curve_height": top_curve_height,
-        })
-    elif "enclosure" in stl_files:
+    # Emit enclosure as the 3D preview (print_plate uses STL import
+    # which CGAL silently drops with complex meshes).
+    if "enclosure" in stl_files:
         emit("model", {
             "name": "enclosure",
             "path": stl_files["enclosure"],
             "top_curve_length": top_curve_length,
             "top_curve_height": top_curve_height,
+            "bottom_curve_length": bottom_curve_length,
+            "bottom_curve_height": bottom_curve_height,
         })
 
     if not all_ok:
@@ -425,6 +427,8 @@ def run_pipeline(
         "pin_mapping": pin_mapping,
         "top_curve_length": top_curve_length,
         "top_curve_height": top_curve_height,
+        "bottom_curve_length": bottom_curve_length,
+        "bottom_curve_height": bottom_curve_height,
         "message": (
             f"Design manufactured successfully! "
             f"{len(stl_files)} STL models generated."

@@ -55,7 +55,7 @@ def _fmt_poly(pts: list[list[float]]) -> str:
 
 # ── rounded-top helpers ─────────────────────────────────────────────
 
-_CURVE_STEPS = 10  # number of hull segments for the smooth fillet
+_CURVE_STEPS = 10  # number of stacked layers for the fillet profile
 
 
 def _body_lines(
@@ -64,69 +64,127 @@ def _body_lines(
     curve_length: float,
     curve_height: float,
     indent: str = "",
+    bottom_curve_length: float = 0.0,
+    bottom_curve_height: float = 0.0,
 ) -> list[str]:
     """Return SCAD lines for the shell body.
 
     When *curve_length* and *curve_height* are both > 0 the top edge is
-    rounded with a quarter-circle fillet profile (``1 − cos``).  Adjacent
-    profile slices are connected with ``hull()`` so the surface is
-    perfectly smooth — no stair-stepping.  The profile is tangent to the
-    vertical wall at its base and tangent to the horizontal top surface
-    at its peak, giving C1 continuity at both ends.
+    rounded with a quarter-circle fillet profile (``1 − cos``).  The
+    fillet is built from stacked ``linear_extrude`` layers — each layer
+    is the outline polygon shrunk by ``offset(r = -inset)`` and extruded
+    to the height of that profile step.  This preserves concave features
+    in the outline (unlike ``hull()``, which computes a *convex* hull
+    and fills in concavities).
+
+    Similarly, *bottom_curve_length* / *bottom_curve_height* round the
+    bottom edge using the same stacked-layer approach, mirrored.
+
+    With 10 layers over a typical 8 mm curve height each step is
+    ~0.8 mm — below typical 0.4 mm FDM nozzle width, and keeps
+    OpenSCAD compile time well under the 180 s timeout.
     """
-    if curve_length <= 0 or curve_height <= 0:
+    has_top = curve_length > 0 and curve_height > 0
+    has_bottom = bottom_curve_length > 0 and bottom_curve_height > 0
+
+    if not has_top and not has_bottom:
         return [
             f"{indent}linear_extrude(height = {h:.3f})",
             f"{indent}    polygon(points = {pts_var});",
         ]
 
-    h_below = h - curve_height
-    steps = _CURVE_STEPS
+    # Use fewer steps when both curves are active to keep compile
+    # time under the 300 s timeout (each layer adds CSG complexity).
+    if has_top and has_bottom:
+        bottom_steps = 5
+        top_steps = 5
+    else:
+        bottom_steps = _CURVE_STEPS
+        top_steps = _CURVE_STEPS
 
-    # Build profile control points using an elliptical quarter-arc
-    # parametrized by sweep angle θ ∈ [0, π/2].
-    #
+    # ── Bottom fillet profile ──────────────────────────────────────
+    # Same elliptical quarter-arc as the top, mirrored vertically.
+    # θ sweeps from π/2 → 0 so z increases from 0 → bottom_curve_height.
+    #   inset(θ) = bottom_curve_length · (1 − cos θ)
+    #   z(θ)     = bottom_curve_height · (1 − sin θ)
+    # At z=0  (bottom): inset = bcl, horizontal tangent (flush with bottom face)
+    # At z=bch (top):   inset = 0,   vertical tangent  (flush with wall)
+    bottom_profile: list[tuple[float, float]] = []
+    if has_bottom:
+        for i in range(bottom_steps + 1):
+            theta = (1.0 - i / bottom_steps) * (math.pi / 2)
+            inset = bottom_curve_length * (1.0 - math.cos(theta))
+            z = bottom_curve_height * (1.0 - math.sin(theta))
+            bottom_profile.append((z, inset))
+
+    # ── Top fillet profile ─────────────────────────────────────────
+    # Quarter-arc from z=h-curve_height (no inset) up to z=h (max inset).
     #   inset(θ) = curve_length · (1 − cos θ)
     #   z(θ)     = h_below + curve_height · sin θ
-    #
-    # At θ=0:   inset=0, dz/dθ>0, d(inset)/dz=0  → vertical  (flush with wall)
-    # At θ=π/2: inset=curve_length, d(inset)/dz→∞ → horizontal (flush with top)
-    #
-    # This guarantees C1 (tangent) continuity at both ends of the fillet
-    # regardless of height, curve_length, or curve_height values.
-    profile: list[tuple[float, float]] = []
-    for i in range(steps + 1):
-        theta = (i / steps) * (math.pi / 2)
-        inset = curve_length * (1.0 - math.cos(theta))
-        z = h_below + curve_height * math.sin(theta)
-        profile.append((z, inset))
+    h_below = h - curve_height if has_top else h
+    top_profile: list[tuple[float, float]] = []
+    if has_top:
+        for i in range(top_steps + 1):
+            theta = (i / top_steps) * (math.pi / 2)
+            inset = curve_length * (1.0 - math.cos(theta))
+            z = h_below + curve_height * math.sin(theta)
+            top_profile.append((z, inset))
+
+    # ── Straight wall zone ─────────────────────────────────────────
+    wall_z0 = bottom_curve_height if has_bottom else 0.0
+    wall_z1 = h_below if has_top else h
+    wall_h = wall_z1 - wall_z0
+
+    # ── Build SCAD lines ───────────────────────────────────────────
+    zone_desc = []
+    if has_bottom:
+        zone_desc.append(f"bottom({bottom_curve_length:.2f}×{bottom_curve_height:.2f})")
+    if has_top:
+        zone_desc.append(f"top({curve_length:.2f}×{curve_height:.2f})")
 
     lines: list[str] = [
-        f"{indent}// Shell body with rounded top edge (smooth hull-based fillet)",
-        f"{indent}// curve_length = {curve_length:.2f} mm, "
-        f"curve_height = {curve_height:.2f} mm",
+        f"{indent}// Shell body with rounded edges (stacked-layer fillet)",
+        f"{indent}// {', '.join(zone_desc)}, bottom_steps={bottom_steps}, top_steps={top_steps}",
         f"{indent}union() {{",
-        f"{indent}    // Straight wall below curve zone",
-        f"{indent}    linear_extrude(height = {h_below:.3f})",
-        f"{indent}        polygon(points = {pts_var});",
     ]
 
-    for i in range(steps):
-        z0, inset0 = profile[i]
-        z1, inset1 = profile[i + 1]
+    # Bottom fillet layers (delta offset — faster than r offset,
+    # no rounded corners since the fillet is already discrete layers)
+    if has_bottom:
+        for i in range(bottom_steps):
+            z0, inset0 = bottom_profile[i]
+            z1, _inset1 = bottom_profile[i + 1]
+            dz = z1 - z0
+            lines += [
+                f"{indent}    // bottom fillet layer {i}",
+                f"{indent}    translate([0, 0, {z0:.3f}])",
+                f"{indent}        linear_extrude(height = {dz:.3f})",
+                f"{indent}            offset(delta = {-inset0:.4f})",
+                f"{indent}                polygon(points = {pts_var});",
+            ]
+
+    # Straight wall between curves
+    if wall_h > 0:
         lines += [
-            f"{indent}    // fillet segment {i}",
-            f"{indent}    hull() {{",
-            f"{indent}        translate([0, 0, {z0:.3f}])",
-            f"{indent}            linear_extrude(height = 0.001)",
-            f"{indent}                offset(r = {-inset0:.4f})",
-            f"{indent}                    polygon(points = {pts_var});",
-            f"{indent}        translate([0, 0, {z1:.3f}])",
-            f"{indent}            linear_extrude(height = 0.001)",
-            f"{indent}                offset(r = {-inset1:.4f})",
-            f"{indent}                    polygon(points = {pts_var});",
-            f"{indent}    }}",
+            f"{indent}    // Straight wall",
+            f"{indent}    translate([0, 0, {wall_z0:.3f}])",
+            f"{indent}        linear_extrude(height = {wall_h:.3f})",
+            f"{indent}            polygon(points = {pts_var});",
         ]
+
+    # Top fillet layers
+    if has_top:
+        for i in range(top_steps):
+            z0, inset0 = top_profile[i]
+            z1, _inset1 = top_profile[i + 1]
+            dz = z1 - z0
+            lines += [
+                f"{indent}    // top fillet layer {i}",
+                f"{indent}    translate([0, 0, {z0:.3f}])",
+                f"{indent}        linear_extrude(height = {dz:.3f})",
+                f"{indent}            offset(delta = {-inset0:.4f})",
+                f"{indent}                polygon(points = {pts_var});",
+            ]
 
     lines.append(f"{indent}}}")
     return lines
@@ -138,6 +196,8 @@ def generate_enclosure_scad(
     cutouts: list[Cutout] | None = None,
     top_curve_length: float = 0.0,
     top_curve_height: float = 0.0,
+    bottom_curve_length: float = 0.0,
+    bottom_curve_height: float = 0.0,
     **_kwargs,
 ) -> str:
     """Generate OpenSCAD for the solid enclosure shell.
@@ -154,6 +214,12 @@ def generate_enclosure_scad(
     top_curve_height : float
         Vertical extent (mm) of the rounded zone measured down from
         the top of the shell.  0 disables rounding.
+    bottom_curve_length : float
+        How far inward (mm) the rounded edge extends from the outer
+        perimeter at the very bottom.  0 disables rounding.
+    bottom_curve_height : float
+        Vertical extent (mm) of the rounded zone measured up from
+        the bottom of the shell.  0 disables rounding.
 
     Extra keyword arguments are accepted (and ignored) for
     forward-compatibility.
@@ -161,30 +227,37 @@ def generate_enclosure_scad(
     h = height or DEFAULT_HEIGHT_MM
     pts_str = f"[{_fmt_poly(outline)}]"
 
-    has_curve = top_curve_length > 0 and top_curve_height > 0
-
     if not cutouts:
         lines: list[str] = [
             "// Auto-generated solid enclosure",
             f"// Height: {h:.1f} mm",
-            "$fn = 32;",
+            "$fn = 16;",
             "",
             f"outline_pts = {pts_str};",
             "",
         ]
-        lines += _body_lines("outline_pts", h, top_curve_length, top_curve_height)
+        lines += _body_lines(
+            "outline_pts", h, top_curve_length, top_curve_height,
+            bottom_curve_length=bottom_curve_length,
+            bottom_curve_height=bottom_curve_height,
+        )
         return "\n".join(lines) + "\n"
 
     lines = [
         "// Auto-generated enclosure with cutouts",
         f"// Height: {h:.1f} mm  —  {len(cutouts)} cutout(s)",
-        "$fn = 32;",
+        "$fn = 16;",
         "",
         f"outline_pts = {pts_str};",
         "",
         "difference() {",
     ]
-    lines += _body_lines("outline_pts", h, top_curve_length, top_curve_height, indent="    ")
+    lines += _body_lines(
+        "outline_pts", h, top_curve_length, top_curve_height,
+        indent="    ",
+        bottom_curve_length=bottom_curve_length,
+        bottom_curve_height=bottom_curve_height,
+    )
     lines.append("")
 
     for i, c in enumerate(cutouts):

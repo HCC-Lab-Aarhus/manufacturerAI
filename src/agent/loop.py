@@ -99,6 +99,22 @@ _TOOL_DECLARATIONS = [
                         "top. Typical values: 2–6 mm."
                     ),
                 ),
+                "bottom_curve_length": genai.protos.Schema(
+                    type=genai.protos.Type.NUMBER,
+                    description=(
+                        "How far inward (mm) the rounded bottom edge curves "
+                        "from the outer perimeter. 0 or omit for a flat bottom. "
+                        "Typical values: 1–3 mm."
+                    ),
+                ),
+                "bottom_curve_height": genai.protos.Schema(
+                    type=genai.protos.Type.NUMBER,
+                    description=(
+                        "Vertical extent (mm) of the rounded zone measured "
+                        "up from the bottom of the shell. 0 or omit for a flat "
+                        "bottom. Typical values: 1–3 mm."
+                    ),
+                ),
             },
             required=["outline", "button_positions"],
         ),
@@ -253,6 +269,8 @@ def run_turn(
                         output_dir=output_dir,
                         top_curve_length=float(args.get("top_curve_length", 0)),
                         top_curve_height=float(args.get("top_curve_height", 0)),
+                        bottom_curve_length=float(args.get("bottom_curve_length", 0)),
+                        bottom_curve_height=float(args.get("bottom_curve_height", 0)),
                     )
                 except Exception as e:
                     log.exception("Pipeline crashed")

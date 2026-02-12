@@ -93,6 +93,14 @@ class _HW:
     def pinhole_diameter(self) -> float:
         return _load()["manufacturing"]["pinhole_diameter_mm"]
 
+    @property
+    def pinhole_taper_diameter(self) -> float:
+        return _load()["manufacturing"].get("pinhole_taper_diameter_mm", 1.2)
+
+    @property
+    def pinhole_taper_depth(self) -> float:
+        return _load()["manufacturing"].get("pinhole_taper_depth_mm", 0.5)
+
     # ── enclosure ───────────────────────────────────────────────────
     @property
     def enclosure(self) -> dict:

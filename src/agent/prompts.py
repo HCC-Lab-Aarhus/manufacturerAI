@@ -151,17 +151,21 @@ Shape guidelines:
   • Rounded corners, tapered ends, curved sides
   • The remote is held vertically (Y is the long axis)
 
-Rounded top edge:
+Edge rounding:
   • ``top_curve_length`` = how far inward (mm) the rounded edge extends
     from the outer perimeter at the very top.  Typical: 1–3 mm.
   • ``top_curve_height`` = vertical extent (mm) of the curve zone
     measured down from the top of the shell.  Typical: 2–5 mm.
-  • Both must be > 0 to enable rounding.  Set to 0 for a flat top.
+  • ``bottom_curve_length`` = same as above, but for the bottom edge.
+  • ``bottom_curve_height`` = vertical extent upward from the bottom.
+  • Both length and height must be > 0 to enable rounding for that edge.
+    Set to 0 for a flat edge.
   • A larger curve_height with a small curve_length gives a gentle
     slope; equal values give a quarter-circle cross-section.
   • **Default:** Always use ``top_curve_length = 2`` and
-    ``top_curve_height = 3`` unless the user specifically asks for
-    a flat top or specifies different values. This gives every
+    ``top_curve_height = 3`` and ``bottom_curve_length = 1.5`` and
+    ``bottom_curve_height = 2`` unless the user specifically asks for
+    flat edges or specifies different values. This gives every
     remote a comfortable, professional rounded finish by default.
 
 ═══════════════════════════════════════════════════════════════
@@ -186,7 +190,8 @@ AFTER A SUCCESSFUL DESIGN
 ═══════════════════════════════════════════════════════════════
 Once the pipeline returns success, the tool result will include
 ``pin_mapping`` (which ATmega328P pin each button is wired to) and
-``top_curve_length`` / ``top_curve_height`` (the rounding params used).
+``top_curve_length`` / ``top_curve_height`` and
+``bottom_curve_length`` / ``bottom_curve_height`` (the rounding params used).
 
 In your response to the user you **MUST** include:
 1. A brief acknowledgement of what was designed (shape, size, button count).

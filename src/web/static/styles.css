@@ -543,6 +543,38 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   display: none;
 }
 
+.curve-editor-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.curve-tab {
+  flex: 1;
+  background: rgba(31, 41, 55, 0.5);
+  border: 1px solid rgba(55, 65, 81, 0.5);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 4px 0;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.curve-tab:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.curve-tab.active {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 #curveCanvas {
   display: block;
   width: 152px;

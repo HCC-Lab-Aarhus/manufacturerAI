@@ -106,7 +106,7 @@ def build_cutouts(
     TOP_SOLID = 2.0          # solid ceiling
     CAVITY_END = h - TOP_SOLID
 
-    pin_depth = PINHOLE_TOP - FLOOR          # 1 mm
+    pin_depth = hw.pinhole_depth             # 2.5 mm (from config)
     pocket_depth = CAVITY_END - CAVITY_START  # full cavity zone
     trace_depth = hw.trace_channel_depth      # 0.4 mm (shallow channel)
 
@@ -135,12 +135,15 @@ def build_cutouts(
 
         if ctype == "button":
             # a) Circular cylinder for button cap press-fit (8.3 mm deep from top)
+            #    Extend 0.5 mm ABOVE shell top to ensure a clean boolean cut
+            #    through the rounded fillet surface.
             cap_d = hw.button["min_hole_diameter_mm"]
             cap_depth = 8.3
+            overshoot = 0.5
             cap_poly = _circle_poly(cx, cy, cap_d / 2)
             cuts.append(Cutout(
                 polygon=cap_poly,
-                depth=cap_depth,
+                depth=cap_depth + overshoot,
                 z_base=h - cap_depth,
                 label=f"button hole {cid}",
             ))
@@ -262,6 +265,36 @@ def build_cutouts(
                 label=f"battery ledge slot {cid}",
             ))
 
+            # d3) Full-perimeter hatch lip recess
+            #     A shallow recess the exact size of the hatch body
+            #     (+ clearance) so the hatch panel drops in flush
+            #     with the bottom surface.  The side ledges already
+            #     handle the long edges; this adds the short (front
+            #     and back) edges of the lip.
+            hatch_clr = enc["battery_hatch_clearance_mm"]
+            lip_w = bat_w - 2 * hatch_clr  # matches hatch_width
+            lip_h = bat_h - 2 * hatch_clr  # matches hatch_height
+            lip_recess = ledge_depth        # same depth as side ledges
+
+            # Front lip edge (−Y side, between through-hole and hatch perimeter)
+            front_edge_d = ledge_width      # same width as side ledge
+            cuts.append(Cutout(
+                polygon=_rect(cx, cy - bat_h / 2 + front_edge_d / 2,
+                              lip_w, front_edge_d),
+                depth=lip_recess,
+                z_base=0.0,
+                label=f"battery front lip {cid}",
+            ))
+
+            # Back lip edge (+Y side)
+            cuts.append(Cutout(
+                polygon=_rect(cx, cy + bat_h / 2 - front_edge_d / 2,
+                              lip_w, front_edge_d),
+                depth=lip_recess,
+                z_base=0.0,
+                label=f"battery back lip {cid}",
+            ))
+
             # e) Cavity pocket above the floor (same as other components)
             poly = _rect(cx, cy, bat_w + 2 * margin, bat_h + 2 * margin)
             cuts.append(Cutout(
@@ -290,12 +323,13 @@ def build_cutouts(
             label=f"{ctype} {cid}",
         ))
 
-    # ── 2. Trace channels (shallow, in floor of cavity zone) ──────
+    # ── 2. Trace channels (full cavity height) ───────────────────
+    #    Traces are carved through the entire cavity zone (same
+    #    height as component pockets) so conductive filament fills
+    #    the full depth and makes reliable contact.
     if routing_result and routing_result.get("traces"):
         tw = hw.trace_width
         half = tw / 2
-        # Traces are shallow channels carved at the bottom of the
-        # cavity zone (z = CAVITY_START, depth = trace_channel_depth).
         trace_z = CAVITY_START
 
         for trace in routing_result["traces"]:
@@ -317,16 +351,19 @@ def build_cutouts(
                 ]
                 cuts.append(Cutout(
                     polygon=poly,
-                    depth=trace_depth,
+                    depth=pocket_depth,
                     z_base=trace_z,
                     label=f"trace {net}",
                 ))
 
     # ── 3. Pinholes (all component pads) ───────────────────────────
-    #    Pinholes go from 2 mm to 3 mm (1 mm deep), sitting just
-    #    below the trace/component cavity so conductive filament
-    #    can bridge from the trace channel into the pin hole.
-    _add_pad_pinholes(pcb_layout, cuts, pin_depth, FLOOR, grid, o_min_x, o_min_y)
+    #    Round pinholes start at the bottom of the cavity zone and
+    #    extend downward into the floor.  A wider taper/funnel cone
+    #    at the entry guides pin insertion and provides a press-fit.
+    #    Pin depth from config (2.5 mm); z_base sits the hole so its
+    #    top aligns with CAVITY_START (traces can bridge into the hole).
+    pin_z_base = CAVITY_START - pin_depth
+    _add_pad_pinholes(pcb_layout, cuts, pin_depth, pin_z_base, grid, o_min_x, o_min_y)
 
     return cuts
 
@@ -340,12 +377,53 @@ def _add_pad_pinholes(
     o_min_x: float,
     o_min_y: float,
 ) -> None:
-    """Add square pinholes at every component pad position.
+    """Add square pinholes with entry taper at every component pad.
 
-    Pad positions are computed from the footprint geometry in
-    ``base_remote.json``, so they match the actual hardware.
+    Each pinhole is a **stepped square channel**:
+
+      1. **Main shaft** (lower portion) — tight 0.7 mm square hole.
+         A DIP pin is 0.46 mm square, so this gives ~0.12 mm clearance
+         per side.  FDM printers shrink holes slightly (material
+         expansion) so the printed hole will be even tighter, producing
+         a press-fit that holds pins securely.
+
+      2. **Entry taper** (top 0.5 mm) — wider 1.2 mm square opening
+         that guides pin insertion and lets conductive filament bridge
+         from the trace channel into the hole.
+
+    Both layers are simple 4-vertex rectangles to keep the OpenSCAD
+    CSG tree lightweight (minimising compile time).
     """
-    ps = hw.pinhole_diameter  # side length of square pinhole
+    # Default pinhole sizes (ATmega DIP pins: 0.46 mm square)
+    default_hole_d = hw.pinhole_diameter       # 0.7 mm — press-fit for DIP
+    taper_d = hw.pinhole_taper_diameter        # 1.2 mm — entry funnel
+    taper_depth = hw.pinhole_taper_depth       # 0.5 mm
+
+    # Button pins are thicker (~1.0 mm Ø legs on tactile switches)
+    button_hole_d = hw.button.get("pinhole_diameter_mm", default_hole_d)
+
+    # Pre-compute shaft depth (everything below the taper)
+    shaft_depth = depth - taper_depth
+    taper_z = z_base + shaft_depth
+
+    def _add_pin(x: float, y: float, label: str,
+                 pin_d: float = default_hole_d) -> None:
+        """Append shaft + taper cutouts for one pin position."""
+        # Shaft sized per component (lower portion)
+        cuts.append(Cutout(
+            polygon=_rect(x, y, pin_d, pin_d),
+            depth=shaft_depth,
+            z_base=z_base,
+            label=label,
+        ))
+        # Wide entry taper (top portion) — always uses taper_d
+        effective_taper = max(taper_d, pin_d + 0.4)
+        cuts.append(Cutout(
+            polygon=_rect(x, y, effective_taper, effective_taper),
+            depth=taper_depth,
+            z_base=taper_z,
+            label=f"{label} taper",
+        ))
 
     for comp in pcb_layout.get("components", []):
         cx, cy = comp["center"]
@@ -354,12 +432,12 @@ def _add_pad_pinholes(
 
         if ctype == "button":
             # 4 pins at corners of pin_spacing rectangle
+            # Button tactile switch legs are ~1.0 mm — use wider holes
             psx = hw.button["pin_spacing_x_mm"] / 2
             psy = hw.button["pin_spacing_y_mm"] / 2
             for dx, dy in [(-psx, -psy), (psx, -psy), (-psx, psy), (psx, psy)]:
-                poly = _rect(cx + dx, cy + dy, ps, ps)
-                cuts.append(Cutout(polygon=poly, depth=depth, z_base=z_base,
-                                   label=f"pin {cid}"))
+                _add_pin(cx + dx, cy + dy, f"pin {cid}",
+                         pin_d=button_hole_d)
 
         elif ctype == "controller":
             # DIP-28: 2 rows of 14 pins
@@ -371,30 +449,22 @@ def _add_pad_pinholes(
             for i in range(pins_per_side):
                 for side in (-1, 1):
                     if rotated:
-                        # 90°: rows along Y, pins along X
                         x = cx - total_h / 2 + i * pin_spacing
                         y = cy + side * row_spacing / 2
                     else:
-                        # 0°: rows along X, pins along Y
                         x = cx + side * row_spacing / 2
                         y = cy - total_h / 2 + i * pin_spacing
-                    poly = _rect(x, y, ps, ps)
-                    cuts.append(Cutout(polygon=poly, depth=depth, z_base=z_base,
-                                       label=f"pin {cid}"))
+                    _add_pin(x, y, f"pin {cid}")
 
         elif ctype == "battery":
             # 2 pads along Y axis
             pad_sp = hw.battery["pad_spacing_mm"]
             for dy in (-pad_sp / 2, pad_sp / 2):
-                poly = _rect(cx, cy + dy, ps, ps)
-                cuts.append(Cutout(polygon=poly, depth=depth, z_base=z_base,
-                                   label=f"pin {cid}"))
+                _add_pin(cx, cy + dy, f"pin {cid}")
 
         elif ctype == "diode":
             # 2 pads along X axis
             pad_sp = hw.diode["pad_spacing_mm"]
             for dx in (-pad_sp / 2, pad_sp / 2):
-                poly = _rect(cx + dx, cy, ps, ps)
-                cuts.append(Cutout(polygon=poly, depth=depth, z_base=z_base,
-                                   label=f"pin {cid}"))
+                _add_pin(cx + dx, cy, f"pin {cid}")
 

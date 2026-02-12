@@ -17,7 +17,8 @@
       "cap_diameter_mm": 9.0,
       "min_hole_diameter_mm": 12.8,
       "hole_clearance_mm": 0.4,
-      "keepout_padding_mm": 3.0
+      "keepout_padding_mm": 3.0,
+      "pinhole_diameter_mm": 1.2
     },
     "controller": {
       "type": "ATMEGA328P-PU_DIP28",
@@ -50,7 +51,9 @@
     "trace_clearance_mm": 2.0,
     "trace_channel_depth_mm": 5.0,
     "pinhole_depth_mm": 2.5,
-    "pinhole_diameter_mm": 1.2
+    "pinhole_diameter_mm": 0.7,
+    "pinhole_taper_diameter_mm": 1.2,
+    "pinhole_taper_depth_mm": 0.5
   },
 
   "enclosure": {

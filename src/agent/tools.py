@@ -214,6 +214,8 @@ def generate_enclosure(
     *,
     top_curve_length: float = 0.0,
     top_curve_height: float = 0.0,
+    bottom_curve_length: float = 0.0,
+    bottom_curve_height: float = 0.0,
 ) -> dict:
     """
     Generate the full OpenSCAD enclosure from outline + PCB layout + routing.
@@ -240,6 +242,8 @@ def generate_enclosure(
             cutouts=cutouts,
             top_curve_length=top_curve_length,
             top_curve_height=top_curve_height,
+            bottom_curve_length=bottom_curve_length,
+            bottom_curve_height=bottom_curve_height,
         )
         (p1 := _output_dir / "enclosure.scad").write_text(enclosure_scad, encoding="utf-8")
 

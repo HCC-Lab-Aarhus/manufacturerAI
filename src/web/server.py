@@ -75,6 +75,8 @@ class GenerateRequest(BaseModel):
 class CurveUpdateRequest(BaseModel):
     top_curve_length: float = 0.0
     top_curve_height: float = 0.0
+    bottom_curve_length: float = 0.0
+    bottom_curve_height: float = 0.0
 
 
 # ── Routes ─────────────────────────────────────────────────────────
@@ -129,6 +131,8 @@ def update_curve(req: CurveUpdateRequest):
         cutouts=cutouts,
         top_curve_length=req.top_curve_length,
         top_curve_height=req.top_curve_height,
+        bottom_curve_length=req.bottom_curve_length,
+        bottom_curve_height=req.bottom_curve_height,
     )
     (_run_dir / "enclosure.scad").write_text(enclosure_scad, encoding="utf-8")
 

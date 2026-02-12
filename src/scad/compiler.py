@@ -69,14 +69,14 @@ def compile_scad(scad_path: Path, stl_path: Path | None = None) -> tuple[bool, s
             [exe, "-o", str(stl_path), str(scad_path)],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=300,
         )
         stderr = result.stderr.strip()
         if result.returncode == 0 and stl_path.exists():
             return True, stderr or "OK", stl_path
         return False, stderr or f"OpenSCAD exited with code {result.returncode}", None
     except subprocess.TimeoutExpired:
-        return False, "OpenSCAD timed out (120s).", None
+        return False, "OpenSCAD timed out (180s).", None
     except Exception as e:
         return False, str(e), None
 
