@@ -65,9 +65,61 @@
           <button class="tab-btn" data-view="debug">PCB Debug</button>
           <button class="tab-btn" data-view="3d">3D Model</button>
         </div>
-        <button id="downloadBtn" class="download-btn disabled" title="No STL yet">
-          Download STL
+        <div class="header-buttons">
+          <button id="readyToPrintBtn" class="ready-to-print-btn" title="Ready to print">
+            Ready to print
+          </button>
+          <button id="downloadBtn" class="download-btn disabled" title="No STL yet">
+            Download STL
+          </button>
+        </div>
+      </div>
+
+      <!-- Geocode overlay screen -->
+      <div id="geocodeOverlay" class="geocode-overlay" style="display: none;">
+        <div class="geocode-content">
+          <div class="geocode-status" id="geocodeStatus">Generating geocode ...</div>
+          <button id="geocodeDownloadBtn" class="geocode-download-btn" disabled>
+            Download Geocode
+          </button>
+        </div>
+        <button id="stepByStepBtn" class="step-by-step-btn">
+          Go to step by step guide
         </button>
+      </div>
+
+      <!-- Step by step guide screen -->
+      <div id="stepByStepScreen" class="step-by-step-screen" style="display: none;">
+        <div class="guide-header">
+          <button id="backToDesignBtn" class="back-to-design-btn">
+            Back to designing
+          </button>
+          <button id="toggleQuestionWindowBtn" class="toggle-question-btn">
+            Question window: Off
+          </button>
+        </div>
+        
+        <div class="guide-layout">
+          <!-- Question/Prompt sidebar -->
+          <aside id="questionSidebar" class="question-sidebar" style="display: none;">
+            <h3>Ask a Question</h3>
+            <textarea id="guidePromptInput" placeholder="Ask about this step..."></textarea>
+            <button id="guideAskBtn" class="guide-ask-btn">Ask</button>
+            <div id="guideResponse" class="guide-response"></div>
+          </aside>
+          
+          <div class="guide-main">
+            <div class="guide-content">
+              <h2>Step by Step Guide</h2>
+              <p>Your printing guide will appear here.</p>
+            </div>
+          </div>
+        </div>
+        
+        <div class="guide-navigation">
+          <button id="guidePrevBtn" class="guide-nav-btn">Previous</button>
+          <button id="guideNextBtn" class="guide-nav-btn">Next</button>
+        </div>
       </div>
 
       <div class="view-container">

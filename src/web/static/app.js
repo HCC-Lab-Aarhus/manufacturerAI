@@ -7,6 +7,24 @@ const statusBadge = document.getElementById("statusBadge");
 const downloadBtn = document.getElementById("downloadBtn");
 const resetBtn    = document.getElementById("resetBtn");
 
+// Ready to print / Geocode elements
+const readyToPrintBtn   = document.getElementById("readyToPrintBtn");
+const geocodeOverlay    = document.getElementById("geocodeOverlay");
+const geocodeStatus     = document.getElementById("geocodeStatus");
+const geocodeDownloadBtn = document.getElementById("geocodeDownloadBtn");
+const stepByStepBtn     = document.getElementById("stepByStepBtn");
+const stepByStepScreen  = document.getElementById("stepByStepScreen");
+const backToDesignBtn   = document.getElementById("backToDesignBtn");
+
+// Step-by-step guide elements
+const toggleQuestionWindowBtn = document.getElementById("toggleQuestionWindowBtn");
+const questionSidebar     = document.getElementById("questionSidebar");
+const guidePromptInput    = document.getElementById("guidePromptInput");
+const guideAskBtn         = document.getElementById("guideAskBtn");
+const guideResponse       = document.getElementById("guideResponse");
+const guidePrevBtn        = document.getElementById("guidePrevBtn");
+const guideNextBtn        = document.getElementById("guideNextBtn");
+
 const outlineView  = document.getElementById("outlineView");
 const outlineSvg   = document.getElementById("outlineSvg");
 const outlineLabel = document.getElementById("outlineLabel");
@@ -352,6 +370,7 @@ function loadModel(url) {
     if (modelLabel) modelLabel.style.display = "none";
 
     downloadBtn.classList.remove("disabled");
+    readyToPrintBtn.classList.remove("disabled");
     switchTab("3d");
   },
   undefined,
@@ -553,6 +572,68 @@ downloadBtn.addEventListener("click", () => {
   window.location.href = `/api/model/download/${latestModelName}`;
 });
 
+// ── Ready to Print / Geocode functionality ────────────────────────
+
+readyToPrintBtn.addEventListener("click", () => {
+  if (readyToPrintBtn.classList.contains("disabled")) return;
+  
+  // Show the geocode overlay
+  geocodeOverlay.style.display = "flex";
+  geocodeStatus.textContent = "Generating geocode ...";
+  geocodeStatus.classList.remove("ready");
+  geocodeDownloadBtn.disabled = true;
+  
+  // After 5 seconds, transition to ready state
+  setTimeout(() => {
+    geocodeStatus.textContent = "Geocode ready for download";
+    geocodeStatus.classList.add("ready");
+    geocodeDownloadBtn.disabled = false;
+  }, 5000);
+});
+
+geocodeDownloadBtn.addEventListener("click", () => {
+  if (geocodeDownloadBtn.disabled) return;
+  // TODO: Implement actual geocode download
+  alert("Geocode download - to be implemented");
+});
+
+stepByStepBtn.addEventListener("click", () => {
+  geocodeOverlay.style.display = "none";
+  stepByStepScreen.style.display = "flex";
+});
+
+backToDesignBtn.addEventListener("click", () => {
+  stepByStepScreen.style.display = "none";
+});
+
+// Toggle question window sidebar
+toggleQuestionWindowBtn.addEventListener("click", () => {
+  const isVisible = questionSidebar.style.display !== "none";
+  questionSidebar.style.display = isVisible ? "none" : "flex";
+  toggleQuestionWindowBtn.textContent = isVisible ? "Question window: Off" : "Question window: On";
+  toggleQuestionWindowBtn.classList.toggle("active", !isVisible);
+});
+
+// Guide navigation buttons
+guidePrevBtn.addEventListener("click", () => {
+  // TODO: Implement previous step navigation
+  console.log("Previous step clicked");
+});
+
+guideNextBtn.addEventListener("click", () => {
+  // TODO: Implement next step navigation
+  console.log("Next step clicked");
+});
+
+// Guide ask button
+guideAskBtn.addEventListener("click", () => {
+  const question = guidePromptInput.value.trim();
+  if (!question) return;
+  // TODO: Implement question handling
+  guideResponse.textContent = "Response will appear here...";
+  guidePromptInput.value = "";
+});
+
 // ── Reset session ─────────────────────────────────────────────────
 
 if (resetBtn) {
@@ -586,6 +667,10 @@ if (resetBtn) {
     }
     latestModelName = null;
     downloadBtn.classList.add("disabled");
+    readyToPrintBtn.classList.add("disabled");
+    // Hide geocode/guide screens
+    geocodeOverlay.style.display = "none";
+    stepByStepScreen.style.display = "none";
     hideProgress();
     // Reset curve editor
     curveEditor.style.display = "none";
