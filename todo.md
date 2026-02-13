@@ -29,7 +29,7 @@ Use a faster 3d model generator to the web, only compile to stl after generating
 
 The visualizations on the web are upside down. Both the layout, pcb debug and 3d model.
 
-Increase button top hole diameter a few mm. They are also not showing in the model, but does show when sliced, fix that.
+DONE Increase button top hole diameter a few mm. They are also not showing in the model, but does show when sliced, fix that.
 
 DONE Tracing shell cutout should extend higher. As high as the other components go.
 Add gap for hatch lip, so it fits into the bottom.
@@ -39,6 +39,10 @@ DONE I THINK Find the notch on the spring on the end of the battery compartment 
 DONE I THINK Add slider for how many edges the llm should output in the edge polygon. Include number in system prompt.
 
 Router should be able to auto select mc pins and button pins during rip ups. Should just report back which pins were assigned to what, which i think there already is some functionality for. Take a look in the pcb folder, which is a optimized but older version of the ts T* router in the manufacturerAI folder. Implement the optimizations from that, but apply it to our current implementation in a way that it integrates properly.
+
+The web recompiles everytime you update the top and bottom edge profiles, there should be a way to hold it from recompiling, and then do it when you are satisfied with the changes. also if you dont change anything it shouldnt recompile. 
+
+The ability to make your own buttons and custom button shapes, then the button holes in the shell should match the custom button shapes. 
 
 # Long term
 
