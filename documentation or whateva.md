@@ -25,6 +25,8 @@
 21. [Frontend (`src/web/static/`)](#frontend)
 22. [Cross-Section Geometry](#cross-section-geometry)
 23. [Coordinate System](#coordinate-system)
+24. [User-Controllable Parameters](#user-controllable-parameters)
+25. [Why Parametric Design](#why-parametric-design)
 
 ---
 
@@ -1072,3 +1074,172 @@ Y ▲  (LENGTH — the long axis of the remote)
 - **Winding:** Counter-clockwise (CCW) for outlines and cutout polygons
 - **Grid resolution:** 0.5mm (for the trace router)
 - **Printer limits:** Max 200mm × 200mm × 35mm
+
+---
+
+## User-Controllable Parameters
+
+The user communicates with the LLM in natural language. The LLM interprets the user's intent and translates it into the concrete parameters accepted by `submit_design()`. Below is the complete list of everything a user can specify — directly or indirectly — organized by what the user says versus what the system receives.
+
+### Parameters the User Can Specify via Chat
+
+| What the user says | What the LLM translates it to | `submit_design` parameter | Type | Example |
+|---|---|---|---|---|
+| Shape description ("oval", "diamond", "T-shape", "classic remote") | A polygon outline — list of [x, y] vertices in mm, CCW winding | `outline` | `[[x,y], ...]` | `[[5,0],[40,0],[45,10],[45,140],[40,150],[5,150],[0,140],[0,10]]` |
+| Overall dimensions ("50mm wide and 150mm long") | The outline vertices are scaled to match | `outline` (implicit) | — | Width mapped to X axis, length to Y axis |
+| Number of buttons ("5 buttons") | Button position objects with auto-generated IDs and labels | `button_positions` | `[{id, label, x, y}]` | `[{id:"btn_1", label:"Button 1", x:25, y:30}, ...]` |
+| Button labels ("Power, Vol+, Vol−, CH+, CH−") | The `label` field on each button object | `button_positions[].label` | `string` | `"Power"`, `"Vol+"` |
+| Button layout ("buttons in a column", "2 rows of 3", "one at each tip") | The `x` and `y` coordinates of each button | `button_positions[].x`, `.y` | `number` (mm) | `x:25, y:120` |
+| Edge rounding ("sharp edges", "very rounded top", "gentle slope") | Curve length and height values for top and/or bottom | `top_curve_length`, `top_curve_height`, `bottom_curve_length`, `bottom_curve_height` | `number` (mm) | `top_curve_length: 3.0, top_curve_height: 5.0` |
+| Flat edges ("flat top", "no rounding") | Curve params set to 0 | `top_curve_length: 0`, etc. | `number` | `0.0` |
+
+### Parameters the User Can Adjust Post-Generation
+
+After a design is generated, the user has additional interactive controls:
+
+| Control | UI Element | What it does | Backend endpoint |
+|---|---|---|---|
+| **Top edge profile** | Curve editor widget (drag on canvas) | Adjusts `top_curve_length` and `top_curve_height` in 0.5mm increments | `POST /api/update_curve` |
+| **Bottom edge profile** | Curve editor widget (Bottom tab) | Adjusts `bottom_curve_length` and `bottom_curve_height` | `POST /api/update_curve` |
+| **Iterate on design** | Chat ("make it wider", "add a button", "change to diamond shape") | LLM redesigns and resubmits with new parameters | `POST /api/generate/stream` |
+| **Download STL** | Download button | Downloads the compiled print plate STL | `GET /api/model/download/{name}` |
+| **Reset** | Reset button | Clears conversation and starts fresh | `POST /api/reset` |
+
+### Parameters the User Does NOT Control
+
+These are determined entirely by the automated pipeline and hardware configuration:
+
+| Parameter | Value | Why it's fixed |
+|---|---|---|
+| Battery placement (position inside outline) | Auto — prefers bottom 40% | Placed by scoring algorithm for optimal clearance |
+| Controller placement (position + rotation) | Auto — prefers center, avoids buttons | Placed by scoring algorithm, tries 0° and 90° |
+| IR diode placement | Auto — top center | Faces outward for IR transmission |
+| Electrical wiring (which pin connects to which button) | Auto — sequential digital pin assignment | Assigned by `_controller_pins()` in order PD0→PC5 |
+| Trace routing paths | Auto — A* pathfinding on 0.5mm grid | Solved by TypeScript router with rip-up/reroute |
+| Shell height | 16.5mm (12mm cavity + 3mm floor + 1.5mm ceiling) | Fixed by enclosure config for consistent manufacturing |
+| Wall thickness | 1.6mm | Fixed for structural integrity |
+| Battery compartment dimensions | 25×48mm | Fixed for 2×AAA battery holder |
+| Button hole diameter | 13mm | Fixed for push-button switch cap fit |
+| Pinhole dimensions | 0.7mm shaft, 1.2mm taper | Fixed for DIP pin press-fit |
+| Trace width / clearance | 1.5mm / 2.0mm | Fixed for conductive filament reliability |
+| Material / colour | Whatever filament is loaded in the 3D printer | Not controllable via software |
+
+### The `submit_design` Function Signature
+
+This is the complete interface between the LLM and the manufacturing pipeline — the full set of parameters that define a design:
+
+```
+submit_design(
+    outline:              [[x, y], ...]     # REQUIRED — polygon shape (6+ vertices, CCW, mm)
+    button_positions:     [{id, label, x, y}, ...]  # REQUIRED — button locations
+    top_curve_length:     float             # OPTIONAL — top edge inset (mm), default 0
+    top_curve_height:     float             # OPTIONAL — top edge vertical extent (mm), default 0
+    bottom_curve_length:  float             # OPTIONAL — bottom edge inset (mm), default 0
+    bottom_curve_height:  float             # OPTIONAL — bottom edge vertical extent (mm), default 0
+)
+```
+
+The LLM always provides defaults for the curve parameters (`top: 2mm/3mm`, `bottom: 1.5mm/2mm`) unless the user explicitly asks for flat edges. The user never needs to know about vertices, coordinates, or curve parameters — the LLM translates natural language ("a long thin oval with 4 buttons") into the exact geometry.
+
+### Examples of User Intent → LLM Translation
+
+**User:** "Make me a remote with 5 buttons"
+**LLM decides:** Classic rounded rectangle ~50×140mm, 5 buttons evenly spaced along the center Y axis, default edge rounding.
+
+**User:** "Diamond shape, 60mm wide, 180mm long, 3 buttons labelled Power, Up, Down"
+**LLM decides:** Diamond polygon (4 vertices at midpoints of bounding box edges, widened tips for button clearance), 3 buttons positioned avoiding the narrow tips, default edge rounding.
+
+**User:** "Make the top edge sharper and the bottom completely flat"
+**LLM decides:** Resubmits with `top_curve_length: 1.0, top_curve_height: 1.5` (smaller = sharper), `bottom_curve_length: 0, bottom_curve_height: 0` (flat).
+
+**User:** "Move the buttons closer together"
+**LLM decides:** Recalculates button Y positions with reduced spacing (while maintaining minimum 12mm center-to-center), resubmits.
+
+**User:** "I want a T-shaped remote with buttons on the wide top part"
+**LLM decides:** T-shaped polygon with narrow lower body and wide upper head. Buttons placed only in the wide head region. Default rounding.
+
+---
+
+## Why Parametric Design
+
+### The Core Argument
+
+ManufacturerAI is fundamentally a **parametric design system** — every physical output is generated from a small set of abstract parameters rather than being manually modeled. This is not an incidental implementation choice; it is the essential architectural decision that makes the entire system possible.
+
+### What "Parametric" Means Here
+
+In traditional CAD, a designer manually draws or sculpts each part. In parametric design, the geometry is **computed from parameters**. The user provides a few high-level inputs (outline shape, button positions, curve values), and the system derives everything else:
+
+```
+User parameters (6 values + polygon + button list)
+    │
+    ▼
+┌─────────────────────────────────────────────┐
+│  Pipeline computes:                          │
+│  • Component positions (scoring algorithm)   │
+│  • Electrical nets (pin assignment rules)    │
+│  • Trace paths (A* pathfinding)             │
+│  • Cutout geometries (from component dims)  │
+│  • Shell body (polygon extrusion + fillets) │
+│  • Battery hatch (from config dimensions)   │
+│  • Pinholes (from component footprints)     │
+│  • Print plate (STL merge)                  │
+└─────────────────────────────────────────────┘
+    │
+    ▼
+Complete 3D-printable STL (tens of thousands of triangles)
+```
+
+A single outline polygon with 8 vertices and 4 button positions generates an enclosure with 100+ cutouts, 56+ pinholes, trace channels, a battery compartment with spring-latch hatch, and fillet profiles — all dimensionally correct and ready to print.
+
+### Why Every Part Must Be Parametric
+
+**1. Arbitrary outline shapes require computed geometry.**
+The user can submit any valid polygon — an oval, a diamond, a T-shape, an asymmetric blob. None of these can be pre-modeled. The enclosure body, fillet layers, cutout positions, and component placements must all be derived from the polygon. If the shell were a fixed 3D model, it would only work for one specific shape. By generating OpenSCAD from parameters, the system handles infinite shape variation.
+
+**2. Component placement depends on the shape.**
+Where the battery and controller fit inside the outline depends on the outline's geometry. A long narrow remote needs the components stacked vertically; a short wide one might place them side by side. The placer's grid-scan algorithm evaluates every valid position per shape — this is only possible because placement is parametric (it takes the outline as input), not pre-determined.
+
+**3. Trace routing depends on component positions.**
+The PCB traces connect specific pins on components that can be anywhere inside the outline. The routes are computed by A* pathfinding on a grid shaped by the outline boundary and component bodies. Different shapes produce different grids produce different routes produce different trace channel cutouts in the enclosure. Every trace channel in the SCAD file is generated from the routing result — pure parametric geometry.
+
+**4. The fillet profile must adapt to any outline.**
+The edge rounding uses Shapely's `buffer(-inset)` to shrink the outline polygon inward at each fillet step. A circle shrinks uniformly; a star shape shrinks with collapsing points; a rectangle shrinks with migrating corners. This adaptive behavior is inherently parametric — the same formula (`1 − cos θ` profile with polygon inset) works for every shape because it operates on the abstract polygon, not on a specific mesh.
+
+**5. Cutouts are derived, not placed.**
+Button holes are positioned at the LLM-specified coordinates. Battery compartment geometry is derived from the battery's placed position and the hardware dimensions. Pinholes are generated at every pad position calculated from the component footprints. None of these can be pre-placed in a template because their positions depend on the upstream placement and routing steps — which depend on the outline shape — which comes from the user.
+
+**6. The hatch is shape-independent because it's parametric.**
+The battery hatch is a standalone component defined purely by config parameters (compartment width, clearance, spring dimensions). It doesn't need to know the outline shape — it's generated from the same hardware constants regardless of the enclosure design. This is parametric reuse: one module, infinite contexts.
+
+**7. An LLM can only be the designer if the output is parametric.**
+The LLM doesn't output STL meshes or 3D geometry. It outputs **parameters**: a polygon and button coordinates. This is only useful if there exists a system that can take those parameters and produce a complete physical product. The parametric pipeline is what makes AI-driven design feasible — the LLM operates in a low-dimensional parameter space (shape + positions + curves) and the pipeline expands that into high-dimensional manufacturing output (SCAD → STL → 3D print).
+
+### The Parametric Stack
+
+Each layer in the system is parametric — its output is fully determined by its inputs:
+
+| Layer | Input | Output |
+|---|---|---|
+| **LLM** | User's natural language | `outline`, `button_positions`, `curve_params` |
+| **Validator** | outline, buttons | Pass/fail with error messages |
+| **Placer** | outline, buttons | `pcb_layout` (all component positions) |
+| **Router** | pcb_layout | `routing_result` (all trace paths) |
+| **Cutout builder** | pcb_layout, routing_result | `cutouts[]` (polygon + depth + z for each) |
+| **SCAD generator** | outline, cutouts, curve_params | OpenSCAD source code (text) |
+| **OpenSCAD** | SCAD source | STL mesh (binary) |
+| **STL merger** | enclosure.stl, hatch.stl | print_plate.stl |
+
+No layer has hidden state. No layer remembers previous runs. Given the same inputs, every layer produces the same output. This means:
+- The curve editor can re-run layers 5-7 without re-running 1-4
+- A failed routing can be reported to the LLM which adjusts layers 1-2 and the pipeline re-runs from scratch
+- Any future component (e.g., a speaker, an LED strip) can be added to the placer and cutout builder without changing the SCAD generator — cutouts are generic polygons
+
+### What This Enables
+
+- **Infinite design variety** — Any polygon the LLM can imagine (within printer limits) becomes a functional remote control
+- **AI-driven iteration** — The LLM can generate, fail, adjust, and retry entirely within the parameter space, without needing to understand mesh geometry
+- **Real-time edge tuning** — The curve editor updates 2 numbers and the entire enclosure recompiles, because the shell is parametrically defined by those numbers
+- **Separation of concerns** — The LLM knows nothing about SCAD, OpenSCAD, pinholes, or trace routing. The SCAD generator knows nothing about the LLM. Each module is a pure function from parameters to output.
+- **Reproducibility** — Every design can be recreated from its `pcb_layout.json` + `routing_result.json` + curve parameters. The output is deterministic.
+- **Future extensibility** — Adding a new component type (e.g., a buzzer) requires: adding its footprint to `base_remote.json`, adding placement logic to `placer.py`, adding cutout logic to `cutouts.py`, and adding pad extraction to `routability.py`. No existing module changes structurally — they already operate on generic component lists and cutout lists.
