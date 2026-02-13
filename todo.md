@@ -44,6 +44,16 @@ The web recompiles everytime you update the top and bottom edge profiles, there 
 
 The ability to make your own buttons and custom button shapes, then the button holes in the shell should match the custom button shapes. 
 
+Have another step/interface after the design stage, here we need to slice it and get the g-code. We need to make custom g-code. the order we nee to print in and how we need to do it is. 
+- first print until we hit the layer where the ink is then we need to iron that layer. 
+- second step print the ink. 
+- third print the walls till the top of diode hole, then set in the diode. 
+- fourth print up to the top of the square holes for button switches, then place in the switches and the atmega328p
+- continue and print the rest. 
+
+Make interface that tells you where to place things in the correct direction. 
+
+
 # Long term
 
 Add "accessories" which adds on the outer shell polygon. Should create simple shapes, and decide a vertice it will be attatched to, and it will use the average normal between the two connected edges. User can move it around to connect on other vertices, perhaps changing the angle too, or maybe even storing two vertices to place it in the middle of an edge, or some percentage along the edge, and with the direction being the normal of that single edge.

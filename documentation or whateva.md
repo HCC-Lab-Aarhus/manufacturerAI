@@ -1175,9 +1175,9 @@ User parameters (6 values + polygon + button list)
     │
     ▼
 ┌─────────────────────────────────────────────┐
-│  Pipeline computes:                          │
-│  • Component positions (scoring algorithm)   │
-│  • Electrical nets (pin assignment rules)    │
+│  Pipeline computes:                         │
+│  • Component positions (scoring algorithm)  │
+│  • Electrical nets (pin assignment rules)   │
 │  • Trace paths (A* pathfinding)             │
 │  • Cutout geometries (from component dims)  │
 │  • Shell body (polygon extrusion + fillets) │
