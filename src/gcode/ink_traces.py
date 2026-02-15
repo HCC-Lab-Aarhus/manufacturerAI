@@ -129,6 +129,50 @@ def generate_ink_gcode(
     return lines
 
 
+# ── Trace segment extraction (for postprocessor) ──────────────────
+
+def extract_trace_segments(
+    routing_result: dict,
+    pcb_layout: dict,
+) -> list[tuple[float, float, float, float]]:
+    """Return trace paths as ``(x1, y1, x2, y2)`` mm line segments.
+
+    This is used by the post-processor to know *where* the traces run
+    so it can skip ironing over them and add a highlight extrusion pass.
+    """
+    if not routing_result:
+        return []
+
+    traces = routing_result.get("traces", [])
+    if not traces:
+        return []
+
+    board_outline = pcb_layout.get("board", {}).get("outline_polygon", [])
+    if board_outline:
+        o_min_x, o_min_y, _, _ = polygon_bounds(board_outline)
+    else:
+        o_min_x = o_min_y = 0.0
+
+    grid = hw.grid_resolution
+
+    def grid_to_mm(gx: float, gy: float) -> tuple[float, float]:
+        return gx * grid + o_min_x, gy * grid + o_min_y
+
+    segments: list[tuple[float, float, float, float]] = []
+    for trace in traces:
+        path = trace.get("path", [])
+        simplified = _simplify_path(path)
+        if len(simplified) < 2:
+            continue
+        for j in range(len(simplified) - 1):
+            x1, y1 = grid_to_mm(simplified[j]["x"], simplified[j]["y"])
+            x2, y2 = grid_to_mm(simplified[j + 1]["x"], simplified[j + 1]["y"])
+            segments.append((x1, y1, x2, y2))
+
+    log.info("Extracted %d trace segments from %d traces", len(segments), len(traces))
+    return segments
+
+
 # ── Path simplification ───────────────────────────────────────────
 
 def _simplify_path(path: list[dict]) -> list[dict]:

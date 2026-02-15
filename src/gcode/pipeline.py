@@ -19,7 +19,7 @@ from pathlib import Path
 
 from src.gcode.slicer import slice_stl
 from src.gcode.pause_points import compute_pause_points, PausePoints
-from src.gcode.ink_traces import generate_ink_gcode
+from src.gcode.ink_traces import generate_ink_gcode, extract_trace_segments
 from src.gcode.postprocessor import postprocess_gcode, PostProcessResult
 
 log = logging.getLogger("manufacturerAI.gcode.pipeline")
@@ -120,6 +120,20 @@ def run_gcode_pipeline(
     )
     stages.append(f"Ink G-code: {len(ink_lines)} lines for {len(routing_result.get('traces', []))} traces")
 
+    # ── 3b. Extract trace segments for ironing filter + highlight ──
+    trace_segs = extract_trace_segments(
+        routing_result=routing_result,
+        pcb_layout=pcb_layout,
+    )
+    if trace_segs:
+        stages.append(f"Trace segments: {len(trace_segs)} segments for ironing filter")
+
+    # ── 3c. Compute bed offset (PrusaSlicer centres model on bed) ──
+    from src.gcode.postprocessor import _compute_bed_offset
+    board_outline = pcb_layout.get("board", {}).get("outline_polygon", [])
+    bed_offset = _compute_bed_offset(board_outline) if board_outline else (0.0, 0.0)
+    stages.append(f"Bed offset: ({bed_offset[0]:.1f}, {bed_offset[1]:.1f}) mm")
+
     # ── 4. Post-process ───────────────────────────────────────────
     staged_gcode = output_dir / "enclosure_staged.gcode"
     log.info("Post-processing G-code...")
@@ -130,6 +144,8 @@ def run_gcode_pipeline(
         ink_z=pauses.ink_layer_z,
         component_z=pauses.component_insert_z,
         ink_gcode_lines=ink_lines,
+        trace_segments=trace_segs,
+        bed_offset=bed_offset,
     )
     stages.extend(pp_result.stages)
     stages.append(f"Staged G-code written: {staged_gcode}")
