@@ -1,0 +1,232 @@
+"""
+G-code post-processor — splits a slicer G-code file at pause points
+and injects ironing, ink deposition, and component-insertion pauses.
+
+PrusaSlicer emits layer-change markers as comments:
+
+    ;LAYER_CHANGE
+    ;Z:3.200
+    ;HEIGHT:0.2
+
+The post-processor walks through the G-code line by line, watches for
+these markers, and inserts custom blocks at the correct Z-heights.
+
+Print stages (bottom to top):
+  1. Print floor layers (Z = 0 → ink_z)
+  2. Iron the ink layer surface
+  3. Pause — deposit conductive ink
+  4. Resume printing cavity walls (ink_z → component_z)
+  5. Pause — insert diode, switches, ATmega328P
+  6. Resume and print ceiling to completion
+
+The MK3S firmware supports ``M601`` for filament-change pause (LCD
+prompt, beep, wait for user) — we use this for pauses.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+
+log = logging.getLogger("manufacturerAI.gcode.postprocessor")
+
+# Regex for PrusaSlicer layer-change Z comment
+_Z_RE = re.compile(r"^;Z:([\d.]+)")
+
+
+@dataclass
+class PostProcessResult:
+    """Output of the post-processing step."""
+
+    output_path: Path
+    total_layers: int
+    ink_layer: int
+    component_layer: int
+    stages: list[str] = field(default_factory=list)
+
+
+def _ironing_block(z: float) -> list[str]:
+    """Generate an ironing pass G-code block.
+
+    PrusaSlicer can do ironing natively, but only globally or per
+    object — not for a single layer.  We generate a minimal ironing
+    sequence: retract, lower Z, zigzag at reduced flow, then resume.
+
+    For now this is a *marker block* — the actual ironing is best done
+    by enabling PrusaSlicer's ironing for the whole print and letting
+    the slicer handle it, or by using a modifier mesh.  The marker
+    ensures the pause happens at the right place.
+    """
+    return [
+        "",
+        "; " + "-" * 40,
+        "; IRONING PASS — ink layer surface",
+        f"; Z = {z:.2f} mm",
+        "; The slicer should already have ironed this layer if ironing",
+        "; is enabled.  If not, enable ironing in PrusaSlicer for the",
+        "; topmost solid layer of the floor section.",
+        "; " + "-" * 40,
+        "",
+    ]
+
+
+def _pause_block(label: str, z: float, instructions: list[str]) -> list[str]:
+    """Generate a firmware pause block (M601) with user instructions.
+
+    ``M601`` on the MK3S:
+    - Retracts filament
+    - Parks the head
+    - Beeps and shows LCD prompt
+    - Waits for user to press the knob
+    - Resumes print
+    """
+    lines = [
+        "",
+        "; " + "=" * 50,
+        f"; PAUSE: {label}",
+        f"; Z = {z:.2f} mm",
+    ]
+    for instr in instructions:
+        lines.append(f"; >> {instr}")
+    lines.extend([
+        "; " + "=" * 50,
+        "",
+        "; Park head and wait for user",
+        "M601 ; pause print — press knob to resume",
+        "",
+    ])
+    return lines
+
+
+def postprocess_gcode(
+    gcode_path: Path,
+    output_path: Path | None,
+    ink_z: float,
+    component_z: float,
+    ink_gcode_lines: list[str] | None = None,
+) -> PostProcessResult:
+    """Read slicer G-code, inject pauses and ink, write result.
+
+    Parameters
+    ----------
+    gcode_path : Path
+        Input ``.gcode`` from PrusaSlicer.
+    output_path : Path or None
+        Where to write the modified G-code.  Defaults to
+        ``<input>_staged.gcode``.
+    ink_z : float
+        Z-height for the ink layer (top of floor).
+    component_z : float
+        Z-height for component insertion (top of cavity).
+    ink_gcode_lines : list[str] or None
+        Pre-generated ink deposition G-code (from ``ink_traces``).
+        If *None*, only a pause is inserted (manual ink application).
+
+    Returns
+    -------
+    PostProcessResult
+    """
+    if output_path is None:
+        output_path = gcode_path.with_name(
+            gcode_path.stem + "_staged" + gcode_path.suffix
+        )
+
+    raw_lines = gcode_path.read_text(encoding="utf-8").splitlines()
+
+    out: list[str] = []
+    total_layers = 0
+    ink_injected = False
+    component_injected = False
+    ink_layer_num = -1
+    comp_layer_num = -1
+
+    stages = []
+
+    i = 0
+    while i < len(raw_lines):
+        line = raw_lines[i]
+
+        # Detect layer change
+        z_match = _Z_RE.match(line)
+        if z_match:
+            z_val = float(z_match.group(1))
+            total_layers += 1
+
+            # ── Ink layer pause (first Z >= ink_z) ─────────────
+            if not ink_injected and z_val >= ink_z - 0.001:
+                ink_injected = True
+                ink_layer_num = total_layers
+
+                # Insert ironing marker
+                out.extend(_ironing_block(ink_z))
+
+                # Insert ink pause
+                out.extend(_pause_block(
+                    "DEPOSIT CONDUCTIVE INK",
+                    ink_z,
+                    [
+                        "The floor surface has been ironed.",
+                        "Deposit conductive ink along the trace channels.",
+                        "Press the knob when done to resume printing.",
+                    ],
+                ))
+
+                # Insert ink G-code if provided
+                if ink_gcode_lines:
+                    out.extend(ink_gcode_lines)
+                    stages.append(f"Ink G-code injected at Z={ink_z:.2f} ({len(ink_gcode_lines)} lines)")
+                    # Second pause after ink to let it dry / cure
+                    out.extend(_pause_block(
+                        "INK CURING",
+                        ink_z,
+                        [
+                            "Conductive ink has been deposited.",
+                            "Allow ink to dry / cure if needed.",
+                            "Press the knob to resume printing.",
+                        ],
+                    ))
+                else:
+                    stages.append(f"Manual ink pause at Z={ink_z:.2f}")
+
+                stages.append(f"Ink layer: {ink_layer_num}")
+
+            # ── Component insertion pause (first Z >= component_z) ──
+            if not component_injected and z_val >= component_z - 0.001:
+                component_injected = True
+                comp_layer_num = total_layers
+
+                out.extend(_pause_block(
+                    "INSERT COMPONENTS",
+                    component_z,
+                    [
+                        "Insert the following components into their pockets:",
+                        "  1. IR diode (LED) — into the round hole near the top edge",
+                        "  2. Tactile switches — into the square button pockets",
+                        "  3. ATmega328P — into the DIP-28 pocket",
+                        "Ensure all pins seat fully into their pin holes.",
+                        "Press the knob when done to resume printing.",
+                    ],
+                ))
+                stages.append(f"Component insertion pause at Z={component_z:.2f}")
+
+        out.append(line)
+        i += 1
+
+    # Write output
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+    log.info(
+        "Post-processed G-code: %d layers, ink@L%d (Z=%.2f), components@L%d (Z=%.2f) → %s",
+        total_layers, ink_layer_num, ink_z, comp_layer_num, component_z, output_path,
+    )
+
+    return PostProcessResult(
+        output_path=output_path,
+        total_layers=total_layers,
+        ink_layer=ink_layer_num,
+        component_layer=comp_layer_num,
+        stages=stages,
+    )

@@ -193,7 +193,7 @@ def build_cutouts(
             cuts.append(Cutout(
                 polygon=wall_poly,
                 depth=hole_d,
-                z_base=CAVITY_START,
+                z_base=CAVITY_END - hole_d,
                 label=f"diode wall hole {cid}",
             ))
             continue

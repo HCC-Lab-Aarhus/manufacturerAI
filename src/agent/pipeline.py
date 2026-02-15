@@ -34,6 +34,7 @@ from src.scad.shell import (
 )
 from src.scad.cutouts import build_cutouts
 from src.scad.compiler import compile_scad, merge_stl_files
+from src.gcode.pipeline import run_gcode_pipeline
 
 log = logging.getLogger("manufacturerAI.pipeline")
 
@@ -418,6 +419,36 @@ def run_pipeline(
             "results": stl_results,
         }
 
+    # ── 7. Slice & generate custom G-code ──────────────────────────
+    gcode_result = None
+    if "enclosure" in stl_files:
+        emit("progress", {"stage": "Slicing & generating custom G-code..."})
+        log.info("Pipeline step 7: slice STL + generate staged G-code")
+        try:
+            gcode_result = run_gcode_pipeline(
+                stl_path=Path(stl_files["enclosure"]),
+                output_dir=output_dir,
+                pcb_layout=layout,
+                routing_result=routing_result,
+            )
+            if gcode_result.success:
+                emit("gcode_ready", {
+                    "staged_gcode": str(gcode_result.staged_gcode_path),
+                    "raw_gcode": str(gcode_result.raw_gcode_path),
+                    "ink_layer_z": gcode_result.pause_points.ink_layer_z,
+                    "component_z": gcode_result.pause_points.component_insert_z,
+                    "ink_layer": gcode_result.postprocess.ink_layer,
+                    "component_layer": gcode_result.postprocess.component_layer,
+                    "total_layers": gcode_result.postprocess.total_layers,
+                    "stages": gcode_result.stages,
+                })
+            else:
+                log.warning("G-code pipeline failed: %s", gcode_result.message)
+                emit("progress", {"stage": f"G-code generation failed: {gcode_result.message}"})
+        except Exception as e:
+            log.warning("G-code pipeline error (non-fatal): %s", e)
+            emit("progress", {"stage": f"G-code generation skipped: {e}"})
+
     # ── Success ────────────────────────────────────────────────────
     emit("progress", {"stage": "Pipeline complete!"})
     log.info("Pipeline complete — all steps succeeded")
@@ -429,6 +460,13 @@ def run_pipeline(
         "stl_files": stl_files,
         "scad_files": scad_files,
     }
+    if gcode_result and gcode_result.success:
+        manifest["gcode"] = {
+            "staged": str(gcode_result.staged_gcode_path),
+            "raw": str(gcode_result.raw_gcode_path),
+            "ink_layer_z": gcode_result.pause_points.ink_layer_z,
+            "component_z": gcode_result.pause_points.component_insert_z,
+        }
     (output_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2), encoding="utf-8"
     )
@@ -436,7 +474,7 @@ def run_pipeline(
     # Build pin mapping so the LLM can report wiring to the user
     pin_mapping = build_pin_mapping(layout, bpos)
 
-    return {
+    result = {
         "status": "success",
         "stl_files": list(stl_files.keys()),
         "component_count": len(layout.get("components", [])),
@@ -451,3 +489,13 @@ def run_pipeline(
             f"{len(stl_files)} STL models generated."
         ),
     }
+    if gcode_result and gcode_result.success:
+        result["gcode"] = {
+            "staged_gcode": str(gcode_result.staged_gcode_path),
+            "ink_layer_z": gcode_result.pause_points.ink_layer_z,
+            "component_z": gcode_result.pause_points.component_insert_z,
+            "total_layers": gcode_result.postprocess.total_layers,
+        }
+        result["message"] += " Custom G-code with print pauses generated."
+
+    return result

@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 import threading
 import traceback
 from datetime import datetime
@@ -24,6 +25,8 @@ from src.agent.loop import run_turn
 from src.scad.shell import generate_enclosure_scad, generate_battery_hatch_scad, generate_print_plate_scad, DEFAULT_HEIGHT_MM
 from src.scad.cutouts import build_cutouts
 from src.scad.compiler import compile_scad
+from src.gcode.pipeline import run_gcode_pipeline
+from src.gcode.slicer import find_prusaslicer
 
 # ── .env loader ────────────────────────────────────────────────────
 
@@ -288,6 +291,163 @@ def get_output_file(run_id: str, path: str):
     if not full.exists():
         raise HTTPException(404)
     return FileResponse(full)
+
+
+# ── G-code endpoints ──────────────────────────────────────────────
+
+@app.post("/api/slice")
+def slice_model():
+    """Slice the enclosure STL and generate staged G-code with pauses.
+
+    Uses the cached pcb_layout and routing_result from the current
+    session's run directory.  Returns metadata about the generated
+    G-code including pause points and layer numbers.
+    """
+    if _run_dir is None:
+        raise HTTPException(400, "No run yet — generate a design first.")
+
+    stl_path = _run_dir / "enclosure.stl"
+    if not stl_path.exists():
+        raise HTTPException(400, "No enclosure STL — compile a design first.")
+
+    layout_path = _run_dir / "pcb_layout.json"
+    routing_path = _run_dir / "routing_result.json"
+    if not layout_path.exists():
+        raise HTTPException(400, "No layout data.")
+
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    routing = {}
+    if routing_path.exists():
+        routing = json.loads(routing_path.read_text(encoding="utf-8"))
+
+    result = run_gcode_pipeline(
+        stl_path=stl_path,
+        output_dir=_run_dir,
+        pcb_layout=layout,
+        routing_result=routing,
+    )
+
+    if not result.success:
+        raise HTTPException(500, result.message)
+
+    return {
+        "status": "ok",
+        "staged_gcode": result.staged_gcode_path.name if result.staged_gcode_path else None,
+        "raw_gcode": result.raw_gcode_path.name if result.raw_gcode_path else None,
+        "pause_points": {
+            "ink_layer_z": result.pause_points.ink_layer_z,
+            "component_insert_z": result.pause_points.component_insert_z,
+            "ink_layer_number": result.pause_points.ink_layer_number,
+            "component_layer_number": result.pause_points.component_layer_number,
+            "total_height": result.pause_points.total_height,
+            "layer_height": result.pause_points.layer_height,
+        } if result.pause_points else None,
+        "postprocess": {
+            "total_layers": result.postprocess.total_layers,
+            "ink_layer": result.postprocess.ink_layer,
+            "component_layer": result.postprocess.component_layer,
+            "stages": result.postprocess.stages,
+        } if result.postprocess else None,
+        "stages": result.stages,
+    }
+
+
+@app.get("/api/gcode/{name}")
+def get_gcode(name: str):
+    """Serve a G-code file from the current session run."""
+    if _run_dir is None:
+        raise HTTPException(404, "No run yet.")
+    gcode = _run_dir / f"{name}.gcode"
+    if not gcode.exists():
+        raise HTTPException(404, f"{name}.gcode not found.")
+    return Response(
+        content=gcode.read_bytes(),
+        media_type="text/plain",
+        headers={
+            "Content-Disposition": f"inline; filename={name}.gcode",
+            "Cache-Control": "no-cache",
+        },
+    )
+
+
+@app.get("/api/gcode/download/{name}")
+def download_gcode(name: str):
+    """Download a G-code file from the current session."""
+    if _run_dir is None:
+        raise HTTPException(404, "No run yet.")
+    gcode = _run_dir / f"{name}.gcode"
+    if not gcode.exists():
+        raise HTTPException(404, f"{name}.gcode not found.")
+    return Response(
+        content=gcode.read_bytes(),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f"attachment; filename={name}.gcode"},
+    )
+
+
+# ── G-code preview / viewer ───────────────────────────────────────
+
+@app.post("/api/gcode/open-viewer")
+def open_gcode_viewer():
+    """Launch PrusaSlicer's G-code viewer on the staged G-code."""
+    if _run_dir is None:
+        raise HTTPException(400, "No run yet.")
+
+    gcode = _run_dir / "enclosure_staged.gcode"
+    if not gcode.exists():
+        raise HTTPException(400, "No G-code file — slice first.")
+
+    exe = find_prusaslicer()
+    if not exe:
+        raise HTTPException(500, "PrusaSlicer not found on this system.")
+
+    try:
+        subprocess.Popen([exe, "--gcodeviewer", str(gcode)])
+    except Exception as e:
+        raise HTTPException(500, f"Failed to launch viewer: {e}")
+
+    return {"status": "ok", "message": "G-code viewer launched."}
+
+
+@app.get("/api/gcode/preview/{name}")
+def preview_gcode(name: str):
+    """Return G-code metadata for the web preview: layers, pauses, line count."""
+    if _run_dir is None:
+        raise HTTPException(404, "No run yet.")
+    gcode = _run_dir / f"{name}.gcode"
+    if not gcode.exists():
+        raise HTTPException(404, f"{name}.gcode not found.")
+
+    lines = gcode.read_text(encoding="utf-8").splitlines()
+    layers: list[dict] = []
+    pauses: list[dict] = []
+    current_z = 0.0
+    layer_idx = 0
+
+    for i, line in enumerate(lines):
+        if line.startswith(";Z:"):
+            try:
+                current_z = float(line[3:])
+            except ValueError:
+                pass
+            layer_idx += 1
+            layers.append({"line": i + 1, "z": current_z, "layer": layer_idx})
+        elif "M601" in line:
+            # Find the pause label (look backwards for ; PAUSE: ...)
+            label = "Pause"
+            for j in range(max(0, i - 8), i):
+                if lines[j].strip().startswith("; PAUSE:"):
+                    label = lines[j].strip().replace("; PAUSE: ", "")
+                    break
+            pauses.append({"line": i + 1, "z": current_z, "layer": layer_idx, "label": label})
+
+    return {
+        "name": name,
+        "total_lines": len(lines),
+        "total_layers": layer_idx,
+        "layers": layers,
+        "pauses": pauses,
+    }
 
 
 # ── Entry point ────────────────────────────────────────────────────

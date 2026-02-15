@@ -572,35 +572,128 @@ downloadBtn.addEventListener("click", () => {
   window.location.href = `/api/model/download/${latestModelName}`;
 });
 
-// ── Ready to Print / Geocode functionality ────────────────────────
+// ── Ready to Print / G-code functionality ─────────────────────────
 
-readyToPrintBtn.addEventListener("click", () => {
+readyToPrintBtn.addEventListener("click", async () => {
   if (readyToPrintBtn.classList.contains("disabled")) return;
   
   // Show the geocode overlay
   geocodeOverlay.style.display = "flex";
-  geocodeStatus.textContent = "Generating geocode ...";
+  geocodeStatus.textContent = "Slicing model & generating G-code ...";
   geocodeStatus.classList.remove("ready");
   geocodeDownloadBtn.disabled = true;
-  
-  // After 5 seconds, transition to ready state
-  setTimeout(() => {
-    geocodeStatus.textContent = "Geocode ready for download";
+
+  try {
+    const resp = await fetch("/api/slice", { method: "POST" });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      geocodeStatus.textContent = `G-code failed: ${err.detail || err.message || "Unknown error"}`;
+      return;
+    }
+    const data = await resp.json();
+    
+    // Store results for download and step-by-step guide
+    window._gcodeResult = data;
+    
+    // Build status text with pause info
+    let statusText = "G-code ready for download";
+    if (data.pause_points) {
+      const pp = data.pause_points;
+      statusText += `\n\nPrint stages:\n`;
+      statusText += `  1. Print floor (layers 1–${pp.ink_layer_number})\n`;
+      statusText += `  2. Iron surface & deposit ink @ Z=${pp.ink_layer_z.toFixed(1)}mm\n`;
+      statusText += `  3. Print walls (layers ${pp.ink_layer_number + 1}–${pp.component_layer_number})\n`;
+      statusText += `  4. Insert components @ Z=${pp.component_insert_z.toFixed(1)}mm\n`;
+      statusText += `  5. Print ceiling to completion`;
+    }
+    
+    geocodeStatus.textContent = statusText;
     geocodeStatus.classList.add("ready");
     geocodeDownloadBtn.disabled = false;
-  }, 5000);
+    _enableGcodeButtons();
+  } catch (e) {
+    geocodeStatus.textContent = `G-code error: ${e.message}`;
+  }
 });
 
 geocodeDownloadBtn.addEventListener("click", () => {
   if (geocodeDownloadBtn.disabled) return;
-  // TODO: Implement actual geocode download
-  alert("Geocode download - to be implemented");
+  // Download the staged G-code file
+  window.location.href = "/api/gcode/download/enclosure_staged";
 });
 
 stepByStepBtn.addEventListener("click", () => {
   geocodeOverlay.style.display = "none";
   stepByStepScreen.style.display = "flex";
+  
+  // Populate the guide with real print stages
+  const guideContent = stepByStepScreen.querySelector(".guide-content");
+  const data = window._gcodeResult;
+  
+  const steps = [];
+  if (data && data.pause_points) {
+    const pp = data.pause_points;
+    steps.push({
+      title: "Stage 1: Print the Floor",
+      body: `Print from layer 1 to layer ${pp.ink_layer_number} (Z = ${pp.ink_layer_z.toFixed(1)} mm).\n` +
+            `This creates the solid base of the enclosure. The top surface of the floor will be ironed smooth ` +
+            `to prepare it for conductive ink deposition.`
+    });
+    steps.push({
+      title: "Stage 2: Deposit Conductive Ink",
+      body: `The printer will pause at Z = ${pp.ink_layer_z.toFixed(1)} mm.\n\n` +
+            `Apply conductive ink along the trace channels carved into the floor surface. ` +
+            `These channels connect the component pin holes and form the circuit.\n\n` +
+            `Press the knob on the printer when done to resume.`
+    });
+    steps.push({
+      title: "Stage 3: Print Cavity Walls",
+      body: `Print from layer ${pp.ink_layer_number + 1} to layer ${pp.component_layer_number} ` +
+            `(Z = ${pp.ink_layer_z.toFixed(1)} → ${pp.component_insert_z.toFixed(1)} mm).\n\n` +
+            `This builds the walls around the component pockets. The ink traces below are sealed in by the plastic.`
+    });
+    steps.push({
+      title: "Stage 4: Insert Components",
+      body: `The printer will pause at Z = ${pp.component_insert_z.toFixed(1)} mm.\n\n` +
+            `Insert the following components into their pockets:\n` +
+            `  • IR diode — round hole near the top edge\n` +
+            `  • Tactile switches — square button pockets\n` +
+            `  • ATmega328P — DIP-28 pocket\n\n` +
+            `Ensure all pins seat fully into the pin holes.\n` +
+            `Press the knob on the printer when done to resume.`
+    });
+    steps.push({
+      title: "Stage 5: Print Ceiling",
+      body: `Print the remaining layers to completion (Z = ${pp.component_insert_z.toFixed(1)} → ${pp.total_height.toFixed(1)} mm).\n\n` +
+            `The ceiling closes over the components, sealing the enclosure. ` +
+            `Button holes remain open for the tactile switches.`
+    });
+  } else {
+    steps.push({
+      title: "No G-code data",
+      body: "Generate G-code first by clicking 'Ready to print'."
+    });
+  }
+  
+  // Store steps and current index for navigation
+  window._guideSteps = steps;
+  window._guideIndex = 0;
+  _renderGuideStep();
 });
+
+function _renderGuideStep() {
+  const guideContent = document.querySelector(".guide-content");
+  if (!window._guideSteps || !guideContent) return;
+  const step = window._guideSteps[window._guideIndex];
+  const total = window._guideSteps.length;
+  guideContent.innerHTML = `
+    <h2>${step.title}</h2>
+    <p style="white-space:pre-wrap;">${step.body}</p>
+    <div style="margin-top:1em;color:#6b7280;font-size:0.85em;">
+      Step ${window._guideIndex + 1} of ${total}
+    </div>
+  `;
+}
 
 backToDesignBtn.addEventListener("click", () => {
   stepByStepScreen.style.display = "none";
@@ -616,13 +709,15 @@ toggleQuestionWindowBtn.addEventListener("click", () => {
 
 // Guide navigation buttons
 guidePrevBtn.addEventListener("click", () => {
-  // TODO: Implement previous step navigation
-  console.log("Previous step clicked");
+  if (!window._guideSteps || window._guideIndex <= 0) return;
+  window._guideIndex--;
+  _renderGuideStep();
 });
 
 guideNextBtn.addEventListener("click", () => {
-  // TODO: Implement next step navigation
-  console.log("Next step clicked");
+  if (!window._guideSteps || window._guideIndex >= window._guideSteps.length - 1) return;
+  window._guideIndex++;
+  _renderGuideStep();
 });
 
 // Guide ask button
@@ -633,6 +728,286 @@ guideAskBtn.addEventListener("click", () => {
   guideResponse.textContent = "Response will appear here...";
   guidePromptInput.value = "";
 });
+
+// ── G-code preview ────────────────────────────────────────────────
+
+const gcodePreviewBtn     = document.getElementById("gcodePreviewBtn");
+const gcodeOpenViewerBtn  = document.getElementById("gcodeOpenViewerBtn");
+const gcodePreviewScreen  = document.getElementById("gcodePreviewScreen");
+const gcodePreviewBackBtn = document.getElementById("gcodePreviewBackBtn");
+const gcodeLayerView      = document.getElementById("gcodeLayerView");
+const gcodeCodeView       = document.getElementById("gcodeCodeView");
+const layerDiagramSvg     = document.getElementById("layerDiagramSvg");
+const gcodeLineCount      = document.getElementById("gcodeLineCount");
+const gcodeLayerCount     = document.getElementById("gcodeLayerCount");
+const gcodePauseJumps     = document.getElementById("gcodePauseJumps");
+const gcodeCodeArea       = document.getElementById("gcodeCodeArea");
+const gcodeTabBtns        = document.querySelectorAll(".gcode-tab");
+
+// Tab switching
+gcodeTabBtns.forEach(btn => btn.addEventListener("click", () => {
+  const view = btn.dataset.gcodeView;
+  gcodeTabBtns.forEach(b => b.classList.toggle("active", b.dataset.gcodeView === view));
+  gcodeLayerView.classList.toggle("active", view === "layers");
+  gcodeCodeView.classList.toggle("active", view === "code");
+}));
+
+// Back button
+gcodePreviewBackBtn.addEventListener("click", () => {
+  gcodePreviewScreen.style.display = "none";
+  geocodeOverlay.style.display = "flex";
+});
+
+// Open in PrusaSlicer
+gcodeOpenViewerBtn.addEventListener("click", async () => {
+  if (gcodeOpenViewerBtn.disabled) return;
+  try {
+    const resp = await fetch("/api/gcode/open-viewer", { method: "POST" });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      alert(err.detail || "Failed to open PrusaSlicer");
+    }
+  } catch (e) {
+    alert("Error: " + e.message);
+  }
+});
+
+// Preview button — fetch metadata + raw G-code, then show preview screen
+gcodePreviewBtn.addEventListener("click", async () => {
+  if (gcodePreviewBtn.disabled) return;
+  gcodePreviewScreen.style.display = "flex";
+  geocodeOverlay.style.display = "none";
+
+  // Fetch preview metadata
+  try {
+    const [metaResp, codeResp] = await Promise.all([
+      fetch("/api/gcode/preview/enclosure_staged"),
+      fetch("/api/gcode/enclosure_staged"),
+    ]);
+    if (metaResp.ok) {
+      const meta = await metaResp.json();
+      gcodeLineCount.textContent = meta.total_lines.toLocaleString() + " lines";
+      gcodeLayerCount.textContent = meta.total_layers + " layers";
+      renderLayerDiagram(meta);
+      renderPauseJumpButtons(meta.pauses);
+    }
+    if (codeResp.ok) {
+      const raw = await codeResp.text();
+      renderGcodeText(raw);
+    }
+  } catch (e) {
+    console.error("G-code preview error:", e);
+  }
+});
+
+// ── Layer diagram renderer ────────────────────────────────────────
+
+function renderLayerDiagram(meta) {
+  const svg = layerDiagramSvg;
+  svg.innerHTML = "";
+
+  const W = 600, H = 400;
+  const pad = { top: 30, right: 30, bottom: 40, left: 70 };
+  const drawW = W - pad.left - pad.right;
+  const drawH = H - pad.top - pad.bottom;
+
+  // Get data from gcodeResult
+  const pp = window._gcodeResult?.pause_points;
+  if (!pp) return;
+
+  const totalH = pp.total_height || 16.5;
+  const inkZ = pp.ink_layer_z;
+  const compZ = pp.component_insert_z;
+
+  // Scale helper: Z mm → SVG y (inverted: bottom = high Z)
+  const yOf = z => pad.top + drawH - (z / totalH) * drawH;
+  const xL = pad.left;
+  const xR = pad.left + drawW;
+
+  // Background
+  const bg = _svgEl("rect", { x: 0, y: 0, width: W, height: H, fill: "#0b1120" });
+  svg.appendChild(bg);
+
+  // Color palette
+  const stageColors = ["#3b82f6", "#10b981", "#6366f1", "#f59e0b", "#ef4444"];
+
+  // Define stages
+  const stages = [
+    { label: "Floor", z0: 0, z1: inkZ, color: stageColors[0] },
+    { label: "Ink deposit", z0: inkZ, z1: inkZ, color: stageColors[1], isPause: true },
+    { label: "Walls", z0: inkZ, z1: compZ, color: stageColors[2] },
+    { label: "Components", z0: compZ, z1: compZ, color: stageColors[3], isPause: true },
+    { label: "Ceiling", z0: compZ, z1: totalH, color: stageColors[4] },
+  ];
+
+  // Draw filled stage blocks (print stages only)
+  stages.forEach(s => {
+    if (s.isPause) return;
+    const y1 = yOf(s.z1);
+    const y0 = yOf(s.z0);
+    const h = y0 - y1;
+    if (h < 1) return;
+    const rect = _svgEl("rect", {
+      x: xL + 60, y: y1, width: drawW - 120, height: h,
+      fill: s.color, opacity: 0.25, rx: 4,
+    });
+    svg.appendChild(rect);
+
+    // Stage label (centered)
+    const label = _svgEl("text", {
+      x: W / 2, y: y1 + h / 2 + 4,
+      fill: s.color, "font-size": 13, "font-weight": 500,
+      "text-anchor": "middle", "font-family": "inherit",
+    });
+    label.textContent = s.label;
+    svg.appendChild(label);
+  });
+
+  // Draw pause lines (dashed)
+  stages.filter(s => s.isPause).forEach(s => {
+    const y = yOf(s.z0);
+    const line = _svgEl("line", {
+      x1: xL + 20, y1: y, x2: xR - 20, y2: y,
+      stroke: s.color, "stroke-width": 2, "stroke-dasharray": "6,4",
+    });
+    svg.appendChild(line);
+
+    // Pause label
+    const lbl = _svgEl("text", {
+      x: xR - 16, y: y - 6,
+      fill: s.color, "font-size": 11, "text-anchor": "end", "font-family": "inherit",
+    });
+    lbl.textContent = `⏸ ${s.label} @ Z=${s.z0.toFixed(1)}mm`;
+    svg.appendChild(lbl);
+  });
+
+  // Y axis — Z height labels
+  const zTicks = [0, inkZ, compZ, totalH];
+  zTicks.forEach(z => {
+    const y = yOf(z);
+    // tick
+    const tick = _svgEl("line", {
+      x1: xL - 4, y1: y, x2: xL, y2: y,
+      stroke: "#4b5563", "stroke-width": 1,
+    });
+    svg.appendChild(tick);
+    // label
+    const lbl = _svgEl("text", {
+      x: xL - 8, y: y + 4,
+      fill: "#9ca3af", "font-size": 11, "text-anchor": "end", "font-family": "inherit",
+    });
+    lbl.textContent = z.toFixed(1) + " mm";
+    svg.appendChild(lbl);
+  });
+
+  // Axis line
+  const axis = _svgEl("line", {
+    x1: xL, y1: pad.top, x2: xL, y2: pad.top + drawH,
+    stroke: "#4b5563", "stroke-width": 1,
+  });
+  svg.appendChild(axis);
+
+  // Title
+  const title = _svgEl("text", {
+    x: W / 2, y: 18,
+    fill: "#e5e7eb", "font-size": 14, "font-weight": 600,
+    "text-anchor": "middle", "font-family": "inherit",
+  });
+  title.textContent = "Print Cross-Section — Layer Heights & Pause Points";
+  svg.appendChild(title);
+
+  // Layer count annotation
+  if (meta.total_layers) {
+    const ann = _svgEl("text", {
+      x: W / 2, y: H - 10,
+      fill: "#6b7280", "font-size": 11,
+      "text-anchor": "middle", "font-family": "inherit",
+    });
+    ann.textContent = `${meta.total_layers} layers @ 0.2mm — ${meta.total_lines.toLocaleString()} G-code lines`;
+    svg.appendChild(ann);
+  }
+}
+
+function _svgEl(tag, attrs) {
+  const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
+
+// ── G-code text renderer ──────────────────────────────────────────
+
+function renderGcodeText(raw) {
+  const lines = raw.split("\n");
+  const MAX_RENDER = 50000; // Limit for performance
+  const truncated = lines.length > MAX_RENDER;
+
+  let html = "";
+  const limit = Math.min(lines.length, MAX_RENDER);
+
+  for (let i = 0; i < limit; i++) {
+    const line = lines[i];
+    const num = `<span class="gcode-line-num">${i + 1}</span>`;
+    const escaped = line
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+
+    if (/^M601\b/.test(line) || /PAUSE|MANUAL STEP/i.test(line)) {
+      html += `<span class="gcode-line gcode-pause" data-line="${i + 1}">${num}${escaped}</span>`;
+    } else if (/^;\s*(INK|CONDUCTIVE)/i.test(line) || /INK_TRACE/i.test(line)) {
+      html += `<span class="gcode-line gcode-ink">${num}${escaped}</span>`;
+    } else if (/^;Z:/i.test(line) || /^;LAYER_CHANGE/i.test(line)) {
+      html += `<span class="gcode-line gcode-layer">${num}${escaped}</span>`;
+    } else if (/^;/.test(line)) {
+      html += `<span class="gcode-line gcode-comment">${num}${escaped}</span>`;
+    } else if (/^G[01]\b/.test(line)) {
+      html += `<span class="gcode-line gcode-move">${num}${escaped}</span>`;
+    } else {
+      html += `<span class="gcode-line">${num}${escaped}</span>`;
+    }
+  }
+
+  if (truncated) {
+    html += `<span class="gcode-line gcode-comment"><span class="gcode-line-num">...</span>; (${(lines.length - MAX_RENDER).toLocaleString()} more lines truncated for performance)</span>`;
+  }
+
+  gcodeCodeArea.innerHTML = html;
+}
+
+// ── Pause jump buttons ────────────────────────────────────────────
+
+function renderPauseJumpButtons(pauses) {
+  if (!pauses || !pauses.length) return;
+  gcodePauseJumps.innerHTML = "";
+
+  pauses.forEach((p, i) => {
+    const btn = document.createElement("button");
+    btn.className = "gcode-pause-jump-btn";
+    btn.textContent = `⏸ ${p.label || "Pause"} (L${p.line})`;
+    btn.addEventListener("click", () => {
+      // Switch to code tab
+      gcodeTabBtns.forEach(b => b.classList.toggle("active", b.dataset.gcodeView === "code"));
+      gcodeLayerView.classList.remove("active");
+      gcodeCodeView.classList.add("active");
+      // Scroll to the pause line
+      const target = gcodeCodeArea.querySelector(`[data-line="${p.line}"]`);
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        target.style.outline = "2px solid #f59e0b";
+        setTimeout(() => target.style.outline = "", 2000);
+      }
+    });
+    gcodePauseJumps.appendChild(btn);
+  });
+}
+
+// Enable preview + viewer buttons when G-code result is available
+function _enableGcodeButtons() {
+  if (window._gcodeResult) {
+    gcodePreviewBtn.disabled = false;
+    gcodeOpenViewerBtn.disabled = false;
+  }
+}
 
 // ── Reset session ─────────────────────────────────────────────────
 
@@ -671,6 +1046,13 @@ if (resetBtn) {
     // Hide geocode/guide screens
     geocodeOverlay.style.display = "none";
     stepByStepScreen.style.display = "none";
+    gcodePreviewScreen.style.display = "none";
+    gcodePreviewBtn.disabled = true;
+    gcodeOpenViewerBtn.disabled = true;
+    gcodeCodeArea.innerHTML = "";
+    layerDiagramSvg.innerHTML = "";
+    gcodePauseJumps.innerHTML = "";
+    window._gcodeResult = null;
     hideProgress();
     // Reset curve editor
     curveEditor.style.display = "none";
@@ -1174,6 +1556,33 @@ sendBtn.addEventListener("click", async () => {
                 ev.bottom_curve_length || 0, ev.bottom_curve_height || 0,
               );
             });
+            break;
+
+          case "gcode_ready":
+            // Store gcode result for the Ready to Print button / step guide
+            window._gcodeResult = {
+              pause_points: {
+                ink_layer_z: ev.ink_layer_z,
+                component_insert_z: ev.component_z,
+                ink_layer_number: ev.ink_layer,
+                component_layer_number: ev.component_layer,
+                total_height: 0,  // filled from shell height
+              },
+              postprocess: {
+                total_layers: ev.total_layers,
+                ink_layer: ev.ink_layer,
+                component_layer: ev.component_layer,
+                stages: ev.stages,
+              },
+              staged_gcode: ev.staged_gcode,
+            };
+            // Fetch shell height to complete the data
+            _fetchShellHeight().then(h => {
+              if (window._gcodeResult && window._gcodeResult.pause_points) {
+                window._gcodeResult.pause_points.total_height = h;
+              }
+            });
+            _enableGcodeButtons();
             break;
 
           case "tool_call":

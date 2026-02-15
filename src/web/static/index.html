@@ -78,14 +78,48 @@
       <!-- Geocode overlay screen -->
       <div id="geocodeOverlay" class="geocode-overlay" style="display: none;">
         <div class="geocode-content">
-          <div class="geocode-status" id="geocodeStatus">Generating geocode ...</div>
-          <button id="geocodeDownloadBtn" class="geocode-download-btn" disabled>
-            Download Geocode
-          </button>
+          <div class="geocode-status" id="geocodeStatus">Generating G-code ...</div>
+          <div class="geocode-actions">
+            <button id="geocodeDownloadBtn" class="geocode-download-btn" disabled>
+              Download G-code
+            </button>
+            <button id="gcodePreviewBtn" class="geocode-preview-btn" disabled>
+              Preview G-code
+            </button>
+            <button id="gcodeOpenViewerBtn" class="geocode-viewer-btn" disabled>
+              Open in PrusaSlicer
+            </button>
+          </div>
         </div>
         <button id="stepByStepBtn" class="step-by-step-btn">
           Go to step by step guide
         </button>
+      </div>
+
+      <!-- G-code preview screen -->
+      <div id="gcodePreviewScreen" class="gcode-preview-screen" style="display: none;">
+        <div class="gcode-preview-header">
+          <button id="gcodePreviewBackBtn" class="back-to-design-btn">Back</button>
+          <div class="gcode-preview-tabs">
+            <button class="gcode-tab active" data-gcode-view="layers">Layer Diagram</button>
+            <button class="gcode-tab" data-gcode-view="code">G-code</button>
+          </div>
+        </div>
+
+        <!-- Layer diagram view -->
+        <div id="gcodeLayerView" class="gcode-panel active">
+          <svg id="layerDiagramSvg" class="layer-diagram-svg" viewBox="0 0 600 400" preserveAspectRatio="xMidYMid meet"></svg>
+        </div>
+
+        <!-- G-code text view -->
+        <div id="gcodeCodeView" class="gcode-panel">
+          <div class="gcode-code-header">
+            <span id="gcodeLineCount">0 lines</span>
+            <span id="gcodeLayerCount">0 layers</span>
+            <div class="gcode-pause-jumps" id="gcodePauseJumps"></div>
+          </div>
+          <pre class="gcode-code-area" id="gcodeCodeArea"></pre>
+        </div>
       </div>
 
       <!-- Step by step guide screen -->
