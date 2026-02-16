@@ -26,7 +26,7 @@ from src.scad.shell import generate_enclosure_scad, generate_battery_hatch_scad,
 from src.scad.cutouts import build_cutouts
 from src.scad.compiler import compile_scad
 from src.gcode.pipeline import run_gcode_pipeline
-from src.gcode.slicer import find_prusaslicer
+from src.gcode.slicer import find_prusaslicer, PRINTERS
 
 # ── .env loader ────────────────────────────────────────────────────
 
@@ -293,10 +293,27 @@ def get_output_file(run_id: str, path: str):
     return FileResponse(full)
 
 
+# ── Printer info ─────────────────────────────────────────────────
+
+@app.get("/api/printers")
+def list_printers():
+    """Return the list of supported printers for the UI dropdown."""
+    return {
+        "printers": [
+            {"id": p.id, "label": p.label, "bed": f"{p.bed_width:.0f}×{p.bed_depth:.0f} mm"}
+            for p in PRINTERS.values()
+        ]
+    }
+
+
 # ── G-code endpoints ──────────────────────────────────────────────
 
+class SliceRequest(BaseModel):
+    printer: str | None = None
+
+
 @app.post("/api/slice")
-def slice_model():
+def slice_model(req: SliceRequest | None = None):
     """Slice the enclosure STL and generate staged G-code with pauses.
 
     Uses the cached pcb_layout and routing_result from the current
@@ -320,11 +337,14 @@ def slice_model():
     if routing_path.exists():
         routing = json.loads(routing_path.read_text(encoding="utf-8"))
 
+    printer_id = req.printer if req else None
+
     result = run_gcode_pipeline(
         stl_path=stl_path,
         output_dir=_run_dir,
         pcb_layout=layout,
         routing_result=routing,
+        printer=printer_id,
     )
 
     if not result.success:

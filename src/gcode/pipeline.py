@@ -17,7 +17,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from src.gcode.slicer import slice_stl
+from src.gcode.slicer import slice_stl, get_printer
 from src.gcode.pause_points import compute_pause_points, PausePoints
 from src.gcode.ink_traces import generate_ink_gcode, extract_trace_segments
 from src.gcode.postprocessor import postprocess_gcode, PostProcessResult
@@ -47,6 +47,7 @@ def run_gcode_pipeline(
     shell_height: float | None = None,
     layer_height: float = 0.2,
     slicer_profile: Path | None = None,
+    printer: str | None = None,
 ) -> GcodePipelineResult:
     """Run the full G-code pipeline: slice → inject pauses → output.
 
@@ -66,6 +67,8 @@ def run_gcode_pipeline(
         Slicer layer height in mm.
     slicer_profile : Path, optional
         Custom PrusaSlicer ``.ini`` profile.
+    printer : str, optional
+        Printer id (``"mk3s"`` or ``"coreone"``).
 
     Returns
     -------
@@ -74,6 +77,9 @@ def run_gcode_pipeline(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     stages: list[str] = []
+
+    pdef = get_printer(printer)
+    stages.append(f"Printer: {pdef.label} (bed {pdef.bed_width:.0f}×{pdef.bed_depth:.0f} mm)")
 
     # ── 1. Compute pause points ────────────────────────────────────
     log.info("Computing pause points...")
@@ -91,15 +97,23 @@ def run_gcode_pipeline(
         pauses.component_insert_z, pauses.component_layer_number,
     )
 
+    # ── 1b. Prefer print_plate.stl (enclosure + battery hatch) ──
+    print_plate = stl_path.parent / "print_plate.stl"
+    if print_plate.exists():
+        log.info("Found print_plate.stl — slicing combined model")
+        stl_path = print_plate
+        stages.append("Using print_plate.stl (enclosure + battery hatch)")
+
     # ── 2. Slice STL ──────────────────────────────────────────────
     raw_gcode = output_dir / "enclosure_raw.gcode"
     log.info("Slicing %s → %s", stl_path, raw_gcode)
-    stages.append("Slicing STL with PrusaSlicer...")
+    stages.append(f"Slicing {stl_path.name} with PrusaSlicer...")
 
     ok, msg, gcode_path = slice_stl(
         stl_path,
         output_gcode=raw_gcode,
         profile_path=slicer_profile,
+        printer=printer,
     )
     if not ok:
         log.error("Slicing failed: %s", msg)
@@ -130,8 +144,7 @@ def run_gcode_pipeline(
 
     # ── 3c. Compute bed offset (PrusaSlicer centres model on bed) ──
     from src.gcode.postprocessor import _compute_bed_offset
-    board_outline = pcb_layout.get("board", {}).get("outline_polygon", [])
-    bed_offset = _compute_bed_offset(board_outline) if board_outline else (0.0, 0.0)
+    bed_offset = _compute_bed_offset(stl_path, bed_size=(pdef.bed_width, pdef.bed_depth))
     stages.append(f"Bed offset: ({bed_offset[0]:.1f}, {bed_offset[1]:.1f}) mm")
 
     # ── 4. Post-process ───────────────────────────────────────────

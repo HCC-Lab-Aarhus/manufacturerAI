@@ -572,6 +572,25 @@ downloadBtn.addEventListener("click", () => {
   window.location.href = `/api/model/download/${latestModelName}`;
 });
 
+// ── Printer list ──────────────────────────────────────────────────
+
+(async () => {
+  try {
+    const resp = await fetch("/api/printers");
+    if (resp.ok) {
+      const { printers } = await resp.json();
+      const sel = document.getElementById("printerSelect");
+      sel.innerHTML = "";
+      for (const p of printers) {
+        const opt = document.createElement("option");
+        opt.value = p.id;
+        opt.textContent = `${p.label} (${p.bed})`;
+        sel.appendChild(opt);
+      }
+    }
+  } catch (_) { /* keep hardcoded fallback */ }
+})();
+
 // ── Ready to Print / G-code functionality ─────────────────────────
 
 readyToPrintBtn.addEventListener("click", async () => {
@@ -584,7 +603,12 @@ readyToPrintBtn.addEventListener("click", async () => {
   geocodeDownloadBtn.disabled = true;
 
   try {
-    const resp = await fetch("/api/slice", { method: "POST" });
+    const printer = document.getElementById("printerSelect").value;
+    const resp = await fetch("/api/slice", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ printer }),
+    });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ detail: resp.statusText }));
       geocodeStatus.textContent = `G-code failed: ${err.detail || err.message || "Unknown error"}`;

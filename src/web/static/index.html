@@ -78,6 +78,13 @@
       <!-- Geocode overlay screen -->
       <div id="geocodeOverlay" class="geocode-overlay" style="display: none;">
         <div class="geocode-content">
+          <div class="printer-selector">
+            <label for="printerSelect">Printer:</label>
+            <select id="printerSelect" class="printer-select">
+              <option value="mk3s">Prusa MK3S</option>
+              <option value="coreone">Prusa Core One+</option>
+            </select>
+          </div>
           <div class="geocode-status" id="geocodeStatus">Generating G-code ...</div>
           <div class="geocode-actions">
             <button id="geocodeDownloadBtn" class="geocode-download-btn" disabled>

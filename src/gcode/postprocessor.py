@@ -74,39 +74,67 @@ class PostProcessResult:
 
 # ── Bed-offset detection ─────────────────────────────────────────
 
-BED_WIDTH = 250.0   # Prusa MK3S bed X
-BED_DEPTH = 210.0   # Prusa MK3S bed Y
+
+def _stl_bbox_center(stl_path: Path) -> tuple[float, float]:
+    """Read an STL (binary or ASCII) and return ``(center_x, center_y)``."""
+    import struct
+
+    data = stl_path.read_bytes()
+    is_ascii = data.lstrip()[:6].lower() == b"solid " and b"facet" in data[:1000]
+
+    min_x = min_y = float("inf")
+    max_x = max_y = float("-inf")
+
+    if is_ascii:
+        _VERTEX_RE = re.compile(
+            r"vertex\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s+([-\d.eE+]+)"
+        )
+        for m in _VERTEX_RE.finditer(data.decode("utf-8", errors="replace")):
+            x, y = float(m.group(1)), float(m.group(2))
+            if x < min_x: min_x = x
+            if x > max_x: max_x = x
+            if y < min_y: min_y = y
+            if y > max_y: max_y = y
+    else:
+        import io
+        f = io.BytesIO(data)
+        f.read(80)  # header
+        (num_tri,) = struct.unpack("<I", f.read(4))
+        for _ in range(num_tri):
+            f.read(12)  # normal vector
+            for _v in range(3):
+                x, y, _z = struct.unpack("<fff", f.read(12))
+                if x < min_x: min_x = x
+                if x > max_x: max_x = x
+                if y < min_y: min_y = y
+                if y > max_y: max_y = y
+            f.read(2)  # attribute byte count
+
+    return ((min_x + max_x) / 2.0, (min_y + max_y) / 2.0)
 
 
 def _compute_bed_offset(
-    outline_polygon: list[list[float] | tuple[float, float]],
-    bed_size: tuple[float, float] = (BED_WIDTH, BED_DEPTH),
+    stl_path: Path,
+    bed_size: tuple[float, float],
 ) -> tuple[float, float]:
     """Compute offset from model-local coords to bed coords.
 
     PrusaSlicer auto-centres the STL on the build plate.  The centre
     of the model's bounding box lands on the centre of the bed:
 
-        offset = bed_centre − model_bbox_centre
+        offset = bed_centre − stl_bbox_centre
 
     Parameters
     ----------
-    outline_polygon : list
-        Board outline as ``[[x, y], ...]`` in model-local mm.
+    stl_path : Path
+        The STL file that PrusaSlicer is slicing (``enclosure.stl``
+        or ``print_plate.stl``).
     bed_size : tuple
         ``(width, height)`` of the bed in mm.
 
     Returns ``(offset_x, offset_y)`` in mm.
     """
-    if not outline_polygon:
-        log.warning("Empty outline polygon — bed offset = (0, 0)")
-        return 0.0, 0.0
-
-    xs = [p[0] for p in outline_polygon]
-    ys = [p[1] for p in outline_polygon]
-
-    model_cx = (min(xs) + max(xs)) / 2.0
-    model_cy = (min(ys) + max(ys)) / 2.0
+    model_cx, model_cy = _stl_bbox_center(stl_path)
 
     bed_cx = bed_size[0] / 2.0
     bed_cy = bed_size[1] / 2.0
@@ -115,9 +143,10 @@ def _compute_bed_offset(
     offset_y = bed_cy - model_cy
 
     log.info(
-        "Bed offset: model centre (%.3f, %.3f) → bed centre (%.1f, %.1f) "
-        "⇒ offset (%.3f, %.3f)",
+        "Bed offset: STL bbox centre (%.3f, %.3f) → bed centre (%.1f, %.1f) "
+        "⇒ offset (%.3f, %.3f)  [%s]",
         model_cx, model_cy, bed_cx, bed_cy, offset_x, offset_y,
+        stl_path.name,
     )
     return offset_x, offset_y
 
@@ -518,9 +547,12 @@ def postprocess_gcode(
     ink_layer_num = -1
     comp_layer_num = -1
     ironing_moves_removed = 0
+    ironing_layers_stripped = 0
+    ironing_lines_stripped = 0
     highlight_z = ink_z + LAYER_HEIGHT
     trace_highlight_pending = False  # armed at ink layer
     trace_highlight_armed = False    # ready to inject after next ;TYPE:
+    current_z = 0.0                  # track Z for ironing filtering
 
 
     # Track whether we're inside the ink layer (between ink_z and the
@@ -549,6 +581,8 @@ def postprocess_gcode(
         if z_match:
             z_val = float(z_match.group(1))
             total_layers += 1
+
+            current_z = z_val
 
             # Leaving the ink layer
             if in_ink_layer and z_val > ink_z + 0.01:
@@ -625,6 +659,63 @@ def postprocess_gcode(
                 ))
                 stages.append(f"Component insertion pause at Z={component_z:.2f}")
 
+        # ── Strip ironing from non-ink layers ─────────────
+        # We only need ironing at the ink layer for a smooth trace
+        # surface.  Ironing the outer shell / ceiling wastes time.
+        # IMPORTANT: preserve the retract → travel → unretract
+        # sequence at the end of the ironing section so the nozzle
+        # travels cleanly to the next object (hatch) without oozing.
+        if line.strip() == ';TYPE:Ironing' and abs(current_z - ink_z) > 0.05:
+            # Collect all lines in the ironing section
+            section: list[str] = []
+            i += 1
+            while i < len(raw_lines):
+                nxt = raw_lines[i].strip()
+                if nxt.startswith(';TYPE:') or nxt.startswith(';LAYER_CHANGE'):
+                    break
+                section.append(raw_lines[i])
+                i += 1
+
+            # Determine what follows: another ;TYPE: or ;LAYER_CHANGE
+            next_is_type = (
+                i < len(raw_lines)
+                and raw_lines[i].strip().startswith(';TYPE:')
+            )
+
+            skipped = len(section)
+            if next_is_type and section:
+                # Another section follows on this layer — the slicer
+                # put a retract → G92 E0 → zhop → travel → zdrop →
+                # unretract at the end of ironing.  We must keep it.
+                # Find the last G92 E0 (E-counter reset before travel).
+                retract_start = None
+                for k in range(len(section) - 1, -1, -1):
+                    if section[k].strip() == 'G92 E0':
+                        # The retract G1 is the line before G92 E0
+                        retract_start = max(0, k - 1)
+                        break
+
+                if retract_start is not None:
+                    kept = section[retract_start:]
+                    skipped = retract_start
+                    for kl in kept:
+                        out.append(kl)
+                        m_k = _MOVE_RE.match(kl)
+                        if m_k:
+                            if m_k.group("x"):
+                                track_x = float(m_k.group("x"))
+                            if m_k.group("y"):
+                                track_y = float(m_k.group("y"))
+
+            ironing_layers_stripped += 1
+            ironing_lines_stripped += skipped
+            log.debug(
+                "Stripped ironing at Z=%.2f (%d moves stripped, %d travel kept)",
+                current_z, skipped,
+                len(section) - skipped,
+            )
+            continue  # don't append the ;TYPE:Ironing line itself
+
         # Append the current line
         out.append(line)
 
@@ -661,6 +752,15 @@ def postprocess_gcode(
     )
     if ironing_moves_removed:
         log.info("  Removed %d ironing moves over trace channels", ironing_moves_removed)
+    if ironing_layers_stripped:
+        log.info(
+            "  Stripped ironing from %d non-ink layers (%d lines removed)",
+            ironing_layers_stripped, ironing_lines_stripped,
+        )
+        stages.append(
+            f"Stripped ironing from {ironing_layers_stripped} non-ink layers "
+            f"({ironing_lines_stripped} G-code lines removed)"
+        )
     if trace_segs:
         log.info("  Trace highlight: %d segments", len(trace_segs))
 
