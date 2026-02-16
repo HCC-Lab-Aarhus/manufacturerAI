@@ -12,9 +12,11 @@ const readyToPrintBtn   = document.getElementById("readyToPrintBtn");
 const geocodeOverlay    = document.getElementById("geocodeOverlay");
 const geocodeStatus     = document.getElementById("geocodeStatus");
 const geocodeDownloadBtn = document.getElementById("geocodeDownloadBtn");
+const geocodeBackBtn    = document.getElementById("geocodeBackBtn");
 const stepByStepBtn     = document.getElementById("stepByStepBtn");
 const stepByStepScreen  = document.getElementById("stepByStepScreen");
 const backToDesignBtn   = document.getElementById("backToDesignBtn");
+const backToGcodeBtn    = document.getElementById("backToGcodeBtn");
 
 // Step-by-step guide elements
 const toggleQuestionWindowBtn = document.getElementById("toggleQuestionWindowBtn");
@@ -580,7 +582,7 @@ downloadBtn.addEventListener("click", () => {
     if (resp.ok) {
       const { printers } = await resp.json();
       const sel = document.getElementById("printerSelect");
-      sel.innerHTML = "";
+      sel.innerHTML = '<option value="" disabled selected>Choose printer...</option>';
       for (const p of printers) {
         const opt = document.createElement("option");
         opt.value = p.id;
@@ -598,12 +600,22 @@ readyToPrintBtn.addEventListener("click", async () => {
   
   // Show the geocode overlay
   geocodeOverlay.style.display = "flex";
+  geocodeStatus.textContent = "";
+  geocodeStatus.classList.remove("ready", "slicing");
+  geocodeDownloadBtn.disabled = true;
+});
+
+// Start slicing when printer is selected
+document.getElementById("printerSelect").addEventListener("change", async (e) => {
+  const printer = e.target.value;
+  if (!printer) return;
+  
   geocodeStatus.textContent = "Slicing model & generating G-code ...";
   geocodeStatus.classList.remove("ready");
+  geocodeStatus.classList.add("slicing");
   geocodeDownloadBtn.disabled = true;
 
   try {
-    const printer = document.getElementById("printerSelect").value;
     const resp = await fetch("/api/slice", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -611,6 +623,7 @@ readyToPrintBtn.addEventListener("click", async () => {
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      geocodeStatus.classList.remove("slicing");
       geocodeStatus.textContent = `G-code failed: ${err.detail || err.message || "Unknown error"}`;
       return;
     }
@@ -619,23 +632,13 @@ readyToPrintBtn.addEventListener("click", async () => {
     // Store results for download and step-by-step guide
     window._gcodeResult = data;
     
-    // Build status text with pause info
-    let statusText = "G-code ready for download";
-    if (data.pause_points) {
-      const pp = data.pause_points;
-      statusText += `\n\nPrint stages:\n`;
-      statusText += `  1. Print floor (layers 1–${pp.ink_layer_number})\n`;
-      statusText += `  2. Iron surface & deposit ink @ Z=${pp.ink_layer_z.toFixed(1)}mm\n`;
-      statusText += `  3. Print walls (layers ${pp.ink_layer_number + 1}–${pp.component_layer_number})\n`;
-      statusText += `  4. Insert components @ Z=${pp.component_insert_z.toFixed(1)}mm\n`;
-      statusText += `  5. Print ceiling to completion`;
-    }
-    
-    geocodeStatus.textContent = statusText;
+    geocodeStatus.textContent = "G-code ready for download";
+    geocodeStatus.classList.remove("slicing");
     geocodeStatus.classList.add("ready");
     geocodeDownloadBtn.disabled = false;
     _enableGcodeButtons();
   } catch (e) {
+    geocodeStatus.classList.remove("slicing");
     geocodeStatus.textContent = `G-code error: ${e.message}`;
   }
 });
@@ -644,6 +647,10 @@ geocodeDownloadBtn.addEventListener("click", () => {
   if (geocodeDownloadBtn.disabled) return;
   // Download the staged G-code file
   window.location.href = "/api/gcode/download/enclosure_staged";
+});
+
+geocodeBackBtn.addEventListener("click", () => {
+  geocodeOverlay.style.display = "none";
 });
 
 stepByStepBtn.addEventListener("click", () => {
@@ -657,45 +664,131 @@ stepByStepBtn.addEventListener("click", () => {
   const steps = [];
   if (data && data.pause_points) {
     const pp = data.pause_points;
+    const components = data.components || [];
+    
+    // ── PAUSE 1: Ink Deposition ──────────────────────────────────
     steps.push({
-      title: "Stage 1: Print the Floor",
-      body: `Print from layer 1 to layer ${pp.ink_layer_number} (Z = ${pp.ink_layer_z.toFixed(1)} mm).\n` +
-            `This creates the solid base of the enclosure. The top surface of the floor will be ironed smooth ` +
-            `to prepare it for conductive ink deposition.`
+      title: "Pause 1: Ink Deposition",
+      subtitle: "Overview",
+      body: `The printer will pause at layer ${pp.ink_layer_number} (Z = ${pp.ink_layer_z.toFixed(1)} mm).\n\n` +
+            `At this pause you need to apply conductive ink to create the circuit traces.`,
+      isPauseHeader: true,
+      pauseNumber: 1,
     });
     steps.push({
-      title: "Stage 2: Deposit Conductive Ink",
-      body: `The printer will pause at Z = ${pp.ink_layer_z.toFixed(1)} mm.\n\n` +
-            `Apply conductive ink along the trace channels carved into the floor surface. ` +
-            `These channels connect the component pin holes and form the circuit.\n\n` +
-            `Press the knob on the printer when done to resume.`
+      title: "Apply Conductive Ink",
+      subtitle: "Pause 1 — Step 1",
+      body: `Apply conductive ink along the trace channels carved into the floor surface.\n\n` +
+            `Important:\n` +
+            `• Follow the channel grooves carefully\n` +
+            `• Ensure continuous lines without gaps\n` +
+            `• Let the ink settle into the channels\n` +
+            `• The ink connects all component pin holes\n\n` +
+            `When done, press the knob on the printer to resume.`,
+      pauseNumber: 1,
     });
+    
+    // ── PAUSE 2: Component Insertion ─────────────────────────────
     steps.push({
-      title: "Stage 3: Print Cavity Walls",
-      body: `Print from layer ${pp.ink_layer_number + 1} to layer ${pp.component_layer_number} ` +
-            `(Z = ${pp.ink_layer_z.toFixed(1)} → ${pp.component_insert_z.toFixed(1)} mm).\n\n` +
-            `This builds the walls around the component pockets. The ink traces below are sealed in by the plastic.`
+      title: "Pause 2: Component Insertion",
+      subtitle: "Overview",
+      body: `The printer will pause at layer ${pp.component_layer_number} (Z = ${pp.component_insert_z.toFixed(1)} mm).\n\n` +
+            `At this pause you need to insert all electronic components into their pockets.`,
+      isPauseHeader: true,
+      pauseNumber: 2,
     });
+    
+    // Add each component as a separate step
+    let componentStep = 1;
+    const totalComponents = components.length;
+    
+    for (const comp of components) {
+      const ctype = comp.type || "";
+      const cid = comp.id || comp.ref || ctype;
+      const rotation = comp.rotation_deg || 0;
+      const center = comp.center || [0, 0];
+      
+      let title = "";
+      let body = "";
+      
+      if (ctype === "button") {
+        title = `Insert Button: ${cid}`;
+        body = `Component: Tactile Push Button (12×12mm)\n` +
+               `Location: ${_describePosition(center)}\n\n` +
+               `Instructions:\n` +
+               `• Find the square pocket for this button\n` +
+               `• Orient the button so the pins align with the holes\n` +
+               `• Press firmly until the button sits flush\n` +
+               `• The button cap should protrude through the top hole`;
+      } else if (ctype === "battery") {
+        title = `Insert Battery Holder: ${cid}`;
+        body = `Component: Battery Compartment (${comp.footprint || "2xAAA"})\n` +
+               `Location: ${_describePosition(center)}\n\n` +
+               `Instructions:\n` +
+               `• Find the rectangular battery pocket\n` +
+               `• Insert the battery holder with contacts facing the correct direction\n` +
+               `• Ensure the spring contacts align with the pin holes\n` +
+               `• Note: Batteries are inserted after printing is complete`;
+      } else if (ctype === "controller") {
+        title = `Insert Microcontroller: ${cid}`;
+        const footprint = comp.footprint || "ATmega328P";
+        body = `Component: ${footprint} (DIP package)\n` +
+               `Location: ${_describePosition(center)}\n` +
+               `Rotation: ${rotation}°\n\n` +
+               `Instructions:\n` +
+               `• Find the rectangular DIP pocket with pin holes\n` +
+               `• IMPORTANT: Locate pin 1 marker (notch or dot on chip)\n` +
+               `• Pin 1 should be at the ${_pinOneDirection(rotation)} of the pocket\n` +
+               `• Align all pins with the holes before pressing down\n` +
+               `• Press gently and evenly to seat all pins`;
+      } else if (ctype === "diode") {
+        title = `Insert IR Diode: ${cid}`;
+        body = `Component: Infrared LED\n` +
+               `Location: ${_describePosition(center)} (near edge for IR transmission)\n\n` +
+               `Instructions:\n` +
+               `• Find the round pocket near the board edge\n` +
+               `• IMPORTANT: The longer leg (anode, +) goes in the marked hole\n` +
+               `• The shorter leg (cathode, -) goes in the other hole\n` +
+               `• The LED should point outward through the wall slot`;
+      } else {
+        title = `Insert Component: ${cid}`;
+        body = `Component type: ${ctype}\n` +
+               `Location: ${_describePosition(center)}\n\n` +
+               `Insert this component into its designated pocket.\n` +
+               `Ensure all pins align with the holes before pressing down.`;
+      }
+      
+      steps.push({
+        title,
+        subtitle: `Pause 2 — Component ${componentStep} of ${totalComponents}`,
+        body,
+        pauseNumber: 2,
+        componentIndex: componentStep,
+        totalComponents,
+      });
+      componentStep++;
+    }
+    
+    // Final step for pause 2
     steps.push({
-      title: "Stage 4: Insert Components",
-      body: `The printer will pause at Z = ${pp.component_insert_z.toFixed(1)} mm.\n\n` +
-            `Insert the following components into their pockets:\n` +
-            `  • IR diode — round hole near the top edge\n` +
-            `  • Tactile switches — square button pockets\n` +
-            `  • ATmega328P — DIP-28 pocket\n\n` +
-            `Ensure all pins seat fully into the pin holes.\n` +
-            `Press the knob on the printer when done to resume.`
+      title: "Resume Printing",
+      subtitle: "Pause 2 — Final Step",
+      body: `All components have been inserted.\n\n` +
+            `Checklist before resuming:\n` +
+            `• All buttons are seated flush\n` +
+            `• Microcontroller pin 1 is correctly oriented\n` +
+            `• IR diode polarity is correct (long leg = +)\n` +
+            `• All pins are fully inserted into their holes\n\n` +
+            `Press the knob on the printer to resume.\n` +
+            `The printer will complete the ceiling to seal the enclosure.`,
+      pauseNumber: 2,
     });
-    steps.push({
-      title: "Stage 5: Print Ceiling",
-      body: `Print the remaining layers to completion (Z = ${pp.component_insert_z.toFixed(1)} → ${pp.total_height.toFixed(1)} mm).\n\n` +
-            `The ceiling closes over the components, sealing the enclosure. ` +
-            `Button holes remain open for the tactile switches.`
-    });
+    
   } else {
     steps.push({
       title: "No G-code data",
-      body: "Generate G-code first by clicking 'Ready to print'."
+      subtitle: "",
+      body: "Generate G-code first by clicking 'Ready to print'.",
     });
   }
   
@@ -705,22 +798,57 @@ stepByStepBtn.addEventListener("click", () => {
   _renderGuideStep();
 });
 
+function _describePosition(center) {
+  const [x, y] = center;
+  // Basic position description based on coordinates
+  const xPos = x < 30 ? "left" : x > 60 ? "right" : "center";
+  const yPos = y < 30 ? "bottom" : y > 60 ? "top" : "middle";
+  return `${yPos}-${xPos} area (X: ${x.toFixed(1)}mm, Y: ${y.toFixed(1)}mm)`;
+}
+
+function _pinOneDirection(rotation) {
+  // Map rotation to pin 1 location description
+  const r = ((rotation % 360) + 360) % 360;
+  if (r < 45 || r >= 315) return "left side";
+  if (r < 135) return "top";
+  if (r < 225) return "right side";
+  return "bottom";
+}
+
 function _renderGuideStep() {
   const guideContent = document.querySelector(".guide-content");
   if (!window._guideSteps || !guideContent) return;
   const step = window._guideSteps[window._guideIndex];
   const total = window._guideSteps.length;
+  
+  let subtitleHtml = step.subtitle ? `<div class="guide-subtitle">${step.subtitle}</div>` : "";
+  let pauseBadge = "";
+  if (step.pauseNumber) {
+    pauseBadge = `<span class="pause-badge">Pause ${step.pauseNumber}</span>`;
+  }
+  
   guideContent.innerHTML = `
-    <h2>${step.title}</h2>
-    <p style="white-space:pre-wrap;">${step.body}</p>
-    <div style="margin-top:1em;color:#6b7280;font-size:0.85em;">
-      Step ${window._guideIndex + 1} of ${total}
+    <div class="guide-header-section">
+      ${pauseBadge}
+      <h2>${step.title}</h2>
+      ${subtitleHtml}
+    </div>
+    <div class="guide-body-section">
+      <p style="white-space:pre-wrap;">${step.body}</p>
+      <div class="guide-step-counter">
+        Step ${window._guideIndex + 1} of ${total}
+      </div>
     </div>
   `;
 }
 
 backToDesignBtn.addEventListener("click", () => {
   stepByStepScreen.style.display = "none";
+});
+
+backToGcodeBtn.addEventListener("click", () => {
+  stepByStepScreen.style.display = "none";
+  geocodeOverlay.style.display = "flex";
 });
 
 // Toggle question window sidebar

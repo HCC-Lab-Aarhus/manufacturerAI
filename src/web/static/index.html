@@ -77,21 +77,24 @@
 
       <!-- Geocode overlay screen -->
       <div id="geocodeOverlay" class="geocode-overlay" style="display: none;">
+        <button id="geocodeBackBtn" class="geocode-back-btn">Back to design</button>
         <div class="geocode-content">
+          <div class="printer-instruction">Select a printer to generate G-code</div>
           <div class="printer-selector">
             <label for="printerSelect">Printer:</label>
             <select id="printerSelect" class="printer-select">
+              <option value="" disabled selected>Choose printer...</option>
               <option value="mk3s">Prusa MK3S</option>
               <option value="coreone">Prusa Core One+</option>
             </select>
           </div>
-          <div class="geocode-status" id="geocodeStatus">Generating G-code ...</div>
+          <div class="geocode-status" id="geocodeStatus"></div>
           <div class="geocode-actions">
-            <button id="geocodeDownloadBtn" class="geocode-download-btn" disabled>
-              Download G-code
-            </button>
             <button id="gcodePreviewBtn" class="geocode-preview-btn" disabled>
               Preview G-code
+            </button>
+            <button id="geocodeDownloadBtn" class="geocode-download-btn" disabled>
+              Download G-code
             </button>
             <button id="gcodeOpenViewerBtn" class="geocode-viewer-btn" disabled>
               Open in PrusaSlicer
@@ -135,6 +138,9 @@
           <button id="backToDesignBtn" class="back-to-design-btn">
             Back to designing
           </button>
+          <button id="backToGcodeBtn" class="back-to-gcode-btn">
+            Back to G-code
+          </button>
           <button id="toggleQuestionWindowBtn" class="toggle-question-btn">
             Question window: Off
           </button>
@@ -154,12 +160,11 @@
               <h2>Step by Step Guide</h2>
               <p>Your printing guide will appear here.</p>
             </div>
+            <div class="guide-navigation">
+              <button id="guidePrevBtn" class="guide-nav-btn">Previous</button>
+              <button id="guideNextBtn" class="guide-nav-btn">Next</button>
+            </div>
           </div>
-        </div>
-        
-        <div class="guide-navigation">
-          <button id="guidePrevBtn" class="guide-nav-btn">Previous</button>
-          <button id="guideNextBtn" class="guide-nav-btn">Next</button>
         </div>
       </div>
 

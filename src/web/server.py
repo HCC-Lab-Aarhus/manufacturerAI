@@ -350,6 +350,9 @@ def slice_model(req: SliceRequest | None = None):
     if not result.success:
         raise HTTPException(500, result.message)
 
+    # Extract components for step-by-step guide
+    components = layout.get("components", [])
+
     return {
         "status": "ok",
         "staged_gcode": result.staged_gcode_path.name if result.staged_gcode_path else None,
@@ -369,6 +372,7 @@ def slice_model(req: SliceRequest | None = None):
             "stages": result.postprocess.stages,
         } if result.postprocess else None,
         "stages": result.stages,
+        "components": components,
     }
 
 

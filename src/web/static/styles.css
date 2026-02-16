@@ -277,10 +277,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .viewer-header {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   gap: 12px;
   padding-bottom: 12px;
-  position: relative;
+  flex-wrap: wrap;
 }
 
 .view-tabs {
@@ -289,6 +289,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: #1f2937;
   padding: 4px;
   border-radius: 10px;
+  flex-shrink: 0;
 }
 
 .tab-btn {
@@ -298,6 +299,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: 12px;
   font-weight: 500;
   border-radius: 6px;
+  white-space: nowrap;
 }
 .tab-btn.active { background: var(--accent); color: white; }
 .tab-btn:hover:not(.active) { background: #374151; }
@@ -644,8 +646,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .header-buttons {
   display: flex;
   gap: 12px;
-  position: absolute;
-  right: 0;
+  flex-shrink: 0;
 }
 
 .viewer-header .download-btn { position: static; }
@@ -671,17 +672,59 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--panel-2);
   z-index: 100;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  justify-content: center;
-  gap: 30px;
+  align-content: center;
+  justify-content: space-between;
+  padding: 20px;
+  gap: 20px;
+  overflow: auto;
+  flex-wrap: wrap;
+}
+
+.geocode-back-btn,
+.step-by-step-btn {
+  width: 200px;
+  padding: 14px 20px;
+  border: none;
+  background: #1f2937;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+  align-self: center;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.geocode-back-btn {
+  clip-path: polygon(15% 0%, 100% 0%, 100% 100%, 15% 100%, 0% 50%);
+  padding-left: 30px;
+}
+
+.geocode-back-btn:hover {
+  background: #374151;
+}
+
+.step-by-step-btn {
+  clip-path: polygon(0% 0%, 85% 0%, 100% 50%, 85% 100%, 0% 100%);
+  padding-right: 30px;
+}
+
+.step-by-step-btn:hover {
+  background: #374151;
 }
 
 .geocode-content {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 20px;
+  flex: 1;
+  min-width: 250px;
 }
 
 .printer-selector {
@@ -689,6 +732,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   align-items: center;
   gap: 10px;
   margin-bottom: 4px;
+}
+
+.printer-instruction {
+  font-size: 28px;
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 12px;
 }
 
 .printer-selector label {
@@ -710,31 +760,39 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   transition: border-color 0.2s;
 }
 
+.printer-select option {
+  background: white;
+  color: black;
+}
+
 .printer-select:hover,
 .printer-select:focus {
   border-color: var(--accent);
 }
 
 .geocode-status {
-  font-size: 24px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text);
   white-space: pre-wrap;
   text-align: center;
+}
+
+.geocode-status.slicing {
   animation: pulse 1.5s ease-in-out infinite;
 }
 
 .geocode-status.ready {
   animation: none;
   color: var(--green);
-  font-size: 16px;
+  font-size: 14px;
 }
 
 .geocode-actions {
   display: flex;
+  flex-direction: column;
   gap: 12px;
-  flex-wrap: wrap;
-  justify-content: center;
+  align-items: center;
 }
 
 .geocode-download-btn {
@@ -757,25 +815,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .geocode-download-btn:not(:disabled):hover {
   background: var(--accent);
   color: #0b1120;
-}
-
-.step-by-step-btn {
-  position: absolute;
-  right: 30px;
-  top: 50%;
-  transform: translateY(-50%);
-  padding: 12px 20px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: #1f2937;
-  color: var(--text);
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.step-by-step-btn:hover {
-  background: #374151;
-  border-color: var(--accent);
 }
 
 /* ── Step by step guide screen ─────────────────────────────────── */
@@ -810,6 +849,21 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 
 .back-to-design-btn:hover {
+  background: #374151;
+  border-color: var(--accent);
+}
+
+.back-to-gcode-btn {
+  padding: 10px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #1f2937;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.back-to-gcode-btn:hover {
   background: #374151;
   border-color: var(--accent);
 }
@@ -901,18 +955,66 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
   text-align: center;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.guide-header-section {
+  flex-shrink: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 20px;
+}
+
+.guide-body-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
 }
 
 .guide-content h2 {
   font-size: 28px;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .guide-content p {
   color: var(--muted);
   font-size: 16px;
+  text-align: left;
+  max-width: 500px;
+}
+
+.guide-subtitle {
+  font-size: 14px;
+  color: var(--muted);
+  margin-bottom: 0;
+}
+
+.pause-badge {
+  display: inline-block;
+  padding: 6px 14px;
+  background: var(--accent);
+  color: white;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 12px;
+}
+
+.guide-step-counter {
+  margin-top: auto;
+  padding-top: 16px;
+  color: #6b7280;
+  font-size: 0.85em;
 }
 
 .guide-navigation {
@@ -921,7 +1023,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   gap: 20px;
   padding-top: 16px;
   border-top: 1px solid var(--border);
-  margin-top: 16px;
+  flex-shrink: 0;
+  margin-top: auto;
 }
 
 .guide-nav-btn {
@@ -960,18 +1063,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   cursor: pointer;
 }
 
-.geocode-preview-btn:not(:disabled):hover {
-  background: var(--accent);
-  color: #0b1120;
-}
-
-.geocode-viewer-btn {
-  border-color: var(--green);
-  color: var(--green);
-}
-
+.geocode-preview-btn:not(:disabled):hover,
 .geocode-viewer-btn:not(:disabled):hover {
-  background: var(--green);
+  background: var(--accent);
   color: #0b1120;
 }
 
