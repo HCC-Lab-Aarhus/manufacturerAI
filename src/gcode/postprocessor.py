@@ -662,9 +662,16 @@ def postprocess_gcode(
         # ── Strip ironing from non-ink layers ─────────────
         # We only need ironing at the ink layer for a smooth trace
         # surface.  Ironing the outer shell / ceiling wastes time.
-        # IMPORTANT: preserve the retract → travel → unretract
-        # sequence at the end of the ironing section so the nozzle
-        # travels cleanly to the next object (hatch) without oozing.
+        #
+        # PrusaSlicer emits a travel preamble before each ironing
+        # section (retract → G92 E0 → lift → travel → lower →
+        # unretract → ;TYPE:Ironing) and a retract postamble after
+        # it.  When we strip the ironing moves, we must also:
+        #  a) remove the preamble (already in `out`)
+        #  b) if another print section follows, keep the travel from
+        #     the ironing postamble to the next section — but replace
+        #     the ironing retract (whose E value is invalid after
+        #     stripping) with a clean retract.
         if line.strip() == ';TYPE:Ironing' and abs(current_z - ink_z) > 0.05:
             # Collect all lines in the ironing section
             section: list[str] = []
@@ -676,28 +683,51 @@ def postprocess_gcode(
                 section.append(raw_lines[i])
                 i += 1
 
-            # Determine what follows: another ;TYPE: or ;LAYER_CHANGE
-            next_is_type = (
+            # ── Remove preamble from `out` ──
+            # Walk backwards to find the G92 E0 that precedes the
+            # retract → travel → unretract leading into this ironing.
+            preamble_start = None
+            for k in range(len(out) - 1, max(0, len(out) - 20), -1):
+                if out[k].strip() == 'G92 E0':
+                    # The retract is one line before.  If the line
+                    # before G92 E0 looks like a retract (G1 E… F…
+                    # with no X/Y), include it.
+                    preamble_start = k
+                    if k > 0 and re.match(
+                        r'^G1\s+E[\d.]+\s+F\d+', out[k - 1].strip()
+                    ):
+                        preamble_start = k - 1
+                    break
+
+            preamble_removed = 0
+            if preamble_start is not None:
+                preamble_removed = len(out) - preamble_start
+                del out[preamble_start:]
+
+            # ── Determine what follows ──
+            next_is_print_type = (
                 i < len(raw_lines)
                 and raw_lines[i].strip().startswith(';TYPE:')
+                and not raw_lines[i].strip().startswith(';TYPE:Custom')
             )
 
             skipped = len(section)
-            if next_is_type and section:
-                # Another section follows on this layer — the slicer
-                # put a retract → G92 E0 → zhop → travel → zdrop →
-                # unretract at the end of ironing.  We must keep it.
-                # Find the last G92 E0 (E-counter reset before travel).
-                retract_start = None
+            if next_is_print_type and section:
+                # Another print section follows — keep the travel
+                # from the ironing postamble to the next section.
+                # Find the last G92 E0 in the section (before travel).
+                g92_idx = None
                 for k in range(len(section) - 1, -1, -1):
                     if section[k].strip() == 'G92 E0':
-                        # The retract G1 is the line before G92 E0
-                        retract_start = max(0, k - 1)
+                        g92_idx = k
                         break
 
-                if retract_start is not None:
-                    kept = section[retract_start:]
-                    skipped = retract_start
+                if g92_idx is not None:
+                    # Keep from G92 E0 onward (travel + unretract).
+                    # Skip section[g92_idx - 1] which is the ironing
+                    # retract with a stale E value from stripped moves.
+                    kept = section[g92_idx:]
+                    skipped = g92_idx
                     for kl in kept:
                         out.append(kl)
                         m_k = _MOVE_RE.match(kl)
@@ -708,10 +738,10 @@ def postprocess_gcode(
                                 track_y = float(m_k.group("y"))
 
             ironing_layers_stripped += 1
-            ironing_lines_stripped += skipped
+            ironing_lines_stripped += skipped + preamble_removed
             log.debug(
-                "Stripped ironing at Z=%.2f (%d moves stripped, %d travel kept)",
-                current_z, skipped,
+                "Stripped ironing at Z=%.2f (%d ironing + %d preamble stripped, %d kept)",
+                current_z, skipped, preamble_removed,
                 len(section) - skipped,
             )
             continue  # don't append the ;TYPE:Ironing line itself
