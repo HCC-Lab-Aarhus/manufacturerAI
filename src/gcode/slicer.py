@@ -35,6 +35,27 @@ def find_prusaslicer() -> str | None:
     return None
 
 
+_GUI_CANDIDATES = [
+    r"C:\Program Files\Prusa3D\PrusaSlicer\prusa-slicer.exe",
+    r"C:\Program Files (x86)\Prusa3D\PrusaSlicer\prusa-slicer.exe",
+]
+
+
+def find_prusaslicer_gui() -> str | None:
+    """Return the path to the *GUI* ``prusa-slicer`` executable.
+
+    The ``--gcodeviewer`` flag requires the GUI binary, not the
+    headless ``prusa-slicer-console``.
+    """
+    path = shutil.which("prusa-slicer")
+    if path:
+        return path
+    for c in _GUI_CANDIDATES:
+        if Path(c).exists():
+            return c
+    return None
+
+
 # ── Printer definitions ────────────────────────────────────────────
 
 from dataclasses import dataclass

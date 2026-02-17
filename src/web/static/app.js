@@ -645,7 +645,6 @@ document.getElementById("printerSelect").addEventListener("change", async (e) =>
 
 geocodeDownloadBtn.addEventListener("click", () => {
   if (geocodeDownloadBtn.disabled) return;
-  // Download the staged G-code file
   window.location.href = "/api/gcode/download/enclosure_staged";
 });
 
@@ -884,7 +883,6 @@ guideAskBtn.addEventListener("click", () => {
 // ── G-code preview ────────────────────────────────────────────────
 
 const gcodePreviewBtn     = document.getElementById("gcodePreviewBtn");
-const gcodeOpenViewerBtn  = document.getElementById("gcodeOpenViewerBtn");
 const gcodePreviewScreen  = document.getElementById("gcodePreviewScreen");
 const gcodePreviewBackBtn = document.getElementById("gcodePreviewBackBtn");
 const gcodeLayerView      = document.getElementById("gcodeLayerView");
@@ -911,10 +909,15 @@ gcodePreviewBackBtn.addEventListener("click", () => {
 });
 
 // Open in PrusaSlicer
-gcodeOpenViewerBtn.addEventListener("click", async () => {
-  if (gcodeOpenViewerBtn.disabled) return;
+const viewGcodeBtn  = document.getElementById("viewGcodeBtn");
+
+async function _openInPrusaSlicer() {
   try {
-    const resp = await fetch("/api/gcode/open-viewer", { method: "POST" });
+    const resp = await fetch("/api/gcode/open-viewer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ format: "gcode" }),
+    });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
       alert(err.detail || "Failed to open PrusaSlicer");
@@ -922,6 +925,10 @@ gcodeOpenViewerBtn.addEventListener("click", async () => {
   } catch (e) {
     alert("Error: " + e.message);
   }
+}
+
+viewGcodeBtn.addEventListener("click", () => {
+  if (!viewGcodeBtn.disabled) _openInPrusaSlicer();
 });
 
 // Preview button — fetch metadata + raw G-code, then show preview screen
@@ -1157,7 +1164,7 @@ function renderPauseJumpButtons(pauses) {
 function _enableGcodeButtons() {
   if (window._gcodeResult) {
     gcodePreviewBtn.disabled = false;
-    gcodeOpenViewerBtn.disabled = false;
+    viewGcodeBtn.disabled = false;
   }
 }
 
@@ -1200,7 +1207,7 @@ if (resetBtn) {
     stepByStepScreen.style.display = "none";
     gcodePreviewScreen.style.display = "none";
     gcodePreviewBtn.disabled = true;
-    gcodeOpenViewerBtn.disabled = true;
+    viewGcodeBtn.disabled = true;
     gcodeCodeArea.innerHTML = "";
     layerDiagramSvg.innerHTML = "";
     gcodePauseJumps.innerHTML = "";

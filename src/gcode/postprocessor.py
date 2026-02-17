@@ -356,16 +356,26 @@ def _trace_highlight_block(
 
     # NOTE: PrusaSlicer Core One uses M83 (relative E distances).
     # Each G1 E value must be the *per-move delta*, not cumulative.
-    lines.append(f"G0 Z{z:.3f} F1000")
+
+    # Retraction / Z-lift constants for travel moves
+    _RETRACT_E = 2.0       # mm — match slicer retract_length
+    _RETRACT_F = 3600      # mm/min — match slicer retract_speed (60 mm/s)
+    _UNRETRACT_F = 1500    # mm/min — deretraction speed
+    _Z_HOP = 0.8           # mm — match slicer retract_lift
+
+    # Retract before the first travel (nozzle is loaded from slicer)
+    lines.append(f"G1 E-{_RETRACT_E:.5f} F{_RETRACT_F} ; retract before trace highlight travel")
+    lines.append(f"G0 Z{z + _Z_HOP:.3f} F720 ; Z-hop")
 
     for poly in polylines:
         if len(poly) < 2:
             continue
 
-        # Travel to start
+        # Travel to start (retracted + lifted)
         sx, sy = poly[0]
         lines.append(f"G0 X{sx:.3f} Y{sy:.3f} F{TRACE_TRAVEL_SPEED}")
-        lines.append(f"G0 Z{z:.3f} F1000")
+        lines.append(f"G0 Z{z:.3f} F720 ; lower to print Z")
+        lines.append(f"G1 E{_RETRACT_E:.5f} F{_UNRETRACT_F} ; unretract")
 
         # Extrude along path — emit per-move E delta (M83 relative)
         prev = poly[0]
@@ -377,7 +387,11 @@ def _trace_highlight_block(
             )
             prev = pt
 
-    # Retract after trace highlight (M83 relative: negative = retract)
+        # Retract + lift after this polyline before traveling to the next
+        lines.append(f"G1 E-{_RETRACT_E:.5f} F{_RETRACT_F} ; retract after polyline")
+        lines.append(f"G0 Z{z + _Z_HOP:.3f} F720 ; Z-hop")
+
+    # Already retracted from the last polyline above
     lines.extend([
         "",
         "; ┌──────────────────────────────────────────────────┐",
@@ -386,7 +400,7 @@ def _trace_highlight_block(
         "; └──────────────────────────────────────────────────┘",
         "; M600 ; filament change — swap back to main color",
         "",
-        "G1 E-0.80000 F2100 ; retract 0.8 mm",
+        "; retraction already applied after last polyline",
         "",
         "; " + "=" * 50,
         "; END TRACE HIGHLIGHT",
@@ -477,6 +491,160 @@ def _pause_block(label: str, z: float, instructions: list[str]) -> list[str]:
         "",
     ])
     return lines
+
+
+# ── M73 recalculation ─────────────────────────────────────────────
+
+_M73_P_RE = re.compile(r"^M73\s+P(\d+)\s+R(\d+)")   # normal mode
+_M73_Q_RE = re.compile(r"^M73\s+Q(\d+)\s+S(\d+)")   # silent mode
+_TIME_META_RE = re.compile(
+    r"^;\s*estimated printing time \((\w+ mode)\)\s*=\s*(.+)",
+)
+
+
+def _recalculate_m73(lines: list[str]) -> list[str]:
+    """Recalculate M73 progress/remaining-time commands.
+
+    After ironing is stripped the original M73 commands no longer
+    reflect reality — progress jumps from ~74% straight to 100% and
+    the initial ``R`` value is far too high.
+
+    Strategy
+    --------
+    1. Find the original total time from the first ``M73 P0 Rxxx``.
+    2. Count *move lines* (G0/G1) as a proxy for elapsed time.
+    3. For each M73 command, compute the fraction of move lines that
+       precede it and derive new P (progress %) and R (remaining min).
+    4. Update the ``estimated printing time`` metadata comments in the
+       footer to match.
+    """
+    # -- Pass 1: count total move lines and find original times -----
+    total_moves = 0
+    orig_total_normal = 0    # minutes, from first M73 P0 R...
+    orig_total_silent = 0    # minutes, from first M73 Q0 S...
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("G0 ") or stripped.startswith("G1 "):
+            total_moves += 1
+        if not orig_total_normal:
+            m = _M73_P_RE.match(stripped)
+            if m and int(m.group(1)) == 0:
+                orig_total_normal = int(m.group(2))
+        if not orig_total_silent:
+            m = _M73_Q_RE.match(stripped)
+            if m and int(m.group(1)) == 0:
+                orig_total_silent = int(m.group(2))
+
+    if total_moves == 0 or (orig_total_normal == 0 and orig_total_silent == 0):
+        return lines  # nothing to recalculate
+
+    # The original total time included ironing that we stripped.
+    # We need the *new* total time.  Use the last real (pre-final)
+    # M73 to figure out how much time the surviving code represents.
+    # Walk backwards to find the second-to-last M73 P line.
+    last_real_p, last_real_r = 0, 0
+    last_real_q, last_real_s = 0, 0
+    for line in reversed(lines):
+        stripped = line.strip()
+        if not last_real_p:
+            m = _M73_P_RE.match(stripped)
+            if m and int(m.group(1)) < 100:
+                last_real_p = int(m.group(1))
+                last_real_r = int(m.group(2))
+        if not last_real_q:
+            m = _M73_Q_RE.match(stripped)
+            if m and int(m.group(1)) < 100:
+                last_real_q = int(m.group(1))
+                last_real_s = int(m.group(2))
+        if last_real_p and last_real_q:
+            break
+
+    # New total time = time elapsed up to last real marker + remaining
+    # time_elapsed = orig_total - last_real_r
+    # But last_real_p% of orig was completed, meaning the actual
+    # content is (orig_total - last_real_r) in real moves.
+    # The stripped ironing accounts for (100 - last_real_p)% of orig.
+    # New total ≈ orig_total - (100 - last_real_p)/100 * orig_total
+    #           = orig_total * last_real_p / 100 + last_real_r
+    # But that double-counts remaining.  Simpler:
+    #   new_total = orig_total - stripped_time
+    #   stripped_time ≈ last_real_r  (the jump from last_real to end)
+    # Actually: new_total = (orig_total - last_real_r)
+    # because the remaining last_real_r minutes were all ironing.
+    # But that's not quite right either — last_real_r has some real
+    # printing too.
+    # Best approach: new_total_normal = orig_total_normal * last_real_p / 100 + last_real_r
+    # Wait no.  Let's think clearly:
+    #   At last_real M73: P=74, R=61 out of orig 238
+    #   Time elapsed so far = 238 - 61 = 177 min
+    #   Progress = 74%, so 74% of the original print took 177 min
+    #   The remaining 26% (ironing) would take 61 min
+    #   After stripping, the total print is just those 177 min
+    #   new_total = orig_total - last_real_r = 238 - 61 = 177
+
+    new_total_normal = max(orig_total_normal - last_real_r, 1) if last_real_p else orig_total_normal
+    new_total_silent = max(orig_total_silent - last_real_s, 1) if last_real_q else orig_total_silent
+
+    # -- Pass 2: rewrite M73 and metadata lines ---------------------
+    moves_so_far = 0
+    result: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Count moves before this line
+        if stripped.startswith("G0 ") or stripped.startswith("G1 "):
+            moves_so_far += 1
+
+        # M73 P... R... (normal mode)
+        m = _M73_P_RE.match(stripped)
+        if m:
+            frac = moves_so_far / total_moves if total_moves else 0
+            pct = min(int(frac * 100), 100)
+            remaining = max(int(new_total_normal * (1.0 - frac) + 0.5), 0)
+            result.append(f"M73 P{pct} R{remaining}")
+            continue
+
+        # M73 Q... S... (silent mode)
+        m = _M73_Q_RE.match(stripped)
+        if m:
+            frac = moves_so_far / total_moves if total_moves else 0
+            pct = min(int(frac * 100), 100)
+            remaining = max(int(new_total_silent * (1.0 - frac) + 0.5), 0)
+            result.append(f"M73 Q{pct} S{remaining}")
+            continue
+
+        # Update estimated printing time metadata in footer
+        mt = _TIME_META_RE.match(stripped)
+        if mt:
+            mode = mt.group(1)
+            if mode == "normal mode":
+                result.append(f"; estimated printing time ({mode}) = {_fmt_time(new_total_normal)}")
+            elif mode == "silent mode":
+                result.append(f"; estimated printing time ({mode}) = {_fmt_time(new_total_silent)}")
+            else:
+                result.append(line)
+            continue
+
+        result.append(line)
+
+    log.info(
+        "Recalculated M73: normal %dmin→%dmin, silent %dmin→%dmin (%d moves)",
+        orig_total_normal, new_total_normal,
+        orig_total_silent, new_total_silent,
+        total_moves,
+    )
+    return result
+
+
+def _fmt_time(minutes: int) -> str:
+    """Format minutes as ``Xh Ym Zs`` like PrusaSlicer."""
+    h = minutes // 60
+    m = minutes % 60
+    if h > 0:
+        return f"{h}h {m}m 0s"
+    return f"{m}m 0s"
 
 
 def postprocess_gcode(
@@ -682,20 +850,28 @@ def postprocess_gcode(
                 i += 1
 
             # ── Remove preamble from `out` ──
-            # Walk backwards to find the G92 E0 that precedes the
-            # retract → travel → unretract leading into this ironing.
+            # Walk backwards to find the retract / G92 E0 that
+            # precedes the travel → unretract leading into ironing.
             preamble_start = None
+            # Method 1: G92 E0 (MK3S absolute-E mode)
             for k in range(len(out) - 1, max(0, len(out) - 20), -1):
                 if out[k].strip() == 'G92 E0':
-                    # The retract is one line before.  If the line
-                    # before G92 E0 looks like a retract (G1 E… F…
-                    # with no X/Y), include it.
                     preamble_start = k
                     if k > 0 and re.match(
                         r'^G1\s+E[\d.]+\s+F\d+', out[k - 1].strip()
                     ):
                         preamble_start = k - 1
                     break
+            # Method 2: Core One M83 — find last retract (G1 E-… F…)
+            if preamble_start is None:
+                for k in range(len(out) - 1, max(0, len(out) - 15), -1):
+                    s = out[k].strip()
+                    if re.match(r'^G1\s+E-[\d.]+\s+F\d+$', s):
+                        preamble_start = k
+                        break
+                    # Stop at the previous extrusion move
+                    if re.match(r'^G1\s+.*[XY].*E[\d.]', s):
+                        break
 
             preamble_removed = 0
             if preamble_start is not None:
@@ -713,7 +889,8 @@ def postprocess_gcode(
             if next_is_print_type and section:
                 # Another print section follows — keep the travel
                 # from the ironing postamble to the next section.
-                # Find the last G92 E0 in the section (before travel).
+
+                # Method 1: G92 E0 (MK3S)
                 g92_idx = None
                 for k in range(len(section) - 1, -1, -1):
                     if section[k].strip() == 'G92 E0':
@@ -722,8 +899,6 @@ def postprocess_gcode(
 
                 if g92_idx is not None:
                     # Keep from G92 E0 onward (travel + unretract).
-                    # Skip section[g92_idx - 1] which is the ironing
-                    # retract with a stale E value from stripped moves.
                     kept = section[g92_idx:]
                     skipped = g92_idx
                     for kl in kept:
@@ -734,6 +909,39 @@ def postprocess_gcode(
                                 track_x = float(m_k.group("x"))
                             if m_k.group("y"):
                                 track_y = float(m_k.group("y"))
+                else:
+                    # Method 2: Core One M83 — no G92 E0 markers.
+                    # Parse the section to find where the postamble
+                    # would position the nozzle, then emit a clean
+                    # retract → travel → unretract sequence.
+                    target_x, target_y, target_z = track_x, track_y, current_z
+                    last_m204 = None
+                    for line_s in section:
+                        m_k = _MOVE_RE.match(line_s)
+                        if m_k:
+                            if m_k.group("x"):
+                                target_x = float(m_k.group("x"))
+                            if m_k.group("y"):
+                                target_y = float(m_k.group("y"))
+                        z_m = re.match(r'^G[01]\s+Z([\d.]+)', line_s.strip())
+                        if z_m:
+                            target_z = float(z_m.group(1))
+                        if line_s.strip().startswith('M204'):
+                            last_m204 = line_s
+
+                    # Emit corrective travel to the position the
+                    # ironing postamble would have reached.
+                    dist = math.hypot(target_x - track_x, target_y - track_y)
+                    if dist > 0.5:
+                        out.append(f"G1 E-2 F3600 ; retract (ironing stripped)")
+                        out.append(f"G0 Z{target_z + 0.8:.3f} F720 ; Z-hop")
+                        out.append(f"G0 X{target_x:.3f} Y{target_y:.3f} F21000 ; travel (ironing stripped)")
+                        out.append(f"G0 Z{target_z:.3f} F720 ; lower")
+                        out.append(f"G1 E1.98 F1500 ; unretract")
+                    if last_m204:
+                        out.append(last_m204)
+                    track_x, track_y = target_x, target_y
+                    skipped = len(section)
 
             ironing_layers_stripped += 1
             ironing_lines_stripped += skipped + preamble_removed
@@ -764,11 +972,17 @@ def postprocess_gcode(
             out.extend(_trace_highlight_block(highlight_z, trace_segs))
             # Restore nozzle to slicer's expected position and
             # unretract so E-state matches what the slicer assumes.
+            # Block ends retracted (2.0mm) with Z-hop — travel is safe.
             out.append(f"G0 X{resume_x:.3f} Y{resume_y:.3f} F9000 ; return to layer start")
-            out.append("G1 E0.80000 F2100 ; unretract to match slicer state")
+            out.append(f"G0 Z{highlight_z:.3f} F720 ; lower back to layer Z")
+            out.append("G1 E2.00000 F1500 ; unretract to match slicer state")
             trace_highlight_armed = False
 
         i += 1
+
+    # ── Recalculate M73 progress after ironing was stripped ────
+    if ironing_lines_stripped:
+        out = _recalculate_m73(out)
 
     # Write output
     output_path.parent.mkdir(parents=True, exist_ok=True)

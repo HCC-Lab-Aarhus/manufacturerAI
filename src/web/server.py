@@ -26,7 +26,7 @@ from src.scad.shell import generate_enclosure_scad, generate_battery_hatch_scad,
 from src.scad.cutouts import build_cutouts
 from src.scad.compiler import compile_scad
 from src.gcode.pipeline import run_gcode_pipeline
-from src.gcode.slicer import find_prusaslicer, PRINTERS
+from src.gcode.slicer import find_prusaslicer, find_prusaslicer_gui, PRINTERS
 
 # ── .env loader ────────────────────────────────────────────────────
 
@@ -63,10 +63,20 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+
+@app.middleware("http")
+async def _no_cache_static(request, call_next):
+    """Prevent browser from caching JS / CSS during development."""
+    response = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return response
+
 # ── Session state (persists across requests) ───────────────────────
 
 _conversation_history: list = []      # Gemini Content proto objects
 _run_dir: Path | None = None          # Output directory for this session
+_printer_id: str | None = None        # Last-used printer id ("mk3s" / "coreone")
 
 
 # ── Models ─────────────────────────────────────────────────────────
@@ -86,15 +96,19 @@ class CurveUpdateRequest(BaseModel):
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(
+        STATIC_DIR / "index.html",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 @app.post("/api/reset")
 def reset_session():
     """Reset conversation history and start a fresh session."""
-    global _conversation_history, _run_dir
+    global _conversation_history, _run_dir, _printer_id
     _conversation_history = []
     _run_dir = None
+    _printer_id = None
     return {"status": "ok"}
 
 
@@ -337,7 +351,9 @@ def slice_model(req: SliceRequest | None = None):
     if routing_path.exists():
         routing = json.loads(routing_path.read_text(encoding="utf-8"))
 
+    global _printer_id
     printer_id = req.printer if req else None
+    _printer_id = printer_id
 
     result = run_gcode_pipeline(
         stl_path=stl_path,
@@ -376,21 +392,22 @@ def slice_model(req: SliceRequest | None = None):
     }
 
 
-@app.get("/api/gcode/{name}")
-def get_gcode(name: str):
-    """Serve a G-code file from the current session run."""
+# NOTE: Static /api/gcode/ routes MUST be defined before the
+# catch-all /api/gcode/{name} route, otherwise FastAPI matches the
+# path parameter first.
+
+@app.get("/api/gcode/download-bgcode")
+def download_bgcode():
+    """Download the binary G-code (.bgcode) for the current session."""
     if _run_dir is None:
         raise HTTPException(404, "No run yet.")
-    gcode = _run_dir / f"{name}.gcode"
-    if not gcode.exists():
-        raise HTTPException(404, f"{name}.gcode not found.")
+    bgcode = _run_dir / "enclosure_staged.bgcode"
+    if not bgcode.exists():
+        raise HTTPException(404, "enclosure_staged.bgcode not found.")
     return Response(
-        content=gcode.read_bytes(),
-        media_type="text/plain",
-        headers={
-            "Content-Disposition": f"inline; filename={name}.gcode",
-            "Cache-Control": "no-cache",
-        },
+        content=bgcode.read_bytes(),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": "attachment; filename=enclosure_staged.bgcode"},
     )
 
 
@@ -409,28 +426,65 @@ def download_gcode(name: str):
     )
 
 
+@app.get("/api/gcode/{name}")
+def get_gcode(name: str):
+    """Serve a G-code file from the current session run."""
+    if _run_dir is None:
+        raise HTTPException(404, "No run yet.")
+    gcode = _run_dir / f"{name}.gcode"
+    if not gcode.exists():
+        raise HTTPException(404, f"{name}.gcode not found.")
+    return Response(
+        content=gcode.read_bytes(),
+        media_type="text/plain",
+        headers={
+            "Content-Disposition": f"inline; filename={name}.gcode",
+            "Cache-Control": "no-cache",
+        },
+    )
+
+
 # ── G-code preview / viewer ───────────────────────────────────────
 
+class OpenViewerRequest(BaseModel):
+    format: str = "bgcode"   # "gcode" or "bgcode"
+
+
 @app.post("/api/gcode/open-viewer")
-def open_gcode_viewer():
-    """Launch PrusaSlicer's G-code viewer on the staged G-code."""
+def open_gcode_viewer(req: OpenViewerRequest | None = None):
+    """Launch PrusaSlicer's G-code viewer.
+
+    Accepts ``{"format": "gcode"}`` or ``{"format": "bgcode"}``.
+    """
     if _run_dir is None:
         raise HTTPException(400, "No run yet.")
 
-    gcode = _run_dir / "enclosure_staged.gcode"
-    if not gcode.exists():
-        raise HTTPException(400, "No G-code file — slice first.")
+    fmt = (req.format if req else "bgcode").lower()
+    if fmt == "bgcode":
+        target = _run_dir / "enclosure_staged.bgcode"
+    else:
+        target = _run_dir / "enclosure_staged.gcode"
 
-    exe = find_prusaslicer()
+    if not target.exists():
+        raise HTTPException(400, f"{target.name} not found — slice first.")
+
+    exe = find_prusaslicer_gui()
     if not exe:
-        raise HTTPException(500, "PrusaSlicer not found on this system.")
+        raise HTTPException(500, "PrusaSlicer (GUI) not found on this system.")
 
     try:
-        subprocess.Popen([exe, "--gcodeviewer", str(gcode)])
+        cmd: list[str] = [exe, "--gcodeviewer", str(target)]
+        # Tell PrusaSlicer which printer to use so the correct bed is
+        # shown (e.g. "Prusa CORE One HF0.4 nozzle").
+        if _printer_id and _printer_id in PRINTERS:
+            native = PRINTERS[_printer_id].native_printer
+            if native:
+                cmd.extend(["--printer-profile", native])
+        subprocess.Popen(cmd)
     except Exception as e:
         raise HTTPException(500, f"Failed to launch viewer: {e}")
 
-    return {"status": "ok", "message": "G-code viewer launched."}
+    return {"status": "ok", "message": f"G-code viewer launched ({target.name})."}
 
 
 @app.get("/api/gcode/preview/{name}")
