@@ -21,6 +21,7 @@ from src.gcode.slicer import slice_stl, get_printer
 from src.gcode.pause_points import compute_pause_points, PausePoints
 from src.gcode.ink_traces import generate_ink_gcode, extract_trace_segments
 from src.gcode.postprocessor import postprocess_gcode, PostProcessResult
+from src.gcode.bgcode import gcode_to_bgcode
 
 log = logging.getLogger("manufacturerAI.gcode.pipeline")
 
@@ -33,6 +34,7 @@ class GcodePipelineResult:
     message: str
     raw_gcode_path: Path | None = None
     staged_gcode_path: Path | None = None
+    bgcode_path: Path | None = None
     pause_points: PausePoints | None = None
     postprocess: PostProcessResult | None = None
     stages: list[str] = field(default_factory=list)
@@ -163,6 +165,17 @@ def run_gcode_pipeline(
     stages.extend(pp_result.stages)
     stages.append(f"Staged G-code written: {staged_gcode}")
 
+    # ── 5. Convert to binary G-code (.bgcode) ──────────────────────
+    bgcode_out = output_dir / "enclosure_staged.bgcode"
+    try:
+        gcode_to_bgcode(staged_gcode, bgcode_out, stl_path=stl_path)
+        stages.append(f"Binary G-code written: {bgcode_out}")
+        log.info("Binary G-code written: %s", bgcode_out)
+    except Exception as exc:
+        log.warning("bgcode conversion failed (ASCII .gcode still usable): %s", exc)
+        bgcode_out = None
+        stages.append(f"bgcode conversion skipped: {exc}")
+
     log.info("G-code pipeline complete: %s", staged_gcode)
 
     return GcodePipelineResult(
@@ -170,6 +183,7 @@ def run_gcode_pipeline(
         message="G-code pipeline completed successfully.",
         raw_gcode_path=gcode_path,
         staged_gcode_path=staged_gcode,
+        bgcode_path=bgcode_out,
         pause_points=pauses,
         postprocess=pp_result,
         stages=stages,

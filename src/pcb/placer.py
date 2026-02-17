@@ -120,23 +120,23 @@ def place_components(
     bat_w = bat_fp["compartment_width_mm"]
     bat_h = bat_fp["compartment_height_mm"]
 
-    # Try placing in the bottom 40% first — the battery belongs at
-    # the bottom of the remote.  Use a low bottleneck channel (3 mm)
-    # because traces route above the battery, not alongside it.
+    # Place the battery in the lower-center area (30–55 % of the
+    # board height).  This prevents it from being shoved to the
+    # extreme bottom while keeping it in the lower half.
     bat_pos, _ = _place_rect(
         board_inset, occupied,
         bat_w, bat_h, margin, prefer="bottom",
-        prefer_weight=0.15,
+        prefer_weight=0.05,
         clearance_cap=3.0,
-        y_zone=(0.0, 0.40),
+        y_zone=(0.30, 0.55),
         bottleneck_channel=3.0,
     )
-    # Fallback: full board area if bottom 40% is too narrow
+    # Fallback: full board area if lower-center is too narrow
     if bat_pos is None:
         bat_pos, _ = _place_rect(
             board_inset, occupied,
             bat_w, bat_h, margin, prefer="bottom",
-            prefer_weight=0.15,
+            prefer_weight=0.05,
             clearance_cap=3.0,
             bottleneck_channel=3.0,
         )
@@ -170,7 +170,12 @@ def place_components(
             "height_mm": bat_h,
         },
     })
-    occupied.append({"cx": bx, "cy": by, "hw": bat_w / 2, "hh": bat_h / 2})
+    # Extra padding around the battery so the controller doesn't
+    # crowd against it — gives room for traces to route between them.
+    bat_spacing_pad = 4.0  # mm extra on each side
+    occupied.append({"cx": bx, "cy": by,
+                     "hw": bat_w / 2 + bat_spacing_pad,
+                     "hh": bat_h / 2 + bat_spacing_pad})
 
     # ── 3. Controller ──────────────────────────────────────────────
     #      Smart placement: avoid putting the MC in the button Y-band
@@ -700,16 +705,27 @@ def generate_placement_candidates(
     seen: set[tuple[int, int, int, int, int]] = set()
 
     for bpref in battery_prefs:
+        # For "bottom" preference, constrain to 30–55 % of board
+        # height so the battery stays in the lower-center area.
+        bzone = (0.30, 0.55) if bpref == "bottom" else None
         bat_pos, _ = _place_rect(
             board_inset, occupied_base,
             bat_w, bat_h, margin, prefer=bpref,
+            prefer_weight=0.05,
+            clearance_cap=3.0,
+            bottleneck_channel=3.0,
+            **(dict(y_zone=bzone) if bzone else {}),
         )
         if bat_pos is None:
             continue
         bx, by = bat_pos
 
         occupied_with_bat = list(occupied_base)
-        occupied_with_bat.append({"cx": bx, "cy": by, "hw": bat_w / 2, "hh": bat_h / 2})
+        # Extra padding so the controller doesn't crowd the battery
+        bat_spacing_pad = 4.0
+        occupied_with_bat.append({"cx": bx, "cy": by,
+                                  "hw": bat_w / 2 + bat_spacing_pad,
+                                  "hh": bat_h / 2 + bat_spacing_pad})
 
         for cpref in controller_prefs:
             # Try both orientations via _place_rect_with_rotation
@@ -888,12 +904,25 @@ def _score_layout_spacing(
             # Positive when battery is further from buttons than MC
             mc_bonus = bat_dist - ctrl_dist
 
+    # ── Mild battery-at-bottom preference ────────────────────────
+    # A small bonus for the battery being below the midpoint — just
+    # enough to break ties, not enough to override spacing quality.
+    bat_bottom_bonus = 0.0
+    if len(polygon) >= 3:
+        poly_ys = [v[1] for v in polygon]
+        mid_y = (min(poly_ys) + max(poly_ys)) / 2
+        for comp in components:
+            if comp.get("type") == "battery":
+                # Positive when battery is below midpoint
+                bat_bottom_bonus = (mid_y - comp["center"][1]) * 0.05
+                break
+
     # min_gap stays untouched — never sacrifice worst-case clearance.
     # MC proximity only boosts mean_gap (secondary sort) with a strong
     # additive bonus so it can differentiate between candidates that
     # have similar min_gap values.  2mm bonus per mm of advantage.
     MC_PROXIMITY_WEIGHT = 2.0
-    adjusted_mean = mean_gap + mc_bonus * MC_PROXIMITY_WEIGHT
+    adjusted_mean = mean_gap + mc_bonus * MC_PROXIMITY_WEIGHT + bat_bottom_bonus
 
     return min_gap, adjusted_mean
 

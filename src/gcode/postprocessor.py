@@ -354,8 +354,8 @@ def _trace_highlight_block(
     # to reduce travel moves.
     polylines = _segments_to_polylines(trace_segs)
 
-    e_accum = 0.0  # running E counter (relative within this block)
-    lines.append(f"G92 E0 ; reset E for trace highlight")
+    # NOTE: PrusaSlicer Core One uses M83 (relative E distances).
+    # Each G1 E value must be the *per-move delta*, not cumulative.
     lines.append(f"G0 Z{z:.3f} F1000")
 
     for poly in polylines:
@@ -367,18 +367,17 @@ def _trace_highlight_block(
         lines.append(f"G0 X{sx:.3f} Y{sy:.3f} F{TRACE_TRAVEL_SPEED}")
         lines.append(f"G0 Z{z:.3f} F1000")
 
-        # Extrude along path
+        # Extrude along path — emit per-move E delta (M83 relative)
         prev = poly[0]
         for pt in poly[1:]:
             dist = math.hypot(pt[0] - prev[0], pt[1] - prev[1])
-            e_accum += dist * E_PER_MM
+            e_delta = dist * E_PER_MM
             lines.append(
-                f"G1 X{pt[0]:.3f} Y{pt[1]:.3f} E{e_accum:.5f} F{TRACE_EXTRUDE_SPEED}"
+                f"G1 X{pt[0]:.3f} Y{pt[1]:.3f} E{e_delta:.5f} F{TRACE_EXTRUDE_SPEED}"
             )
             prev = pt
 
-    # Retract by 0.8 mm (Prusa MK3S default retract distance)
-    retract_e = e_accum - 0.8
+    # Retract after trace highlight (M83 relative: negative = retract)
     lines.extend([
         "",
         "; ┌──────────────────────────────────────────────────┐",
@@ -387,8 +386,7 @@ def _trace_highlight_block(
         "; └──────────────────────────────────────────────────┘",
         "; M600 ; filament change — swap back to main color",
         "",
-        f"G1 E{retract_e:.5f} F2100 ; retract 0.8 mm",
-        "G92 E0 ; reset E after highlight pass",
+        "G1 E-0.80000 F2100 ; retract 0.8 mm",
         "",
         "; " + "=" * 50,
         "; END TRACE HIGHLIGHT",
@@ -767,7 +765,7 @@ def postprocess_gcode(
             # Restore nozzle to slicer's expected position and
             # unretract so E-state matches what the slicer assumes.
             out.append(f"G0 X{resume_x:.3f} Y{resume_y:.3f} F9000 ; return to layer start")
-            out.append("G1 E.8 F2100 ; unretract to match slicer state")
+            out.append("G1 E0.80000 F2100 ; unretract to match slicer state")
             trace_highlight_armed = False
 
         i += 1

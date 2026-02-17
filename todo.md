@@ -44,7 +44,7 @@ The web recompiles everytime you update the top and bottom edge profiles, there 
 
 The ability to make your own buttons and custom button shapes, then the button holes in the shell should match the custom button shapes. 
 
-Have another step/interface after the design stage, here we need to slice it and get the g-code. We need to make custom g-code. the order we nee to print in and how we need to do it is. 
+DONE Have another step/interface after the design stage, here we need to slice it and get the g-code. We need to make custom g-code. the order we nee to print in and how we need to do it is. 
 - first print until we hit the layer where the ink is then we need to iron that layer. 
 - second step print the ink. 
 - third print the walls till the top of diode hole, then set in the diode. 
@@ -52,6 +52,8 @@ Have another step/interface after the design stage, here we need to slice it and
 - continue and print the rest. 
 
 Make interface that tells you where to place things in the correct direction. 
+
+figure out a way to make bgcode for the coreone
 
 
 # Long term
