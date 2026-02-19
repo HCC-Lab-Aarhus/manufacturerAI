@@ -125,11 +125,20 @@ def _normalize_outline(
 ) -> tuple[list[list[float]], list[dict]]:
     """
     Normalize outline and buttons so the bottom-left is at the origin.
-    Also strips duplicate closing vertex (if first == last).
+    Also strips duplicate closing vertex (if first == last) and
+    auto-smooths coarsely-approximated curves.
     """
     # Strip duplicate closing vertex
     if len(outline) >= 2 and outline[0] == outline[-1]:
         outline = outline[:-1]
+
+    # Auto-smooth coarse curves (e.g. 8-vertex "circle" → 64 vertices).
+    # Only activates when ≥ 70 % of interior angles are nearly straight
+    # (i.e. the polygon is trying to be curved but has too few vertices).
+    # Shapes with intentional sharp corners (rectangles, diamonds, T-shapes)
+    # are left untouched.
+    from src.geometry.polygon import smooth_polygon
+    outline = smooth_polygon(outline)
 
     # Find minimum x, y
     min_x = min(v[0] for v in outline)

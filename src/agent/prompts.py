@@ -112,7 +112,14 @@ Outline polygon:
   • No self-intersections
   • X dimension (width) ≤ {limits['max_width_mm']}mm
   • Y dimension (length) ≤ {limits['max_length_mm']}mm
-  • Use 8-20 vertices for organic shapes
+  • For organic / curved shapes, use **24-48 vertices** to make the
+    curve smooth.  Approximate circles with cos/sin at equal angular
+    steps (e.g. 32 vertices for a circle, 24+ for an oval).
+    The pipeline will auto-smooth coarse curves, but starting with
+    more vertices gives a better result.
+  • For shapes with straight sides and intentional corners (rectangles,
+    T-shapes, diamonds, trapezoids), use 4-12 vertices — these are
+    kept sharp, not smoothed.
 
 Button clearance:
   • Every button center must be ≥ {edge_clearance:.1f}mm from EVERY polygon edge
@@ -125,12 +132,15 @@ Button clearance:
   • Use think() to verify: for each button, calculate its distance
     to the nearest edge and ensure it's ≥ {edge_clearance:.1f}mm
 
-EXAMPLE 1 — a TV remote 150mm long × 45mm wide (elongated oval):
+EXAMPLE 1 — a TV remote 150mm long × 45mm wide (smooth oval):
+  Use ~24+ vertices to approximate the ellipse:
   outline = [
-    [5, 0], [40, 0],        // bottom edge
-    [45, 10], [45, 140],    // right side
-    [40, 150], [5, 150],    // top edge
-    [0, 140], [0, 10]       // left side
+    [22.5, 0],  [30.1, 0.6],  [36.6, 2.4],  [41.5, 5.7],
+    [44.6, 10.2], [45.0, 15.8], [45.0, 134.2], [44.6, 139.8],
+    [41.5, 144.3],[36.6, 147.6],[30.1, 149.4],[22.5, 150.0],
+    [14.9, 149.4],[8.4, 147.6], [3.5, 144.3], [0.4, 139.8],
+    [0.0, 134.2], [0.0, 15.8],  [0.4, 10.2],  [3.5, 5.7],
+    [8.4, 2.4],   [14.9, 0.6]
   ]
   buttons at x=22.5 (centered), y=30, y=50, y=70 etc.
 

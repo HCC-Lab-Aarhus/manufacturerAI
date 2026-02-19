@@ -272,3 +272,126 @@ def _line_intersection(
         return None
     t = ((b1[0] - a1[0]) * dy2 - (b1[1] - a1[1]) * dx2) / denom
     return [a1[0] + t * dx1, a1[1] + t * dy1]
+
+
+# ── polygon smoothing ──────────────────────────────────────────────
+
+
+def _edge_lengths(outline: Outline) -> list[float]:
+    """Return the length of each edge [i] → [i+1] (wrapping)."""
+    n = len(outline)
+    return [
+        math.hypot(
+            outline[(i + 1) % n][0] - outline[i][0],
+            outline[(i + 1) % n][1] - outline[i][1],
+        )
+        for i in range(n)
+    ]
+
+
+def _interior_angle(a: Vertex, b: Vertex, c: Vertex) -> float:
+    """Interior angle at vertex *b* for a CCW polygon, in degrees.
+
+    Returns the angle "inside" the polygon at b, where a is the
+    previous vertex and c is the next vertex (CCW order).
+    Convex corners: 0–180°.  Reflex corners: 180–360°.
+    """
+    # Vectors from b toward neighbours
+    ax, ay = a[0] - b[0], a[1] - b[1]
+    cx, cy = c[0] - b[0], c[1] - b[1]
+    dot = ax * cx + ay * cy
+    # Cross product sign tells us which side of ba the vector bc is on.
+    # For CCW polygons, negate the cross so the interior (left) side
+    # maps to the 0–π range.
+    cross = ay * cx - ax * cy
+    angle = math.atan2(cross, dot)
+    if angle < 0:
+        angle += 2 * math.pi
+    return math.degrees(angle)
+
+
+def _chaikin_cut(outline: Outline) -> Outline:
+    """One iteration of Chaikin's corner-cutting algorithm.
+
+    Each edge is split at 25% and 75%, producing a polygon with 2n
+    vertices that converges toward a smooth B-spline curve.
+    """
+    n = len(outline)
+    result: Outline = []
+    for i in range(n):
+        p0 = outline[i]
+        p1 = outline[(i + 1) % n]
+        result.append([0.75 * p0[0] + 0.25 * p1[0],
+                       0.75 * p0[1] + 0.25 * p1[1]])
+        result.append([0.25 * p0[0] + 0.75 * p1[0],
+                       0.25 * p0[1] + 0.75 * p1[1]])
+    return result
+
+
+def smooth_polygon(
+    outline: Outline,
+    *,
+    iterations: int = 3,
+    max_vertices: int = 128,
+    angle_threshold: float = 130.0,
+) -> Outline:
+    """Smooth a polygon using Chaikin's corner-cutting subdivision.
+
+    Designed for LLM-generated outlines that attempt rounded/oval
+    shapes but only produce 6–20 vertices (resulting in visible
+    faceting).  The algorithm only activates when the polygon looks
+    like it's *trying* to be curved — i.e. most interior angles are
+    ≥ *angle_threshold* degrees (nearly straight, typical of a coarse
+    circle approximation).
+
+    Parameters
+    ----------
+    outline : list of [x, y]
+        The polygon vertices (CCW or CW — works either way).
+    iterations : int
+        Number of Chaikin subdivision passes (each doubles vertex count).
+        3 passes: 8 verts → 64 verts → smooth.
+    max_vertices : int
+        Stop subdividing if vertex count would exceed this.
+    angle_threshold : float
+        Interior angle (degrees) above which a corner is considered
+        "gentle".  If ≥ 70% of corners exceed this threshold, the
+        polygon is treated as an attempted curve and gets smoothed.
+        Polygons with sharp corners (rectangles, diamonds, T-shapes,
+        rounded rectangles, hexagons) are left alone.
+
+    Returns
+    -------
+    Smoothed polygon, or the original if smoothing is not appropriate.
+    """
+    if len(outline) < 5:
+        return outline
+
+    ccw = ensure_ccw(outline)
+    n = len(ccw)
+
+    # Compute interior angles to decide if this looks like an
+    # attempted curve or a shape with intentional sharp corners.
+    smooth_count = 0
+    for i in range(n):
+        a = ccw[(i - 1) % n]
+        b = ccw[i]
+        c = ccw[(i + 1) % n]
+        angle = _interior_angle(a, b, c)
+        if angle >= angle_threshold:
+            smooth_count += 1
+
+    smooth_ratio = smooth_count / n
+    if smooth_ratio < 0.70:
+        # Polygon has too many sharp corners — probably intentional
+        # (rectangle, diamond, T-shape, etc.).  Don't smooth.
+        return outline
+
+    # Apply Chaikin subdivision
+    result = list(ccw)
+    for _ in range(iterations):
+        if len(result) * 2 > max_vertices:
+            break
+        result = _chaikin_cut(result)
+
+    return result

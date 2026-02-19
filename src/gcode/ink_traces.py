@@ -85,7 +85,7 @@ def generate_ink_gcode(
 
     # Lift to safe height before starting ink pass
     # Retract filament first to prevent ooze during long travels
-    lines.append("G1 E-2.00000 F3600 ; retract before ink travels")
+    lines.append("G1 E-0.80000 F2700 ; retract before ink travels")
     lines.append(f"G0 Z{ink_z + z_hop:.3f} F{travel_speed}")
     lines.append("G91 ; relative positioning")
     lines.append("G90 ; back to absolute")
@@ -123,7 +123,7 @@ def generate_ink_gcode(
 
     lines.append("")
     lines.append("; Unretract — restore filament state before next M601 pause")
-    lines.append("G1 E2.00000 F1500 ; unretract after ink travels")
+    lines.append("G1 E0.80000 F1500 ; unretract after ink travels")
     lines.append("")
     lines.append("; " + "=" * 50)
     lines.append("; END CONDUCTIVE INK")

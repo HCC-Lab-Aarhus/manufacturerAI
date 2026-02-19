@@ -109,10 +109,13 @@ def place_components(
             },
         }
         components.append(comp)
+        # Use the keepout circle radius (not just pin spacing) so
+        # that battery/controller stay clear of the full button area.
+        btn_ko_r = hw.button["cap_diameter_mm"] / 2 + hw.button["keepout_padding_mm"]
         occupied.append({
             "cx": btn["x"], "cy": btn["y"],
-            "hw": hw.button["pin_spacing_x_mm"] / 2,
-            "hh": hw.button["pin_spacing_y_mm"] / 2,
+            "hw": btn_ko_r,
+            "hh": btn_ko_r,
         })
 
     # ── 2. Battery compartment ──────────────────────────────────────
@@ -215,11 +218,11 @@ def place_components(
     if ctrl_rot == 90:
         ko_w = ctrl_h + ctrl_pad
         ko_h = ctrl_w + ctrl_pad
-        occ_hw, occ_hh = ctrl_h / 2, ctrl_w / 2
+        occ_hw, occ_hh = ko_w / 2, ko_h / 2
     else:
         ko_w = ctrl_w + ctrl_pad
         ko_h = ctrl_h + ctrl_pad
-        occ_hw, occ_hh = ctrl_w / 2, ctrl_h / 2
+        occ_hw, occ_hh = ko_w / 2, ko_h / 2
 
     components.append({
         "id": "U1",
@@ -234,6 +237,8 @@ def place_components(
             "height_mm": ko_h,
         },
     })
+    # Occupied rect now uses the full keepout extent (body + padding)
+    # so subsequent components (and SCAD cutouts) are properly spaced.
     occupied.append({"cx": cx, "cy": cy, "hw": occ_hw, "hh": occ_hh})
 
     # ── 4. Diode (IR LED) — at top center, facing outward ─────────
@@ -273,7 +278,7 @@ def place_components(
     })
 
     # ── Assemble layout ────────────────────────────────────────────
-    return {
+    layout = {
         "board": {
             "outline_polygon": [[v[0], v[1]] for v in board_inset],
             "thickness_mm": hw.pcb_thickness,
@@ -283,6 +288,83 @@ def place_components(
         "keepout_regions": [],
         "metadata": {},
     }
+
+    # ── Post-placement sanity check ────────────────────────────────
+    _validate_no_cutout_overlap(layout)
+
+    return layout
+
+
+# ── Post-placement cutout overlap validation ───────────────────────
+
+
+def _cutout_rect(comp: dict, margin: float) -> tuple[float, float, float, float]:
+    """Return (x_min, y_min, x_max, y_max) of the SCAD cutout pocket.
+
+    Mirrors the logic in ``scad/cutouts.py``: the pocket is the
+    keepout rectangle + 2·margin for rectangular keepouts, the bounding
+    box of the keepout circle + margin for circular ones.  For
+    batteries the pocket is body + 2·margin.
+    """
+    cx, cy = comp["center"]
+    ko = comp.get("keepout", {})
+    ctype = comp.get("type", "")
+
+    if ctype == "battery":
+        # Battery pocket uses body dims, not keepout
+        hw2 = comp.get("body_width_mm", 25) / 2 + margin
+        hh2 = comp.get("body_height_mm", 48) / 2 + margin
+    elif ko.get("type") == "rectangle":
+        hw2 = ko["width_mm"] / 2 + margin
+        hh2 = ko["height_mm"] / 2 + margin
+    elif ko.get("type") == "circle":
+        r = ko["radius_mm"] + margin
+        hw2 = hh2 = r
+    else:
+        hw2 = hh2 = 5.0 + margin
+
+    return (cx - hw2, cy - hh2, cx + hw2, cy + hh2)
+
+
+def _rects_overlap(
+    a: tuple[float, float, float, float],
+    b: tuple[float, float, float, float],
+) -> bool:
+    """True if two (x_min, y_min, x_max, y_max) rectangles overlap."""
+    return (a[0] < b[2] and b[0] < a[2]
+            and a[1] < b[3] and b[1] < a[3])
+
+
+def _validate_no_cutout_overlap(layout: dict) -> None:
+    """Warn (and log) if any two SCAD cutout pockets overlap.
+
+    This is a safety net — the placement algorithm should already
+    prevent overlaps.  If an overlap sneaks through, log it loudly
+    so it shows up during development / testing.
+
+    Button-vs-button overlaps are skipped because button positions
+    are user-specified and the placer cannot move them.
+    """
+    margin = hw.component_margin
+    comps = layout.get("components", [])
+    for i in range(len(comps)):
+        ri = _cutout_rect(comps[i], margin)
+        for j in range(i + 1, len(comps)):
+            # Skip button-vs-button pairs (user-specified positions)
+            ci = comps[i]
+            cj = comps[j]
+            if ci.get("type") == "button" and cj.get("type") == "button":
+                continue
+            rj = _cutout_rect(comps[j], margin)
+            if _rects_overlap(ri, rj):
+                log.warning(
+                    "CUTOUT OVERLAP: %s (%s) at (%.1f,%.1f) [%.1f×%.1f] "
+                    "overlaps %s (%s) at (%.1f,%.1f) [%.1f×%.1f]",
+                    ci.get("id"), ci.get("type"), ci["center"][0], ci["center"][1],
+                    ri[2] - ri[0], ri[3] - ri[1],
+                    cj.get("id"), cj.get("type"), cj["center"][0], cj["center"][1],
+                    rj[2] - rj[0], rj[3] - rj[1],
+                )
 
 
 # ── Placement core ─────────────────────────────────────────────────
@@ -314,18 +396,70 @@ def _dist_to_polygon(px: float, py: float, polygon: list[list[float]]) -> float:
     )
 
 
+def _rect_perimeter_samples(
+    cx: float, cy: float,
+    hw2: float, hh2: float,
+    max_spacing: float = 5.0,
+) -> list[tuple[float, float]]:
+    """Generate sample points around a rectangle's perimeter.
+
+    Includes the four corners, edge midpoints, and additional points
+    so that no two adjacent samples are more than *max_spacing* mm
+    apart.  This catches concave-polygon crossings that a simple
+    4-corner check would miss.
+    """
+    w, h = hw2 * 2.0, hh2 * 2.0
+    # Number of subdivisions per edge (at least 2 = endpoints)
+    nx = max(2, int(math.ceil(w / max_spacing)) + 1)
+    ny = max(2, int(math.ceil(h / max_spacing)) + 1)
+    pts: list[tuple[float, float]] = []
+
+    # Bottom and top edges (vary X)
+    for i in range(nx):
+        t = i / (nx - 1)
+        x = cx - hw2 + w * t
+        pts.append((x, cy - hh2))
+        pts.append((x, cy + hh2))
+
+    # Left and right edges (vary Y, skip corners already added)
+    for j in range(1, ny - 1):
+        t = j / (ny - 1)
+        y = cy - hh2 + h * t
+        pts.append((cx - hw2, y))
+        pts.append((cx + hw2, y))
+
+    return pts
+
+
+def _rect_inside_polygon(
+    cx: float, cy: float,
+    hw2: float, hh2: float,
+    polygon: list[list[float]],
+    max_spacing: float = 5.0,
+) -> bool:
+    """Check whether a rectangle is fully inside a polygon.
+
+    Uses dense perimeter sampling (≤ *max_spacing* mm apart) so that
+    concavities narrower than the sampling interval are reliably
+    detected.  Much safer than a 4-corner check for non-convex shapes.
+    """
+    for px, py in _rect_perimeter_samples(cx, cy, hw2, hh2, max_spacing):
+        if not point_in_polygon(px, py, polygon):
+            return False
+    return True
+
+
 def _rect_edge_clearance(
     cx: float, cy: float,
     hw2: float, hh2: float,
     polygon: list[list[float]],
 ) -> float:
-    """Min distance from rect perimeter (corners + edge midpoints) to polygon boundary."""
-    samples = [
-        (cx - hw2, cy - hh2), (cx + hw2, cy - hh2),
-        (cx + hw2, cy + hh2), (cx - hw2, cy + hh2),
-        (cx, cy - hh2), (cx + hw2, cy),
-        (cx, cy + hh2), (cx - hw2, cy),
-    ]
+    """Min distance from rect perimeter to polygon boundary.
+
+    Uses dense edge sampling (≤ 5 mm spacing) for reliable clearance
+    measurement even on concave outlines.
+    """
+    samples = _rect_perimeter_samples(cx, cy, hw2, hh2, max_spacing=5.0)
     return min(_dist_to_polygon(px, py, polygon) for px, py in samples)
 
 
@@ -509,12 +643,11 @@ def _place_rect(
     while cx <= max_x - hw2 + 0.01:
         cy = scan_y_min
         while cy <= scan_y_max + 0.01:
-            # All four corners must be inside the polygon
-            if not all(
-                point_in_polygon(cx + dx, cy + dy, ccw)
-                for dx in (-hw2, hw2)
-                for dy in (-hh2, hh2)
-            ):
+            # Rectangle perimeter must be fully inside the polygon.
+            # Dense edge sampling (≤ 5 mm) catches concavities that a
+            # simple 4-corner check would miss on non-rectangular
+            # outlines.
+            if not _rect_inside_polygon(cx, cy, hw2, hh2, ccw):
                 cy += step
                 continue
 
@@ -681,8 +814,8 @@ def generate_placement_candidates(
         })
         occupied_base.append({
             "cx": btn["x"], "cy": btn["y"],
-            "hw": hw.button["pin_spacing_x_mm"] / 2,
-            "hh": hw.button["pin_spacing_y_mm"] / 2,
+            "hw": hw.button["cap_diameter_mm"] / 2 + hw.button["keepout_padding_mm"],
+            "hh": hw.button["cap_diameter_mm"] / 2 + hw.button["keepout_padding_mm"],
         })
 
     bat_fp = hw.battery
@@ -739,13 +872,13 @@ def generate_placement_candidates(
             cx, cy = ctrl_pos
 
             if ctrl_rot == 90:
-                occ_hw, occ_hh = ctrl_h / 2, ctrl_w / 2
                 ko_w = ctrl_h + ctrl_pad
                 ko_h = ctrl_w + ctrl_pad
+                occ_hw, occ_hh = ko_w / 2, ko_h / 2
             else:
-                occ_hw, occ_hh = ctrl_w / 2, ctrl_h / 2
                 ko_w = ctrl_w + ctrl_pad
                 ko_h = ctrl_h + ctrl_pad
+                occ_hw, occ_hh = ko_w / 2, ko_h / 2
 
             # Dedup on 2mm grid (include rotation)
             key = (int(bx / 2), int(by / 2), int(cx / 2), int(cy / 2), ctrl_rot)
@@ -968,4 +1101,8 @@ def place_components_optimal(
         "(from %d candidates)",
         best_score[0], best_score[1], len(candidates),
     )
+
+    if best_layout is not None:
+        _validate_no_cutout_overlap(best_layout)
+
     return best_layout

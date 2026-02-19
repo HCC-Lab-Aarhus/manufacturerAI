@@ -297,3 +297,122 @@ class TestNoFallbackRegression:
             assert tuple(ctrl["center"]) != tuple(btn["center"]), (
                 f"Controller placed on top of {btn['id']}!"
             )
+
+
+# ── 6. Concave / irregular outlines ─────────────────────────────
+
+
+class TestConcaveOutlines:
+    """
+    Irregular/non-rectangular outlines must not allow components to
+    extend through concavities or overlap each other's SCAD pockets.
+    """
+
+    @staticmethod
+    def _no_scad_overlap(layout: dict, skip_buttons: bool = True) -> None:
+        """Assert no pair of placed components has overlapping SCAD pockets.
+
+        When *skip_buttons* is True, any pair involving a button is
+        skipped—button positions are user-defined and not under the
+        placer's control.
+        """
+        from src.pcb.placer import _cutout_rect, _rects_overlap
+        margin = hw.component_margin
+        comps = layout["components"]
+        for i in range(len(comps)):
+            ri = _cutout_rect(comps[i], margin)
+            for j in range(i + 1, len(comps)):
+                if skip_buttons and (
+                    comps[i]["type"] == "button" or comps[j]["type"] == "button"
+                ):
+                    continue
+                rj = _cutout_rect(comps[j], margin)
+                assert not _rects_overlap(ri, rj), (
+                    f"SCAD pockets overlap: {comps[i]['id']} vs {comps[j]['id']}"
+                )
+
+    def test_hourglass_no_overlap(self):
+        """Hourglass shape with narrow waist — components must not
+        extend through the concavity.
+        """
+        outline = [
+            [0, 0], [60, 0], [60, 40], [40, 65], [60, 90],
+            [60, 130], [0, 130], [0, 90], [20, 65], [0, 40],
+        ]
+        buttons = [
+            {"id": "btn_1", "label": "A", "x": 30, "y": 100},
+            {"id": "btn_2", "label": "B", "x": 30, "y": 115},
+        ]
+        layout = place_components(outline, buttons)
+        bat = _component_by_id(layout, "BAT1")
+        ctrl = _component_by_id(layout, "U1")
+
+        # Both must be inside the board polygon
+        from src.geometry.polygon import point_in_polygon, ensure_ccw
+        ccw = ensure_ccw(layout["board"]["outline_polygon"])
+        for comp in [bat, ctrl]:
+            cx, cy = comp["center"]
+            assert point_in_polygon(cx, cy, ccw), (
+                f"{comp['id']} center outside polygon"
+            )
+
+        self._no_scad_overlap(layout)
+
+    def test_egg_battery_fits(self):
+        """Egg/teardrop shape — wide bottom, narrow top."""
+        outline = [
+            [5, 0], [55, 0], [65, 30], [65, 90],
+            [55, 130], [30, 150], [5, 130], [-5, 90], [-5, 30],
+        ]
+        buttons = [
+            {"id": "btn_1", "label": "A", "x": 30, "y": 95},
+            {"id": "btn_2", "label": "B", "x": 30, "y": 115},
+        ]
+        layout = place_components(outline, buttons)
+        self._no_scad_overlap(layout)
+
+    def test_capsule_tall_no_overlap(self):
+        """Capsule/pill shape."""
+        outline = [
+            [10, 0], [40, 0], [50, 15], [50, 125], [40, 140],
+            [10, 140], [0, 125], [0, 15],
+        ]
+        buttons = [
+            {"id": "btn_1", "label": "A", "x": 25, "y": 80},
+            {"id": "btn_2", "label": "B", "x": 25, "y": 100},
+        ]
+        layout = place_components(outline, buttons)
+        self._no_scad_overlap(layout)
+
+    def test_wide_rounded_no_overlap(self):
+        """Wide rounded rectangle with tapered ends."""
+        outline = [
+            [5, 0], [65, 0], [70, 10], [70, 100], [65, 115],
+            [50, 120], [20, 120], [5, 115], [0, 100], [0, 10],
+        ]
+        buttons = [
+            {"id": "btn_1", "label": "A", "x": 35, "y": 70},
+            {"id": "btn_2", "label": "B", "x": 35, "y": 90},
+        ]
+        layout = place_components(outline, buttons)
+        self._no_scad_overlap(layout)
+
+    def test_peanut_refuses_if_no_fit(self):
+        """Peanut shape (two lobes + narrow neck) — battery must not
+        span across the neck.
+        """
+        outline = [
+            [10, 0], [50, 0], [55, 15], [50, 35], [42, 50],
+            [50, 65], [55, 85], [50, 110], [10, 110],
+            [5, 85], [10, 65], [18, 50], [10, 35], [5, 15],
+        ]
+        buttons = [
+            {"id": "btn_1", "label": "A", "x": 30, "y": 80},
+            {"id": "btn_2", "label": "B", "x": 30, "y": 95},
+        ]
+        # Either succeeds without overlap, or raises PlacementError
+        try:
+            layout = place_components(outline, buttons)
+            self._no_scad_overlap(layout)
+        except PlacementError:
+            pass  # Expected — battery can't fit in either lobe
