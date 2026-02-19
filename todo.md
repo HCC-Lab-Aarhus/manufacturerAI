@@ -25,7 +25,7 @@ DONE The placer now places the battery compartment a little further back so that
 
 The router is still sometimes placing routes too close. Specifically, sometimes a single cell. It also doenst always find a solution, even when there is one.
 
-Use a faster 3d model generator to the web, only compile to stl after generating the faster view. Also only generate build plate stl, but generate others on demand.
+DONE Use a faster 3d model generator to the web, only compile to stl after generating the faster view. Also only generate build plate stl, but generate others on demand.
 
 DONE The visualizations on the web are upside down. Both the layout, pcb debug and 3d model.
 
@@ -56,6 +56,8 @@ Make interface that tells you where to place things in the correct direction.
 DONT DO THIS figure out a way to make bgcode for the coreone
 
 Make a printer profile for the Prusa i3 mk3s+ to genereate correct gcode. 
+
+Negative PNG has to be 1536x1383 pixels.
 
 
 # Long term

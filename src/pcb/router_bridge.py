@@ -4,14 +4,74 @@ TypeScript PCB Router Bridge — calls the TS CLI and returns routing results.
 
 from __future__ import annotations
 import json
+import logging
 import subprocess
 from pathlib import Path
 
 from src.config.hardware import hw
 from src.geometry.polygon import polygon_bounds
 
+log = logging.getLogger("manufacturerAI.router_bridge")
 
 _PCB_DIR = Path(__file__).resolve().parents[2] / "pcb"
+
+
+# ── ATmega328P DIP-28 physical pin layout ──────────────────────────
+#
+# Left side:  pin 1 (bottom) → pin 14 (top)
+# Right side: pin 15 (top, opposite pin 14) → pin 28 (bottom)
+#
+# The dict key iteration order sent to the TS router determines which
+# index → physical-position mapping the router uses.  This list
+# matches the real ATmega328P-PU DIP-28 pinout so that simulated
+# pin positions correspond to reality.
+
+_DIP28_PIN_ORDER: list[str] = [
+    # Left side  (pins 1-14, bottom → top)
+    "PC6", "PD0", "PD1", "PD2", "PD3", "PD4", "VCC", "GND1",
+    "PB6", "PB7", "PD5", "PD6", "PD7", "PB0",
+    # Right side (pins 15-28, top → bottom)
+    "PB1", "PB2", "PB3", "PB4", "PB5", "AVCC", "AREF", "GND2",
+    "PC0", "PC1", "PC2", "PC3", "PC4", "PC5",
+]
+
+
+def _pin_world_positions(
+    cx: float, cy: float, rotation: int = 0,
+) -> dict[str, tuple[float, float]]:
+    """Compute world (x, y) for every DIP-28 pin.
+
+    Mirrors the TS router's ``placeController`` geometry exactly so the
+    Python-side proximity calculation matches the actual pad positions.
+    """
+    fp = hw.router_footprints()["controller"]
+    pin_sp: float = fp["pinSpacing"]    # 2.54 mm
+    row_sp: float = fp["rowSpacing"]    # 7.62 mm
+    n = len(_DIP28_PIN_ORDER)           # 28
+    half = n // 2                       # 14
+    span = (half - 1) * pin_sp          # 33.02 mm
+
+    pos: dict[str, tuple[float, float]] = {}
+    for i, name in enumerate(_DIP28_PIN_ORDER):
+        pn = i + 1  # 1-based physical pin number
+        if rotation == 90:
+            if pn <= half:
+                px = cx - span / 2 + (pn - 1) * pin_sp
+                py = cy - row_sp / 2
+            else:
+                ri = n - pn
+                px = cx - span / 2 + ri * pin_sp
+                py = cy + row_sp / 2
+        else:
+            if pn <= half:
+                px = cx - row_sp / 2
+                py = cy - span / 2 + (pn - 1) * pin_sp
+            else:
+                ri = n - pn
+                px = cx + row_sp / 2
+                py = cy - span / 2 + ri * pin_sp
+        pos[name] = (px, py)
+    return pos
 
 
 class RouterError(Exception):
@@ -122,7 +182,12 @@ def _convert_layout(pcb_layout: dict) -> dict:
         if ctype == "button":
             buttons.append({"id": cid, "x": x, "y": y, "signalNet": f"{cid}_SIG"})
         elif ctype == "controller":
-            pins = _controller_pins(button_comps, diode_comps)
+            pins = _controller_pins(
+                button_comps, diode_comps,
+                ctrl_x=x, ctrl_y=y,
+                ctrl_rotation=comp.get("rotation_deg", 0),
+                comp_offset=(min_x, min_y),
+            )
             ctrl_entry: dict = {"id": cid, "x": x, "y": y, "pins": pins}
             rot = comp.get("rotation_deg", 0)
             if rot:
@@ -168,17 +233,28 @@ def build_pin_mapping(
     This tells the user which physical MCU pin each button is wired to,
     so they can program the firmware accordingly.
     """
-    # Gather button IDs in placement order
-    button_comps = [
-        c for c in pcb_layout.get("components", [])
-        if c.get("type") == "button"
-    ]
-    diode_comps = [
-        c for c in pcb_layout.get("components", [])
-        if c.get("type") == "diode"
-    ]
+    components = pcb_layout.get("components", [])
+    button_comps = [c for c in components if c.get("type") == "button"]
+    diode_comps  = [c for c in components if c.get("type") == "diode"]
+    ctrl_comps   = [c for c in components if c.get("type") == "controller"]
 
-    pins = _controller_pins(button_comps, diode_comps)
+    outline = pcb_layout["board"]["outline_polygon"]
+    min_x, min_y, _, _ = polygon_bounds(outline)
+
+    if ctrl_comps:
+        ctrl = ctrl_comps[0]
+        cx = ctrl["center"][0] - min_x
+        cy = ctrl["center"][1] - min_y
+        rot = ctrl.get("rotation_deg", 0)
+    else:
+        cx, cy, rot = 0.0, 0.0, 0
+
+    pins = _controller_pins(
+        button_comps, diode_comps,
+        ctrl_x=cx, ctrl_y=cy,
+        ctrl_rotation=rot,
+        comp_offset=(min_x, min_y),
+    )
 
     # Invert: signal net → controller pin name
     net_to_pin: dict[str, str] = {}
@@ -215,22 +291,68 @@ def build_pin_mapping(
 def _controller_pins(
     button_comps: list[dict],
     diode_comps: list[dict],
+    *,
+    ctrl_x: float = 0.0,
+    ctrl_y: float = 0.0,
+    ctrl_rotation: int = 0,
+    comp_offset: tuple[float, float] = (0.0, 0.0),
 ) -> dict[str, str]:
-    button_count = len(button_comps)
-    diode_count = len(diode_comps)
-    pins = hw.pin_assignments(button_count, diode_count)
+    """Build controller pin → net mapping using proximity-based assignment.
+
+    Instead of blindly assigning PD0, PD1, PD2 … in sequence, this
+    computes the physical (x, y) of every available GPIO pin and assigns
+    each button / diode signal to the *nearest* free pin.  This
+    minimises trace lengths and dramatically improves routability on
+    tight boards.
+
+    Parameters
+    ----------
+    ctrl_x, ctrl_y : float
+        Controller centre, already in the origin-shifted coordinate
+        system (board bottom-left = 0, 0).
+    ctrl_rotation : int
+        0 or 90.
+    comp_offset : tuple[float, float]
+        ``(min_x, min_y)`` to subtract from raw component ``center``
+        values to bring them into the same coordinate space.
+    """
     cp = hw.controller_pins
-    # rename generic SWn / LEDn nets to actual component IDs
-    btn_idx = 0
-    diode_idx = 0
-    for pin in cp["digital_order"]:
-        net = pins.get(pin, "")
-        if net.startswith("SW") and net.endswith("_SIG"):
-            if btn_idx < len(button_comps):
-                pins[pin] = f"{button_comps[btn_idx]['id']}_SIG"
-                btn_idx += 1
-        elif net.startswith("LED") and net.endswith("_SIG"):
-            if diode_idx < len(diode_comps):
-                pins[pin] = f"{diode_comps[diode_idx]['id']}_SIG"
-                diode_idx += 1
-    return pins
+    power  = dict(cp["power"])       # VCC→VCC, GND1→GND, …
+    unused = set(cp["unused"])       # {PC6, PB6, PB7}
+    gpio   = [p for p in cp["digital_order"]
+              if p not in power and p not in unused]
+
+    # Start every pin at NC; overwrite power/unused/signal below.
+    pin_net: dict[str, str] = {p: "NC" for p in _DIP28_PIN_ORDER}
+    for p in _DIP28_PIN_ORDER:
+        if p in power:
+            pin_net[p] = power[p]
+
+    # Physical pin positions on the board
+    pin_pos = _pin_world_positions(ctrl_x, ctrl_y, ctrl_rotation)
+
+    # Targets that need a signal connection: (net_name, x, y)
+    ox, oy = comp_offset
+    targets: list[tuple[str, float, float]] = []
+    for c in button_comps:
+        targets.append((f"{c['id']}_SIG", c["center"][0] - ox, c["center"][1] - oy))
+    for c in diode_comps:
+        targets.append((f"{c['id']}_SIG", c["center"][0] - ox, c["center"][1] - oy))
+
+    # Greedy nearest-pin: assign each component to its closest free GPIO.
+    free = set(gpio)
+    for net_name, tx, ty in targets:
+        if not free:
+            break
+        best = min(
+            free,
+            key=lambda p: (pin_pos[p][0] - tx) ** 2 + (pin_pos[p][1] - ty) ** 2,
+        )
+        pin_net[best] = net_name
+        free.discard(best)
+        log.debug("Pin %s → %s  (dist %.1f mm)",
+                  best, net_name,
+                  ((pin_pos[best][0] - tx) ** 2 + (pin_pos[best][1] - ty) ** 2) ** 0.5)
+
+    # Return in DIP-28 physical order so the TS router places pins correctly.
+    return {p: pin_net[p] for p in _DIP28_PIN_ORDER}

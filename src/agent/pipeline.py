@@ -31,6 +31,7 @@ from src.scad.shell import (
     generate_enclosure_scad,
     generate_battery_hatch_scad,
     generate_print_plate_scad,
+    DEFAULT_HEIGHT_MM,
 )
 from src.scad.cutouts import build_cutouts
 from src.scad.compiler import compile_scad, merge_stl_files
@@ -392,6 +393,27 @@ def run_pipeline(
         "print_plate": str(p3),
     }
     emit("scad_generated", scad_files)
+
+    # ── 5b. Instant 3-D preview (sent before slow STL compile) ──────
+    # Gather lightweight component info for client-side cutouts.
+    _preview_comps = []
+    for _c in layout.get("components", []):
+        _preview_comps.append({
+            "type": _c.get("type"),
+            "center": _c["center"],
+            "body_width_mm": _c.get("body_width_mm", 0),
+            "body_height_mm": _c.get("body_height_mm", 0),
+        })
+    emit("shell_preview", {
+        "outline": outline,
+        "height_mm": DEFAULT_HEIGHT_MM,
+        "wall_mm": hw.wall_thickness,
+        "top_curve_length": top_curve_length,
+        "top_curve_height": top_curve_height,
+        "bottom_curve_length": bottom_curve_length,
+        "bottom_curve_height": bottom_curve_height,
+        "components": _preview_comps,
+    })
 
     # ── 6. Compile STL ─────────────────────────────────────────────
     emit("progress", {"stage": "Compiling STL models..."})

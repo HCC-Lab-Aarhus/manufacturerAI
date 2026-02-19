@@ -351,14 +351,266 @@ dirLight.position.set(200, -100, 200);
 scene.add(dirLight);
 
 let currentMesh = null;
+// Store shell preview data so curve edits can rebuild instantly
+let _shellPreviewData = null;
+
+/**
+ * Build a Three.js mesh from outline polygon + shell parameters.
+ * Uses ExtrudeGeometry for the main body and layered insets for
+ * the rounded top/bottom edges — all computed client-side (instant).
+ */
+function buildShellPreview(data) {
+  _shellPreviewData = data;
+  const outline = data.outline;           // [[x,y], ...]
+  const height = data.height_mm || 16.5;
+  const wall = data.wall_mm || 1.6;
+  const topLen = data.top_curve_length || 0;
+  const topHt = data.top_curve_height || 0;
+  const botLen = data.bottom_curve_length || 0;
+  const botHt = data.bottom_curve_height || 0;
+  const components = data.components || [];
+
+  if (!outline || outline.length < 3) return;
+
+  // Remove old mesh
+  if (currentMesh) {
+    if (currentMesh.isGroup) {
+      currentMesh.traverse(c => { if (c.isMesh) { c.geometry.dispose(); c.material.dispose(); } });
+    } else {
+      currentMesh.geometry.dispose();
+      currentMesh.material.dispose();
+    }
+    scene.remove(currentMesh);
+    currentMesh = null;
+  }
+
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x93c5fd, metalness: 0.1, roughness: 0.5, side: THREE.DoubleSide,
+  });
+
+  const group = new THREE.Group();
+
+  // ── Cutout geometry from components ──────────────────────
+  // Button holes: 13mm diameter circle, from z = (h - 8.3) to top
+  const BUTTON_HOLE_R = 6.5;
+  const BUTTON_CAP_DEPTH = 8.3;
+  const buttonHoles = components
+    .filter(c => c.type === "button")
+    .map(c => ({ cx: c.center[0], cy: c.center[1] }));
+
+  // Battery opening: centre through-hole (20mm × bat_h), from z = 0 to 3mm
+  const BATTERY_LEDGE = 2.5;
+  const BATTERY_FLOOR = 3.0;
+  const batteryHoles = components
+    .filter(c => c.type === "battery")
+    .map(c => {
+      const bw = c.body_width_mm || 25;
+      const bh = c.body_height_mm || 48;
+      const holeW = bw - 2 * BATTERY_LEDGE;  // 20mm
+      return { cx: c.center[0], cy: c.center[1], hw: holeW / 2, hh: bh / 2 };
+    });
+
+  // Helper: create a circular THREE.Path (for shape holes)
+  function circleHole(cx, cy, r, n) {
+    n = n || 24;
+    const path = new THREE.Path();
+    path.moveTo(cx + r, cy);
+    for (let i = 1; i <= n; i++) {
+      const a = (2 * Math.PI * i) / n;
+      path.lineTo(cx + r * Math.cos(a), cy + r * Math.sin(a));
+    }
+    return path;
+  }
+
+  // Helper: create a rectangular THREE.Path (for shape holes)
+  function rectHole(cx, cy, hw, hh) {
+    const path = new THREE.Path();
+    path.moveTo(cx - hw, cy - hh);
+    path.lineTo(cx + hw, cy - hh);
+    path.lineTo(cx + hw, cy + hh);
+    path.lineTo(cx - hw, cy + hh);
+    path.lineTo(cx - hw, cy - hh);
+    return path;
+  }
+
+  // Helper: create THREE.Shape from polygon vertices (inset by `inset` mm)
+  // Optionally punches button/battery holes into the shape.
+  function makeShape(pts, inset, opts) {
+    opts = opts || {};
+    let usePts = pts;
+    if (inset > 0) {
+      const centX = pts.reduce((a, p) => a + p[0], 0) / pts.length;
+      const centY = pts.reduce((a, p) => a + p[1], 0) / pts.length;
+      usePts = pts.map(([x, y]) => {
+        const dx = x - centX, dy = y - centY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 0.01) return [x, y];
+        const factor = Math.max(0, (dist - inset) / dist);
+        return [centX + dx * factor, centY + dy * factor];
+      });
+    }
+    const s = new THREE.Shape();
+    s.moveTo(usePts[0][0], usePts[0][1]);
+    for (let i = 1; i < usePts.length; i++) s.lineTo(usePts[i][0], usePts[i][1]);
+    s.closePath();
+
+    // Punch button holes
+    if (opts.buttons) {
+      for (const b of buttonHoles) {
+        s.holes.push(circleHole(b.cx, b.cy, BUTTON_HOLE_R - inset * 0.3));
+      }
+    }
+    // Punch battery through-hole
+    if (opts.battery) {
+      for (const b of batteryHoles) {
+        s.holes.push(rectHole(b.cx, b.cy, b.hw, b.hh));
+      }
+    }
+    return s;
+  }
+
+  const STEPS = 10;
+
+  // Flat body height (middle section between bottom and top curves)
+  const flatBase = botHt;
+  const flatTop = height - topHt;
+  const flatH = Math.max(0.01, flatTop - flatBase);
+
+  // Z thresholds for cutouts
+  const btnZStart = height - BUTTON_CAP_DEPTH;  // ~8.2 mm
+  const batZEnd = BATTERY_FLOOR;                 // 3.0 mm
+
+  // Helper: should this layer have button holes?
+  function layerHasButtons(z0, z1) {
+    return buttonHoles.length > 0 && z1 > btnZStart;
+  }
+  // Helper: should this layer have battery hole?
+  function layerHasBattery(z0, z1) {
+    return batteryHoles.length > 0 && z0 < batZEnd;
+  }
+
+  // ── Bottom curve layers ──────────────────────────────────
+  if (botLen > 0 && botHt > 0) {
+    for (let i = 0; i < STEPS; i++) {
+      const t0 = i / STEPS;
+      const t1 = (i + 1) / STEPS;
+      const angle0 = (Math.PI / 2) * (1 - t0);
+      const angle1 = (Math.PI / 2) * (1 - t1);
+      const inset0 = botLen * Math.sin(angle0);
+      const inset1 = botLen * Math.sin(angle1);
+      const z0 = botHt * (1 - Math.sin(angle0));
+      const z1 = botHt * (1 - Math.sin(angle1));
+      const avgInset = (inset0 + inset1) / 2;
+      const layerH = z1 - z0;
+      if (layerH < 0.001) continue;
+      const shape = makeShape(outline, avgInset, {
+        buttons: layerHasButtons(z0, z1),
+        battery: layerHasBattery(z0, z1),
+      });
+      const geom = new THREE.ExtrudeGeometry(shape, {
+        depth: layerH, bevelEnabled: false,
+      });
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.position.z = z0;
+      group.add(mesh);
+    }
+  }
+
+  // ── Flat body ────────────────────────────────────────────
+  // Split the flat body into up to 3 sub-slabs so battery and button
+  // holes only affect the Z ranges they should.
+  {
+    const slabs = [];
+    let zCur = flatBase;
+    const zEnd = flatBase + flatH;
+    // Boundary Z values within the flat body
+    const cuts = [batZEnd, btnZStart].filter(z => z > zCur && z < zEnd).sort((a, b) => a - b);
+    for (const zCut of cuts) {
+      if (zCut > zCur + 0.01) slabs.push([zCur, zCut]);
+      zCur = zCut;
+    }
+    if (zEnd > zCur + 0.01) slabs.push([zCur, zEnd]);
+
+    for (const [sz0, sz1] of slabs) {
+      const shape = makeShape(outline, 0, {
+        buttons: layerHasButtons(sz0, sz1),
+        battery: layerHasBattery(sz0, sz1),
+      });
+      const geom = new THREE.ExtrudeGeometry(shape, {
+        depth: sz1 - sz0, bevelEnabled: false,
+      });
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.position.z = sz0;
+      group.add(mesh);
+    }
+  }
+
+  // ── Top curve layers ─────────────────────────────────────
+  if (topLen > 0 && topHt > 0) {
+    for (let i = 0; i < STEPS; i++) {
+      const t0 = i / STEPS;
+      const t1 = (i + 1) / STEPS;
+      const angle0 = (Math.PI / 2) * t0;
+      const angle1 = (Math.PI / 2) * t1;
+      const inset0 = topLen * (1 - Math.cos(angle0));
+      const inset1 = topLen * (1 - Math.cos(angle1));
+      const z0 = (height - topHt) + topHt * Math.sin(angle0);
+      const z1 = (height - topHt) + topHt * Math.sin(angle1);
+      const avgInset = (inset0 + inset1) / 2;
+      const layerH = z1 - z0;
+      if (layerH < 0.001) continue;
+      const shape = makeShape(outline, avgInset, {
+        buttons: layerHasButtons(z0, z1),
+        battery: layerHasBattery(z0, z1),
+      });
+      const geom = new THREE.ExtrudeGeometry(shape, {
+        depth: layerH, bevelEnabled: false,
+      });
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.position.z = z0;
+      group.add(mesh);
+    }
+  }
+
+  // Center and orient
+  const box = new THREE.Box3().setFromObject(group);
+  const center = new THREE.Vector3();
+  box.getCenter(center);
+  group.position.sub(center);
+
+  // Wrap in container for rotation (Z-up → Y-up)
+  const container = new THREE.Group();
+  container.add(group);
+  container.rotation.x = Math.PI / 2;
+  container.isGroup = true;
+
+  scene.add(container);
+  currentMesh = container;
+
+  // Fit camera
+  const box2 = new THREE.Box3().setFromObject(container);
+  const size = new THREE.Vector3();
+  box2.getSize(size);
+  const d = Math.max(size.x, size.y, size.z) * 1.7;
+  camera.position.set(0, -d, d * 0.7);
+  controls.target.set(0, 0, 0);
+  controls.update();
+
+  if (modelLabel) modelLabel.style.display = "none";
+  switchTab("3d");
+}
 
 function loadModel(url) {
   const loader = new THREE.STLLoader();
   loader.load(url, (geometry) => {
     if (currentMesh) {
+      if (currentMesh.isGroup) {
+        currentMesh.traverse(c => { if (c.isMesh) { c.geometry.dispose(); c.material.dispose(); } });
+      } else {
+        currentMesh.geometry.dispose();
+        currentMesh.material.dispose();
+      }
       scene.remove(currentMesh);
-      currentMesh.geometry.dispose();
-      currentMesh.material.dispose();
     }
     const mat = new THREE.MeshStandardMaterial({ color: 0x93c5fd, metalness: 0.1, roughness: 0.5 });
     const mesh = new THREE.Mesh(geometry, mat);
@@ -1563,57 +1815,27 @@ function _showRecompiling(show) {
 }
 
 async function _sendCurveUpdate() {
-  // If already compiling, stash the latest params — they'll be sent
-  // when the current compile finishes (only the last one matters).
-  if (_curveCompiling) {
-    _curvePending = {
-      length: _curveLength, height: _curveHeight,
-      bottomLength: _bottomCurveLength, bottomHeight: _bottomCurveHeight,
-    };
-    return;
+  // Instant client-side rebuild — no server round-trip needed.
+  if (_shellPreviewData) {
+    _shellPreviewData.top_curve_length = _curveLength;
+    _shellPreviewData.top_curve_height = _curveHeight;
+    _shellPreviewData.bottom_curve_length = _bottomCurveLength;
+    _shellPreviewData.bottom_curve_height = _bottomCurveHeight;
+    buildShellPreview(_shellPreviewData);
   }
 
-  _curveCompiling = true;
-  _curvePending = null;
-  _showRecompiling(true);
-
-  try {
-    const res = await fetch("/api/update_curve", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        top_curve_length: _curveLength,
-        top_curve_height: _curveHeight,
-        bottom_curve_length: _bottomCurveLength,
-        bottom_curve_height: _bottomCurveHeight,
-      }),
-    });
-    if (!res.ok) {
-      console.warn("Curve update failed:", await res.text());
-      return;
-    }
-    const data = await res.json();
-    if (data.model_name) {
-      loadModel(`/api/model/${data.model_name}?t=${Date.now()}`);
-    }
-  } catch (err) {
-    console.warn("Curve update error:", err);
-  } finally {
-    _curveCompiling = false;
-    _showRecompiling(false);
-
-    // If user changed the curve while we were compiling, fire one
-    // more compile with the latest values.
-    if (_curvePending) {
-      _curveLength = _curvePending.length;
-      _curveHeight = _curvePending.height;
-      _bottomCurveLength = _curvePending.bottomLength;
-      _bottomCurveHeight = _curvePending.bottomHeight;
-      _curvePending = null;
-      _drawCurveProfile();
-      _sendCurveUpdate();
-    }
-  }
+  // Also fire a background server update so the STL stays in sync
+  // for download / slicing.  We don't wait for it or block the UI.
+  fetch("/api/update_curve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      top_curve_length: _curveLength,
+      top_curve_height: _curveHeight,
+      bottom_curve_length: _bottomCurveLength,
+      bottom_curve_height: _bottomCurveHeight,
+    }),
+  }).catch(err => console.warn("Background curve STL update:", err));
 }
 
 // ── SSE streaming ─────────────────────────────────────────────────
@@ -1701,6 +1923,16 @@ sendBtn.addEventListener("click", async () => {
 
           case "pcb_layout":
             renderOutlineWithComponents(ev);
+            break;
+
+          case "shell_preview":
+            buildShellPreview(ev);
+            _fetchShellHeight().then(() => {
+              showCurveEditor(
+                ev.top_curve_length || 0, ev.top_curve_height || 0,
+                ev.bottom_curve_length || 0, ev.bottom_curve_height || 0,
+              );
+            });
             break;
 
           case "debug_image":
