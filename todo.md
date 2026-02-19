@@ -19,7 +19,7 @@ DONE Edge profile tool is behaving weirdly. When changed, the loading spinner is
 
 DONE The agent should always mention the rounding parameters it chose, and the assigned pins it gets from the router when the routing succeeds. In the initial message, it should also both acknowledge the design parameters, and then say "with a curve..." so on.
 
-The placer is still not placing the MC closest to the buttons. This should be the first priority, not just weighted higher.
+PARTIALLY DONE The placer is still not placing the MC closest to the buttons. This should be the first priority, not just weighted higher.
 
 DONE The placer now places the battery compartment a little further back so that there is pace for the mc. 
 
@@ -27,7 +27,7 @@ The router is still sometimes placing routes too close. Specifically, sometimes 
 
 Use a faster 3d model generator to the web, only compile to stl after generating the faster view. Also only generate build plate stl, but generate others on demand.
 
-The visualizations on the web are upside down. Both the layout, pcb debug and 3d model.
+DONE The visualizations on the web are upside down. Both the layout, pcb debug and 3d model.
 
 DONE Increase button top hole diameter a few mm. They are also not showing in the model, but does show when sliced, fix that.
 
@@ -38,7 +38,7 @@ DONE I THINK Find the notch on the spring on the end of the battery compartment 
 
 DONE I THINK Add slider for how many edges the llm should output in the edge polygon. Include number in system prompt.
 
-Router should be able to auto select mc pins and button pins during rip ups. Should just report back which pins were assigned to what, which i think there already is some functionality for. Take a look in the pcb folder, which is a optimized but older version of the ts T* router in the manufacturerAI folder. Implement the optimizations from that, but apply it to our current implementation in a way that it integrates properly.
+?Router should be able to auto select mc pins and button pins during rip ups. Should just report back which pins were assigned to what, which i think there already is some functionality for. Take a look in the pcb folder, which is a optimized but older version of the ts T* router in the manufacturerAI folder. Implement the optimizations from that, but apply it to our current implementation in a way that it integrates properly?
 
 The web recompiles everytime you update the top and bottom edge profiles, there should be a way to hold it from recompiling, and then do it when you are satisfied with the changes. also if you dont change anything it shouldnt recompile. 
 
@@ -53,7 +53,9 @@ DONE Have another step/interface after the design stage, here we need to slice i
 
 Make interface that tells you where to place things in the correct direction. 
 
-figure out a way to make bgcode for the coreone
+DONT DO THIS figure out a way to make bgcode for the coreone
+
+Make a printer profile for the Prusa i3 mk3s+ to genereate correct gcode. 
 
 
 # Long term

@@ -122,22 +122,56 @@ def _place_and_route(
 def _normalize_outline(
     outline: list[list[float]],
     button_positions: list[dict],
+    *,
+    outline_type: str = "polygon",
 ) -> tuple[list[list[float]], list[dict]]:
     """
     Normalize outline and buttons so the bottom-left is at the origin.
     Also strips duplicate closing vertex (if first == last) and
     auto-smooths coarsely-approximated curves.
+
+    If *outline_type* is ``"ellipse"`` or ``"racetrack"``, the provided
+    outline is treated as a bounding box and replaced with a
+    programmatically-generated shape.
     """
+    from src.geometry.polygon import (
+        smooth_polygon, generate_ellipse, generate_racetrack,
+        polygon_bounds,
+    )
+
     # Strip duplicate closing vertex
     if len(outline) >= 2 and outline[0] == outline[-1]:
         outline = outline[:-1]
 
+    # ── Parametric shape generation ────────────────────────────────
+    otype = (outline_type or "polygon").lower().strip()
+    if otype in ("ellipse", "racetrack"):
+        # Extract bounding box from whatever outline was provided
+        min_x = min(v[0] for v in outline)
+        min_y = min(v[1] for v in outline)
+        max_x = max(v[0] for v in outline)
+        max_y = max(v[1] for v in outline)
+        width = max_x - min_x
+        length = max_y - min_y
+
+        if otype == "ellipse":
+            outline = generate_ellipse(width, length, n=32)
+        else:
+            outline = generate_racetrack(width, length, n_cap=16)
+
+        # Shift buttons so they're relative to the new origin
+        button_positions = [
+            {**b, "x": b["x"] - min_x, "y": b["y"] - min_y}
+            for b in button_positions
+        ]
+        return outline, button_positions
+
+    # ── Standard polygon path ──────────────────────────────────────
     # Auto-smooth coarse curves (e.g. 8-vertex "circle" → 64 vertices).
     # Only activates when ≥ 70 % of interior angles are nearly straight
     # (i.e. the polygon is trying to be curved but has too few vertices).
     # Shapes with intentional sharp corners (rectangles, diamonds, T-shapes)
     # are left untouched.
-    from src.geometry.polygon import smooth_polygon
     outline = smooth_polygon(outline)
 
     # Find minimum x, y
@@ -160,6 +194,7 @@ def run_pipeline(
     emit: EmitFn,
     output_dir: Path,
     *,
+    outline_type: str = "polygon",
     top_curve_length: float = 0.0,
     top_curve_height: float = 0.0,
     bottom_curve_length: float = 0.0,
@@ -203,7 +238,7 @@ def run_pipeline(
         }
         for i, b in enumerate(button_positions)
     ]
-    outline, bpos = _normalize_outline(outline, bpos)
+    outline, bpos = _normalize_outline(outline, bpos, outline_type=outline_type)
 
     # ── 1. Validate outline ────────────────────────────────────────
     emit("progress", {"stage": "Validating outline..."})

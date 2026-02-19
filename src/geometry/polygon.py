@@ -49,6 +49,67 @@ def point_in_polygon(x: float, y: float, outline: Outline) -> bool:
     return inside
 
 
+def generate_ellipse(width: float, length: float, n: int = 32) -> Outline:
+    """Generate a *n*-vertex ellipse inscribed in *width* × *length* box.
+
+    Origin at bottom-left (0, 0).  Counter-clockwise winding starting at
+    the rightmost point (mid-right).
+    """
+    cx, cy = width / 2, length / 2
+    rx, ry = width / 2, length / 2
+    pts: Outline = []
+    for i in range(n):
+        angle = 2 * math.pi * i / n
+        pts.append([
+            round(cx + rx * math.cos(angle), 4),
+            round(cy + ry * math.sin(angle), 4),
+        ])
+    return pts
+
+
+def generate_racetrack(width: float, length: float, n_cap: int = 16) -> Outline:
+    """Generate a stadium/racetrack shape inscribed in *width* × *length*.
+
+    Two semicircles joined by straight sides.  The semicircles are on the
+    shorter dimension.  Origin at bottom-left.  CCW winding.
+    """
+    if width > length:
+        # Wide: semicircles on left / right
+        r = length / 2
+        sx = r  # start of straight segment x
+        ex = width - r  # end of straight segment x
+        pts: Outline = []
+        # Right semicircle (top to bottom)
+        for i in range(n_cap + 1):
+            angle = math.pi / 2 - math.pi * i / n_cap
+            pts.append([round(ex + r * math.cos(angle), 4),
+                        round(r + r * math.sin(angle), 4)])
+        # Left semicircle (bottom to top)
+        for i in range(n_cap + 1):
+            angle = -math.pi / 2 - math.pi * i / n_cap
+            pts.append([round(sx + r * math.cos(angle), 4),
+                        round(r + r * math.sin(angle), 4)])
+        return pts
+    else:
+        # Tall (normal remote): semicircles on top / bottom
+        r = width / 2
+        sy = r  # start of straight segment y
+        ey = length - r  # end of straight segment y
+        pts = []
+        # Bottom semicircle (left to right)
+        for i in range(n_cap + 1):
+            angle = math.pi + math.pi * i / n_cap
+            pts.append([round(r + r * math.cos(angle), 4),
+                        round(sy + r * math.sin(angle), 4)])
+        # Right side up
+        # Top semicircle (right to left)
+        for i in range(n_cap + 1):
+            angle = 0 + math.pi * i / n_cap
+            pts.append([round(r + r * math.cos(angle), 4),
+                        round(ey + r * math.sin(angle), 4)])
+        return pts
+
+
 def polygon_bounds(outline: Outline) -> tuple[float, float, float, float]:
     """Return (min_x, min_y, max_x, max_y)."""
     xs = [v[0] for v in outline]

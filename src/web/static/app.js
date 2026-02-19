@@ -198,7 +198,10 @@ function renderOutline(outline, buttons, label) {
   outlineSvg.setAttribute("viewBox", `${minX - pad} ${minY - pad} ${vw} ${vh}`);
   outlineSvg.innerHTML = "";
 
-  const pts = outline.map(([x, y]) => `${x},${y}`).join(" ");
+  // Flip Y so outline appears right-side up (SVG Y-down, data Y-up)
+  const flipY = y => (maxY + minY) - y;
+
+  const pts = outline.map(([x, y]) => `${x},${flipY(y)}`).join(" ");
   const poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
   poly.setAttribute("points", pts);
   poly.setAttribute("fill", "rgba(59,130,246,0.15)");
@@ -209,9 +212,10 @@ function renderOutline(outline, buttons, label) {
   const btnRadius = 3;
   const fontSize = Math.max(2, vw / 60);
   for (const btn of (buttons || [])) {
+    const cy = flipY(btn.y);
     const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
     c.setAttribute("cx", btn.x);
-    c.setAttribute("cy", btn.y);
+    c.setAttribute("cy", cy);
     c.setAttribute("r", btnRadius);
     c.setAttribute("fill", "rgba(239,68,68,0.6)");
     c.setAttribute("stroke", "#ef4444");
@@ -220,7 +224,7 @@ function renderOutline(outline, buttons, label) {
 
     const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
     t.setAttribute("x", btn.x);
-    t.setAttribute("y", btn.y - btnRadius - 1.5);
+    t.setAttribute("y", cy - btnRadius - 1.5);
     t.setAttribute("text-anchor", "middle");
     t.setAttribute("fill", "#e5e7eb");
     t.setAttribute("font-size", fontSize);
@@ -261,8 +265,11 @@ function renderOutlineWithComponents(layout) {
   outlineSvg.setAttribute("viewBox", `${minX - pad} ${minY - pad} ${vw} ${vh}`);
   outlineSvg.innerHTML = "";
 
+  // Flip Y so outline appears right-side up (SVG Y-down, data Y-up)
+  const flipY = y => (maxY + minY) - y;
+
   // Polygon outline
-  const pts = outline.map(([x, y]) => `${x},${y}`).join(" ");
+  const pts = outline.map(([x, y]) => `${x},${flipY(y)}`).join(" ");
   const poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
   poly.setAttribute("points", pts);
   poly.setAttribute("fill", "rgba(59,130,246,0.10)");
@@ -274,7 +281,8 @@ function renderOutlineWithComponents(layout) {
   const sw = Math.max(0.3, vw / 300);
 
   for (const comp of components) {
-    const [cx, cy] = comp.center;
+    const [cx, rawCy] = comp.center;
+    const cy = flipY(rawCy);
     const colors = COMP_COLORS[comp.type] || DEFAULT_COMP_COLOR;
     const ko = comp.keepout || {};
 
@@ -425,7 +433,7 @@ const imageDragStates = {
 };
 
 function applyImageTransform(img, zoom, dragState) {
-  img.style.transform = `scale(${zoom}) translate(${dragState.translateX / zoom}px, ${dragState.translateY / zoom}px)`;
+  img.style.transform = `scaleX(${zoom}) scaleY(${-zoom}) translate(${dragState.translateX / zoom}px, ${dragState.translateY / zoom}px)`;
   img.style.transformOrigin = "center center";
 }
 

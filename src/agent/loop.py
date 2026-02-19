@@ -58,6 +58,17 @@ _TOOL_DECLARATIONS = [
         parameters=genai.protos.Schema(
             type=genai.protos.Type.OBJECT,
             properties={
+                "outline_type": genai.protos.Schema(
+                    type=genai.protos.Type.STRING,
+                    description=(
+                        "Shape type: 'polygon' (default — use provided vertices), "
+                        "'ellipse' (generate a smooth ellipse from the bounding box), "
+                        "or 'racetrack' (rectangle with semicircular ends). "
+                        "For 'ellipse' and 'racetrack', the outline field is "
+                        "optional — just provide width/height as a simple "
+                        "rectangle [[0,0],[W,0],[W,L],[0,L]]."
+                    ),
+                ),
                 "outline": genai.protos.Schema(
                     type=genai.protos.Type.ARRAY,
                     items=genai.protos.Schema(
@@ -66,7 +77,9 @@ _TOOL_DECLARATIONS = [
                     ),
                     description=(
                         "Polygon outline as list of [x, y] vertices in mm, "
-                        "counter-clockwise winding.  Min 6 vertices."
+                        "counter-clockwise winding.  Min 4 vertices. "
+                        "For outline_type='ellipse'/'racetrack', just provide "
+                        "a bounding rectangle."
                     ),
                 ),
                 "button_positions": genai.protos.Schema(
@@ -267,6 +280,7 @@ def run_turn(
                         button_positions=args.get("button_positions", []),
                         emit=emit,
                         output_dir=output_dir,
+                        outline_type=args.get("outline_type", "polygon"),
                         top_curve_length=float(args.get("top_curve_length", 0)),
                         top_curve_height=float(args.get("top_curve_height", 0)),
                         bottom_curve_length=float(args.get("bottom_curve_length", 0)),

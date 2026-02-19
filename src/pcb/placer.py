@@ -197,6 +197,8 @@ def place_components(
         ctrl_w, ctrl_h, margin,
         prefer="center",
         avoid_y_band=btn_band,
+        bottleneck_channel=5.0,
+        clearance_cap=8.0,
     )
     if ctrl_pos is None:
         raise PlacementError(
@@ -550,6 +552,8 @@ def _place_rect_with_rotation(
     margin: float,
     prefer: str = "center",
     avoid_y_band: tuple[float, float] | None = None,
+    bottleneck_channel: float = 10.0,
+    clearance_cap: float | None = None,
 ) -> tuple[tuple[float, float] | None, int]:
     """
     Try both 0° and 90° orientations and return the best position
@@ -563,6 +567,8 @@ def _place_rect_with_rotation(
         pos, score = _place_rect(
             polygon, occupied, w, h, margin,
             prefer=prefer, avoid_y_band=avoid_y_band,
+            bottleneck_channel=bottleneck_channel,
+            clearance_cap=clearance_cap,
         )
         if pos is not None and score > best_score:
             best_pos = pos
@@ -861,15 +867,24 @@ def generate_placement_candidates(
                                   "hh": bat_h / 2 + bat_spacing_pad})
 
         for cpref in controller_prefs:
-            # Try both orientations via _place_rect_with_rotation
-            ctrl_pos, ctrl_rot = _place_rect_with_rotation(
-                board_inset, occupied_with_bat,
-                ctrl_w, ctrl_h, margin, prefer=cpref,
-                avoid_y_band=btn_band,
-            )
-            if ctrl_pos is None:
-                continue
-            cx, cy = ctrl_pos
+            # Explicitly try BOTH rotations and create a candidate
+            # for each valid placement.  This ensures the layout
+            # scorer can compare horizontal vs vertical layouts
+            # fairly rather than pre-filtering via placement scores.
+            for force_rot, c_w, c_h in [(0, ctrl_w, ctrl_h),
+                                         (90, ctrl_h, ctrl_w)]:
+                ctrl_pos, _ = _place_rect(
+                    board_inset, occupied_with_bat,
+                    c_w, c_h, margin,
+                    prefer=cpref,
+                    avoid_y_band=btn_band,
+                    bottleneck_channel=5.0,
+                    clearance_cap=8.0,
+                )
+                if ctrl_pos is None:
+                    continue
+                cx, cy = ctrl_pos
+                ctrl_rot = force_rot
 
             if ctrl_rot == 90:
                 ko_w = ctrl_h + ctrl_pad
@@ -988,11 +1003,17 @@ def _score_layout_spacing(
     components = layout["components"]
     gaps: list[float] = []
 
-    # Component-to-edge gaps
+    # Component-to-edge gaps — cap excessive edge clearance so that
+    # being very far from the edge (e.g. a narrow component centred on
+    # a wide board) doesn't dominate the minimum-gap metric.  Beyond
+    # the cap, additional clearance counts at only 10%.
+    EDGE_CAP = 8.0
     for comp in components:
         cx, cy = comp["center"]
         hw2, hh2 = _component_half_extents(comp)
         edge_gap = _rect_edge_clearance(cx, cy, hw2, hh2, polygon)
+        if edge_gap > EDGE_CAP:
+            edge_gap = EDGE_CAP + (edge_gap - EDGE_CAP) * 0.1
         gaps.append(edge_gap)
 
     # Pairwise component-to-component gaps
