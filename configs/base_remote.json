@@ -72,7 +72,7 @@
   },
 
   "controller_pins": {
-    "$comment": "ATmega328P pin assignments. Sequential: PD0 first, then PD1, etc. Buttons assigned in order.",
+    "$comment": "ATmega328P pin assignments with capabilities. Components are assigned to pins matching their required capability (e.g. IR diode → PWM pin, analog sensor → ADC pin). Buttons need only plain digital GPIO.",
     "power": {
       "VCC": "VCC",
       "GND1": "GND",
@@ -85,6 +85,14 @@
       "PD0", "PD1", "PD2", "PD3", "PD4", "PD5", "PD6", "PD7",
       "PB0", "PB1", "PB2", "PB3", "PB4", "PB5",
       "PC0", "PC1", "PC2", "PC3", "PC4", "PC5"
-    ]
+    ],
+    "pin_capabilities": {
+      "$comment": "ATmega328P special-function pins. 'digital' is implicit for all GPIO.",
+      "pwm":    ["PD3", "PD5", "PD6", "PB1", "PB2", "PB3"],
+      "analog": ["PC0", "PC1", "PC2", "PC3", "PC4", "PC5"],
+      "i2c":    ["PC4", "PC5"],
+      "spi":    ["PB2", "PB3", "PB4", "PB5"],
+      "uart":   ["PD0", "PD1"]
+    }
   }
 }

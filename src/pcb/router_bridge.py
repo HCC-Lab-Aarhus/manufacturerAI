@@ -301,9 +301,23 @@ def _controller_pins(
 
     Instead of blindly assigning PD0, PD1, PD2 … in sequence, this
     computes the physical (x, y) of every available GPIO pin and assigns
-    each button / diode signal to the *nearest* free pin.  This
-    minimises trace lengths and dramatically improves routability on
-    tight boards.
+    each button / diode signal to the *nearest* free pin **that has the
+    required capability**.
+
+    Pin capability matching
+    -----------------------
+    Each component type declares what kind of pin it needs:
+
+    * ``button``  → ``"digital"`` — any GPIO pin works.
+    * ``diode``   → ``"pwm"``     — IR LEDs need hardware PWM for the
+      38 kHz carrier signal (Timer OC pins).
+    * (future) analog sensors → ``"analog"`` (ADC-capable PC0-PC5).
+    * (future) I2C peripherals → ``"i2c"`` (PC4/SDA, PC5/SCL).
+
+    Constrained components (pwm, analog, …) are assigned **first** so
+    that unconstrained buttons don't accidentally consume scarce pins.
+    If no matching pin is available the component falls back to any
+    remaining GPIO.
 
     Parameters
     ----------
@@ -322,6 +336,21 @@ def _controller_pins(
     gpio   = [p for p in cp["digital_order"]
               if p not in power and p not in unused]
 
+    # ── Pin capability sets (from config) ───────────────────────────
+    capabilities: dict[str, set[str]] = {}
+    for cap_name, pin_list in cp.get("pin_capabilities", {}).items():
+        if cap_name.startswith("$"):
+            continue  # skip JSON comments
+        capabilities[cap_name] = set(pin_list)
+
+    # Component type → required pin capability.
+    # "digital" is implicit and means "any GPIO".
+    _COMPONENT_PIN_REQ: dict[str, str] = {
+        "button": "digital",
+        "diode":  "pwm",      # IR LED needs hardware PWM for 38 kHz carrier
+        # Future: "sensor": "analog", "i2c_device": "i2c", ...
+    }
+
     # Start every pin at NC; overwrite power/unused/signal below.
     pin_net: dict[str, str] = {p: "NC" for p in _DIP28_PIN_ORDER}
     for p in _DIP28_PIN_ORDER:
@@ -331,27 +360,57 @@ def _controller_pins(
     # Physical pin positions on the board
     pin_pos = _pin_world_positions(ctrl_x, ctrl_y, ctrl_rotation)
 
-    # Targets that need a signal connection: (net_name, x, y)
+    # Build targets: (net_name, x, y, required_capability)
     ox, oy = comp_offset
-    targets: list[tuple[str, float, float]] = []
+    targets: list[tuple[str, float, float, str]] = []
     for c in button_comps:
-        targets.append((f"{c['id']}_SIG", c["center"][0] - ox, c["center"][1] - oy))
+        req = _COMPONENT_PIN_REQ.get("button", "digital")
+        targets.append((f"{c['id']}_SIG", c["center"][0] - ox, c["center"][1] - oy, req))
     for c in diode_comps:
-        targets.append((f"{c['id']}_SIG", c["center"][0] - ox, c["center"][1] - oy))
+        req = _COMPONENT_PIN_REQ.get("diode", "digital")
+        targets.append((f"{c['id']}_SIG", c["center"][0] - ox, c["center"][1] - oy, req))
 
-    # Greedy nearest-pin: assign each component to its closest free GPIO.
+    # ── Sort: constrained targets first ─────────────────────────────
+    # Assign components that require scarce pins (pwm, analog, i2c…)
+    # before unconstrained digital-only components, so buttons don't
+    # accidentally consume the limited PWM / ADC pins.
+    def _constraint_priority(t: tuple[str, float, float, str]) -> int:
+        req = t[3]
+        if req == "digital":
+            return 1   # assign last — any GPIO will do
+        return 0       # assign first — limited pool
+
+    targets.sort(key=_constraint_priority)
+
+    # ── Greedy nearest-pin with capability filtering ────────────────
     free = set(gpio)
-    for net_name, tx, ty in targets:
+    for net_name, tx, ty, req in targets:
         if not free:
             break
+
+        # Build candidate pool: only pins matching the required capability.
+        if req != "digital" and req in capabilities:
+            candidates = free & capabilities[req]
+        else:
+            candidates = free  # "digital" → any GPIO
+
+        # Fallback: if no matching pin is left, allow any free GPIO
+        # (better to route sub-optimally than to leave unrouted).
+        if not candidates:
+            log.warning(
+                "No free %s-capable pin for %s — falling back to any GPIO",
+                req, net_name,
+            )
+            candidates = free
+
         best = min(
-            free,
+            candidates,
             key=lambda p: (pin_pos[p][0] - tx) ** 2 + (pin_pos[p][1] - ty) ** 2,
         )
         pin_net[best] = net_name
         free.discard(best)
-        log.debug("Pin %s → %s  (dist %.1f mm)",
-                  best, net_name,
+        log.debug("Pin %s → %s  (cap=%s, dist %.1f mm)",
+                  best, net_name, req,
                   ((pin_pos[best][0] - tx) ** 2 + (pin_pos[best][1] - ty) ** 2) ** 0.5)
 
     # Return in DIP-28 physical order so the TS router places pins correctly.
