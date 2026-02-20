@@ -23,6 +23,7 @@ from typing import NamedTuple
 
 from src.config.hardware import hw
 from src.geometry.polygon import polygon_bounds, ensure_ccw, point_in_polygon
+from src.pcb.router_bridge import _controller_pins, _DIP28_PIN_ORDER, _pin_world_positions
 
 
 # ── Public types ────────────────────────────────────────────────────
@@ -105,29 +106,41 @@ def _extract_pads(layout: dict) -> list[PadInfo]:
     """
     Replicate the TS router's pad extraction in Python so we can predict
     net topologies without calling the router.
+
+    Uses the same capability-aware proximity pin assignment
+    (``_controller_pins``) as the real router bridge, so the predicted
+    controller-pad → component-pad connectivity matches the actual
+    routing input.
     """
     pads: list[PadInfo] = []
     components = layout.get("components", [])
 
     buttons = [c for c in components if c.get("type") == "button"]
     diodes = [c for c in components if c.get("type") == "diode"]
+    ctrl_comps = [c for c in components if c.get("type") == "controller"]
 
-    # Get pin assignments
-    pin_map = hw.pin_assignments(len(buttons), len(diodes))
-    # Rename generic SWn / LEDn to actual component IDs
-    cp = hw.controller_pins
-    btn_idx = 0
-    diode_idx = 0
-    for pin in cp["digital_order"]:
-        net = pin_map.get(pin, "")
-        if net.startswith("SW") and net.endswith("_SIG"):
-            if btn_idx < len(buttons):
-                pin_map[pin] = f"{buttons[btn_idx]['id']}_SIG"
-                btn_idx += 1
-        elif net.startswith("LED") and net.endswith("_SIG"):
-            if diode_idx < len(diodes):
-                pin_map[pin] = f"{diodes[diode_idx]['id']}_SIG"
-                diode_idx += 1
+    # ── Build pin map using the same logic as router_bridge ─────────
+    # The controller's position matters for proximity-based assignment.
+    outline = layout.get("board", {}).get("outline_polygon", [])
+    if outline:
+        min_x, min_y, _, _ = polygon_bounds(outline)
+    else:
+        min_x, min_y = 0.0, 0.0
+
+    if ctrl_comps:
+        ctrl = ctrl_comps[0]
+        cx_ctrl = ctrl["center"][0]
+        cy_ctrl = ctrl["center"][1]
+        ctrl_rot = ctrl.get("rotation_deg", 0)
+    else:
+        cx_ctrl, cy_ctrl, ctrl_rot = 0.0, 0.0, 0
+
+    pin_map = _controller_pins(
+        buttons, diodes,
+        ctrl_x=cx_ctrl, ctrl_y=cy_ctrl,
+        ctrl_rotation=ctrl_rot,
+        comp_offset=(0.0, 0.0),  # layout coords are already absolute
+    )
 
     for comp in components:
         ctype = comp.get("type")
@@ -157,7 +170,7 @@ def _extract_pads(layout: dict) -> list[PadInfo]:
         elif ctype == "controller":
             row_spacing = hw.controller["row_spacing_mm"]
             pin_spacing = hw.controller["pin_spacing_mm"]
-            pin_names = list(pin_map.keys())
+            pin_names = list(pin_map.keys())   # DIP-28 physical order
             pin_count = len(pin_names)
             pins_per_side = math.ceil(pin_count / 2)
             total_height = (pins_per_side - 1) * pin_spacing
