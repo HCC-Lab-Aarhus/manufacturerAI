@@ -36,6 +36,7 @@ from src.scad.shell import (
 from src.scad.cutouts import build_cutouts
 from src.scad.compiler import compile_scad, merge_stl_files
 from src.gcode.pipeline import run_gcode_pipeline
+from firmware.firmware_generator import generate_firmware, generate_pin_assignment_report
 
 log = logging.getLogger("manufacturerAI.pipeline")
 
@@ -540,12 +541,25 @@ def run_pipeline(
     # Build pin mapping so the LLM can report wiring to the user
     pin_mapping = build_pin_mapping(layout, bpos)
 
+    # Generate firmware with PCB routing pin assignments
+    firmware_path = output_dir / "firmware" / "UniversalIRRemote.ino"
+    try:
+        generate_firmware(pin_mapping, firmware_path)
+        log.info("Firmware generated with routed pin assignments: %s", firmware_path)
+        
+        # Also save pin assignment report
+        report_path = output_dir / "firmware" / "PIN_ASSIGNMENT_REPORT.txt"
+        report_path.write_text(generate_pin_assignment_report(pin_mapping), encoding="utf-8")
+    except Exception as e:
+        log.warning("Firmware generation failed: %s", e)
+
     result = {
         "status": "success",
         "stl_files": list(stl_files.keys()),
         "component_count": len(layout.get("components", [])),
         "routed_traces": len(routing_result.get("traces", [])),
         "pin_mapping": pin_mapping,
+        "firmware_path": str(firmware_path) if firmware_path.exists() else None,
         "top_curve_length": top_curve_length,
         "top_curve_height": top_curve_height,
         "bottom_curve_length": bottom_curve_length,
@@ -555,6 +569,8 @@ def run_pipeline(
             f"{len(stl_files)} STL models generated."
         ),
     }
+    if firmware_path.exists():
+        result["message"] += " Firmware generated with PCB pin assignments."
     if gcode_result and gcode_result.success:
         result["gcode"] = {
             "staged_gcode": str(gcode_result.staged_gcode_path),
