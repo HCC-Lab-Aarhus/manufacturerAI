@@ -1033,29 +1033,43 @@ function loadModel(url) {
 
 /**
  * Poll for an updated STL after background SCAD recompile (realign).
- * Checks every 5s; gives up after ~5 minutes.
+ * Checks /api/stl_status every 5s; loads model when rebuild finishes.
  */
+let _stlPollGeneration = 0;
 function _pollForUpdatedModel(modelName, attempt = 0) {
   const MAX_ATTEMPTS = 60;  // 60 × 5s = 5 min
-  if (attempt >= MAX_ATTEMPTS) {
-    if (modelLabel) { modelLabel.textContent = "Model recompile timed out"; modelLabel.style.display = ""; }
-    return;
-  }
-  setTimeout(async () => {
-    try {
-      const resp = await fetch(`/api/model/${modelName}?t=${Date.now()}`, { method: "HEAD" });
-      if (resp.ok) {
-        // Check if the file has been updated by comparing content-length
-        // to what we had before (a crude proxy for "new file")
-        _suppressModelTabSwitch = true;
-        loadModel(`/api/model/${modelName}?t=${Date.now()}`);
-        downloadBtn.classList.remove("disabled");
-        downloadBtn.title = "Download STL";
-        return;
+  const myGen = ++_stlPollGeneration;
+  function tick(n) {
+    if (n >= MAX_ATTEMPTS || myGen !== _stlPollGeneration) {
+      if (n >= MAX_ATTEMPTS && modelLabel) {
+        modelLabel.textContent = "Model recompile timed out";
+        modelLabel.style.display = "";
       }
-    } catch { /* ignore */ }
-    _pollForUpdatedModel(modelName, attempt + 1);
-  }, 5000);
+      return;
+    }
+    setTimeout(async () => {
+      if (myGen !== _stlPollGeneration) return;
+      try {
+        const resp = await fetch("/api/stl_status");
+        if (resp.ok) {
+          const status = await resp.json();
+          if (!status.rebuilding) {
+            // Rebuild finished — load the new model
+            const name = status.model_name || modelName;
+            _suppressModelTabSwitch = true;
+            loadModel(`/api/model/${name}?t=${Date.now()}`);
+            downloadBtn.classList.remove("disabled");
+            downloadBtn.title = "Download STL";
+            latestModelName = name;
+            if (modelLabel) modelLabel.style.display = "none";
+            return;
+          }
+        }
+      } catch { /* ignore */ }
+      tick(n + 1);
+    }, 5000);
+  }
+  tick(attempt);
 }
 
 (function animate() {
@@ -1851,6 +1865,7 @@ function _enableGcodeButtons() {
 if (resetBtn) {
   resetBtn.addEventListener("click", async () => {
     await fetch("/api/reset", { method: "POST" });
+    _realignApplied = false;
     chatEl.innerHTML = "";
     setStatus("Ready", "");
     outlineSvg.innerHTML = "";
@@ -2266,8 +2281,8 @@ sendBtn.addEventListener("click", async () => {
   const msg = promptInput.value.trim();
   if (!msg) return;
 
-  // Reset realign protection — new generation should take over
-  _realignApplied = false;
+  // Cancel active dragging but preserve _realignApplied so SSE
+  // events from a new pipeline run don't overwrite the user's layout.
   if (realignActive) exitRealignMode(false);
 
   addMessage("user", msg);
@@ -2340,6 +2355,10 @@ sendBtn.addEventListener("click", async () => {
             break;
 
           case "outline_preview":
+            if (realignActive || _realignApplied) {
+              logDebug("Ignoring outline_preview event (realign active/applied)");
+              break;
+            }
             renderOutline(ev.outline, ev.buttons, ev.label);
             break;
 

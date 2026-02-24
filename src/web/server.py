@@ -80,6 +80,7 @@ _printer_id: str | None = None        # Last-used printer id ("mk3s" / "coreone"
 _layout_gen: int = 0                  # bumped by update_layout; checked by emit
 _pipeline_gate = threading.Event()    # clear() = paused, set() = running
 _pipeline_gate.set()                  # start unblocked
+_stl_rebuilding = False               # True while background STL compile is running
 
 
 # ── Models ─────────────────────────────────────────────────────────
@@ -263,34 +264,40 @@ def update_layout(req: LayoutUpdateRequest):
     run_dir_snap = _run_dir  # snapshot for the background thread
 
     def _rebuild_stl():
+        global _stl_rebuilding
         if not outline:
+            _stl_rebuilding = False
             return
-        cutouts = build_cutouts(layout, routing)
-        enclosure_scad = generate_enclosure_scad(outline=outline, cutouts=cutouts)
-        (run_dir_snap / "enclosure.scad").write_text(enclosure_scad, encoding="utf-8")
+        try:
+            cutouts = build_cutouts(layout, routing)
+            enclosure_scad = generate_enclosure_scad(outline=outline, cutouts=cutouts)
+            (run_dir_snap / "enclosure.scad").write_text(enclosure_scad, encoding="utf-8")
 
-        hatch_scad = generate_battery_hatch_scad()
-        (run_dir_snap / "battery_hatch.scad").write_text(hatch_scad, encoding="utf-8")
-        plate_scad = generate_print_plate_scad()
-        (run_dir_snap / "print_plate.scad").write_text(plate_scad, encoding="utf-8")
+            hatch_scad = generate_battery_hatch_scad()
+            (run_dir_snap / "battery_hatch.scad").write_text(hatch_scad, encoding="utf-8")
+            plate_scad = generate_print_plate_scad()
+            (run_dir_snap / "print_plate.scad").write_text(plate_scad, encoding="utf-8")
 
-        for name in ["enclosure", "battery_hatch"]:
-            scad_p = run_dir_snap / f"{name}.scad"
-            stl_p = scad_p.with_suffix(".stl")
-            if scad_p.exists():
-                compile_scad(scad_p, stl_p)
+            for name in ["enclosure", "battery_hatch"]:
+                scad_p = run_dir_snap / f"{name}.scad"
+                stl_p = scad_p.with_suffix(".stl")
+                if scad_p.exists():
+                    compile_scad(scad_p, stl_p)
 
-        # Merge into print plate
-        from src.scad.compiler import merge_stl_files
-        enc_stl = run_dir_snap / "enclosure.stl"
-        hatch_stl = run_dir_snap / "battery_hatch.stl"
-        plate_stl = run_dir_snap / "print_plate.stl"
-        if enc_stl.exists() and hatch_stl.exists():
-            merge_stl_files(
-                [(enc_stl, (0, 0, 0)), (hatch_stl, (80, 0, 0))],
-                plate_stl,
-            )
+            # Merge into print plate
+            from src.scad.compiler import merge_stl_files
+            enc_stl = run_dir_snap / "enclosure.stl"
+            hatch_stl = run_dir_snap / "battery_hatch.stl"
+            plate_stl = run_dir_snap / "print_plate.stl"
+            if enc_stl.exists() and hatch_stl.exists():
+                merge_stl_files(
+                    [(enc_stl, (0, 0, 0)), (hatch_stl, (80, 0, 0))],
+                    plate_stl,
+                )
+        finally:
+            _stl_rebuilding = False
 
+    _stl_rebuilding = True
     threading.Thread(target=_rebuild_stl, daemon=True).start()
 
     model_name = "print_plate" if (_run_dir / "print_plate.stl").exists() else "enclosure"
@@ -317,6 +324,21 @@ def realign_resume():
     return {"status": "resumed"}
 
 
+@app.get("/api/stl_status")
+def stl_status():
+    """Check if background STL rebuild is still running."""
+    model_name = None
+    if _run_dir:
+        if (_run_dir / "print_plate.stl").exists():
+            model_name = "print_plate"
+        elif (_run_dir / "enclosure.stl").exists():
+            model_name = "enclosure"
+    return {
+        "rebuilding": _stl_rebuilding,
+        "model_name": model_name,
+    }
+
+
 @app.post("/api/generate/stream")
 async def generate_stream(req: GenerateRequest):
     """
@@ -329,13 +351,13 @@ async def generate_stream(req: GenerateRequest):
     if not req.message.strip():
         raise HTTPException(400, "Empty prompt.")
 
-    # Reset realign protection on new generation
-    _layout_gen = 0
-    _pipeline_gate.set()  # ensure pipeline is unblocked
+    # Ensure pipeline is unblocked (may have been paused for realign mode)
+    _pipeline_gate.set()
 
-    # Remove realign lock so pipeline can write freely
-    if _run_dir and (_run_dir / ".layout_lock").exists():
-        (_run_dir / ".layout_lock").unlink()
+    # NOTE: we intentionally do NOT remove .layout_lock or reset
+    # _layout_gen here.  If the user realigned, we want the lock to
+    # persist so the pipeline won't overwrite their layout.  The lock
+    # is cleared on /api/reset (new chat) only.
 
     # Create / reuse run dir for this session
     if _run_dir is None:
@@ -350,7 +372,7 @@ async def generate_stream(req: GenerateRequest):
         # Block while realign mode is active (pipeline pauses)
         _pipeline_gate.wait()
         # If a realign happened mid-pipeline, suppress layout/debug events
-        if _layout_gen > gen_at_start and event_type in ("pcb_layout", "debug_image"):
+        if _layout_gen > gen_at_start and event_type in ("outline_preview", "pcb_layout", "debug_image"):
             return
         queue.put({"type": event_type, **data})
 

@@ -276,7 +276,19 @@ def run_turn(
 
             elif name == "submit_design":
                 _pipeline_attempts += 1
-                if _pipeline_done:
+                if (output_dir / ".layout_lock").exists():
+                    # User manually realigned — don't overwrite their layout
+                    result = {
+                        "status": "success",
+                        "message": (
+                            "The user has manually realigned the components "
+                            "and the design has already been built with the "
+                            "realigned layout.  Do NOT resubmit — just report "
+                            "the current status to the user."
+                        ),
+                    }
+                    _pipeline_done = True
+                elif _pipeline_done:
                     # Pipeline already succeeded — don't run again
                     result = {
                         "status": "ok",
