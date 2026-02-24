@@ -44,6 +44,16 @@ const progressLabel = document.getElementById("progressLabel");
 const progressFill = document.getElementById("progressFill");
 let currentView = "outline";
 
+// Realign mode
+const realignBtn       = document.getElementById("realignBtn");
+const realignBar       = document.getElementById("realignBar");
+const realignApplyBtn  = document.getElementById("realignApplyBtn");
+const realignCancelBtn = document.getElementById("realignCancelBtn");
+let   realignActive    = false;
+let   _currentLayout   = null;   // last layout from server
+let   _editedLayout    = null;   // deep-copy being edited in realign mode
+let   _realignApplied  = false;  // true after apply — blocks SSE overwrites
+
 // ── Progress bar helpers ──────────────────────────────────────────
 
 const PROGRESS_STAGES = {
@@ -327,6 +337,379 @@ function renderOutlineWithComponents(layout) {
   outlineLabel.textContent = "Component placement";
   outlineLabel.style.display = "none";
   switchTab("outline");
+}
+
+// ── Realign mode (drag components in outline view) ────────────────
+
+function enterRealignMode() {
+  if (!_currentLayout) return;
+  realignActive = true;
+  _editedLayout = JSON.parse(JSON.stringify(_currentLayout));
+  realignBtn.classList.add("active");
+  realignBar.style.display = "flex";
+  outlineView.classList.add("realign-active");
+  // Pause the pipeline while dragging
+  fetch("/api/realign/pause", { method: "POST" }).catch(() => {});
+  renderDraggableOutline(_editedLayout);
+}
+
+function exitRealignMode(apply) {
+  realignActive = false;
+  realignBtn.classList.remove("active");
+  realignBar.style.display = "none";
+  outlineView.classList.remove("realign-active");
+
+  if (apply && _editedLayout) {
+    // POST updated positions first, THEN resume pipeline so it picks
+    // up the new layout from disk.  applyRealignedLayout handles resume.
+    applyRealignedLayout(_editedLayout);
+  } else {
+    // Cancel — just resume immediately
+    fetch("/api/realign/resume", { method: "POST" }).catch(() => {});
+    renderOutlineWithComponents(_currentLayout);
+  }
+}
+
+realignBtn.addEventListener("click", () => {
+  if (realignActive) exitRealignMode(false);
+  else enterRealignMode();
+});
+realignApplyBtn.addEventListener("click",  () => exitRealignMode(true));
+realignCancelBtn.addEventListener("click", () => exitRealignMode(false));
+
+// ── Edge-proximity helpers ──────────────────────────────────────
+function _ptSegDist(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 === 0 ? 0 : ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const nx = ax + t * dx, ny = ay + t * dy;
+  return Math.hypot(px - nx, py - ny);
+}
+function _pointInPolygon(px, py, poly) {
+  // Ray-casting algorithm — returns true if (px,py) is inside the polygon.
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i][0], yi = poly[i][1];
+    const xj = poly[j][0], yj = poly[j][1];
+    if ((yi > py) !== (yj > py) &&
+        px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+function _compEdgeClearance(comp, outline) {
+  // Returns the minimum distance from any critical point to the outline edge.
+  // Returns 0 if any point is outside the outline.
+  const ko = comp.keepout || {};
+  const [cx, cy] = comp.center;
+  let probePoints;
+  if (ko.type === "rectangle") {
+    const hw = ko.width_mm / 2, hh = ko.height_mm / 2;
+    probePoints = [[cx-hw,cy-hh],[cx+hw,cy-hh],[cx+hw,cy+hh],[cx-hw,cy+hh]];
+  } else if (ko.type === "circle") {
+    const r = ko.radius_mm || 0;
+    probePoints = [[cx,cy-r],[cx+r,cy],[cx,cy+r],[cx-r,cy]];
+  } else {
+    probePoints = [[cx, cy]];
+  }
+
+  // For the battery, also probe the pin positions (pads sit above the body, toward center).
+  // Router places pads at y = center_y + bodyH/2 + ~2.5mm (keepout + 5 cells * 0.5mm)
+  if (comp.type === "battery") {
+    const bodyH = comp.body_height_mm || (ko.type === "rectangle" ? ko.height_mm : 0);
+    const padOffset = bodyH / 2 + 5;  // body half-height + pad clearance (~5mm)
+    const padSpacing = 3;             // half of 6mm pad spacing
+    probePoints.push(
+      [cx - padSpacing, cy + padOffset],  // VCC pad (above body)
+      [cx + padSpacing, cy + padOffset],  // GND pad (above body)
+    );
+  }
+
+  let minD = Infinity;
+  for (const [px, py] of probePoints) {
+    // If point is outside the polygon, clearance is 0
+    if (!_pointInPolygon(px, py, outline)) return 0;
+    for (let i = 0; i < outline.length; i++) {
+      const j = (i + 1) % outline.length;
+      const d = _ptSegDist(px, py, outline[i][0], outline[i][1], outline[j][0], outline[j][1]);
+      if (d < minD) minD = d;
+    }
+  }
+  return minD;
+}
+// Minimum edge clearance per component type.
+const _EDGE_WARN_MM = 5;           // wall 2mm + trace edge 3mm
+function _edgeThreshold(comp) {
+  return _EDGE_WARN_MM;
+}
+
+function _updateApplyBtnState(layout, outline) {
+  // Disable apply button if any component is too close to the edge
+  const anyBad = (layout.components || []).some(c =>
+    c.type !== "diode" && _compEdgeClearance(c, outline) < _edgeThreshold(c)
+  );
+  realignApplyBtn.disabled = anyBad;
+  realignApplyBtn.title = anyBad
+    ? "Move highlighted components away from the edge first"
+    : "Apply new layout";
+}
+
+function renderDraggableOutline(layout) {
+  const outline = layout.board && layout.board.outline_polygon;
+  const components = layout.components || [];
+  if (!outline || outline.length < 3) return;
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [x, y] of outline) {
+    if (x < minX) minX = x; if (y < minY) minY = y;
+    if (x > maxX) maxX = x; if (y > maxY) maxY = y;
+  }
+  const pad = 10;
+  const vw = maxX - minX + pad * 2;
+  const vh = maxY - minY + pad * 2;
+  outlineSvg.setAttribute("viewBox", `${minX - pad} ${minY - pad} ${vw} ${vh}`);
+  outlineSvg.innerHTML = "";
+  const flipY = y => (maxY + minY) - y;
+
+  // Board polygon
+  const pts = outline.map(([x, y]) => `${x},${flipY(y)}`).join(" ");
+  const poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+  poly.setAttribute("points", pts);
+  poly.setAttribute("fill", "rgba(59,130,246,0.10)");
+  poly.setAttribute("stroke", "#3b82f6");
+  poly.setAttribute("stroke-width", String(Math.max(0.5, vw / 200)));
+  outlineSvg.appendChild(poly);
+
+  const fontSize = Math.max(2, vw / 60);
+  const sw = Math.max(0.3, vw / 300);
+
+  // Helper: convert client coordinates to SVG coords
+  function clientToSvg(clientX, clientY) {
+    const pt = outlineSvg.createSVGPoint();
+    pt.x = clientX; pt.y = clientY;
+    return pt.matrixTransform(outlineSvg.getScreenCTM().inverse());
+  }
+
+  for (let i = 0; i < components.length; i++) {
+    const comp = components[i];
+    const [cx, rawCy] = comp.center;
+    const cy = flipY(rawCy);
+    const colors = COMP_COLORS[comp.type] || DEFAULT_COMP_COLOR;
+    const ko = comp.keepout || {};
+
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.classList.add("comp-draggable");
+    g.dataset.compIdx = i;
+
+    // Edge-proximity check (only in realign mode; skip diode — it must sit at the edge)
+    const isDiode = comp.type === "diode";
+    const edgeDist = (realignActive && !isDiode) ? _compEdgeClearance(comp, outline) : Infinity;
+    const warnThreshold = _edgeThreshold(comp);
+    const tooClose = edgeDist < warnThreshold;
+    if (tooClose) g.classList.add("comp-warn");
+
+    // Shape
+    if (ko.type === "rectangle") {
+      const w = ko.width_mm, h = ko.height_mm;
+      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      rect.setAttribute("x", cx - w / 2); rect.setAttribute("y", cy - h / 2);
+      rect.setAttribute("width", w); rect.setAttribute("height", h);
+      rect.setAttribute("rx", Math.min(1, w / 10));
+      rect.setAttribute("fill", tooClose ? "rgba(239,68,68,0.25)" : colors.fill);
+      rect.setAttribute("stroke", tooClose ? "#ef4444" : colors.stroke);
+      rect.setAttribute("stroke-width", tooClose ? sw * 2 : sw);
+      g.appendChild(rect);
+    } else if (ko.type === "circle") {
+      const r = ko.radius_mm;
+      const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      circle.setAttribute("cx", cx); circle.setAttribute("cy", cy);
+      circle.setAttribute("r", r);
+      circle.setAttribute("fill", tooClose ? "rgba(239,68,68,0.25)" : colors.fill);
+      circle.setAttribute("stroke", tooClose ? "#ef4444" : colors.stroke);
+      circle.setAttribute("stroke-width", tooClose ? sw * 2 : sw);
+      g.appendChild(circle);
+    }
+
+    // Warning label
+    if (tooClose) {
+      const wt = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      const warnY = cy - (ko.type === "rectangle" ? ko.height_mm / 2 : (ko.radius_mm || 0)) - fontSize * 0.6;
+      wt.setAttribute("x", cx); wt.setAttribute("y", warnY);
+      wt.setAttribute("text-anchor", "middle"); wt.setAttribute("fill", "#ef4444");
+      wt.setAttribute("font-size", fontSize * 0.85); wt.setAttribute("font-weight", "700");
+      wt.textContent = edgeDist === 0
+        ? "Outside outline!"
+        : `Too close (${edgeDist.toFixed(1)}mm, need ${warnThreshold}mm)`;
+      g.appendChild(wt);
+    }
+
+    // Label
+    const label = comp.ref || comp.id;
+    const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    t.setAttribute("x", cx); t.setAttribute("y", cy + fontSize * 0.35);
+    t.setAttribute("text-anchor", "middle"); t.setAttribute("fill", colors.stroke);
+    t.setAttribute("font-size", fontSize); t.setAttribute("font-weight", "600");
+    t.textContent = label;
+    g.appendChild(t);
+
+    outlineSvg.appendChild(g);
+
+    // ── Right-click to rotate (controller only) ───────────
+    if (comp.type === "controller") {
+      g.addEventListener("contextmenu", (e) => {
+        if (!realignActive) return;
+        e.preventDefault(); e.stopPropagation();
+        // Toggle 0° ↔ 90°
+        const oldRot = comp.rotation_deg || 0;
+        comp.rotation_deg = oldRot === 0 ? 90 : 0;
+        // Swap keepout dimensions
+        const ko = comp.keepout || {};
+        if (ko.type === "rectangle") {
+          [ko.width_mm, ko.height_mm] = [ko.height_mm, ko.width_mm];
+        }
+        if (comp.body_width_mm != null && comp.body_height_mm != null) {
+          [comp.body_width_mm, comp.body_height_mm] = [comp.body_height_mm, comp.body_width_mm];
+        }
+        renderDraggableOutline(layout);
+        _updateApplyBtnState(layout, outline);
+      });
+      // Visual rotate hint (shown only in realign mode)
+      if (realignActive) {
+        const w = (ko.type === "rectangle") ? ko.width_mm : (ko.radius_mm * 2);
+        const h = (ko.type === "rectangle") ? ko.height_mm : (ko.radius_mm * 2);
+        const iconSz = Math.min(w, h) * 0.28;
+        const ix = cx + w / 2 - iconSz * 0.7;
+        const iy = cy - h / 2 + iconSz * 0.7;
+        const rotIcon = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        rotIcon.setAttribute("x", ix); rotIcon.setAttribute("y", iy);
+        rotIcon.setAttribute("text-anchor", "middle");
+        rotIcon.setAttribute("font-size", iconSz);
+        rotIcon.setAttribute("fill", "#60a5facc");
+        rotIcon.setAttribute("pointer-events", "none");
+        rotIcon.textContent = "\u21BB";  // ↻ clockwise arrow
+        g.appendChild(rotIcon);
+      }
+    }
+
+    // ── Drag handling (diode is fixed — not user-movable) ─────────
+    if (isDiode) { g.style.cursor = "default"; }
+    let dragging = false;
+    let dragStartSvg = null;
+    let origCx = cx, origCy = cy;
+
+    g.addEventListener("mousedown", (e) => {
+      if (!realignActive || isDiode) return;
+      e.preventDefault(); e.stopPropagation();
+      dragging = true;
+      dragStartSvg = clientToSvg(e.clientX, e.clientY);
+      origCx = cx; origCy = cy;
+      g.classList.add("comp-dragging");
+    });
+
+    const onMove = (e) => {
+      if (!dragging) return;
+      e.preventDefault();
+      const cur = clientToSvg(e.clientX, e.clientY);
+      const dx = cur.x - dragStartSvg.x;
+      const dy = cur.y - dragStartSvg.y;
+      g.setAttribute("transform", `translate(${dx}, ${dy})`);
+    };
+
+    const onUp = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      g.classList.remove("comp-dragging");
+      const cur = clientToSvg(e.clientX, e.clientY);
+      const dx = cur.x - dragStartSvg.x;
+      const dy = cur.y - dragStartSvg.y;
+
+      // Update the data (flip dy back to data Y-up coords)
+      const newCx = comp.center[0] + dx;
+      const newCy = comp.center[1] - dy;  // invert Y back
+      comp.center = [newCx, newCy];
+
+      // Re-render so elements are at correct positions (no lingering transform)
+      renderDraggableOutline(layout);
+
+      // Update Apply button state — disable if any component is too close
+      _updateApplyBtnState(layout, outline);
+    };
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
+  outlineLabel.style.display = "none";
+
+  // Initial check — disable Apply if something already too close
+  if (realignActive) _updateApplyBtnState(layout, outline);
+}
+
+async function applyRealignedLayout(layout) {
+  // Show a loading state
+  realignBar.style.display = "flex";
+  const origLabel = document.querySelector(".realign-bar-label");
+  origLabel.textContent = "Applying new layout...";
+  realignApplyBtn.disabled = true;
+  realignCancelBtn.disabled = true;
+
+  try {
+    // Extract updated component positions (+ rotation for controller)
+    const positions = layout.components.map(c => ({
+      id: c.id,
+      center: c.center,
+      rotation_deg: c.rotation_deg ?? null,
+    }));
+
+    const resp = await fetch("/api/update_layout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ positions }),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(err.detail || "Server error");
+    }
+
+    const result = await resp.json();
+    _currentLayout = result.layout;
+    _realignApplied = true;   // block SSE from overwriting
+    renderOutlineWithComponents(_currentLayout);
+
+    // Load updated STL if available
+    if (result.model_name) {
+      loadModel(`/api/model/${result.model_name}?t=${Date.now()}`);
+      downloadBtn.classList.remove("disabled");
+      downloadBtn.title = "Download STL";
+      latestModelName = result.model_name;
+    }
+
+    // Load updated debug image
+    if (result.has_debug_image) {
+      debugImage.src = `/api/images/pcb_debug?t=${Date.now()}`;
+      negativeImage.src = `/api/images/negative?t=${Date.now()}`;
+      debugImage.style.display = "block";
+      debugLabel.style.display = "none";
+    }
+
+    // NOW resume the pipeline — new layout + routing are on disk
+    await fetch("/api/realign/resume", { method: "POST" }).catch(() => {});
+
+  } catch (e) {
+    addMessage("system", `Realign failed: ${e.message}`);
+    // Revert to original layout
+    renderOutlineWithComponents(_currentLayout);
+    // Still resume so the pipeline isn't stuck paused
+    fetch("/api/realign/resume", { method: "POST" }).catch(() => {});
+  } finally {
+    realignBar.style.display = "none";
+    origLabel.textContent = "Drag components to reposition";
+    realignApplyBtn.disabled = false;
+    realignCancelBtn.disabled = false;
+  }
 }
 
 // ── Three.js setup ────────────────────────────────────────────────
@@ -786,6 +1169,8 @@ function setupImageDrag(element, stateKey, getZoom, applyFn) {
   let startY = 0;
   
   element.addEventListener("mousedown", (e) => {
+    // Don't pan the outline SVG when realign mode is active
+    if (realignActive && element === outlineSvg) return;
     e.preventDefault();
     isDragging = true;
     startX = e.clientX - state.translateX;
@@ -1848,6 +2233,10 @@ sendBtn.addEventListener("click", async () => {
   const msg = promptInput.value.trim();
   if (!msg) return;
 
+  // Reset realign protection — new generation should take over
+  _realignApplied = false;
+  if (realignActive) exitRealignMode(false);
+
   addMessage("user", msg);
   promptInput.value = "";
   sendBtn.disabled = true;
@@ -1922,6 +2311,12 @@ sendBtn.addEventListener("click", async () => {
             break;
 
           case "pcb_layout":
+            // Don't let the pipeline overwrite a realigned layout
+            if (realignActive || _realignApplied) {
+              logDebug("Ignoring pcb_layout event (realign active/applied)");
+              break;
+            }
+            _currentLayout = JSON.parse(JSON.stringify(ev));  // deep-copy
             renderOutlineWithComponents(ev);
             break;
 
@@ -1936,6 +2331,11 @@ sendBtn.addEventListener("click", async () => {
             break;
 
           case "debug_image":
+            // Don't let the pipeline overwrite realigned debug images
+            if (realignActive || _realignApplied) {
+              logDebug("Ignoring debug_image event (realign active/applied)");
+              break;
+            }
             debugImage.src = `/api/images/${ev.label}?t=${Date.now()}`;
             negativeImage.src = `/api/images/negative?t=${Date.now()}`;
             // Show debug image, hide label

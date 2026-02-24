@@ -220,6 +220,8 @@ def run_turn(
 
     # ── Process model responses (tool-call loop) ───────────────────
     empty_retries = 0
+    _pipeline_done = False          # True once submit_design succeeds
+    _pipeline_attempts = 0          # cap retries to avoid parallel outlines
     for _turn_idx in range(MAX_TURNS):
         is_empty = isinstance(response, _EmptyResponse)
         function_calls = _extract_function_calls(response)
@@ -273,27 +275,48 @@ def run_turn(
                 result = {"status": "ok"}
 
             elif name == "submit_design":
-                emit("progress", {"stage": "Running manufacturing pipeline..."})
-                try:
-                    result = run_pipeline(
-                        outline=args.get("outline", []),
-                        button_positions=args.get("button_positions", []),
-                        emit=emit,
-                        output_dir=output_dir,
-                        outline_type=args.get("outline_type", "polygon"),
-                        top_curve_length=float(args.get("top_curve_length", 0)),
-                        top_curve_height=float(args.get("top_curve_height", 0)),
-                        bottom_curve_length=float(args.get("bottom_curve_length", 0)),
-                        bottom_curve_height=float(args.get("bottom_curve_height", 0)),
-                    )
-                except Exception as e:
-                    log.exception("Pipeline crashed")
+                _pipeline_attempts += 1
+                if _pipeline_done:
+                    # Pipeline already succeeded — don't run again
+                    result = {
+                        "status": "ok",
+                        "message": "Design already submitted and built successfully.",
+                    }
+                elif _pipeline_attempts > 2:
+                    # Cap retries to prevent multiple outlines
                     result = {
                         "status": "error",
                         "step": "pipeline",
-                        "message": str(e),
-                        "traceback": traceback.format_exc(),
+                        "message": (
+                            "Maximum pipeline attempts reached. "
+                            "Please report the final result to the user."
+                        ),
                     }
+                else:
+                    emit("progress", {"stage": "Running manufacturing pipeline..."})
+                    try:
+                        result = run_pipeline(
+                            outline=args.get("outline", []),
+                            button_positions=args.get("button_positions", []),
+                            emit=emit,
+                            output_dir=output_dir,
+                            outline_type=args.get("outline_type", "polygon"),
+                            top_curve_length=float(args.get("top_curve_length", 0)),
+                            top_curve_height=float(args.get("top_curve_height", 0)),
+                            bottom_curve_length=float(args.get("bottom_curve_length", 0)),
+                            bottom_curve_height=float(args.get("bottom_curve_height", 0)),
+                        )
+                    except Exception as e:
+                        log.exception("Pipeline crashed")
+                        result = {
+                            "status": "error",
+                            "step": "pipeline",
+                            "message": str(e),
+                            "traceback": traceback.format_exc(),
+                        }
+
+                    if result.get("status") == "success":
+                        _pipeline_done = True
 
             else:
                 result = {"status": "error", "message": f"Unknown tool: {name}"}

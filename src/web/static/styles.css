@@ -490,6 +490,81 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   user-select: none;
 }
 
+/* ── Realign mode ──────────────────────────────────────────────── */
+
+.realign-btn {
+  padding: 6px 0;
+  font-size: 12px;
+  background: rgba(31,41,55,0.9);
+  border-radius: 8px;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  text-align: center;
+  width: 100%;
+  box-sizing: border-box;
+  transition: background 0.15s, color 0.15s;
+}
+.realign-btn:hover { background: rgba(59,130,246,0.8); color: white; }
+.realign-btn.active {
+  background: rgba(59,130,246,0.9);
+  color: white;
+  box-shadow: 0 0 8px rgba(59,130,246,0.5);
+}
+
+.realign-bar {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(11, 17, 32, 0.95);
+  border: 1px solid rgba(59,130,246,0.4);
+  border-radius: 10px;
+  padding: 8px 16px;
+  backdrop-filter: blur(6px);
+}
+.realign-bar-label {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.realign-apply-btn,
+.realign-cancel-btn {
+  padding: 5px 14px;
+  font-size: 12px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.realign-apply-btn {
+  background: #3b82f6;
+  color: white;
+}
+.realign-apply-btn:hover { background: #2563eb; }
+.realign-cancel-btn {
+  background: rgba(239,68,68,0.15);
+  color: #ef4444;
+  border: 1px solid rgba(239,68,68,0.3);
+}
+.realign-cancel-btn:hover { background: rgba(239,68,68,0.3); }
+
+/* Draggable component styling in realign mode */
+.realign-active .comp-draggable {
+  cursor: move !important;
+}
+.realign-active .comp-draggable:hover {
+  filter: brightness(1.5);
+}
+.comp-dragging {
+  opacity: 0.8;
+  filter: drop-shadow(0 0 6px rgba(59,130,246,0.7));
+}
+
 /* ── Curve editor widget ───────────────────────────────────────── */
 
 .curve-editor {

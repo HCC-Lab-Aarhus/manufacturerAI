@@ -162,8 +162,8 @@ def _extract_pads(layout: dict) -> list[PadInfo]:
             )
             pad_offset = (body_keepout_cells + 5) * hw.grid_resolution
             half_pad_spacing = hw.battery["pad_spacing_mm"] / 2
-            # Both pads on the same side (below), separated horizontally
-            pad_y = cy - bh / 2 - pad_offset
+            # Both pads on the same side (above body, toward board interior)
+            pad_y = cy + bh / 2 + pad_offset
             pads.append(PadInfo(cx - half_pad_spacing, pad_y, "VCC", cid, "VCC"))
             pads.append(PadInfo(cx + half_pad_spacing, pad_y, "GND", cid, "GND"))
 

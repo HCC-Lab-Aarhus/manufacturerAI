@@ -173,10 +173,17 @@
         <div id="outlineView" class="view-panel active">
           <div class="view-controls">
             <button class="reset-view-btn" id="resetOutlineView">Reset view</button>
+            <button class="realign-btn" id="realignBtn" title="Drag components to reposition them">Realign</button>
             <div class="zoom-controls">
               <button class="zoom-btn" data-view="outline" data-action="in">+</button>
               <button class="zoom-btn" data-view="outline" data-action="out">−</button>
             </div>
+          </div>
+          <!-- Realign mode apply/cancel bar -->
+          <div class="realign-bar" id="realignBar" style="display:none;">
+            <span class="realign-bar-label">Drag components to reposition</span>
+            <button class="realign-apply-btn" id="realignApplyBtn">Apply</button>
+            <button class="realign-cancel-btn" id="realignCancelBtn">Cancel</button>
           </div>
           <svg id="outlineSvg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet"></svg>
           <div class="view-label" id="outlineLabel">No outline yet</div>

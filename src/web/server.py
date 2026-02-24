@@ -77,6 +77,9 @@ async def _no_cache_static(request, call_next):
 _conversation_history: list = []      # Gemini Content proto objects
 _run_dir: Path | None = None          # Output directory for this session
 _printer_id: str | None = None        # Last-used printer id ("mk3s" / "coreone")
+_layout_gen: int = 0                  # bumped by update_layout; checked by emit
+_pipeline_gate = threading.Event()    # clear() = paused, set() = running
+_pipeline_gate.set()                  # start unblocked
 
 
 # ── Models ─────────────────────────────────────────────────────────
@@ -92,6 +95,16 @@ class CurveUpdateRequest(BaseModel):
     bottom_curve_height: float = 0.0
 
 
+class LayoutPositionUpdate(BaseModel):
+    id: str
+    center: list[float]
+    rotation_deg: int | None = None
+
+
+class LayoutUpdateRequest(BaseModel):
+    positions: list[LayoutPositionUpdate]
+
+
 # ── Routes ─────────────────────────────────────────────────────────
 
 @app.get("/")
@@ -105,10 +118,12 @@ def index():
 @app.post("/api/reset")
 def reset_session():
     """Reset conversation history and start a fresh session."""
-    global _conversation_history, _run_dir, _printer_id
+    global _conversation_history, _run_dir, _printer_id, _layout_gen
     _conversation_history = []
     _run_dir = None
     _printer_id = None
+    _layout_gen = 0
+    _pipeline_gate.set()
     return {"status": "ok"}
 
 
@@ -175,6 +190,111 @@ def update_curve(req: CurveUpdateRequest):
     }
 
 
+@app.post("/api/update_layout")
+def update_layout(req: LayoutUpdateRequest):
+    """Move components to new positions, re-route traces, and rebuild STLs.
+
+    Called from the Realign mode in the outline view.  Accepts a list of
+    ``{id, center}`` pairs, patches the cached ``pcb_layout.json``, then
+    re-routes and re-generates SCAD/STL from the updated layout.
+    """
+    from src.pcb.router_bridge import route_traces as _route_traces, RouterError
+
+    if _run_dir is None:
+        raise HTTPException(400, "No run yet — generate a design first.")
+
+    layout_path = _run_dir / "pcb_layout.json"
+    if not layout_path.exists():
+        raise HTTPException(400, "No layout data — generate a design first.")
+
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+
+    # ── Patch component positions ──────────────────────────────────
+    global _layout_gen
+    _layout_gen += 1   # prevent pipeline thread from overwriting
+    pos_map = {p.id: p.center for p in req.positions}
+    rot_map = {p.id: p.rotation_deg for p in req.positions if p.rotation_deg is not None}
+    for comp in layout.get("components", []):
+        if comp["id"] in pos_map:
+            comp["center"] = pos_map[comp["id"]]
+        if comp["id"] in rot_map:
+            old_rot = comp.get("rotation_deg", 0)
+            new_rot = rot_map[comp["id"]]
+            if old_rot != new_rot:
+                comp["rotation_deg"] = new_rot
+                # Swap keepout dimensions when rotation changes
+                ko = comp.get("keepout", {})
+                if ko.get("type") == "rectangle":
+                    ko["width_mm"], ko["height_mm"] = ko["height_mm"], ko["width_mm"]
+                # Swap body dimensions too (battery, controller)
+                if "body_width_mm" in comp and "body_height_mm" in comp:
+                    comp["body_width_mm"], comp["body_height_mm"] = comp["body_height_mm"], comp["body_width_mm"]
+
+    # Save updated layout
+    layout_path.write_text(json.dumps(layout, indent=2), encoding="utf-8")
+
+    # Write lock marker so pipeline thread won't overwrite our files
+    (_run_dir / ".layout_lock").write_text("realigned", encoding="utf-8")
+
+    # ── Re-route traces ────────────────────────────────────────────
+    routing = {}
+    has_debug_image = False
+    routing_ok = False
+    try:
+        routing = _route_traces(layout, _run_dir)
+        routing_ok = routing.get("success", False)
+        (_run_dir / "routing_result.json").write_text(
+            json.dumps(routing, indent=2), encoding="utf-8"
+        )
+        has_debug_image = (_run_dir / "pcb_debug.png").exists()
+    except (RouterError, Exception) as exc:
+        # Routing may fail with the new positions — log it so we can debug.
+        import logging as _log
+        _log.getLogger("manufacturerAI.server").warning(
+            "Re-route after realign failed: %s", exc, exc_info=True,
+        )
+
+    # ── Rebuild SCAD + STL ─────────────────────────────────────────
+    outline = layout.get("board", {}).get("outline_polygon", [])
+    if outline:
+        cutouts = build_cutouts(layout, routing)
+        enclosure_scad = generate_enclosure_scad(outline=outline, cutouts=cutouts)
+        (_run_dir / "enclosure.scad").write_text(enclosure_scad, encoding="utf-8")
+
+        hatch_scad = generate_battery_hatch_scad()
+        (_run_dir / "battery_hatch.scad").write_text(hatch_scad, encoding="utf-8")
+        plate_scad = generate_print_plate_scad()
+        (_run_dir / "print_plate.scad").write_text(plate_scad, encoding="utf-8")
+
+        for name in ["enclosure", "battery_hatch", "print_plate"]:
+            scad_p = _run_dir / f"{name}.scad"
+            stl_p = scad_p.with_suffix(".stl")
+            if scad_p.exists():
+                compile_scad(scad_p, stl_p)
+
+    model_name = "print_plate" if (_run_dir / "print_plate.stl").exists() else "enclosure"
+    return {
+        "status": "ok",
+        "layout": layout,
+        "model_name": model_name,
+        "has_debug_image": has_debug_image,
+    }
+
+
+@app.post("/api/realign/pause")
+def realign_pause():
+    """Pause the pipeline while the user is in realign mode."""
+    _pipeline_gate.clear()
+    return {"status": "paused"}
+
+
+@app.post("/api/realign/resume")
+def realign_resume():
+    """Resume the pipeline after exiting realign mode."""
+    _pipeline_gate.set()
+    return {"status": "resumed"}
+
+
 @app.post("/api/generate/stream")
 async def generate_stream(req: GenerateRequest):
     """
@@ -182,10 +302,18 @@ async def generate_stream(req: GenerateRequest):
     pushes SSE events to the client via a Queue.
     Conversation history is preserved across requests for multi-turn.
     """
-    global _conversation_history, _run_dir
+    global _conversation_history, _run_dir, _layout_gen
 
     if not req.message.strip():
         raise HTTPException(400, "Empty prompt.")
+
+    # Reset realign protection on new generation
+    _layout_gen = 0
+    _pipeline_gate.set()  # ensure pipeline is unblocked
+
+    # Remove realign lock so pipeline can write freely
+    if _run_dir and (_run_dir / ".layout_lock").exists():
+        (_run_dir / ".layout_lock").unlink()
 
     # Create / reuse run dir for this session
     if _run_dir is None:
@@ -194,8 +322,14 @@ async def generate_stream(req: GenerateRequest):
         _run_dir.mkdir(parents=True, exist_ok=True)
 
     queue: Queue[dict | None] = Queue()
+    gen_at_start = _layout_gen      # snapshot for this generation
 
     def emit(event_type: str, data: dict):
+        # Block while realign mode is active (pipeline pauses)
+        _pipeline_gate.wait()
+        # If a realign happened mid-pipeline, suppress layout/debug events
+        if _layout_gen > gen_at_start and event_type in ("pcb_layout", "debug_image"):
+            return
         queue.put({"type": event_type, **data})
 
     def run_in_thread():
@@ -220,10 +354,16 @@ async def generate_stream(req: GenerateRequest):
     thread.start()
 
     async def event_generator():
+        import time as _time
+        _last_data = _time.monotonic()
         while True:
             try:
                 item = queue.get(timeout=0.05)
             except Empty:
+                # Send keepalive comment every 15 s to prevent connection drop
+                if _time.monotonic() - _last_data > 15:
+                    yield ": keepalive\n\n"
+                    _last_data = _time.monotonic()
                 await asyncio.sleep(0.05)
                 continue
 
@@ -231,6 +371,7 @@ async def generate_stream(req: GenerateRequest):
                 break
 
             yield f"data: {json.dumps(item)}\n\n"
+            _last_data = _time.monotonic()
 
             if item.get("type") == "error":
                 break

@@ -59,17 +59,43 @@ def _save_winning_result(
     output_dir: Path,
     emit: EmitFn,
 ) -> None:
-    """Persist and emit a successful layout+routing pair."""
-    (output_dir / "pcb_layout.json").write_text(
-        json.dumps(layout, indent=2), encoding="utf-8"
-    )
-    (output_dir / "routing_result.json").write_text(
-        json.dumps(routing_result, indent=2), encoding="utf-8"
-    )
+    """Persist and emit a successful layout+routing pair.
+
+    If a ``.layout_lock`` marker exists in *output_dir* (written by
+    the realign endpoint), skip overwriting files — the user's
+    manual placement takes priority.
+    """
+    lock = output_dir / ".layout_lock"
+    if not lock.exists():
+        (output_dir / "pcb_layout.json").write_text(
+            json.dumps(layout, indent=2), encoding="utf-8"
+        )
+        (output_dir / "routing_result.json").write_text(
+            json.dumps(routing_result, indent=2), encoding="utf-8"
+        )
     emit("pcb_layout", layout)
     pcb_debug = output_dir / "pcb_debug.png"
     if pcb_debug.exists():
         emit("debug_image", {"path": str(pcb_debug), "label": pcb_debug.stem})
+
+
+def _reload_if_realigned(
+    layout: dict | None,
+    routing_result: dict | None,
+    output_dir: Path,
+) -> tuple[dict | None, dict | None]:
+    """If `.layout_lock` exists the user realigned — re-read from disk."""
+    lock = output_dir / ".layout_lock"
+    if not lock.exists():
+        return layout, routing_result
+    log.info("Realign lock detected — reloading layout & routing from disk")
+    lp = output_dir / "pcb_layout.json"
+    rp = output_dir / "routing_result.json"
+    if lp.exists():
+        layout = json.loads(lp.read_text(encoding="utf-8"))
+    if rp.exists():
+        routing_result = json.loads(rp.read_text(encoding="utf-8"))
+    return layout, routing_result
 
 
 def _place_and_route(
@@ -99,10 +125,11 @@ def _place_and_route(
     if layout is None:
         return (None, None)
 
-    # Save placement result
-    (output_dir / "pcb_layout.json").write_text(
-        json.dumps(layout, indent=2), encoding="utf-8"
-    )
+    # Save placement result (unless realign lock is active)
+    if not (output_dir / ".layout_lock").exists():
+        (output_dir / "pcb_layout.json").write_text(
+            json.dumps(layout, indent=2), encoding="utf-8"
+        )
     emit("pcb_layout", layout)
 
     # ── Route traces (single attempt, full budget) ───────────────
@@ -305,6 +332,11 @@ def run_pipeline(
         outline, bpos, output_dir, emit,
     )
 
+    # ── Re-read from disk if the user realigned during the pause ───
+    layout, routing_result = _reload_if_realigned(
+        layout, routing_result, output_dir,
+    )
+
     if layout is None:
         # Total placement failure — not even one candidate
         return {
@@ -355,6 +387,12 @@ def run_pipeline(
     # ── 5. Generate SCAD ───────────────────────────────────────────
     emit("progress", {"stage": "Generating enclosure..."})
     log.info("Pipeline step 5: generate SCAD")
+
+    # Checkpoint: re-read in case the user realigned while we were
+    # blocked on one of the emit() calls above.
+    layout, routing_result = _reload_if_realigned(
+        layout, routing_result, output_dir,
+    )
 
     try:
         cutouts = build_cutouts(layout, routing_result)

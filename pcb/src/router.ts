@@ -104,12 +104,12 @@ export class Router {
       })
     }
 
-    // Place VCC and GND pads on the SAME side (below the body),
-    // separated horizontally by padSpacing.  This keeps one side of
-    // the battery completely free for trace routing.
+    // Place VCC and GND pads on the SAME side (above the body,
+    // toward the board interior), separated horizontally by padSpacing.
+    // This keeps the outer edge free and makes routing easier.
     const res = this.input.board.gridResolution
     const padOffsetCells = this.bodyKeepoutCells + 5
-    const padY = battery.y - bodyH / 2 - padOffsetCells * res
+    const padY = battery.y + bodyH / 2 + padOffsetCells * res
     const halfPadSpacing = this.footprints.battery.padSpacing / 2
 
     const vccPadCenter = this.grid.worldToGrid(battery.x - halfPadSpacing, padY)
