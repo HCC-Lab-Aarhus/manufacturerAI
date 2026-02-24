@@ -238,7 +238,6 @@ def update_layout(req: LayoutUpdateRequest):
 
     # ── Re-route traces ────────────────────────────────────────────
     routing = {}
-    has_debug_image = False
     routing_ok = False
     try:
         routing = _route_traces(layout, _run_dir)
@@ -246,7 +245,6 @@ def update_layout(req: LayoutUpdateRequest):
         (_run_dir / "routing_result.json").write_text(
             json.dumps(routing, indent=2), encoding="utf-8"
         )
-        has_debug_image = (_run_dir / "pcb_debug.png").exists()
     except (RouterError, Exception) as exc:
         # Routing may fail with the new positions — log it so we can debug.
         import logging as _log
@@ -254,23 +252,46 @@ def update_layout(req: LayoutUpdateRequest):
             "Re-route after realign failed: %s", exc, exc_info=True,
         )
 
-    # ── Rebuild SCAD + STL ─────────────────────────────────────────
+    # Always check for debug image (router generates it even on partial failure)
+    has_debug_image = (
+        (_run_dir / "pcb" / "pcb_debug.png").exists()
+        or (_run_dir / "pcb_debug.png").exists()
+    )
+
+    # ── Rebuild SCAD + STL in background (compile takes minutes) ───
     outline = layout.get("board", {}).get("outline_polygon", [])
-    if outline:
+    run_dir_snap = _run_dir  # snapshot for the background thread
+
+    def _rebuild_stl():
+        if not outline:
+            return
         cutouts = build_cutouts(layout, routing)
         enclosure_scad = generate_enclosure_scad(outline=outline, cutouts=cutouts)
-        (_run_dir / "enclosure.scad").write_text(enclosure_scad, encoding="utf-8")
+        (run_dir_snap / "enclosure.scad").write_text(enclosure_scad, encoding="utf-8")
 
         hatch_scad = generate_battery_hatch_scad()
-        (_run_dir / "battery_hatch.scad").write_text(hatch_scad, encoding="utf-8")
+        (run_dir_snap / "battery_hatch.scad").write_text(hatch_scad, encoding="utf-8")
         plate_scad = generate_print_plate_scad()
-        (_run_dir / "print_plate.scad").write_text(plate_scad, encoding="utf-8")
+        (run_dir_snap / "print_plate.scad").write_text(plate_scad, encoding="utf-8")
 
-        for name in ["enclosure", "battery_hatch", "print_plate"]:
-            scad_p = _run_dir / f"{name}.scad"
+        for name in ["enclosure", "battery_hatch"]:
+            scad_p = run_dir_snap / f"{name}.scad"
             stl_p = scad_p.with_suffix(".stl")
             if scad_p.exists():
                 compile_scad(scad_p, stl_p)
+
+        # Merge into print plate
+        from src.scad.compiler import merge_stl_files
+        enc_stl = run_dir_snap / "enclosure.stl"
+        hatch_stl = run_dir_snap / "battery_hatch.stl"
+        plate_stl = run_dir_snap / "print_plate.stl"
+        if enc_stl.exists() and hatch_stl.exists():
+            merge_stl_files(
+                [(enc_stl, (0, 0, 0)), (hatch_stl, (80, 0, 0))],
+                plate_stl,
+            )
+
+    threading.Thread(target=_rebuild_stl, daemon=True).start()
 
     model_name = "print_plate" if (_run_dir / "print_plate.stl").exists() else "enclosure"
     return {
@@ -278,6 +299,7 @@ def update_layout(req: LayoutUpdateRequest):
         "layout": layout,
         "model_name": model_name,
         "has_debug_image": has_debug_image,
+        "stl_rebuilding": True,
     }
 
 
@@ -434,7 +456,11 @@ def get_image(name: str):
         _run_dir / f"pcb_{name}.png",
     ]:
         if candidate.exists():
-            return FileResponse(candidate, media_type="image/png")
+            return FileResponse(
+                candidate,
+                media_type="image/png",
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+            )
 
     raise HTTPException(404, f"Image {name} not found.")
 

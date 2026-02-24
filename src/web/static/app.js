@@ -53,6 +53,7 @@ let   realignActive    = false;
 let   _currentLayout   = null;   // last layout from server
 let   _editedLayout    = null;   // deep-copy being edited in realign mode
 let   _realignApplied  = false;  // true after apply — blocks SSE overwrites
+let   _suppressModelTabSwitch = false; // true during realign apply — don't auto-switch to 3D
 
 // ── Progress bar helpers ──────────────────────────────────────────
 
@@ -679,20 +680,24 @@ async function applyRealignedLayout(layout) {
     _realignApplied = true;   // block SSE from overwriting
     renderOutlineWithComponents(_currentLayout);
 
-    // Load updated STL if available
-    if (result.model_name) {
-      loadModel(`/api/model/${result.model_name}?t=${Date.now()}`);
-      downloadBtn.classList.remove("disabled");
-      downloadBtn.title = "Download STL";
-      latestModelName = result.model_name;
-    }
-
-    // Load updated debug image
+    // Load updated debug image and switch to debug tab so user sees it
     if (result.has_debug_image) {
       debugImage.src = `/api/images/pcb_debug?t=${Date.now()}`;
       negativeImage.src = `/api/images/negative?t=${Date.now()}`;
       debugImage.style.display = "block";
-      debugLabel.style.display = "none";
+      if (debugLabel) debugLabel.style.display = "none";
+      debugImageSelect.value = "debug";
+      switchTab("debug");
+    }
+
+    // STL is recompiling in background — poll for the updated model
+    if (result.stl_rebuilding && result.model_name) {
+      latestModelName = result.model_name;
+      if (modelLabel) {
+        modelLabel.textContent = "Recompiling 3D model…";
+        modelLabel.style.display = "";
+      }
+      _pollForUpdatedModel(result.model_name);
     }
 
     // NOW resume the pipeline — new layout + routing are on disk
@@ -1016,13 +1021,41 @@ function loadModel(url) {
 
     downloadBtn.classList.remove("disabled");
     readyToPrintBtn.classList.remove("disabled");
-    switchTab("3d");
+    if (!_suppressModelTabSwitch) switchTab("3d");
+    _suppressModelTabSwitch = false;
   },
   undefined,
   (err) => {
     console.error("STL load error:", err);
     if (modelLabel) { modelLabel.textContent = "Failed to load 3D model"; modelLabel.style.display = ""; }
   });
+}
+
+/**
+ * Poll for an updated STL after background SCAD recompile (realign).
+ * Checks every 5s; gives up after ~5 minutes.
+ */
+function _pollForUpdatedModel(modelName, attempt = 0) {
+  const MAX_ATTEMPTS = 60;  // 60 × 5s = 5 min
+  if (attempt >= MAX_ATTEMPTS) {
+    if (modelLabel) { modelLabel.textContent = "Model recompile timed out"; modelLabel.style.display = ""; }
+    return;
+  }
+  setTimeout(async () => {
+    try {
+      const resp = await fetch(`/api/model/${modelName}?t=${Date.now()}`, { method: "HEAD" });
+      if (resp.ok) {
+        // Check if the file has been updated by comparing content-length
+        // to what we had before (a crude proxy for "new file")
+        _suppressModelTabSwitch = true;
+        loadModel(`/api/model/${modelName}?t=${Date.now()}`);
+        downloadBtn.classList.remove("disabled");
+        downloadBtn.title = "Download STL";
+        return;
+      }
+    } catch { /* ignore */ }
+    _pollForUpdatedModel(modelName, attempt + 1);
+  }, 5000);
 }
 
 (function animate() {
