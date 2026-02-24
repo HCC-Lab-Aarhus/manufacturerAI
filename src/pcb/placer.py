@@ -886,80 +886,80 @@ def generate_placement_candidates(
                 cx, cy = ctrl_pos
                 ctrl_rot = force_rot
 
-            if ctrl_rot == 90:
-                ko_w = ctrl_h + ctrl_pad
-                ko_h = ctrl_w + ctrl_pad
-                occ_hw, occ_hh = ko_w / 2, ko_h / 2
-            else:
-                ko_w = ctrl_w + ctrl_pad
-                ko_h = ctrl_h + ctrl_pad
-                occ_hw, occ_hh = ko_w / 2, ko_h / 2
+                if ctrl_rot == 90:
+                    ko_w = ctrl_h + ctrl_pad
+                    ko_h = ctrl_w + ctrl_pad
+                    occ_hw, occ_hh = ko_w / 2, ko_h / 2
+                else:
+                    ko_w = ctrl_w + ctrl_pad
+                    ko_h = ctrl_h + ctrl_pad
+                    occ_hw, occ_hh = ko_w / 2, ko_h / 2
 
-            # Dedup on 2mm grid (include rotation)
-            key = (int(bx / 2), int(by / 2), int(cx / 2), int(cy / 2), ctrl_rot)
-            if key in seen:
-                continue
-            seen.add(key)
+                # Dedup on 2mm grid (include rotation)
+                key = (int(bx / 2), int(by / 2), int(cx / 2), int(cy / 2), ctrl_rot)
+                if key in seen:
+                    continue
+                seen.add(key)
 
-            occupied_all = list(occupied_with_bat)
-            occupied_all.append({"cx": cx, "cy": cy, "hw": occ_hw, "hh": occ_hh})
+                occupied_all = list(occupied_with_bat)
+                occupied_all.append({"cx": cx, "cy": cy, "hw": occ_hw, "hh": occ_hh})
 
-            # Diode — at top center; scan down until pads clear edge zone
-            dmin_x, _, dmax_x, dmax_y = polygon_bounds(board_inset)
-            diode_cx = (dmin_x + dmax_x) / 2
-            d_pad_half = hw.diode.get("pad_spacing_mm", 5.0) / 2
-            d_req_clr = hw.edge_clearance + 2.5
-            ddy = dmax_y - hw.edge_clearance
-            for _ds in range(200):
-                dl = _dist_to_polygon(diode_cx - d_pad_half, ddy, board_inset)
-                dr = _dist_to_polygon(diode_cx + d_pad_half, ddy, board_inset)
-                if min(dl, dr) >= d_req_clr:
-                    break
-                ddy -= 0.5
-            ddx = diode_cx
+                # Diode — at top center; scan down until pads clear edge zone
+                dmin_x, _, dmax_x, dmax_y = polygon_bounds(board_inset)
+                diode_cx = (dmin_x + dmax_x) / 2
+                d_pad_half = hw.diode.get("pad_spacing_mm", 5.0) / 2
+                d_req_clr = hw.edge_clearance + 2.5
+                ddy = dmax_y - hw.edge_clearance
+                for _ds in range(200):
+                    dl = _dist_to_polygon(diode_cx - d_pad_half, ddy, board_inset)
+                    dr = _dist_to_polygon(diode_cx + d_pad_half, ddy, board_inset)
+                    if min(dl, dr) >= d_req_clr:
+                        break
+                    ddy -= 0.5
+                ddx = diode_cx
 
-            comps = list(components_base)
-            comps.append({
-                "id": "BAT1", "ref": "battery", "type": "battery",
-                "footprint": battery_type,
-                "center": [bx, by], "rotation_deg": 0,
-                "body_width_mm": bat_w, "body_height_mm": bat_h,
-                "keepout": {"type": "rectangle", "width_mm": bat_w, "height_mm": bat_h},
-            })
-            comps.append({
-                "id": "U1", "ref": "controller", "type": "controller",
-                "footprint": ctrl["type"],
-                "center": [cx, cy], "rotation_deg": ctrl_rot,
-                "keepout": {
-                    "type": "rectangle",
-                    "width_mm": ko_w,
-                    "height_mm": ko_h,
-                },
-            })
-            comps.append({
-                "id": "D1", "ref": "DIODE", "type": "diode",
-                "footprint": hw.diode["type"],
-                "center": [ddx, ddy], "rotation_deg": 0,
-                "keepout": {"type": "circle", "radius_mm": d_r},
-            })
+                comps = list(components_base)
+                comps.append({
+                    "id": "BAT1", "ref": "battery", "type": "battery",
+                    "footprint": battery_type,
+                    "center": [bx, by], "rotation_deg": 0,
+                    "body_width_mm": bat_w, "body_height_mm": bat_h,
+                    "keepout": {"type": "rectangle", "width_mm": bat_w, "height_mm": bat_h},
+                })
+                comps.append({
+                    "id": "U1", "ref": "controller", "type": "controller",
+                    "footprint": ctrl["type"],
+                    "center": [cx, cy], "rotation_deg": ctrl_rot,
+                    "keepout": {
+                        "type": "rectangle",
+                        "width_mm": ko_w,
+                        "height_mm": ko_h,
+                    },
+                })
+                comps.append({
+                    "id": "D1", "ref": "DIODE", "type": "diode",
+                    "footprint": hw.diode["type"],
+                    "center": [ddx, ddy], "rotation_deg": 0,
+                    "keepout": {"type": "circle", "radius_mm": d_r},
+                })
 
-            layout = {
-                "board": {
-                    "outline_polygon": [[v[0], v[1]] for v in board_inset],
-                    "thickness_mm": hw.pcb_thickness,
-                    "origin": "bottom_left",
-                },
-                "components": comps,
-                "keepout_regions": [],
-                "metadata": {
-                    "battery_prefer": bpref,
-                    "controller_prefer": cpref,
-                    "controller_rotation": ctrl_rot,
-                },
-            }
-            candidates.append(layout)
-            if len(candidates) >= max_candidates:
-                return candidates
+                layout = {
+                    "board": {
+                        "outline_polygon": [[v[0], v[1]] for v in board_inset],
+                        "thickness_mm": hw.pcb_thickness,
+                        "origin": "bottom_left",
+                    },
+                    "components": comps,
+                    "keepout_regions": [],
+                    "metadata": {
+                        "battery_prefer": bpref,
+                        "controller_prefer": cpref,
+                        "controller_rotation": ctrl_rot,
+                    },
+                }
+                candidates.append(layout)
+                if len(candidates) >= max_candidates:
+                    return candidates
 
     return candidates
 
