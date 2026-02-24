@@ -12,10 +12,15 @@ any part of the pipeline can append cutouts without touching SCAD logic.
 
 from __future__ import annotations
 
+import logging
 import math
+from collections import defaultdict
 from dataclasses import dataclass, field
-from shapely.geometry import Polygon as ShapelyPolygon
+from shapely.geometry import MultiPolygon, Polygon as ShapelyPolygon
+from shapely.ops import unary_union
 from src.config.hardware import hw
+
+log = logging.getLogger(__name__)
 
 # Default extrusion height (mm): floor + cavity + ceiling.
 DEFAULT_HEIGHT_MM = hw.shell_height + hw.floor_thickness + hw.ceil_thickness
@@ -304,13 +309,81 @@ def generate_enclosure_scad(
     )
     lines.append("")
 
-    for i, c in enumerate(cutouts):
-        tag = c.label or f"cutout_{i}"
-        lines.append(f"    // [{i}] {tag}")
-        lines.append(f"    translate([0, 0, {c.z_base:.3f}])")
-        lines.append(f"        linear_extrude(height = {c.depth:.3f})")
-        lines.append(f"            polygon(points = [{_fmt_poly(c.polygon)}]);")
+    # ── Merge cutouts that share the same (z_base, depth) ─────────
+    # Instead of emitting 150+ individual ``difference()`` children
+    # (which makes OpenSCAD's CGAL backend extremely slow), we group
+    # cutouts by their extrusion parameters and merge the 2-D
+    # polygons with Shapely's ``unary_union``.  This typically
+    # collapses ~160 operations down to ~5-10.
+    groups: dict[tuple[float, float], list[Cutout]] = defaultdict(list)
+    for c in cutouts:
+        groups[(round(c.z_base, 4), round(c.depth, 4))].append(c)
+
+    group_idx = 0
+    for (z_base, depth), members in groups.items():
+        labels = ", ".join(m.label for m in members if m.label)
+        count = len(members)
+
+        # Build Shapely polygons for all members in this group
+        shapely_polys = []
+        for m in members:
+            if len(m.polygon) >= 3:
+                try:
+                    sp = ShapelyPolygon(m.polygon)
+                    if sp.is_valid and not sp.is_empty:
+                        shapely_polys.append(sp)
+                except Exception:
+                    pass
+
+        if not shapely_polys:
+            continue
+
+        merged = unary_union(shapely_polys)
+
+        # Extract polygon(s) from the merged result
+        if merged.is_empty:
+            continue
+
+        polys: list[ShapelyPolygon] = []
+        if isinstance(merged, ShapelyPolygon):
+            polys = [merged]
+        elif isinstance(merged, MultiPolygon):
+            polys = list(merged.geoms)
+        else:
+            # GeometryCollection or unexpected — skip
+            log.warning("Unexpected Shapely result type %s for group z=%.2f d=%.2f",
+                        type(merged).__name__, z_base, depth)
+            continue
+
+        # Emit ONE polygon() per group using OpenSCAD's multi-path
+        # syntax.  This collapses all cutouts in this z/depth group
+        # into a single difference() child — the key CSG speedup.
+        all_pts: list[tuple[float, float]] = []
+        paths: list[list[int]] = []
+        for poly in polys:
+            exterior = list(poly.exterior.coords)[:-1]
+            start = len(all_pts)
+            all_pts.extend(exterior)
+            paths.append(list(range(start, start + len(exterior))))
+            for hole in poly.interiors:
+                hole_coords = list(hole.coords)[:-1]
+                h_start = len(all_pts)
+                all_pts.extend(hole_coords)
+                paths.append(list(range(h_start, h_start + len(hole_coords))))
+
+        tag = f"group {group_idx}: {count} cutouts at z={z_base:.1f} d={depth:.1f}"
+        if labels:
+            tag += f" ({labels[:80]})"
+        lines.append(f"    // {tag}")
+        lines.append(f"    translate([0, 0, {z_base:.3f}])")
+        lines.append(f"        linear_extrude(height = {depth:.3f})")
+        pts_str = _fmt_poly(all_pts)
+        paths_str = ", ".join(
+            "[" + ", ".join(str(i) for i in p) + "]" for p in paths
+        )
+        lines.append(f"            polygon(points = [{pts_str}], paths = [{paths_str}]);")
         lines.append("")
+        group_idx += 1
 
     lines.append("}")
     return "\n".join(lines) + "\n"

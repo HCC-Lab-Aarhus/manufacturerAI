@@ -55,9 +55,11 @@ Make interface that tells you where to place things in the correct direction.
 
 DONT DO THIS figure out a way to make bgcode for the coreone
 
-Make a printer profile for the Prusa i3 mk3s+ to genereate correct gcode. 
+DONE Make a printer profile for the Prusa i3 mk3s+ to genereate correct gcode. 
 
 Negative PNG has to be 1536x1383 pixels.
+
+It needs to ask for certain things when you send a prompt, it needs to know most details, like how big do you want the remote, what shape, how many buttons, and where should the buttons be placed. 
 
 
 # Long term

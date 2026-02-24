@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -168,6 +169,7 @@ def run_turn(
     history: list,
     emit: EmitFn,
     output_dir: str | Path,
+    cancel: threading.Event | None = None,
     model_name: str = "gemini-2.5-pro",
 ) -> list:
     """
@@ -178,6 +180,7 @@ def run_turn(
         history: List of prior Content proto objects (conversation so far).
         emit: Callback(event_type, data_dict) for streaming events to UI.
         output_dir: Directory for pipeline outputs.
+        cancel: Threading event — set to cancel the pipeline.
         model_name: Gemini model to use.
 
     Returns:
@@ -308,15 +311,19 @@ def run_turn(
                     emit("progress", {"stage": "Running manufacturing pipeline..."})
                     try:
                         result = run_pipeline(
-                            outline=args.get("outline", []),
-                            button_positions=args.get("button_positions", []),
+                            run_dir=output_dir,
                             emit=emit,
-                            output_dir=output_dir,
+                            cancel=cancel,
+                            start_from="validate",
+                            outline=args.get("outline", []),
+                            buttons=args.get("button_positions", []),
                             outline_type=args.get("outline_type", "polygon"),
-                            top_curve_length=float(args.get("top_curve_length", 0)),
-                            top_curve_height=float(args.get("top_curve_height", 0)),
-                            bottom_curve_length=float(args.get("bottom_curve_length", 0)),
-                            bottom_curve_height=float(args.get("bottom_curve_height", 0)),
+                            curve_params={
+                                "top_curve_length": float(args.get("top_curve_length", 0)),
+                                "top_curve_height": float(args.get("top_curve_height", 0)),
+                                "bottom_curve_length": float(args.get("bottom_curve_length", 0)),
+                                "bottom_curve_height": float(args.get("bottom_curve_height", 0)),
+                            },
                         )
                     except Exception as e:
                         log.exception("Pipeline crashed")

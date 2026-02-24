@@ -361,11 +361,11 @@ function exitRealignMode(apply) {
   outlineView.classList.remove("realign-active");
 
   if (apply && _editedLayout) {
-    // POST updated positions first, THEN resume pipeline so it picks
-    // up the new layout from disk.  applyRealignedLayout handles resume.
+    // POST updated positions — this aborts the old pipeline,
+    // re-routes traces, and starts a background STL rebuild.
     applyRealignedLayout(_editedLayout);
   } else {
-    // Cancel — just resume immediately
+    // Cancel — resume the paused pipeline so it can finish
     fetch("/api/realign/resume", { method: "POST" }).catch(() => {});
     renderOutlineWithComponents(_currentLayout);
   }
@@ -656,6 +656,11 @@ async function applyRealignedLayout(layout) {
   realignApplyBtn.disabled = true;
   realignCancelBtn.disabled = true;
 
+  // Reset progress bar for the realign flow
+  _lastProgressPct = 0;
+  updateProgress("Routing traces...");
+  setStatus("Realigning…", "working");
+
   try {
     // Extract updated component positions (+ rotation for controller)
     const positions = layout.components.map(c => ({
@@ -680,6 +685,22 @@ async function applyRealignedLayout(layout) {
     _realignApplied = true;   // block SSE from overwriting
     renderOutlineWithComponents(_currentLayout);
 
+    // Build shell preview + show curve editor from response data
+    if (result.shell_preview) {
+      buildShellPreview(result.shell_preview);
+      _fetchShellHeight().then(() => {
+        showCurveEditor(
+          result.shell_preview.top_curve_length || 0,
+          result.shell_preview.top_curve_height || 0,
+          result.shell_preview.bottom_curve_length || 0,
+          result.shell_preview.bottom_curve_height || 0,
+        );
+      });
+    }
+
+    // Routing done — advance progress
+    updateProgress("Generating enclosure...");
+
     // Load updated debug image and switch to debug tab so user sees it
     if (result.has_debug_image) {
       debugImage.src = `/api/images/pcb_debug?t=${Date.now()}`;
@@ -691,24 +712,30 @@ async function applyRealignedLayout(layout) {
     }
 
     // STL is recompiling in background — poll for the updated model
-    if (result.stl_rebuilding && result.model_name) {
-      latestModelName = result.model_name;
+    if (result.stl_rebuilding) {
+      if (result.model_name) latestModelName = result.model_name;
+      updateProgress("Compiling STL models...");
       if (modelLabel) {
         modelLabel.textContent = "Recompiling 3D model…";
         modelLabel.style.display = "";
       }
-      _pollForUpdatedModel(result.model_name);
+      _pollForUpdatedModel(result.model_name || "print_plate");
+    } else {
+      // No STL rebuild needed — we're done
+      updateProgress("Pipeline complete!");
+      setStatus("Ready", "");
+      setTimeout(hideProgress, 2000);
     }
 
-    // NOW resume the pipeline — new layout + routing are on disk
-    await fetch("/api/realign/resume", { method: "POST" }).catch(() => {});
+    // Old pipeline is aborted — no need to resume it.
+    // Background STL rebuild is running independently.
 
   } catch (e) {
     addMessage("system", `Realign failed: ${e.message}`);
+    setStatus("Error", "error");
+    hideProgress();
     // Revert to original layout
     renderOutlineWithComponents(_currentLayout);
-    // Still resume so the pipeline isn't stuck paused
-    fetch("/api/realign/resume", { method: "POST" }).catch(() => {});
   } finally {
     realignBar.style.display = "none";
     origLabel.textContent = "Drag components to reposition";
@@ -1041,9 +1068,13 @@ function _pollForUpdatedModel(modelName, attempt = 0) {
   const myGen = ++_stlPollGeneration;
   function tick(n) {
     if (n >= MAX_ATTEMPTS || myGen !== _stlPollGeneration) {
-      if (n >= MAX_ATTEMPTS && modelLabel) {
-        modelLabel.textContent = "Model recompile timed out";
-        modelLabel.style.display = "";
+      if (n >= MAX_ATTEMPTS) {
+        if (modelLabel) {
+          modelLabel.textContent = "Model recompile timed out";
+          modelLabel.style.display = "";
+        }
+        setStatus("Error", "error");
+        hideProgress();
       }
       return;
     }
@@ -1054,14 +1085,32 @@ function _pollForUpdatedModel(modelName, attempt = 0) {
         if (resp.ok) {
           const status = await resp.json();
           if (!status.rebuilding) {
+            if (status.error) {
+              // Build failed — show error, don't try to load model
+              if (modelLabel) {
+                modelLabel.textContent = `STL build failed: ${status.error}`;
+                modelLabel.style.display = "";
+              }
+              setStatus("Error", "error");
+              hideProgress();
+              return;
+            }
+            if (!status.model_name) {
+              // No model produced yet — keep waiting
+              tick(n + 1);
+              return;
+            }
             // Rebuild finished — load the new model
-            const name = status.model_name || modelName;
+            const name = status.model_name;
             _suppressModelTabSwitch = true;
             loadModel(`/api/model/${name}?t=${Date.now()}`);
             downloadBtn.classList.remove("disabled");
             downloadBtn.title = "Download STL";
             latestModelName = name;
             if (modelLabel) modelLabel.style.display = "none";
+            updateProgress("Pipeline complete!");
+            setStatus("Ready", "");
+            setTimeout(hideProgress, 2000);
             return;
           }
         }
@@ -2258,7 +2307,7 @@ async function _sendCurveUpdate() {
   }
 
   // Also fire a background server update so the STL stays in sync
-  // for download / slicing.  We don't wait for it or block the UI.
+  // for download / slicing.  Poll for the recompiled STL.
   fetch("/api/update_curve", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2268,6 +2317,15 @@ async function _sendCurveUpdate() {
       bottom_curve_length: _bottomCurveLength,
       bottom_curve_height: _bottomCurveHeight,
     }),
+  }).then(resp => {
+    if (resp.ok) {
+      updateProgress("Compiling STL models...");
+      if (modelLabel) {
+        modelLabel.textContent = "Recompiling 3D model…";
+        modelLabel.style.display = "";
+      }
+      _pollForUpdatedModel(latestModelName || "print_plate");
+    }
   }).catch(err => console.warn("Background curve STL update:", err));
 }
 
@@ -2373,6 +2431,10 @@ sendBtn.addEventListener("click", async () => {
             break;
 
           case "shell_preview":
+            if (realignActive || _realignApplied) {
+              logDebug("Ignoring shell_preview event (realign active/applied)");
+              break;
+            }
             buildShellPreview(ev);
             _fetchShellHeight().then(() => {
               showCurveEditor(
@@ -2398,6 +2460,10 @@ sendBtn.addEventListener("click", async () => {
             break;
 
           case "model":
+            if (realignActive || _realignApplied) {
+              logDebug("Ignoring model event (realign active/applied)");
+              break;
+            }
             latestModelName = ev.name;
             loadModel(`/api/model/${ev.name}?t=${Date.now()}`);
             // Show curve editor when model loads; use model's curve params if available

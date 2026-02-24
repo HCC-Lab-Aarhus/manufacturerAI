@@ -5,7 +5,11 @@ TypeScript PCB Router Bridge — calls the TS CLI and returns routing results.
 from __future__ import annotations
 import json
 import logging
+import os
+import signal
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 from src.config.hardware import hw
@@ -88,11 +92,31 @@ def _find_or_build_cli() -> Path:
     return cli
 
 
+def _kill_proc_tree(pid: int) -> None:
+    """Kill a process and all its children.
+
+    Needed on Windows because ``shell=True`` starts ``cmd.exe`` and
+    ``proc.kill()`` only kills cmd — the child node.exe keeps running.
+    """
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(pid)],
+            capture_output=True,
+            shell=True,
+        )
+    else:
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
 def route_traces(
     pcb_layout: dict,
     output_dir: Path,
     *,
     max_attempts: int | None = None,
+    cancel: threading.Event | None = None,
 ) -> dict:
     """
     Route traces via the TypeScript A* router CLI.
@@ -103,6 +127,8 @@ def route_traces(
         When set, limits the total rip-up/reroute attempts in the TS
         router.  Use a low value (e.g. 8) for fast screening of multiple
         placement candidates, and *None* (default → 25) for thorough routing.
+    cancel : threading.Event, optional
+        If set, the subprocess is killed and a ``RouterError`` is raised.
 
     Returns dict with 'success', 'traces', 'failed_nets'.
     """
@@ -120,28 +146,66 @@ def route_traces(
 
     cli = _find_or_build_cli()
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             ["node", str(cli), "--output", str(output_dir / "pcb")],
             cwd=_PCB_DIR,
-            input=json.dumps(router_input),
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            check=False,
             shell=True,
         )
+        # Feed input and close stdin
+        proc.stdin.write(json.dumps(router_input))
+        proc.stdin.close()
+
+        # Read pipes in background threads to prevent deadlock.
+        # (Node outputs 50-70 KB JSON; Windows pipe buffer is ~4 KB.
+        # Without draining, node blocks and the poll loop waits forever.)
+        stdout_buf: list[str] = []
+        stderr_buf: list[str] = []
+
+        def _drain_stdout():
+            stdout_buf.append(proc.stdout.read())
+
+        def _drain_stderr():
+            stderr_buf.append(proc.stderr.read())
+
+        t_out = threading.Thread(target=_drain_stdout, daemon=True)
+        t_err = threading.Thread(target=_drain_stderr, daemon=True)
+        t_out.start()
+        t_err.start()
+
+        # Poll with cancel support (check every 0.25 s)
+        while proc.poll() is None:
+            if cancel is not None and cancel.is_set():
+                _kill_proc_tree(proc.pid)
+                proc.wait(timeout=5)
+                t_out.join(timeout=2)
+                t_err.join(timeout=2)
+                raise RouterError("Routing cancelled.")
+            time.sleep(0.25)
+
+        t_out.join(timeout=10)
+        t_err.join(timeout=10)
+
+        stdout = stdout_buf[0] if stdout_buf else ""
+        stderr = stderr_buf[0] if stderr_buf else ""
+        proc.stdout.close()
+        proc.stderr.close()
     except FileNotFoundError:
         raise RouterError("Node.js not found.")
 
-    (output_dir / "ts_router_stdout.txt").write_text(result.stdout or "", encoding="utf-8")
-    (output_dir / "ts_router_stderr.txt").write_text(result.stderr or "", encoding="utf-8")
+    (output_dir / "ts_router_stdout.txt").write_text(stdout or "", encoding="utf-8")
+    (output_dir / "ts_router_stderr.txt").write_text(stderr or "", encoding="utf-8")
 
-    if not result.stdout.strip():
-        raise RouterError(f"Router produced no output. stderr: {result.stderr}")
+    if not (stdout or "").strip():
+        raise RouterError(f"Router produced no output. stderr: {stderr}")
 
     try:
-        parsed = json.loads(result.stdout)
+        parsed = json.loads(stdout)
     except json.JSONDecodeError as e:
-        raise RouterError(f"Failed to parse router output: {e}\n{result.stdout[:500]}")
+        raise RouterError(f"Failed to parse router output: {e}\n{(stdout or '')[:500]}")
 
     (output_dir / "ts_router_result.json").write_text(
         json.dumps(parsed, indent=2), encoding="utf-8"
