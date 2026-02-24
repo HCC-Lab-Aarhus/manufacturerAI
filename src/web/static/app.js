@@ -683,7 +683,7 @@ async function applyRealignedLayout(layout) {
     // Load updated debug image and switch to debug tab so user sees it
     if (result.has_debug_image) {
       debugImage.src = `/api/images/pcb_debug?t=${Date.now()}`;
-      negativeImage.src = `/api/images/negative?t=${Date.now()}`;
+      negativeImage.src = `/api/images/pcb_negative?t=${Date.now()}`;
       debugImage.style.display = "block";
       if (debugLabel) debugLabel.style.display = "none";
       debugImageSelect.value = "debug";
@@ -2389,7 +2389,7 @@ sendBtn.addEventListener("click", async () => {
               break;
             }
             debugImage.src = `/api/images/${ev.label}?t=${Date.now()}`;
-            negativeImage.src = `/api/images/negative?t=${Date.now()}`;
+            negativeImage.src = `/api/images/pcb_negative?t=${Date.now()}`;
             // Show debug image, hide label
             debugImage.style.display = "";
             if (debugLabel) debugLabel.style.display = "none";

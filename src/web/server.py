@@ -254,10 +254,7 @@ def update_layout(req: LayoutUpdateRequest):
         )
 
     # Always check for debug image (router generates it even on partial failure)
-    has_debug_image = (
-        (_run_dir / "pcb" / "pcb_debug.png").exists()
-        or (_run_dir / "pcb_debug.png").exists()
-    )
+    has_debug_image = (_run_dir / "pcb_debug.png").exists()
 
     # ── Rebuild SCAD + STL in background (compile takes minutes) ───
     outline = layout.get("board", {}).get("outline_polygon", [])
@@ -467,24 +464,23 @@ def download_model(name: str):
 
 @app.get("/api/images/{name}")
 def get_image(name: str):
-    """Serve a debug image from the current session."""
+    """Serve a PNG image from the current run directory.
+
+    Files are always flat in the run dir (e.g. pcb_debug.png,
+    pcb_negative.png).  The client must request the exact stem.
+    """
     if _run_dir is None:
         raise HTTPException(404, "No run yet.")
 
-    for candidate in [
-        _run_dir / "pcb" / f"{name}.png",
-        _run_dir / f"{name}.png",
-        _run_dir / "pcb" / f"pcb_{name}.png",
-        _run_dir / f"pcb_{name}.png",
-    ]:
-        if candidate.exists():
-            return FileResponse(
-                candidate,
-                media_type="image/png",
-                headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-            )
+    img = _run_dir / f"{name}.png"
+    if not img.exists():
+        raise HTTPException(404, f"Image {name}.png not found.")
 
-    raise HTTPException(404, f"Image {name} not found.")
+    return FileResponse(
+        img,
+        media_type="image/png",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 @app.get("/api/outputs/{run_id}/{path:path}")
