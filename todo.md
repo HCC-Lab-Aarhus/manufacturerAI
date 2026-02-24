@@ -61,7 +61,7 @@ Negative PNG has to be 1536x1383 pixels.
 
 DONE It needs to ask for certain things when you send a prompt, it needs to know how big do you want the remote, what shape, how many buttons, and where should the buttons be placed. 
 
-LIFT THE HOLES make it a bread board
+LIFT THE HOLES or make canals for traceing make it a bread board
 
 
 # Long term
