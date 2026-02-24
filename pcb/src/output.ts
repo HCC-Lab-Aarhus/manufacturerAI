@@ -187,8 +187,9 @@ export class OutputGenerator {
   }
 
   private worldToPixel(worldX: number, worldY: number, width: number, height: number): { px: number; py: number } {
-    const mmPerInch = 25.4
-    const px = Math.floor((worldX / this.board.boardWidth) * width)
+    // Flip both X and Y so mask orientation matches the debug image
+    // (the debug image applies a 180° rotation which flips both axes)
+    const px = Math.floor((1 - worldX / this.board.boardWidth) * width)
     const py = Math.floor((1 - worldY / this.board.boardHeight) * height)
     return { px, py }
   }

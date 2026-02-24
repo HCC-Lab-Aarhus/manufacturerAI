@@ -323,11 +323,13 @@ def update_layout(req: LayoutUpdateRequest):
 
     # ── Re-route traces (synchronous — fast) ───────────────────────
     routing = {}
+    routing_ok = False
     try:
         routing = _route_traces(layout, _run_dir)
         (_run_dir / "routing_result.json").write_text(
             json.dumps(routing, indent=2), encoding="utf-8"
         )
+        routing_ok = routing.get("success", False)
     except (RouterError, Exception) as exc:
         _bm_log.warning("Re-route after realign failed: %s", exc, exc_info=True)
 
@@ -362,8 +364,16 @@ def update_layout(req: LayoutUpdateRequest):
         ],
     }
 
-    # ── Rebuild SCAD + STL in background (pipeline "build" step) ───
-    _build.start_background(_run_dir, start_from="build", stop_after="build")
+    # ── Only rebuild STL if routing succeeded ──────────────────────
+    failed_nets = []
+    if routing_ok:
+        _build.start_background(_run_dir, start_from="build", stop_after="build")
+    else:
+        failed_nets = [
+            f.get("netName", str(f)) if isinstance(f, dict) else str(f)
+            for f in routing.get("failed_nets", [])
+        ]
+        _bm_log.warning("Skipping STL build — routing failed (%d failed nets)", len(failed_nets))
 
     model_name = (
         "print_plate" if (_run_dir / "print_plate.stl").exists()
@@ -375,7 +385,9 @@ def update_layout(req: LayoutUpdateRequest):
         "layout": layout,
         "model_name": model_name,
         "has_debug_image": has_debug_image,
-        "stl_rebuilding": True,
+        "stl_rebuilding": routing_ok,
+        "routing_ok": routing_ok,
+        "failed_nets": failed_nets,
         "shell_preview": shell_preview,
     }
 

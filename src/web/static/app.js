@@ -720,6 +720,20 @@ async function applyRealignedLayout(layout) {
         modelLabel.style.display = "";
       }
       _pollForUpdatedModel(result.model_name || "print_plate");
+    } else if (result.routing_ok === false) {
+      // Routing failed — tell the user, don't build STL
+      const nets = (result.failed_nets || []).join(", ");
+      const msg = nets
+        ? `Routing failed — could not route: ${nets}. Try moving components further apart.`
+        : "Routing failed — traces could not be connected. Try moving components further apart.";
+      updateProgress("Routing failed");
+      setStatus("Error", "error");
+      if (modelLabel) {
+        modelLabel.textContent = msg;
+        modelLabel.style.display = "";
+      }
+      addMessage("system", msg);
+      setTimeout(hideProgress, 3000);
     } else {
       // No STL rebuild needed — we're done
       updateProgress("Pipeline complete!");
@@ -1164,7 +1178,7 @@ const imageDragStates = {
 };
 
 function applyImageTransform(img, zoom, dragState) {
-  img.style.transform = `scaleX(${zoom}) scaleY(${-zoom}) translate(${dragState.translateX / zoom}px, ${dragState.translateY / zoom}px)`;
+  img.style.transform = `scale(${zoom}) translate(${dragState.translateX / zoom}px, ${dragState.translateY / zoom}px)`;
   img.style.transformOrigin = "center center";
 }
 
