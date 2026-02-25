@@ -310,6 +310,20 @@ function renderOutlineWithComponents(layout) {
       rect.setAttribute("stroke", colors.stroke);
       rect.setAttribute("stroke-width", sw);
       outlineSvg.appendChild(rect);
+
+      // If this is a custom-shaped button, also draw the shape outline
+      if (comp.shape_outline && comp.shape_outline.length >= 3) {
+        const shapePts = comp.shape_outline
+          .map(([sx, sy]) => `${cx + sx},${cy + (-sy)}`)
+          .join(" ");
+        const shapePoly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+        shapePoly.setAttribute("points", shapePts);
+        shapePoly.setAttribute("fill", "none");
+        shapePoly.setAttribute("stroke", colors.stroke);
+        shapePoly.setAttribute("stroke-width", sw * 1.5);
+        shapePoly.setAttribute("stroke-dasharray", `${sw * 3},${sw * 2}`);
+        outlineSvg.appendChild(shapePoly);
+      }
     } else if (ko.type === "circle") {
       const r = ko.radius_mm;
       const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
@@ -828,12 +842,17 @@ function buildShellPreview(data) {
   const group = new THREE.Group();
 
   // ── Cutout geometry from components ──────────────────────
-  // Button holes: 13mm diameter circle, from z = (h - 8.3) to top
+  // Button holes: 13mm diameter circle (default) or custom shape polygon
   const BUTTON_HOLE_R = 6.5;
   const BUTTON_CAP_DEPTH = 8.3;
+  const BUTTON_HOLE_CLR = 0.3;  // clearance for custom shapes
   const buttonHoles = components
     .filter(c => c.type === "button")
-    .map(c => ({ cx: c.center[0], cy: c.center[1] }));
+    .map(c => ({
+      cx: c.center[0],
+      cy: c.center[1],
+      shape_outline: c.shape_outline || null,
+    }));
 
   // Battery opening: centre through-hole (20mm × bat_h), from z = 0 to 3mm
   const BATTERY_LEDGE = 2.5;
@@ -870,6 +889,22 @@ function buildShellPreview(data) {
     return path;
   }
 
+  // Helper: create a polygon THREE.Path from a shape_outline + offset
+  function polyHole(cx, cy, verts, clr) {
+    clr = clr || 0;
+    const path = new THREE.Path();
+    // Simple outward offset: scale vertices by (dist+clr)/dist from centroid
+    const pts = verts.map(([x, y]) => {
+      const d = Math.sqrt(x * x + y * y);
+      const f = d > 0.01 ? (d + clr) / d : 1;
+      return [cx + x * f, cy + y * f];
+    });
+    path.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) path.lineTo(pts[i][0], pts[i][1]);
+    path.closePath();
+    return path;
+  }
+
   // Helper: create THREE.Shape from polygon vertices (inset by `inset` mm)
   // Optionally punches button/battery holes into the shape.
   function makeShape(pts, inset, opts) {
@@ -891,10 +926,14 @@ function buildShellPreview(data) {
     for (let i = 1; i < usePts.length; i++) s.lineTo(usePts[i][0], usePts[i][1]);
     s.closePath();
 
-    // Punch button holes
+    // Punch button holes (custom polygon or default circle)
     if (opts.buttons) {
       for (const b of buttonHoles) {
-        s.holes.push(circleHole(b.cx, b.cy, BUTTON_HOLE_R - inset * 0.3));
+        if (b.shape_outline && b.shape_outline.length >= 3) {
+          s.holes.push(polyHole(b.cx, b.cy, b.shape_outline, BUTTON_HOLE_CLR));
+        } else {
+          s.holes.push(circleHole(b.cx, b.cy, BUTTON_HOLE_R - inset * 0.3));
+        }
       }
     }
     // Punch battery through-hole

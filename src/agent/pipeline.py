@@ -36,6 +36,7 @@ from src.pcb.routability import score_placement, detect_crossings, format_feedba
 from src.scad.shell import (
     generate_enclosure_scad,
     generate_battery_hatch_scad,
+    generate_button_cap_scad,
     generate_print_plate_scad,
     DEFAULT_HEIGHT_MM,
 )
@@ -191,16 +192,18 @@ def _step_validate(run_dir: Path, emit: EmitFn, cancel: threading.Event | None) 
         return b.get("id", f"Button {i + 1}")
 
     # Normalize button format (preserve function field)
-    bpos = [
-        {
+    bpos = []
+    for i, b in enumerate(buttons):
+        entry = {
             "id": b.get("id", f"btn_{i}"),
             "label": _button_label(b, i),
             "x": b["x"],
             "y": b["y"],
             "function": b.get("function", ""),
         }
-        for i, b in enumerate(buttons)
-    ]
+        if b.get("shape_outline"):
+            entry["shape_outline"] = b["shape_outline"]
+        bpos.append(entry)
 
     # Normalize outline (smooth, shift to origin, parametric shapes)
     outline, bpos = _normalize_outline(outline, bpos, outline_type=outline_type)
@@ -406,6 +409,7 @@ def _step_build(run_dir: Path, emit: EmitFn, cancel: threading.Event | None) -> 
         return {"status": "error", "step": "build", "message": "No outline in layout."}
 
     # ── Generate SCAD ──────────────────────────────────────────────
+    button_cap_names: list[str] = []   # e.g. ["button_btn_1", ...]
     try:
         cutouts = build_cutouts(layout, routing)
         log.info("Built %d cutouts for shell subtraction", len(cutouts))
@@ -423,7 +427,26 @@ def _step_build(run_dir: Path, emit: EmitFn, cancel: threading.Event | None) -> 
         hatch_scad = generate_battery_hatch_scad()
         (run_dir / "battery_hatch.scad").write_text(hatch_scad, encoding="utf-8")
 
-        plate_scad = generate_print_plate_scad()
+        # Generate custom button cap SCADs
+        for comp in layout.get("components", []):
+            if comp.get("type") != "button":
+                continue
+            shape_outline = comp.get("shape_outline")
+            if not shape_outline or len(shape_outline) < 3:
+                continue
+            btn_id = comp["id"]
+            cap_name = f"button_{btn_id}"
+            cap_scad = generate_button_cap_scad(
+                button_id=btn_id,
+                shape_outline=shape_outline,
+            )
+            (run_dir / f"{cap_name}.scad").write_text(cap_scad, encoding="utf-8")
+            button_cap_names.append(cap_name)
+            log.info("Generated button cap SCAD: %s", cap_name)
+
+        plate_scad = generate_print_plate_scad(
+            button_caps=[f"{n}.stl" for n in button_cap_names] or None,
+        )
         (run_dir / "print_plate.scad").write_text(plate_scad, encoding="utf-8")
     except Exception as e:
         log.exception("SCAD generation failed")
@@ -443,7 +466,7 @@ def _step_build(run_dir: Path, emit: EmitFn, cancel: threading.Event | None) -> 
     stl_files: dict[str, str] = {}
     all_ok = True
 
-    for name in ("enclosure", "battery_hatch"):
+    for name in ("enclosure", "battery_hatch", *button_cap_names):
         scad_p = run_dir / f"{name}.scad"
         if not scad_p.exists():
             continue
@@ -461,16 +484,20 @@ def _step_build(run_dir: Path, emit: EmitFn, cancel: threading.Event | None) -> 
 
         _check(cancel)
 
-    # Merge enclosure + hatch into print_plate
-    if "enclosure" in stl_files and "battery_hatch" in stl_files:
+    # Merge enclosure + hatch + button caps into print_plate
+    merge_parts: list[tuple] = []
+    if "enclosure" in stl_files:
+        merge_parts.append((Path(stl_files["enclosure"]), (0.0, 0.0, 0.0)))
+    if "battery_hatch" in stl_files:
+        merge_parts.append((Path(stl_files["battery_hatch"]), (80.0, 0.0, 0.0)))
+    for i, cap_name in enumerate(button_cap_names):
+        if cap_name in stl_files:
+            x_off = 120.0 + i * 25.0
+            merge_parts.append((Path(stl_files[cap_name]), (x_off, 0.0, 0.0)))
+
+    if len(merge_parts) >= 2:
         plate_stl = run_dir / "print_plate.stl"
-        merged = merge_stl_files(
-            [
-                (Path(stl_files["enclosure"]), (0.0, 0.0, 0.0)),
-                (Path(stl_files["battery_hatch"]), (80.0, 0.0, 0.0)),
-            ],
-            plate_stl,
-        )
+        merged = merge_stl_files(merge_parts, plate_stl)
         if merged and plate_stl.exists():
             stl_files["print_plate"] = str(plate_stl)
 
@@ -602,12 +629,15 @@ def _emit_shell_preview(
     """Emit shell_preview event for client-side 3-D preview."""
     comps = []
     for c in layout.get("components", []):
-        comps.append({
+        comp_data = {
             "type": c.get("type"),
             "center": c["center"],
             "body_width_mm": c.get("body_width_mm", 0),
             "body_height_mm": c.get("body_height_mm", 0),
-        })
+        }
+        if c.get("shape_outline"):
+            comp_data["shape_outline"] = c["shape_outline"]
+        comps.append(comp_data)
     emit("shell_preview", {
         "outline": outline,
         "height_mm": DEFAULT_HEIGHT_MM,

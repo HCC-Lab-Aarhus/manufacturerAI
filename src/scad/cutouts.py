@@ -53,6 +53,37 @@ def _circle_poly(cx: float, cy: float, r: float, n: int = 16) -> list[list[float
     ]
 
 
+def _offset_polygon(
+    shape: list[list[float]],
+    offset: float,
+    cx: float = 0.0,
+    cy: float = 0.0,
+) -> list[list[float]]:
+    """Offset a polygon outward by *offset* mm using Shapely, then translate.
+
+    *shape* is centered at origin. The result is translated to *(cx, cy)*.
+    Falls back to a simple scale if Shapely buffer produces unexpected geometry.
+    """
+    from shapely.geometry import Polygon as _SPoly
+    try:
+        poly = _SPoly(shape)
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+        buffered = poly.buffer(offset, join_style=2)  # mitre join
+        if buffered.is_empty:
+            return [[x + cx, y + cy] for x, y in shape]
+        # Take the exterior of the (possibly multi) polygon
+        exterior = (
+            buffered.exterior if hasattr(buffered, "exterior")
+            else list(buffered.geoms)[0].exterior
+        )
+        coords = list(exterior.coords)[:-1]  # drop closing duplicate
+        return [[x + cx, y + cy] for x, y in coords]
+    except Exception:
+        # Fallback: naive uniform scale from centroid
+        return [[x + cx, y + cy] for x, y in shape]
+
+
 def _simplify_path(path: list[dict]) -> list[dict]:
     """Collapse grid-step path into corners only."""
     if len(path) <= 2:
@@ -134,13 +165,23 @@ def build_cutouts(
         keepout = comp.get("keepout", {})
 
         if ctype == "button":
-            # a) Circular cylinder for button cap press-fit (8.3 mm deep from top)
-            #    Extend 0.5 mm ABOVE shell top to ensure a clean boolean cut
-            #    through the rounded fillet surface.
-            cap_d = hw.button["min_hole_diameter_mm"]
+            shape_outline = comp.get("shape_outline")
             cap_depth = 8.3
             overshoot = 0.5
-            cap_poly = _circle_poly(cx, cy, cap_d / 2)
+
+            if shape_outline and len(shape_outline) >= 3:
+                # Custom shape — offset polygon by hole_clearance and translate
+                # to button center. Shape vertices are relative to (0,0).
+                clr = hw.button_cap.get("hole_clearance_mm", 0.3)
+                cap_poly = _offset_polygon(shape_outline, clr, cx, cy)
+            else:
+                # Default circular cap hole — 13mm Ø
+                cap_d = hw.button["min_hole_diameter_mm"]
+                cap_poly = _circle_poly(cx, cy, cap_d / 2)
+
+            # a) Cap hole from top (8.3 mm deep from top)
+            #    Extend 0.5 mm ABOVE shell top to ensure a clean boolean cut
+            #    through the rounded fillet surface.
             cuts.append(Cutout(
                 polygon=cap_poly,
                 depth=cap_depth + overshoot,

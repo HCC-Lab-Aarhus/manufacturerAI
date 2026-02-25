@@ -100,12 +100,32 @@ _TOOL_DECLARATIONS = [
                                     "'ch1', 'ch2', 'ch3', 'ch4', 'ch5', 'brand'."
                                 ),
                             ),
+                            "shape_outline": genai.protos.Schema(
+                                type=genai.protos.Type.ARRAY,
+                                items=genai.protos.Schema(
+                                    type=genai.protos.Type.ARRAY,
+                                    items=genai.protos.Schema(type=genai.protos.Type.NUMBER),
+                                ),
+                                description=(
+                                    "Optional custom button shape as a polygon of "
+                                    "[x, y] vertices in mm, centered at (0,0), CCW winding. "
+                                    "The button cap and shell hole will match this shape. "
+                                    "If omitted, a standard round 9mm cap is used.\n"
+                                    "Copy-paste shapes:\n"
+                                    "Plus: [[-2,-6],[2,-6],[2,-2],[6,-2],[6,2],[2,2],[2,6],[-2,6],[-2,2],[-6,2],[-6,-2],[-2,-2]]\n"
+                                    "Minus: [[-6,-2],[6,-2],[6,2],[-6,2]]\n"
+                                    "Circle: [[5,0],[3.54,3.54],[0,5],[-3.54,3.54],[-5,0],[-3.54,-3.54],[0,-5],[3.54,-3.54]]\n"
+                                    "Square: [[-5,-5],[5,-5],[5,5],[-5,5]]\n"
+                                    "All vertices must be centered at (0,0)."
+                                ),
+                            ),
                         },
                         required=["id", "x", "y", "function"],
                     ),
                     description=(
                         "Button positions with id, label, x (mm), y (mm), "
-                        "and function (what IR command the button sends)."
+                        "function (what IR command the button sends), and "
+                        "optional shape_outline for custom button shapes."
                     ),
                 ),
                 "top_curve_length": genai.protos.Schema(
@@ -240,6 +260,41 @@ def run_turn(
         is_empty = isinstance(response, _EmptyResponse)
         function_calls = _extract_function_calls(response)
         text = _extract_text(response)
+
+        # ── Check for MALFORMED_FUNCTION_CALL after retries exhausted ──
+        _malformed = False
+        for cand in getattr(response, 'candidates', []) or []:
+            fr = getattr(cand, 'finish_reason', None)
+            fr_name = getattr(fr, 'name', str(fr))
+            if fr_name == 'MALFORMED_FUNCTION_CALL':
+                _malformed = True
+                break
+        if _malformed and not function_calls:
+            # Model tried to call a tool but emitted bad JSON.
+            # Nudge it to try again with clean formatting.
+            empty_retries += 1
+            if empty_retries > 3:
+                log.warning("Repeated MALFORMED_FUNCTION_CALL, stopping.")
+                emit("error", {"message": (
+                    "The AI model produced an invalid function call. "
+                    "Please try again."
+                )})
+                break
+            log.info("MALFORMED_FUNCTION_CALL — nudging model to retry...")
+            try:
+                response = _safe_send(
+                    chat,
+                    ("Your previous function call was malformed (invalid JSON). "
+                     "Please try again — call submit_design with the same "
+                     "values, but make sure all JSON arrays and objects are "
+                     "properly closed."),
+                )
+                api_log.next_turn()
+            except Exception as e:
+                api_log.log("error", message=str(e))
+                emit("error", {"message": f"Gemini API error: {e}"})
+                break
+            continue
 
         # ── Case 1: empty response (SDK IndexError / no candidates) ──
         if is_empty and not function_calls and not text:
@@ -426,6 +481,7 @@ def _safe_send(chat, message, _max_retries: int = 3):
     """
     Wrapper around chat.send_message that:
     - catches the SDK's IndexError when the model returns empty candidates
+    - retries on MALFORMED_FUNCTION_CALL (model emitted bad JSON for a tool)
     - retries on 429 (rate-limit) errors with exponential backoff
     """
     for attempt in range(_max_retries + 1):
@@ -433,20 +489,54 @@ def _safe_send(chat, message, _max_retries: int = 3):
             resp = chat.send_message(message)
             log.debug("Model response: candidates=%d",
                       len(getattr(resp, 'candidates', []) or []))
-            return resp
+
+            # Check for MALFORMED_FUNCTION_CALL finish_reason on the
+            # candidate itself (the SDK doesn't always raise).
+            for cand in getattr(resp, 'candidates', []) or []:
+                fr = getattr(cand, 'finish_reason', None)
+                # finish_reason enum: 1=STOP, 6=MALFORMED_FUNCTION_CALL
+                fr_val = fr if isinstance(fr, int) else getattr(fr, 'value', fr)
+                fr_name = getattr(fr, 'name', str(fr))
+                if fr_name == 'MALFORMED_FUNCTION_CALL' or fr_val == 6:
+                    if attempt < _max_retries:
+                        log.warning(
+                            "MALFORMED_FUNCTION_CALL — retrying (%d/%d)...",
+                            attempt + 1, _max_retries,
+                        )
+                        time.sleep(1)
+                        break  # break inner for, continue outer
+                    else:
+                        log.warning("MALFORMED_FUNCTION_CALL — exhausted retries.")
+                        return resp  # let caller handle gracefully
+            else:
+                # No malformed finish_reason on any candidate — good.
+                return resp
+            # `break` from inner for-loop landed here; continue retry.
+            continue
+
         except IndexError:
             log.warning("Model returned empty candidates (IndexError). "
                         "Will retry with nudge.")
             return _EmptyResponse()
         except Exception as e:
             err_str = str(e)
+            # Catch MALFORMED_FUNCTION_CALL raised as an exception
+            if "MALFORMED_FUNCTION_CALL" in err_str and attempt < _max_retries:
+                log.warning(
+                    "MALFORMED_FUNCTION_CALL exception — retrying (%d/%d)...",
+                    attempt + 1, _max_retries,
+                )
+                time.sleep(1)
+                continue
             if "429" in err_str and attempt < _max_retries:
                 wait = 2 ** attempt  # 1s, 2s, 4s
                 log.warning("Rate-limited (429), retrying in %ds (attempt %d/%d)...",
                             wait, attempt + 1, _max_retries)
                 time.sleep(wait)
                 continue
-            raise  # non-429 error or exhausted retries
+            raise  # non-retryable error or exhausted retries
+    # Exhausted all retries — return empty sentinel so loop can nudge.
+    return _EmptyResponse()
 
 
 def _proto_to_dict(proto_struct) -> dict:

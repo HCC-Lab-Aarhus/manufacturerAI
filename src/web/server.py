@@ -359,6 +359,9 @@ def update_layout(req: LayoutUpdateRequest):
                 "center": c["center"],
                 "body_width_mm": c.get("body_width_mm", 0),
                 "body_height_mm": c.get("body_height_mm", 0),
+                **({
+                    "shape_outline": c["shape_outline"]
+                } if c.get("shape_outline") else {}),
             }
             for c in layout.get("components", [])
         ],

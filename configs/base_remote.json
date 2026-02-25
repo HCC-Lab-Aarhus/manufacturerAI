@@ -56,6 +56,20 @@
     "pinhole_taper_depth_mm": 0.5
   },
 
+  "button_cap": {
+    "cap_thickness_mm": 2.0,
+    "stem_width_mm": 3.0,
+    "stem_height_mm": 5.3,
+    "clip_thickness_mm": 0.8,
+    "clip_width_mm": 2.0,
+    "switch_head_top_mm": 1.5,
+    "switch_head_bottom_mm": 1.2,
+    "switch_head_top_height_mm": 1.0,
+    "switch_head_bottom_height_mm": 1.0,
+    "clip_clearance_mm": 0.2,
+    "hole_clearance_mm": 0.3
+  },
+
   "enclosure": {
     "wall_thickness_mm": 1.6,
     "bottom_thickness_mm": 3.0,
