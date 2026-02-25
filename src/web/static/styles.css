@@ -15,6 +15,68 @@
   --border:  #1f2937;
 }
 
+/* ── Light Mode ────────────────────────────────────────────────── */
+
+:root.light {
+  color-scheme: light;
+  --bg:      #f3f4f6;
+  --panel:   #ffffff;
+  --panel-2: #f9fafb;
+  --text:    #1f2937;
+  --muted:   #6b7280;
+  --accent:  #2563eb;
+  --green:   #16a34a;
+  --red:     #dc2626;
+  --border:  #e5e7eb;
+}
+
+/* ── Theme Toggle Button ───────────────────────────────────────── */
+
+.theme-toggle {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 9999;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.theme-toggle:hover {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.theme-icon {
+  transition: opacity 0.2s ease, transform 0.3s ease;
+}
+
+.theme-icon.sun {
+  display: none;
+}
+
+.theme-icon.moon {
+  display: block;
+}
+
+:root.light .theme-icon.sun {
+  display: block;
+}
+
+:root.light .theme-icon.moon {
+  display: none;
+}
+
 body {
   margin: 0;
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -1059,11 +1121,18 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   margin-bottom: 8px;
 }
 
-.guide-content p {
+.guide-content p,
+.guide-body-text {
   color: var(--muted);
   font-size: 16px;
   text-align: left;
   max-width: 500px;
+}
+
+.guide-body-text strong {
+  color: var(--text);
+  display: block;
+  margin-bottom: 8px;
 }
 
 .guide-subtitle {
@@ -1090,6 +1159,212 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   padding-top: 16px;
   color: #6b7280;
   font-size: 0.85em;
+}
+
+/* ── Guide Section Navigation ────────────────────────────────── */
+
+.guide-section-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #0f1729;
+  border-radius: 10px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.section-nav-label {
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.section-nav-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.section-nav-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #1f2937;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.section-nav-btn:hover {
+  background: #374151;
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.section-nav-btn.active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+/* ── Manual Sliding Sidebar ─────────────────────────────────────── */
+
+.manual-sidebar-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 115;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.manual-sidebar-overlay.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.manual-sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 280px;
+  height: 100%;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  z-index: 120;
+  transform: translateX(-100%);
+  transition: transform 0.3s ease;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.3);
+}
+
+.manual-sidebar.open {
+  transform: translateX(0);
+}
+
+.manual-sidebar-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+
+.manual-sidebar-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.manual-sidebar-header h3::before {
+  content: "";
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="%239ca3af" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>') no-repeat center;
+}
+
+.manual-sidebar-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.manual-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  margin-bottom: 4px;
+}
+
+.manual-nav-item:hover {
+  background: #1f2937;
+  color: var(--text);
+}
+
+.manual-nav-item.active {
+  background: var(--accent);
+  color: white;
+}
+
+.manual-nav-item.active .manual-nav-icon svg {
+  stroke: white;
+}
+
+.manual-nav-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.manual-nav-icon svg {
+  stroke: var(--muted);
+}
+
+.manual-nav-item:hover .manual-nav-icon svg {
+  stroke: var(--text);
+}
+
+.manual-nav-label {
+  flex: 1;
+}
+
+.manual-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #1f2937;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.manual-toggle-btn:hover {
+  background: #374151;
+  border-color: var(--accent);
+}
+
+.manual-toggle-btn.active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.manual-toggle-btn svg {
+  stroke: currentColor;
+}
+
+/* ── Placement component hover effect ───────────────────────────── */
+
+.placement-component:hover {
+  filter: brightness(1.2);
 }
 
 .guide-navigation {
@@ -1268,3 +1543,487 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .gcode-pause { color: #f85149; font-weight: bold; background: rgba(248, 81, 73, 0.1); display: block; padding: 2px 0; }
 .gcode-ink { color: #3fb950; background: rgba(63, 185, 80, 0.06); }
 .gcode-layer { color: #d2a8ff; }
+
+/* ── Component Placement View (Step-by-step guide) ─────────────── */
+
+.guide-placement-view {
+  width: 400px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.placement-view-header {
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+  background: #0f1729;
+}
+
+.placement-view-header h3 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.placement-view-content {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: #0b1120;
+  min-height: 300px;
+}
+
+.placement-view-content svg {
+  width: 100%;
+  height: 100%;
+  max-height: 350px;
+}
+
+.placement-view-legend {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 20px;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.legend-dot.current {
+  background: #3b82f6;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.6);
+}
+
+.legend-dot.other {
+  background: #4b5563;
+}
+
+/* Component list styles */
+.component-list {
+  list-style: none;
+  padding: 0;
+  margin: 16px 0;
+  text-align: left;
+  width: 100%;
+  max-width: 400px;
+}
+
+.component-list li {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  margin-bottom: 8px;
+  background: #1f2937;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.component-list li::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-right: 12px;
+}
+
+.component-list .component-name {
+  font-weight: 500;
+  color: var(--text);
+  flex: 1;
+}
+
+.component-list .component-type {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  background: #374151;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.component-list .component-count {
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(59, 130, 246, 0.15);
+  padding: 2px 10px;
+  border-radius: 4px;
+}
+
+/* ── Light Mode Overrides ────────────────────────────────────────── */
+
+:root.light .message.user {
+  background: #e5e7eb;
+}
+
+:root.light .message.assistant {
+  background: #f9fafb;
+  border-color: var(--border);
+}
+
+:root.light .message.progress-ring {
+  border-color: #d1d5db;
+}
+
+:root.light .message.thinking-bubble {
+  border-color: #d1d5db;
+}
+
+:root.light textarea,
+:root.light input[type="text"] {
+  background: #f9fafb;
+  color: var(--text);
+}
+
+:root.light .tab-btn {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+:root.light .tab-btn:hover:not(.active) {
+  background: #d1d5db;
+}
+
+:root.light .tab-btn.active {
+  background: var(--accent);
+  color: white;
+}
+
+:root.light .view-label {
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+}
+
+:root.light .printer-select {
+  background: #f9fafb;
+}
+
+:root.light .printer-select:hover {
+  background: #e5e7eb;
+}
+
+:root.light .geocode-btn {
+  background: #e5e7eb;
+}
+
+:root.light .geocode-btn:hover:not(:disabled) {
+  background: #d1d5db;
+}
+
+:root.light .guide-ask-btn:hover {
+  background: #1d4ed8;
+}
+
+:root.light .guide-nav-btn {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+:root.light .guide-nav-btn:hover {
+  background: #d1d5db;
+  color: #1f2937;
+}
+
+:root.light .section-nav-btn {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+:root.light .section-nav-btn:hover {
+  background: #d1d5db;
+  color: #1f2937;
+}
+
+:root.light .section-nav-btn.active {
+  background: var(--accent);
+  color: white;
+}
+
+/* Light mode Manual Sidebar */
+:root.light .manual-sidebar {
+  background: #f9fafb;
+  border-color: #d1d5db;
+}
+
+:root.light .manual-sidebar-header {
+  background: #f3f4f6;
+  border-color: #e5e7eb;
+}
+
+:root.light .manual-nav-item {
+  color: #4b5563;
+}
+
+:root.light .manual-nav-item:hover {
+  background: #e5e7eb;
+  color: #1f2937;
+}
+
+:root.light .manual-nav-item.active {
+  background: var(--accent);
+  color: white;
+}
+
+:root.light .manual-nav-icon svg {
+  stroke: #6b7280;
+}
+
+:root.light .manual-nav-item:hover .manual-nav-icon svg {
+  stroke: #374151;
+}
+
+:root.light .manual-toggle-btn {
+  background: #e5e7eb;
+  color: #374151;
+  border-color: #d1d5db;
+}
+
+:root.light .manual-toggle-btn:hover {
+  background: #d1d5db;
+  color: #1f2937;
+}
+
+:root.light .manual-toggle-btn.active {
+  background: var(--accent);
+  color: white;
+}
+
+:root.light .component-list li {
+  background: #f3f4f6;
+}
+
+:root.light .component-list .component-type {
+  background: #e5e7eb;
+}
+
+:root.light .guide-response {
+  background: #f3f4f6;
+}
+
+:root.light .placement-view-content {
+  background: #f3f4f6;
+}
+
+:root.light .placement-view-header {
+  background: #f9fafb;
+}
+
+:root.light .guide-section-nav {
+  background: #f9fafb;
+}
+
+:root.light .gcode-code-area {
+  background: #f9fafb;
+  color: #1f2937;
+}
+
+:root.light .gcode-pause-jump-btn {
+  background: #d1d5db;
+  color: #1f2937;
+}
+
+:root.light .gcode-pause-jump-btn:hover {
+  background: var(--accent);
+  color: white;
+}
+
+:root.light .gcode-tab {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+:root.light .gcode-tab.active {
+  background: var(--accent);
+  color: white;
+}
+
+:root.light .gcode-tab:hover:not(.active) {
+  background: #d1d5db;
+  color: #1f2937;
+}
+
+:root.light .gcode-preview-tabs {
+  background: #f9fafb;
+}
+
+:root.light .legend-dot.other {
+  background: #9ca3af;
+}
+
+/* Reset button */
+:root.light .reset-btn {
+  background: #f3f4f6;
+  border-color: var(--border);
+}
+
+:root.light .reset-btn:hover {
+  background: #fee2e2;
+}
+
+/* View tabs */
+:root.light .view-tabs {
+  background: #e5e7eb;
+}
+
+/* Curve editor (edge profile menu) */
+:root.light .curve-editor {
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
+}
+
+:root.light .curve-tab {
+  background: rgba(229, 231, 235, 0.5);
+  border-color: rgba(209, 213, 219, 0.5);
+}
+
+:root.light .curve-tab:hover {
+  background: #e5e7eb;
+}
+
+:root.light .curve-tab.active {
+  background: rgba(37, 99, 235, 0.1);
+}
+
+:root.light #curveCanvas {
+  background: rgba(249, 250, 251, 0.8);
+  border-color: var(--border);
+}
+
+/* Microphone button */
+:root.light .mic-btn {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+:root.light .mic-btn:hover {
+  background: #e5e7eb;
+  color: #1f2937;
+}
+
+/* Logo */
+:root.light .logo {
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
+}
+
+/* Debug image select */
+:root.light .debug-image-select {
+  background: rgba(37, 99, 235, 0.9);
+  color: white;
+}
+
+/* Geocode back button & step-by-step button */
+:root.light .geocode-back-btn,
+:root.light .step-by-step-btn {
+  background: #f3f4f6;
+  color: #1f2937;
+}
+
+:root.light .geocode-back-btn:hover {
+  background: #e5e7eb;
+}
+
+:root.light .step-by-step-btn:hover {
+  background: #dbeafe;
+}
+
+/* Guide header buttons */
+:root.light .back-to-design-btn,
+:root.light .back-to-gcode-btn,
+:root.light .toggle-question-btn {
+  background: #f3f4f6;
+  color: #1f2937;
+}
+
+:root.light .back-to-design-btn:hover,
+:root.light .back-to-gcode-btn:hover {
+  background: #e5e7eb;
+}
+
+:root.light .toggle-question-btn:hover {
+  background: #e5e7eb;
+}
+
+:root.light .toggle-question-btn.active {
+  background: var(--accent);
+  color: white;
+}
+
+/* View panel (outline, debug, 3D viewer container) */
+:root.light .view-panel {
+  background: #f9fafb;
+}
+
+:root.light .view-container {
+  background: var(--panel-2);
+}
+
+:root.light .realign-bar {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(37, 99, 235, 0.4);
+}
+
+/* View box buttons (reset view, zoom, realign) */
+:root.light .reset-view-btn {
+  background: rgba(255, 255, 255, 0.95);
+  color: #374151;
+  border: 1px solid var(--border);
+}
+
+:root.light .reset-view-btn:hover {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+:root.light .zoom-controls button,
+:root.light .zoom-controls .zoom-btn {
+  background: rgba(255, 255, 255, 0.95);
+  color: #374151;
+  border: 1px solid var(--border);
+}
+
+:root.light .zoom-controls button:hover,
+:root.light .zoom-controls .zoom-btn:hover {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+:root.light .realign-btn {
+  background: rgba(255, 255, 255, 0.95);
+  color: #374151;
+  border: 1px solid var(--border);
+}
+
+:root.light .realign-btn:hover {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+:root.light .realign-btn.active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}

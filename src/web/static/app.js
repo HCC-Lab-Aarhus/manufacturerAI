@@ -1,5 +1,24 @@
 /* ── ManufacturerAI — app.js ────────────────────────────────────── */
 
+// ── Theme Toggle (runs immediately) ───────────────────────────────
+(function initTheme() {
+  const savedTheme = localStorage.getItem("manufacturerAI-theme");
+  if (savedTheme === "light") {
+    document.documentElement.classList.add("light");
+  }
+})();
+
+const themeToggle = document.getElementById("themeToggle");
+if (themeToggle) {
+  themeToggle.addEventListener("click", () => {
+    document.documentElement.classList.toggle("light");
+    const isLight = document.documentElement.classList.contains("light");
+    localStorage.setItem("manufacturerAI-theme", isLight ? "light" : "dark");
+    // Dispatch custom event for theme change
+    window.dispatchEvent(new CustomEvent("themechange", { detail: { isLight } }));
+  });
+}
+
 const chatEl      = document.getElementById("chat");
 const promptInput = document.getElementById("promptInput");
 const sendBtn     = document.getElementById("sendBtn");
@@ -761,7 +780,14 @@ async function applyRealignedLayout(layout) {
 // ── Three.js setup ────────────────────────────────────────────────
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0b1120);
+function updateSceneBackground() {
+  const isLight = document.documentElement.classList.contains("light");
+  scene.background = new THREE.Color(isLight ? 0xf3f4f6 : 0x0b1120);
+}
+updateSceneBackground();
+
+// Listen for theme changes
+window.addEventListener("themechange", updateSceneBackground);
 
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 2000);
 camera.position.set(0, -140, 120);
@@ -1416,126 +1442,204 @@ stepByStepBtn.addEventListener("click", () => {
   const data = window._gcodeResult;
   
   const steps = [];
+  const sections = []; // Track section start indices for navigation
+  
   if (data && data.pause_points) {
     const pp = data.pause_points;
     const components = data.components || [];
     
-    // ── PAUSE 1: Ink Deposition ──────────────────────────────────
-    steps.push({
-      title: "Pause 1: Ink Deposition",
-      subtitle: "Overview",
-      body: `The printer will pause at layer ${pp.ink_layer_number} (Z = ${pp.ink_layer_z.toFixed(1)} mm).\n\n` +
-            `At this pause you need to apply conductive ink to create the circuit traces.`,
-      isPauseHeader: true,
-      pauseNumber: 1,
-    });
-    steps.push({
-      title: "Apply Conductive Ink",
-      subtitle: "Pause 1 — Step 1",
-      body: `Apply conductive ink along the trace channels carved into the floor surface.\n\n` +
-            `Important:\n` +
-            `• Follow the channel grooves carefully\n` +
-            `• Ensure continuous lines without gaps\n` +
-            `• Let the ink settle into the channels\n` +
-            `• The ink connects all component pin holes\n\n` +
-            `When done, press the knob on the printer to resume.`,
-      pauseNumber: 1,
-    });
+    // Store components globally for placement view
+    window._guideComponents = components;
     
-    // ── PAUSE 2: Component Insertion ─────────────────────────────
-    steps.push({
-      title: "Pause 2: Component Insertion",
-      subtitle: "Overview",
-      body: `The printer will pause at layer ${pp.component_layer_number} (Z = ${pp.component_insert_z.toFixed(1)} mm).\n\n` +
-            `At this pause you need to insert all electronic components into their pockets.`,
-      isPauseHeader: true,
-      pauseNumber: 2,
-    });
-    
-    // Add each component as a separate step
-    let componentStep = 1;
-    const totalComponents = components.length;
-    
+    // ── Group components by type ─────────────────────────────────
+    const grouped = {};
     for (const comp of components) {
-      const ctype = comp.type || "";
-      const cid = comp.id || comp.ref || ctype;
-      const rotation = comp.rotation_deg || 0;
-      const center = comp.center || [0, 0];
-      
-      let title = "";
-      let body = "";
-      
-      if (ctype === "button") {
-        title = `Insert Button: ${cid}`;
-        body = `Component: Tactile Push Button (12×12mm)\n` +
-               `Location: ${_describePosition(center)}\n\n` +
-               `Instructions:\n` +
-               `• Find the square pocket for this button\n` +
-               `• Orient the button so the pins align with the holes\n` +
-               `• Press firmly until the button sits flush\n` +
-               `• The button cap should protrude through the top hole`;
-      } else if (ctype === "battery") {
-        title = `Insert Battery Holder: ${cid}`;
-        body = `Component: Battery Compartment (${comp.footprint || "2xAAA"})\n` +
-               `Location: ${_describePosition(center)}\n\n` +
-               `Instructions:\n` +
-               `• Find the rectangular battery pocket\n` +
-               `• Insert the battery holder with contacts facing the correct direction\n` +
-               `• Ensure the spring contacts align with the pin holes\n` +
-               `• Note: Batteries are inserted after printing is complete`;
-      } else if (ctype === "controller") {
-        title = `Insert Microcontroller: ${cid}`;
-        const footprint = comp.footprint || "ATmega328P";
-        body = `Component: ${footprint} (DIP package)\n` +
-               `Location: ${_describePosition(center)}\n` +
-               `Rotation: ${rotation}°\n\n` +
-               `Instructions:\n` +
-               `• Find the rectangular DIP pocket with pin holes\n` +
-               `• IMPORTANT: Locate pin 1 marker (notch or dot on chip)\n` +
-               `• Pin 1 should be at the ${_pinOneDirection(rotation)} of the pocket\n` +
-               `• Align all pins with the holes before pressing down\n` +
-               `• Press gently and evenly to seat all pins`;
-      } else if (ctype === "diode") {
-        title = `Insert IR Diode: ${cid}`;
-        body = `Component: Infrared LED\n` +
-               `Location: ${_describePosition(center)} (near edge for IR transmission)\n\n` +
-               `Instructions:\n` +
-               `• Find the round pocket near the board edge\n` +
-               `• IMPORTANT: The longer leg (anode, +) goes in the marked hole\n` +
-               `• The shorter leg (cathode, -) goes in the other hole\n` +
-               `• The LED should point outward through the wall slot`;
-      } else {
-        title = `Insert Component: ${cid}`;
-        body = `Component type: ${ctype}\n` +
-               `Location: ${_describePosition(center)}\n\n` +
-               `Insert this component into its designated pocket.\n` +
-               `Ensure all pins align with the holes before pressing down.`;
-      }
-      
-      steps.push({
-        title,
-        subtitle: `Pause 2 — Component ${componentStep} of ${totalComponents}`,
-        body,
-        pauseNumber: 2,
-        componentIndex: componentStep,
-        totalComponents,
-      });
-      componentStep++;
+      const ctype = comp.type || "other";
+      if (!grouped[ctype]) grouped[ctype] = [];
+      grouped[ctype].push(comp);
     }
     
-    // Final step for pause 2
+    // ── Welcome / Introduction Step ──────────────────────────────
+    sections.push({ name: "Introduction", index: steps.length });
+    steps.push({
+      title: "Ready to Start Printing",
+      subtitle: "Introduction",
+      body: `Your custom enclosure is ready to print.\n\n` +
+            `During the print process, the printer will pause once ` +
+            `so you can insert the electronic components.\n\n` +
+            `Use the section buttons above to jump to specific component types.`,
+      showPlacementView: false,
+      section: "Introduction",
+    });
+    
+    // ── Component Checklist (Grouped) ────────────────────────────
+    // Build component list HTML with counts
+    let componentListHTML = "";
+    const typeLabels = {
+      button: "Tactile Push Button (12×12mm)",
+      battery: "Battery Holder",
+      controller: "ATmega328P Microcontroller",
+      diode: "Infrared LED",
+    };
+    
+    for (const [ctype, comps] of Object.entries(grouped)) {
+      const count = comps.length;
+      let label = typeLabels[ctype] || ctype;
+      
+      // For battery, include footprint info
+      if (ctype === "battery" && comps[0].footprint) {
+        label = `Battery Holder (${comps[0].footprint})`;
+      }
+      
+      // Pluralize if needed
+      if (count > 1 && ctype === "button") {
+        label = "Tactile Push Buttons (12×12mm)";
+      } else if (count > 1 && ctype === "diode") {
+        label = "Infrared LEDs";
+      }
+      
+      const countText = count > 1 ? `× ${count}` : "";
+      componentListHTML += `<li><span class="component-name">${label}</span>${countText ? `<span class="component-count">${countText}</span>` : ""}</li>`;
+    }
+    
+    sections.push({ name: "Checklist", index: steps.length });
+    steps.push({
+      title: "Component Checklist",
+      subtitle: "Materials Needed",
+      body: `Gather these components before the printer pauses:\n\n` +
+            `<ul class="component-list">${componentListHTML}</ul>\n\n` +
+            `Make sure you have everything ready before starting the print.`,
+      isPauseHeader: true,
+      pauseNumber: 1,
+      showPlacementView: false,
+      section: "Checklist",
+    });
+    
+    // ── Section: Buttons ─────────────────────────────────────────
+    const buttons = grouped.button || [];
+    if (buttons.length > 0) {
+      sections.push({ name: "Buttons", index: steps.length });
+      
+      const buttonCount = buttons.length;
+      const buttonWord = buttonCount === 1 ? "Button" : "Buttons";
+      
+      // Get all button positions for the placement view
+      const buttonIndices = buttons.map(b => components.indexOf(b));
+      
+      steps.push({
+        title: `${buttonWord} Placement`,
+        subtitle: buttonCount > 1 ? `${buttonCount} buttons to insert` : "1 button to insert",
+        body: `<strong>Component:</strong> Tactile Push Button (12×12mm)\n\n` +
+              `<strong>How to insert:</strong>\n` +
+              `• Locate the square pocket(s) on the enclosure\n` +
+              `• Orient each button so the pins align with the holes\n` +
+              `• Press firmly until the button sits flush\n` +
+              `• The button cap should protrude through the top hole\n\n` +
+              `${buttonCount > 1 ? `Repeat for all ${buttonCount} buttons shown in the placement view.` : "See the placement view for the exact location."}`,
+        pauseNumber: 1,
+        componentIndices: buttonIndices,
+        showPlacementView: true,
+        section: "Buttons",
+      });
+    }
+    
+    // ── Section: Microcontroller ─────────────────────────────────
+    const controllers = grouped.controller || [];
+    if (controllers.length > 0) {
+      sections.push({ name: "Microcontroller", index: steps.length });
+      
+      const ctrl = controllers[0];
+      const footprint = ctrl.footprint || "ATmega328P";
+      const rotation = ctrl.rotation_deg || 0;
+      const controllerIndices = controllers.map(c => components.indexOf(c));
+      
+      steps.push({
+        title: "Microcontroller Placement",
+        subtitle: `${footprint} chip`,
+        body: `<strong>Component:</strong> ${footprint} (DIP package)\n\n` +
+              `<strong>How to insert:</strong>\n` +
+              `• Locate the rectangular DIP pocket with pin holes\n` +
+              `• Find the pin 1 marker on the chip (notch or dot)\n` +
+              `• Pin 1 should be at the ${_pinOneDirection(rotation)} of the pocket\n` +
+              `• Carefully align ALL pins with the holes\n` +
+              `• Press gently and evenly — do not force!\n\n` +
+              `<strong>⚠ Important:</strong> Incorrect orientation will damage the chip.`,
+        pauseNumber: 1,
+        componentIndices: controllerIndices,
+        showPlacementView: true,
+        section: "Microcontroller",
+      });
+    }
+    
+    // ── Section: Battery ─────────────────────────────────────────
+    const batteries = grouped.battery || [];
+    if (batteries.length > 0) {
+      sections.push({ name: "Battery", index: steps.length });
+      
+      const batt = batteries[0];
+      const footprint = batt.footprint || "2xAAA";
+      const batteryIndices = batteries.map(b => components.indexOf(b));
+      
+      steps.push({
+        title: "Battery Compartment",
+        subtitle: `${footprint} holder`,
+        body: `<strong>Component:</strong> Battery Holder (${footprint})\n\n` +
+              `<strong>How to insert:</strong>\n` +
+              `• Locate the rectangular battery pocket\n` +
+              `• Insert the holder with contacts facing the correct direction\n` +
+              `• Ensure spring contacts align with the pin holes\n` +
+              `• Press down until fully seated\n\n` +
+              `<strong>Note:</strong> Batteries are inserted after printing is complete.`,
+        pauseNumber: 1,
+        componentIndices: batteryIndices,
+        showPlacementView: true,
+        section: "Battery",
+      });
+    }
+    
+    // ── Section: IR LED ──────────────────────────────────────────
+    const diodes = grouped.diode || [];
+    if (diodes.length > 0) {
+      sections.push({ name: "IR LED", index: steps.length });
+      
+      const diodeCount = diodes.length;
+      const diodeWord = diodeCount === 1 ? "LED" : "LEDs";
+      const diodeIndices = diodes.map(d => components.indexOf(d));
+      
+      steps.push({
+        title: `IR ${diodeWord} Placement`,
+        subtitle: diodeCount > 1 ? `${diodeCount} infrared LEDs` : "Infrared LED",
+        body: `<strong>Component:</strong> Infrared LED\n\n` +
+              `<strong>How to insert:</strong>\n` +
+              `• Locate the round pocket near the board edge\n` +
+              `• The LED has two legs of different lengths\n` +
+              `• Longer leg (anode, +) → marked hole\n` +
+              `• Shorter leg (cathode, −) → other hole\n` +
+              `• LED should point outward through the wall slot\n\n` +
+              `<strong>⚠ Important:</strong> Wrong polarity = LED won't work!`,
+        pauseNumber: 1,
+        componentIndices: diodeIndices,
+        showPlacementView: true,
+        section: "IR LED",
+      });
+    }
+    
+    // ── Final Step ───────────────────────────────────────────────
+    sections.push({ name: "Resume", index: steps.length });
     steps.push({
       title: "Resume Printing",
-      subtitle: "Pause 2 — Final Step",
+      subtitle: "Final Check",
       body: `All components have been inserted.\n\n` +
-            `Checklist before resuming:\n` +
+            `<strong>Checklist before resuming:</strong>\n` +
             `• All buttons are seated flush\n` +
             `• Microcontroller pin 1 is correctly oriented\n` +
-            `• IR diode polarity is correct (long leg = +)\n` +
-            `• All pins are fully inserted into their holes\n\n` +
+            `• IR LED polarity is correct (long leg = +)\n` +
+            `• All pins are fully inserted into holes\n\n` +
             `Press the knob on the printer to resume.\n` +
             `The printer will complete the ceiling to seal the enclosure.`,
-      pauseNumber: 2,
+      pauseNumber: 1,
+      showPlacementView: false,
+      section: "Resume",
     });
     
   } else {
@@ -1543,14 +1647,86 @@ stepByStepBtn.addEventListener("click", () => {
       title: "No G-code data",
       subtitle: "",
       body: "Generate G-code first by clicking 'Ready to print'.",
+      showPlacementView: false,
     });
   }
   
-  // Store steps and current index for navigation
+  // Store steps, sections, and current index for navigation
   window._guideSteps = steps;
+  window._guideSections = sections;
   window._guideIndex = 0;
+  _renderSectionNav();
   _renderGuideStep();
 });
+
+function _renderSectionNav() {
+  const sidebarContent = document.getElementById("manualSidebarContent");
+  const sections = window._guideSections || [];
+  
+  if (!sidebarContent || sections.length <= 1) {
+    return;
+  }
+  
+  sidebarContent.innerHTML = "";
+  
+  for (const section of sections) {
+    const btn = document.createElement("button");
+    btn.className = "manual-nav-item";
+    btn.innerHTML = `
+      <span class="manual-nav-icon">${_getSectionIcon(section.name)}</span>
+      <span class="manual-nav-label">${section.name}</span>
+    `;
+    btn.dataset.index = section.index;
+    btn.addEventListener("click", () => {
+      window._guideIndex = section.index;
+      _renderGuideStep();
+      _updateSectionNavActive();
+      // Close sidebar on mobile or after selection
+      const sidebar = document.getElementById("manualSidebar");
+      const overlay = document.getElementById("manualSidebarOverlay");
+      const toggle = document.getElementById("manualSidebarToggle");
+      if (window.innerWidth < 1024) {
+        sidebar?.classList.remove("open");
+        overlay?.classList.remove("visible");
+        toggle?.classList.remove("active");
+      }
+    });
+    sidebarContent.appendChild(btn);
+  }
+  
+  _updateSectionNavActive();
+}
+
+function _getSectionIcon(sectionName) {
+  const icons = {
+    "Buttons": `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/><circle cx="12" cy="12" r="3"/></svg>`,
+    "Microcontroller": `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="1"/><line x1="9" y1="4" x2="9" y2="1"/><line x1="15" y1="4" x2="15" y2="1"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/></svg>`,
+    "Battery": `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="6" width="18" height="12" rx="2"/><line x1="23" y1="10" x2="23" y2="14"/></svg>`,
+    "IR LED": `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="7"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m19.07 4.93-1.41 1.41"/><path d="m6.34 17.66-1.41 1.41"/></svg>`,
+    "Resume": `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>`,
+    "Print": `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>`,
+  };
+  return icons[sectionName] || `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>`;
+}
+
+function _updateSectionNavActive() {
+  const btns = document.querySelectorAll(".manual-nav-item");
+  const sections = window._guideSections || [];
+  const currentIndex = window._guideIndex;
+  
+  // Find which section the current step belongs to
+  let currentSectionIndex = 0;
+  for (let i = sections.length - 1; i >= 0; i--) {
+    if (currentIndex >= sections[i].index) {
+      currentSectionIndex = i;
+      break;
+    }
+  }
+  
+  btns.forEach((btn, i) => {
+    btn.classList.toggle("active", i === currentSectionIndex);
+  });
+}
 
 function _describePosition(center) {
   const [x, y] = center;
@@ -1571,6 +1747,9 @@ function _pinOneDirection(rotation) {
 
 function _renderGuideStep() {
   const guideContent = document.querySelector(".guide-content");
+  const placementView = document.getElementById("guidePlacementView");
+  const placementSvg = document.getElementById("placementSvg");
+  
   if (!window._guideSteps || !guideContent) return;
   const step = window._guideSteps[window._guideIndex];
   const total = window._guideSteps.length;
@@ -1581,6 +1760,10 @@ function _renderGuideStep() {
     pauseBadge = `<span class="pause-badge">Pause ${step.pauseNumber}</span>`;
   }
   
+  // Check if body contains HTML (component list)
+  const bodyContainsHtml = step.body.includes("<ul") || step.body.includes("<strong>");
+  const bodyStyle = bodyContainsHtml ? "" : 'style="white-space:pre-wrap;"';
+  
   guideContent.innerHTML = `
     <div class="guide-header-section">
       ${pauseBadge}
@@ -1588,12 +1771,452 @@ function _renderGuideStep() {
       ${subtitleHtml}
     </div>
     <div class="guide-body-section">
-      <p style="white-space:pre-wrap;">${step.body}</p>
+      <div class="guide-body-text" ${bodyStyle}>${step.body}</div>
       <div class="guide-step-counter">
         Step ${window._guideIndex + 1} of ${total}
       </div>
     </div>
   `;
+  
+  // Handle placement view visibility
+  if (step.showPlacementView && placementView && placementSvg) {
+    placementView.style.display = "flex";
+    // Support both single componentIndex (legacy) and componentIndices (array)
+    const indices = step.componentIndices || (step.componentIndex !== undefined ? [step.componentIndex] : []);
+    _renderPlacementView(indices, placementSvg);
+  } else if (placementView) {
+    placementView.style.display = "none";
+  }
+  
+  // Update section nav active state
+  _updateSectionNavActive();
+}
+
+function _renderPlacementView(highlightIndices, svg) {
+  const components = window._guideComponents || [];
+  const data = window._gcodeResult;
+  
+  // Convert single number to array for backwards compatibility
+  const highlightSet = new Set(Array.isArray(highlightIndices) ? highlightIndices : [highlightIndices]);
+  
+  if (!components.length || !data) {
+    svg.innerHTML = "";
+    return;
+  }
+  
+  // Get board outline from layout data
+  const boardOutline = data.components?.[0]?.board?.outline_polygon || null;
+  
+  // Calculate bounds from components using realistic dimensions
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const comp of components) {
+    const [cx, cy] = comp.center || [0, 0];
+    const ctype = comp.type || "";
+    
+    // Use realistic component dimensions for bounds calculation
+    let w, h;
+    if (ctype === "controller") {
+      w = 7.5 + 7;  // body + pins on both sides
+      h = 35;
+    } else if (ctype === "button") {
+      w = Math.max(comp.body_width_mm || 12, 12);
+      h = Math.max(comp.body_height_mm || 12, 12);
+    } else if (ctype === "diode") {
+      w = 6;        // LED dome width
+      h = 8.5 + 8;  // dome height + legs (protrudes upward)
+    } else if (ctype === "battery") {
+      w = Math.max(comp.body_width_mm || 25, 25);
+      h = Math.max(comp.body_height_mm || 52, 52);
+    } else {
+      w = comp.body_width_mm || 15;
+      h = comp.body_height_mm || 15;
+    }
+    
+    minX = Math.min(minX, cx - w/2 - 5);
+    minY = Math.min(minY, cy - h/2 - 5);
+    maxX = Math.max(maxX, cx + w/2 + 5);
+    maxY = Math.max(maxY, cy + h/2 + 5);
+  }
+  
+  // Add padding
+  const padding = 10;
+  minX -= padding;
+  minY -= padding;
+  maxX += padding;
+  maxY += padding;
+  
+  const width = maxX - minX;
+  const height = maxY - minY;
+  
+  // Update viewBox
+  svg.setAttribute("viewBox", `${minX} ${minY} ${width} ${height}`);
+  
+  let svgContent = "";
+  
+  // Theme-aware colors
+  const isLight = document.documentElement.classList.contains("light");
+  const boardFill = isLight ? "#e5e7eb" : "#1f2937";
+  const boardStroke = isLight ? "#d1d5db" : "#374151";
+  
+  // Draw board outline background (approximate rectangle)
+  svgContent += `<rect x="${minX + padding/2}" y="${minY + padding/2}" 
+    width="${width - padding}" height="${height - padding}" 
+    fill="${boardFill}" stroke="${boardStroke}" stroke-width="1" rx="3"/>`;
+  
+  // Draw each component
+  for (let i = 0; i < components.length; i++) {
+    const comp = components[i];
+    const [cx, cy] = comp.center || [0, 0];
+    const ctype = comp.type || "";
+    const cid = comp.id || comp.ref || ctype;
+    const rotation = comp.rotation_deg || 0;
+    
+    // Determine component dimensions - use realistic sizes
+    let w = comp.body_width_mm || 12;
+    let h = comp.body_height_mm || 12;
+    
+    // Override with realistic component dimensions
+    if (ctype === "controller") {
+      // ATmega328P-PU DIP-28: 35mm long x 7.5mm body (9.5mm with pins)
+      w = 7.5;   // body width (pins extend beyond)
+      h = 35;    // body length
+    } else if (ctype === "button") {
+      // Tactile switch: typically 6x6mm or 12x12mm
+      w = Math.max(w, 12);
+      h = Math.max(h, 12);
+    } else if (ctype === "diode") {
+      // 5mm LED
+      w = 5;
+      h = 5;
+    } else if (ctype === "battery") {
+      // 2xAAA battery holder: ~25mm x 52mm
+      w = Math.max(w, 25);
+      h = Math.max(h, 52);
+    }
+    
+    // Check if this is one of the highlighted components
+    const isCurrent = highlightSet.has(i);
+    const fillColor = isCurrent ? "rgba(59, 130, 246, 0.25)" : (isLight ? "rgba(107, 114, 128, 0.15)" : "rgba(75, 85, 99, 0.25)");
+    const strokeColor = isCurrent ? "#3b82f6" : (isLight ? "#9ca3af" : "#6b7280");
+    const strokeWidth = isCurrent ? "1.5" : "1";
+    const pinColor = isLight ? "#4b5563" : "#9ca3af";
+    const bodyColor = isLight ? "#374151" : "#4b5563";
+    
+    // Wrap in clickable group
+    svgContent += `<g class="placement-component" data-component-index="${i}" style="cursor:pointer;">`;
+    
+    // Draw component based on type with realistic proportions
+    svgContent += _drawComponentSvg(ctype, cx, cy, w, h, rotation, {
+      fillColor, strokeColor, strokeWidth, pinColor, bodyColor, isCurrent, isLight
+    });
+    
+    // Add pulsing highlight ring for current component
+    if (isCurrent) {
+      const highlightW = w + 6;
+      const highlightH = h + 6;
+      svgContent += `<rect x="${cx - highlightW/2}" y="${cy - highlightH/2}" 
+        width="${highlightW}" height="${highlightH}" 
+        fill="none" stroke="#3b82f6" stroke-width="1" rx="3" 
+        stroke-dasharray="4,2" opacity="0.7">
+        <animate attributeName="stroke-dashoffset" from="0" to="12" dur="1s" repeatCount="indefinite"/>
+      </rect>`;
+    }
+    
+    svgContent += `</g>`;
+  }
+  
+  svg.innerHTML = svgContent;
+  
+  // Add click handlers to placement components
+  svg.querySelectorAll(".placement-component").forEach(g => {
+    g.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const compIdx = parseInt(g.dataset.componentIndex, 10);
+      _navigateToComponentStep(compIdx);
+    });
+  });
+}
+
+/**
+ * Draw a realistic component SVG based on type
+ */
+function _drawComponentSvg(ctype, cx, cy, w, h, rotation, opts) {
+  const { fillColor, strokeColor, strokeWidth, pinColor, bodyColor, isCurrent, isLight } = opts;
+  let svg = "";
+  
+  // Apply rotation transform
+  const rotationAttr = rotation !== 0 ? `transform="rotate(${rotation}, ${cx}, ${cy})"` : "";
+  
+  if (ctype === "controller") {
+    // ATmega328P-PU DIP-28 realistic IC rendering
+    // DIP-28: rectangular black plastic body with pins on two sides
+    const bodyW = w;      // width (narrow side ~7.6mm)
+    const bodyH = h;      // height (long side ~35mm)
+    const pinCount = 14;  // pins per side
+    const pinSpacing = (bodyH - 4) / (pinCount - 1);  // space pins with margin
+    const pinLength = 3.5;
+    const pinWidth = 0.65;
+    
+    svg += `<g ${rotationAttr}>`;
+    
+    // Shadow/3D effect
+    svg += `<rect x="${cx - bodyW/2 + 0.5}" y="${cy - bodyH/2 + 0.5}" width="${bodyW}" height="${bodyH}" 
+      fill="rgba(0,0,0,0.3)" rx="1"/>`;
+    
+    // IC body - black plastic rectangle
+    svg += `<rect x="${cx - bodyW/2}" y="${cy - bodyH/2}" width="${bodyW}" height="${bodyH}" 
+      fill="#1a1a1a" stroke="${isCurrent ? '#3b82f6' : '#333'}" stroke-width="${strokeWidth}" rx="1"/>`;
+    
+    // Subtle body highlight (plastic sheen)
+    svg += `<rect x="${cx - bodyW/2 + 0.8}" y="${cy - bodyH/2 + 0.8}" width="${bodyW - 1.6}" height="${bodyH * 0.15}" 
+      fill="rgba(255,255,255,0.08)" rx="0.5"/>`;
+    
+    // Pin 1 notch - semicircular indent at top center (standard DIP marking)
+    const notchR = Math.min(2.5, bodyW * 0.15);
+    svg += `<circle cx="${cx}" cy="${cy - bodyH/2}" r="${notchR}" fill="#0a0a0a"/>`;
+    svg += `<path d="M ${cx - notchR} ${cy - bodyH/2} A ${notchR} ${notchR} 0 0 1 ${cx + notchR} ${cy - bodyH/2}" 
+      fill="#1a1a1a" stroke="none"/>`;
+    
+    // Pin 1 dot indicator (embossed circle near corner)
+    svg += `<circle cx="${cx - bodyW/2 + 2.2}" cy="${cy - bodyH/2 + 3}" r="1.2" 
+      fill="none" stroke="${isCurrent ? '#3b82f6' : '#444'}" stroke-width="0.4"/>`;
+    
+    // Metal pins - left side (pins 1-14 from top to bottom)
+    const pinsStartY = cy - bodyH/2 + 2;
+    for (let p = 0; p < pinCount; p++) {
+      const pinY = pinsStartY + p * pinSpacing;
+      // Pin leg
+      svg += `<rect x="${cx - bodyW/2 - pinLength}" y="${pinY - pinWidth/2}" 
+        width="${pinLength}" height="${pinWidth}" fill="#b8b8b8"/>`;
+      // Pin connection to body
+      svg += `<rect x="${cx - bodyW/2 - 0.3}" y="${pinY - pinWidth/2 - 0.1}" 
+        width="${0.5}" height="${pinWidth + 0.2}" fill="#888"/>`;
+    }
+    
+    // Metal pins - right side (pins 28-15 from top to bottom)
+    for (let p = 0; p < pinCount; p++) {
+      const pinY = pinsStartY + p * pinSpacing;
+      // Pin leg
+      svg += `<rect x="${cx + bodyW/2}" y="${pinY - pinWidth/2}" 
+        width="${pinLength}" height="${pinWidth}" fill="#b8b8b8"/>`;
+      // Pin connection to body
+      svg += `<rect x="${cx + bodyW/2 - 0.2}" y="${pinY - pinWidth/2 - 0.1}" 
+        width="${0.5}" height="${pinWidth + 0.2}" fill="#888"/>`;
+    }
+    
+    // Laser-etched label text
+    svg += `<text x="${cx}" y="${cy - 4}" text-anchor="middle" font-size="2.8" fill="#666" font-family="Arial, sans-serif" font-weight="bold">ATMEL</text>`;
+    svg += `<text x="${cx}" y="${cy}" text-anchor="middle" font-size="2.5" fill="#555" font-family="Arial, sans-serif">MEGA328P</text>`;
+    svg += `<text x="${cx}" y="${cy + 3.5}" text-anchor="middle" font-size="2" fill="#444" font-family="Arial, sans-serif">PU</text>`;
+    
+    svg += `</g>`;
+    
+  } else if (ctype === "button") {
+    // Tactile push button realistic rendering
+    // Real: 12x12mm body, 6x6mm tactile switch with round cap
+    const bodySize = Math.max(w, h);
+    const capDiameter = bodySize * 0.6;
+    const pinSpacingX = 6.25; // half of 12.5mm spacing
+    const pinSpacingY = 2.5;  // half of 5mm spacing
+    const pinLength = 2;
+    const pinWidth = 0.8;
+    
+    svg += `<g ${rotationAttr}>`;
+    
+    // Button body (square)
+    svg += `<rect x="${cx - bodySize/2}" y="${cy - bodySize/2}" width="${bodySize}" height="${bodySize}" 
+      fill="${isLight ? '#374151' : '#1f2937'}" stroke="${strokeColor}" stroke-width="${strokeWidth}" rx="1"/>`;
+    
+    // Inner tactile switch area
+    svg += `<rect x="${cx - bodySize/3}" y="${cy - bodySize/3}" width="${bodySize * 2/3}" height="${bodySize * 2/3}" 
+      fill="${isLight ? '#4b5563' : '#374151'}" stroke="none" rx="1"/>`;
+    
+    // Button cap (raised circle)
+    svg += `<circle cx="${cx}" cy="${cy}" r="${capDiameter/2}" 
+      fill="${fillColor}" stroke="${strokeColor}" stroke-width="${strokeWidth}"/>`;
+    svg += `<circle cx="${cx}" cy="${cy}" r="${capDiameter/2 - 1.5}" 
+      fill="none" stroke="${isLight ? '#9ca3af' : '#6b7280'}" stroke-width="0.5"/>`;
+    
+    // Four corner pins
+    const pinPositions = [
+      [-pinSpacingX, -pinSpacingY],
+      [pinSpacingX, -pinSpacingY],
+      [-pinSpacingX, pinSpacingY],
+      [pinSpacingX, pinSpacingY],
+    ];
+    for (const [px, py] of pinPositions) {
+      svg += `<rect x="${cx + px - pinWidth/2}" y="${cy + py - pinLength/2}" width="${pinWidth}" height="${pinLength}" 
+        fill="${pinColor}" rx="0.2"/>`;
+    }
+    
+    svg += `</g>`;
+    
+  } else if (ctype === "diode") {
+    // 5mm T-1 3/4 IR LED realistic rendering
+    // LED protrudes from shell - dome faces outward (toward top of SVG)
+    const diameter = 5;  // 5mm LED
+    const r = diameter / 2;
+    const domeHeight = 8.5;  // total height of LED
+    const flangeHeight = 1;
+    const legLength = 6;
+    const legWidth = 0.6;
+    const legSpacing = 1.27;  // 2.54mm pitch / 2
+    
+    svg += `<g ${rotationAttr}>`;
+    
+    // Shadow for 3D effect
+    svg += `<ellipse cx="${cx + 0.3}" cy="${cy + 0.3}" rx="${r}" ry="${r * 0.4}" 
+      fill="rgba(0,0,0,0.2)"/>`;
+    
+    // LED base flange (wider ring at bottom of dome)
+    svg += `<rect x="${cx - r - 0.5}" y="${cy + r * 0.3}" width="${diameter + 1}" height="${flangeHeight}" 
+      fill="#d4d4d4" stroke="#a3a3a3" stroke-width="0.3" rx="0.3"/>`;
+    
+    // LED body/dome - clear plastic with slight IR tint
+    // Main dome oval shape (side view of cylindrical LED)
+    svg += `<ellipse cx="${cx}" cy="${cy - domeHeight/4}" rx="${r}" ry="${domeHeight/2.5}" 
+      fill="url(#irLedGradient${isCurrent ? 'Active' : ''})" stroke="${isCurrent ? '#3b82f6' : '#94a3b8'}" stroke-width="${strokeWidth}"/>`;
+    
+    // Define gradient for realistic plastic look
+    svg += `<defs>
+      <radialGradient id="irLedGradient${isCurrent ? 'Active' : ''}" cx="30%" cy="30%" r="70%">
+        <stop offset="0%" stop-color="${isLight ? '#f8fafc' : '#e2e8f0'}"/>
+        <stop offset="40%" stop-color="${isLight ? '#e0e7ff' : '#c7d2fe'}"/>
+        <stop offset="100%" stop-color="${isLight ? '#a5b4fc' : '#818cf8'}"/>
+      </radialGradient>
+    </defs>`;
+    
+    // Internal LED die/chip (visible through clear plastic)
+    svg += `<rect x="${cx - 0.8}" y="${cy}" width="1.6" height="1.2" 
+      fill="#c4b5fd" stroke="none" rx="0.2"/>`;
+    
+    // Reflector cup outline
+    svg += `<ellipse cx="${cx}" cy="${cy + 0.3}" rx="${r * 0.7}" ry="${r * 0.3}" 
+      fill="none" stroke="#a5b4fc" stroke-width="0.3" opacity="0.5"/>`;
+    
+    // Cathode flat edge indicator (flat side of LED)
+    svg += `<line x1="${cx - r}" y1="${cy - domeHeight/3}" x2="${cx - r}" y2="${cy + r * 0.3}" 
+      stroke="${isCurrent ? '#3b82f6' : '#64748b'}" stroke-width="1"/>`;
+    
+    // LED legs (metal leads coming out bottom)
+    // Anode (longer leg, +)
+    svg += `<rect x="${cx + legSpacing - legWidth/2}" y="${cy + r * 0.3 + flangeHeight}" 
+      width="${legWidth}" height="${legLength}" fill="#b8b8b8"/>`;
+    // Cathode (shorter leg, -)
+    svg += `<rect x="${cx - legSpacing - legWidth/2}" y="${cy + r * 0.3 + flangeHeight}" 
+      width="${legWidth}" height="${legLength * 0.7}" fill="#b8b8b8"/>`;
+    
+    // Bent portion of legs (going into board)
+    svg += `<rect x="${cx + legSpacing - legWidth/2}" y="${cy + r * 0.3 + flangeHeight + legLength - 0.3}" 
+      width="${legWidth + 1}" height="${legWidth}" fill="#b8b8b8"/>`;
+    svg += `<rect x="${cx - legSpacing - legWidth/2}" y="${cy + r * 0.3 + flangeHeight + legLength * 0.7 - 0.3}" 
+      width="${legWidth + 1}" height="${legWidth}" fill="#b8b8b8"/>`;
+    
+    // Polarity labels
+    svg += `<text x="${cx + legSpacing + 2}" y="${cy + r + legLength/2}" text-anchor="start" font-size="2" fill="${pinColor}">+</text>`;
+    svg += `<text x="${cx - legSpacing - 2}" y="${cy + r + legLength * 0.35}" text-anchor="end" font-size="2" fill="${pinColor}">−</text>`;
+    
+    // Label showing it's IR
+    svg += `<text x="${cx}" y="${cy - domeHeight/2 - 1}" text-anchor="middle" font-size="2" fill="${isLight ? '#6366f1' : '#a5b4fc'}" font-weight="bold">IR</text>`;
+    
+    svg += `</g>`;
+    
+  } else if (ctype === "battery") {
+    // Battery compartment (2xAAA)
+    // Real: 25mm x 48mm compartment
+    svg += `<g ${rotationAttr}>`;
+    
+    // Outer compartment
+    svg += `<rect x="${cx - w/2}" y="${cy - h/2}" width="${w}" height="${h}" 
+      fill="${fillColor}" stroke="${strokeColor}" stroke-width="${strokeWidth}" rx="2"/>`;
+    
+    // Battery outline slots (2 AAA batteries side by side)
+    const battW = 10.5; // AAA diameter
+    const battH = h - 6; // length minus spring space
+    const battGap = 2;
+    
+    svg += `<rect x="${cx - battW - battGap/2}" y="${cy - battH/2}" width="${battW}" height="${battH}" 
+      fill="none" stroke="${isLight ? '#9ca3af' : '#6b7280'}" stroke-width="0.5" stroke-dasharray="2,1" rx="5"/>`;
+    svg += `<rect x="${cx + battGap/2}" y="${cy - battH/2}" width="${battW}" height="${battH}" 
+      fill="none" stroke="${isLight ? '#9ca3af' : '#6b7280'}" stroke-width="0.5" stroke-dasharray="2,1" rx="5"/>`;
+    
+    // Polarity indicators
+    svg += `<text x="${cx - battW/2 - battGap/2}" y="${cy - battH/2 + 4}" text-anchor="middle" font-size="4" fill="${pinColor}" font-weight="bold">+</text>`;
+    svg += `<text x="${cx + battW/2 + battGap/2}" y="${cy - battH/2 + 4}" text-anchor="middle" font-size="4" fill="${pinColor}" font-weight="bold">+</text>`;
+    svg += `<text x="${cx - battW/2 - battGap/2}" y="${cy + battH/2 - 2}" text-anchor="middle" font-size="4" fill="${pinColor}" font-weight="bold">−</text>`;
+    svg += `<text x="${cx + battW/2 + battGap/2}" y="${cy + battH/2 - 2}" text-anchor="middle" font-size="4" fill="${pinColor}" font-weight="bold">−</text>`;
+    
+    // Spring contacts (bottom)
+    svg += `<path d="M ${cx - w/3} ${cy + h/2 - 3} Q ${cx - w/3 - 1.5} ${cy + h/2 - 1} ${cx - w/3} ${cy + h/2 + 0.5}" 
+      fill="none" stroke="${pinColor}" stroke-width="0.8"/>`;
+    svg += `<path d="M ${cx + w/3} ${cy + h/2 - 3} Q ${cx + w/3 + 1.5} ${cy + h/2 - 1} ${cx + w/3} ${cy + h/2 + 0.5}" 
+      fill="none" stroke="${pinColor}" stroke-width="0.8"/>`;
+    
+    svg += `</g>`;
+    
+  } else {
+    // Generic component fallback
+    svg += `<rect x="${cx - w/2}" y="${cy - h/2}" width="${w}" height="${h}" 
+      fill="${fillColor}" stroke="${strokeColor}" stroke-width="${strokeWidth}" rx="1" ${rotationAttr}/>`;
+  }
+  
+  return svg;
+}
+
+/**
+ * Navigate to the guide step that shows the specified component
+ */
+function _navigateToComponentStep(componentIndex) {
+  const steps = window._guideSteps || [];
+  
+  // Find a step that highlights this component
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    const indices = step.componentIndices || (step.componentIndex !== undefined ? [step.componentIndex] : []);
+    if (indices.includes(componentIndex)) {
+      window._guideIndex = i;
+      _renderGuideStep();
+      _updateSectionNavActive();
+      return;
+    }
+  }
+}
+
+// Manual sidebar toggle
+function toggleManualSidebar() {
+  const sidebar = document.getElementById("manualSidebar");
+  const overlay = document.getElementById("manualSidebarOverlay");
+  const toggle = document.getElementById("manualSidebarToggle");
+  
+  if (!sidebar) return;
+  
+  const isOpen = sidebar.classList.contains("open");
+  
+  if (isOpen) {
+    sidebar.classList.remove("open");
+    overlay?.classList.remove("visible");
+    toggle?.classList.remove("active");
+  } else {
+    sidebar.classList.add("open");
+    overlay?.classList.add("visible");
+    toggle?.classList.add("active");
+  }
+}
+
+const manualSidebarToggle = document.getElementById("manualSidebarToggle");
+const manualSidebarOverlay = document.getElementById("manualSidebarOverlay");
+
+if (manualSidebarToggle) {
+  manualSidebarToggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleManualSidebar();
+  });
+}
+
+if (manualSidebarOverlay) {
+  manualSidebarOverlay.addEventListener("click", () => {
+    toggleManualSidebar();
+  });
 }
 
 backToDesignBtn.addEventListener("click", () => {

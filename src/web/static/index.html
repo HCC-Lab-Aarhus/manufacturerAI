@@ -7,6 +7,24 @@
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
+  <!-- Theme toggle (fixed position) -->
+  <button id="themeToggle" class="theme-toggle" title="Toggle light/dark mode">
+    <svg class="theme-icon sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="5"/>
+      <line x1="12" y1="1" x2="12" y2="3"/>
+      <line x1="12" y1="21" x2="12" y2="23"/>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+      <line x1="1" y1="12" x2="3" y2="12"/>
+      <line x1="21" y1="12" x2="23" y2="12"/>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+    </svg>
+    <svg class="theme-icon moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+    </svg>
+  </button>
+
   <div class="app">
     <!-- Left panel: chat -->
     <aside class="panel left">
@@ -134,7 +152,27 @@
 
       <!-- Step by step guide screen -->
       <div id="stepByStepScreen" class="step-by-step-screen" style="display: none;">
+        <!-- Manual sliding sidebar overlay -->
+        <div id="manualSidebarOverlay" class="manual-sidebar-overlay"></div>
+        
+        <!-- Manual sliding sidebar -->
+        <aside id="manualSidebar" class="manual-sidebar">
+          <div class="manual-sidebar-header">
+            <h3>Manual</h3>
+          </div>
+          <div class="manual-sidebar-content" id="manualSidebarContent">
+            <!-- Section nav will be populated dynamically -->
+          </div>
+        </aside>
+        
         <div class="guide-header">
+          <button id="manualSidebarToggle" class="manual-toggle-btn" title="Open manual navigation">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+            </svg>
+            Manual
+          </button>
           <button id="backToDesignBtn" class="back-to-design-btn">
             Back to designing
           </button>
@@ -163,6 +201,20 @@
             <div class="guide-navigation">
               <button id="guidePrevBtn" class="guide-nav-btn">Previous</button>
               <button id="guideNextBtn" class="guide-nav-btn">Next</button>
+            </div>
+          </div>
+          
+          <!-- Component placement view panel -->
+          <div id="guidePlacementView" class="guide-placement-view" style="display: none;">
+            <div class="placement-view-header">
+              <h3>Component Placement</h3>
+            </div>
+            <div class="placement-view-content">
+              <svg id="placementSvg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet"></svg>
+            </div>
+            <div class="placement-view-legend" id="placementLegend">
+              <span class="legend-item"><span class="legend-dot current"></span> Current component</span>
+              <span class="legend-item"><span class="legend-dot other"></span> Other components</span>
             </div>
           </div>
         </div>
