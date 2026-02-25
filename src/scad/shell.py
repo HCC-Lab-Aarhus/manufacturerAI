@@ -315,9 +315,22 @@ def generate_enclosure_scad(
     # cutouts by their extrusion parameters and merge the 2-D
     # polygons with Shapely's ``unary_union``.  This typically
     # collapses ~160 operations down to ~5-10.
+    #
+    # After merging, cutouts are clipped to the enclosure outline to
+    # prevent component pockets from punching through the outer walls.
     groups: dict[tuple[float, float], list[Cutout]] = defaultdict(list)
     for c in cutouts:
         groups[(round(c.z_base, 4), round(c.depth, 4))].append(c)
+
+    # Build outline polygon for clipping (once, outside the loop)
+    outline_clip_poly: ShapelyPolygon | None = None
+    if len(outline) >= 3:
+        try:
+            outline_clip_poly = ShapelyPolygon(outline)
+            if not outline_clip_poly.is_valid or outline_clip_poly.is_empty:
+                outline_clip_poly = None
+        except Exception:
+            outline_clip_poly = None
 
     group_idx = 0
     for (z_base, depth), members in groups.items():
@@ -339,6 +352,14 @@ def generate_enclosure_scad(
             continue
 
         merged = unary_union(shapely_polys)
+
+        # Clip merged cutouts to the outline boundary to prevent
+        # component pockets from punching through enclosure walls.
+        if outline_clip_poly is not None and not merged.is_empty:
+            try:
+                merged = merged.intersection(outline_clip_poly)
+            except Exception:
+                pass  # Keep unclipped if intersection fails
 
         # Extract polygon(s) from the merged result
         if merged.is_empty:

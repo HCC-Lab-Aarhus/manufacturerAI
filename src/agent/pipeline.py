@@ -168,13 +168,36 @@ def _step_validate(run_dir: Path, emit: EmitFn, cancel: threading.Event | None) 
     buttons = design.get("buttons", [])
     outline_type = design.get("outline_type", "polygon")
 
-    # Normalize button format
+    # Function → display label mapping
+    _FUNC_LABELS = {
+        "power": "Power",
+        "vol_up": "Vol +",
+        "vol_down": "Vol −",
+        "ch1": "Ch 1",
+        "ch2": "Ch 2",
+        "ch3": "Ch 3",
+        "ch4": "Ch 4",
+        "ch5": "Ch 5",
+        "brand": "Brand",
+    }
+
+    def _button_label(b: dict, i: int) -> str:
+        """Get display label: explicit label > function name > fallback."""
+        if b.get("label"):
+            return b["label"]
+        func = b.get("function", "")
+        if func and func in _FUNC_LABELS:
+            return _FUNC_LABELS[func]
+        return b.get("id", f"Button {i + 1}")
+
+    # Normalize button format (preserve function field)
     bpos = [
         {
             "id": b.get("id", f"btn_{i}"),
-            "label": b.get("label", b.get("id", f"btn_{i}")),
+            "label": _button_label(b, i),
             "x": b["x"],
             "y": b["y"],
+            "function": b.get("function", ""),
         }
         for i, b in enumerate(buttons)
     ]

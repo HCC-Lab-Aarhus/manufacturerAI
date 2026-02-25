@@ -292,10 +292,11 @@ def build_pin_mapping(
     button_positions: list[dict],
 ) -> list[dict]:
     """
-    Build a human-readable mapping: button label → controller pin.
+    Build a human-readable mapping: button label/function → controller pin.
 
     This tells the user which physical MCU pin each button is wired to,
-    so they can program the firmware accordingly.
+    and what IR function each button performs, so they can verify the
+    firmware configuration.
     """
     components = pcb_layout.get("components", [])
     button_comps = [c for c in components if c.get("type") == "button"]
@@ -326,8 +327,10 @@ def build_pin_mapping(
         if net.endswith("_SIG") and net != "NC":
             net_to_pin[net] = pin_name
 
-    # Build label → pin list
+    # Build lookups from button_positions
     label_lookup = {b["id"]: b.get("label", b["id"]) for b in button_positions}
+    function_lookup = {b["id"]: b.get("function", "") for b in button_positions}
+    
     mapping = []
     for comp in button_comps:
         cid = comp["id"]
@@ -335,6 +338,7 @@ def build_pin_mapping(
         mapping.append({
             "button_id": cid,
             "label": label_lookup.get(cid, cid),
+            "function": function_lookup.get(cid, ""),
             "signal_net": sig_net,
             "controller_pin": net_to_pin.get(sig_net, "unrouted"),
         })

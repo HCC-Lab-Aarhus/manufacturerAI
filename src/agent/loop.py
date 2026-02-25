@@ -92,10 +92,21 @@ _TOOL_DECLARATIONS = [
                             "label": genai.protos.Schema(type=genai.protos.Type.STRING),
                             "x": genai.protos.Schema(type=genai.protos.Type.NUMBER),
                             "y": genai.protos.Schema(type=genai.protos.Type.NUMBER),
+                            "function": genai.protos.Schema(
+                                type=genai.protos.Type.STRING,
+                                description=(
+                                    "The IR function this button performs. "
+                                    "Valid values: 'power', 'vol_up', 'vol_down', "
+                                    "'ch1', 'ch2', 'ch3', 'ch4', 'ch5', 'brand'."
+                                ),
+                            ),
                         },
-                        required=["id", "x", "y"],
+                        required=["id", "x", "y", "function"],
                     ),
-                    description="Button positions with id, label, x (mm), y (mm).",
+                    description=(
+                        "Button positions with id, label, x (mm), y (mm), "
+                        "and function (what IR command the button sends)."
+                    ),
                 ),
                 "top_curve_length": genai.protos.Schema(
                     type=genai.protos.Type.NUMBER,

@@ -98,7 +98,7 @@ def place_components(
     for btn in button_positions:
         comp = {
             "id": btn["id"],
-            "ref": btn["id"],
+            "ref": btn.get("label", btn["id"]),
             "type": "button",
             "footprint": hw.button["switch_type"],
             "center": [btn["x"], btn["y"]],
@@ -122,13 +122,18 @@ def place_components(
     bat_fp = hw.battery
     bat_w = bat_fp["compartment_width_mm"]
     bat_h = bat_fp["compartment_height_mm"]
+    
+    # For placement purposes, account for the cutout margin.  The cutout
+    # extends by `margin` mm beyond the body on each side.
+    bat_place_w = bat_w + 2 * margin
+    bat_place_h = bat_h + 2 * margin
 
     # Place the battery in the lower-center area (30–55 % of the
     # board height).  This prevents it from being shoved to the
     # extreme bottom while keeping it in the lower half.
     bat_pos, _ = _place_rect(
         board_inset, occupied,
-        bat_w, bat_h, margin, prefer="bottom",
+        bat_place_w, bat_place_h, margin, prefer="bottom",
         prefer_weight=0.05,
         clearance_cap=3.0,
         y_zone=(0.30, 0.55),
@@ -138,7 +143,7 @@ def place_components(
     if bat_pos is None:
         bat_pos, _ = _place_rect(
             board_inset, occupied,
-            bat_w, bat_h, margin, prefer="bottom",
+            bat_place_w, bat_place_h, margin, prefer="bottom",
             prefer_weight=0.05,
             clearance_cap=3.0,
             bottleneck_channel=3.0,
@@ -188,13 +193,17 @@ def place_components(
     ctrl_h = ctrl["body_height_mm"]  # 36 mm (long side)
     ctrl_pad = ctrl["keepout_padding_mm"]
 
+    # For placement purposes, use the full cutout size (body + keepout + margin).
+    ctrl_place_w = ctrl_w + ctrl_pad + 2 * margin
+    ctrl_place_h = ctrl_h + ctrl_pad + 2 * margin
+
     # Compute the button Y-band so we can penalise placement inside it.
     btn_band = _button_y_band(button_positions, margin)
 
     # Try both orientations: 0° (w×h) and 90° (h×w), keep best scoring.
     ctrl_pos, ctrl_rot = _place_rect_with_rotation(
         board_inset, occupied,
-        ctrl_w, ctrl_h, margin,
+        ctrl_place_w, ctrl_place_h, margin,
         prefer="center",
         avoid_y_band=btn_band,
         bottleneck_channel=5.0,
@@ -808,7 +817,7 @@ def generate_placement_candidates(
     for btn in button_positions:
         components_base.append({
             "id": btn["id"],
-            "ref": btn["id"],
+            "ref": btn.get("label", btn["id"]),
             "type": "button",
             "footprint": hw.button["switch_type"],
             "center": [btn["x"], btn["y"]],
@@ -835,6 +844,12 @@ def generate_placement_candidates(
     d_diam = hw.diode["diameter_mm"]
     d_r = d_diam / 2 + 1.0
 
+    # For placement purposes, use the full cutout size.
+    bat_place_w = bat_w + 2 * margin
+    bat_place_h = bat_h + 2 * margin
+    ctrl_place_w = ctrl_w + ctrl_pad + 2 * margin
+    ctrl_place_h = ctrl_h + ctrl_pad + 2 * margin
+
     battery_prefs = ["bottom", "center", "top"]
     controller_prefs = ["center", "bottom", "top"]
 
@@ -849,7 +864,7 @@ def generate_placement_candidates(
         bzone = (0.30, 0.55) if bpref == "bottom" else None
         bat_pos, _ = _place_rect(
             board_inset, occupied_base,
-            bat_w, bat_h, margin, prefer=bpref,
+            bat_place_w, bat_place_h, margin, prefer=bpref,
             prefer_weight=0.05,
             clearance_cap=3.0,
             bottleneck_channel=3.0,
@@ -871,8 +886,8 @@ def generate_placement_candidates(
             # for each valid placement.  This ensures the layout
             # scorer can compare horizontal vs vertical layouts
             # fairly rather than pre-filtering via placement scores.
-            for force_rot, c_w, c_h in [(0, ctrl_w, ctrl_h),
-                                         (90, ctrl_h, ctrl_w)]:
+            for force_rot, c_w, c_h in [(0, ctrl_place_w, ctrl_place_h),
+                                         (90, ctrl_place_h, ctrl_place_w)]:
                 ctrl_pos, _ = _place_rect(
                     board_inset, occupied_with_bat,
                     c_w, c_h, margin,
