@@ -329,20 +329,6 @@ function renderOutlineWithComponents(layout) {
       rect.setAttribute("stroke", colors.stroke);
       rect.setAttribute("stroke-width", sw);
       outlineSvg.appendChild(rect);
-
-      // If this is a custom-shaped button, also draw the shape outline
-      if (comp.shape_outline && comp.shape_outline.length >= 3) {
-        const shapePts = comp.shape_outline
-          .map(([sx, sy]) => `${cx + sx},${cy + (-sy)}`)
-          .join(" ");
-        const shapePoly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
-        shapePoly.setAttribute("points", shapePts);
-        shapePoly.setAttribute("fill", "none");
-        shapePoly.setAttribute("stroke", colors.stroke);
-        shapePoly.setAttribute("stroke-width", sw * 1.5);
-        shapePoly.setAttribute("stroke-dasharray", `${sw * 3},${sw * 2}`);
-        outlineSvg.appendChild(shapePoly);
-      }
     } else if (ko.type === "circle") {
       const r = ko.radius_mm;
       const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
@@ -399,15 +385,7 @@ function exitRealignMode(apply) {
     applyRealignedLayout(_editedLayout);
   } else {
     // Cancel — resume the paused pipeline so it can finish
-    fetch("/api/realign/resume", { method: "POST" })
-      .then(r => r.json())
-      .then(data => {
-        if (data.stl_rebuilding) {
-          updateProgress("Compiling STL models...");
-          _pollForUpdatedModel(latestModelName || "print_plate");
-        }
-      })
-      .catch(() => {});
+    fetch("/api/realign/resume", { method: "POST" }).catch(() => {});
     renderOutlineWithComponents(_currentLayout);
   }
 }
@@ -868,17 +846,12 @@ function buildShellPreview(data) {
   const group = new THREE.Group();
 
   // ── Cutout geometry from components ──────────────────────
-  // Button holes: 13mm diameter circle (default) or custom shape polygon
+  // Button holes: 13mm diameter circle, from z = (h - 8.3) to top
   const BUTTON_HOLE_R = 6.5;
   const BUTTON_CAP_DEPTH = 8.3;
-  const BUTTON_HOLE_CLR = 0.3;  // clearance for custom shapes
   const buttonHoles = components
     .filter(c => c.type === "button")
-    .map(c => ({
-      cx: c.center[0],
-      cy: c.center[1],
-      shape_outline: c.shape_outline || null,
-    }));
+    .map(c => ({ cx: c.center[0], cy: c.center[1] }));
 
   // Battery opening: centre through-hole (20mm × bat_h), from z = 0 to 3mm
   const BATTERY_LEDGE = 2.5;
@@ -915,22 +888,6 @@ function buildShellPreview(data) {
     return path;
   }
 
-  // Helper: create a polygon THREE.Path from a shape_outline + offset
-  function polyHole(cx, cy, verts, clr) {
-    clr = clr || 0;
-    const path = new THREE.Path();
-    // Simple outward offset: scale vertices by (dist+clr)/dist from centroid
-    const pts = verts.map(([x, y]) => {
-      const d = Math.sqrt(x * x + y * y);
-      const f = d > 0.01 ? (d + clr) / d : 1;
-      return [cx + x * f, cy + y * f];
-    });
-    path.moveTo(pts[0][0], pts[0][1]);
-    for (let i = 1; i < pts.length; i++) path.lineTo(pts[i][0], pts[i][1]);
-    path.closePath();
-    return path;
-  }
-
   // Helper: create THREE.Shape from polygon vertices (inset by `inset` mm)
   // Optionally punches button/battery holes into the shape.
   function makeShape(pts, inset, opts) {
@@ -952,14 +909,10 @@ function buildShellPreview(data) {
     for (let i = 1; i < usePts.length; i++) s.lineTo(usePts[i][0], usePts[i][1]);
     s.closePath();
 
-    // Punch button holes (custom polygon or default circle)
+    // Punch button holes
     if (opts.buttons) {
       for (const b of buttonHoles) {
-        if (b.shape_outline && b.shape_outline.length >= 3) {
-          s.holes.push(polyHole(b.cx, b.cy, b.shape_outline, BUTTON_HOLE_CLR));
-        } else {
-          s.holes.push(circleHole(b.cx, b.cy, BUTTON_HOLE_R - inset * 0.3));
-        }
+        s.holes.push(circleHole(b.cx, b.cy, BUTTON_HOLE_R - inset * 0.3));
       }
     }
     // Punch battery through-hole
@@ -1842,6 +1795,7 @@ function _renderGuideStep() {
 function _renderPlacementView(highlightIndices, svg) {
   const components = window._guideComponents || [];
   const data = window._gcodeResult;
+  const layout = _currentLayout;  // Use actual layout for outline
   
   // Convert single number to array for backwards compatibility
   const highlightSet = new Set(Array.isArray(highlightIndices) ? highlightIndices : [highlightIndices]);
@@ -1851,39 +1805,54 @@ function _renderPlacementView(highlightIndices, svg) {
     return;
   }
   
-  // Get board outline from layout data
-  const boardOutline = data.components?.[0]?.board?.outline_polygon || null;
+  // Get actual outline polygon from layout
+  const outline = layout?.board?.outline_polygon || null;
   
-  // Calculate bounds from components using realistic dimensions
+  // Calculate bounds from outline if available
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const comp of components) {
-    const [cx, cy] = comp.center || [0, 0];
-    const ctype = comp.type || "";
-    
-    // Use realistic component dimensions for bounds calculation
-    let w, h;
-    if (ctype === "controller") {
-      w = 7.5 + 7;  // body + pins on both sides
-      h = 35;
-    } else if (ctype === "button") {
-      w = Math.max(comp.body_width_mm || 12, 12);
-      h = Math.max(comp.body_height_mm || 12, 12);
-    } else if (ctype === "diode") {
-      w = 6;        // LED dome width
-      h = 8.5 + 8;  // dome height + legs (protrudes upward)
-    } else if (ctype === "battery") {
-      w = Math.max(comp.body_width_mm || 25, 25);
-      h = Math.max(comp.body_height_mm || 52, 52);
-    } else {
-      w = comp.body_width_mm || 15;
-      h = comp.body_height_mm || 15;
+  
+  if (outline && outline.length >= 3) {
+    // Use actual outline bounds
+    for (const [x, y] of outline) {
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
     }
-    
-    minX = Math.min(minX, cx - w/2 - 5);
-    minY = Math.min(minY, cy - h/2 - 5);
-    maxX = Math.max(maxX, cx + w/2 + 5);
-    maxY = Math.max(maxY, cy + h/2 + 5);
+  } else {
+    // Fallback: calculate from components
+    for (const comp of components) {
+      const [cx, cy] = comp.center || [0, 0];
+      const ctype = comp.type || "";
+      
+      let w, h;
+      if (ctype === "controller") {
+        w = 7.5 + 7;
+        h = 35;
+      } else if (ctype === "button") {
+        w = Math.max(comp.body_width_mm || 12, 12);
+        h = Math.max(comp.body_height_mm || 12, 12);
+      } else if (ctype === "diode") {
+        w = 6;
+        h = 8.5 + 8;
+      } else if (ctype === "battery") {
+        w = Math.max(comp.body_width_mm || 25, 25);
+        h = Math.max(comp.body_height_mm || 52, 52);
+      } else {
+        w = comp.body_width_mm || 15;
+        h = comp.body_height_mm || 15;
+      }
+      
+      minX = Math.min(minX, cx - w/2 - 5);
+      minY = Math.min(minY, cy - h/2 - 5);
+      maxX = Math.max(maxX, cx + w/2 + 5);
+      maxY = Math.max(maxY, cy + h/2 + 5);
+    }
   }
+  
+  // Store original bounds before padding (for Y-flip calculation)
+  const origMinY = minY;
+  const origMaxY = maxY;
   
   // Add padding
   const padding = 10;
@@ -1903,17 +1872,27 @@ function _renderPlacementView(highlightIndices, svg) {
   // Theme-aware colors
   const isLight = document.documentElement.classList.contains("light");
   const boardFill = isLight ? "#e5e7eb" : "#1f2937";
-  const boardStroke = isLight ? "#d1d5db" : "#374151";
+  const boardStroke = isLight ? "#9ca3af" : "#4b5563";
   
-  // Draw board outline background (approximate rectangle)
-  svgContent += `<rect x="${minX + padding/2}" y="${minY + padding/2}" 
-    width="${width - padding}" height="${height - padding}" 
-    fill="${boardFill}" stroke="${boardStroke}" stroke-width="1" rx="3"/>`;
+  // Flip Y so outline appears right-side up (SVG Y-down, data Y-up)
+  const flipY = y => (origMaxY + origMinY) - y;
   
-  // Draw each component
+  // Draw actual outline polygon if available, otherwise fallback to rectangle
+  if (outline && outline.length >= 3) {
+    const pts = outline.map(([x, y]) => `${x},${flipY(y)}`).join(" ");
+    svgContent += `<polygon points="${pts}" 
+      fill="${boardFill}" stroke="${boardStroke}" stroke-width="1.5"/>`;
+  } else {
+    svgContent += `<rect x="${minX + padding/2}" y="${minY + padding/2}" 
+      width="${width - padding}" height="${height - padding}" 
+      fill="${boardFill}" stroke="${boardStroke}" stroke-width="1" rx="3"/>`;
+  }
+  
+  // Draw each component (with Y-flip to match outline)
   for (let i = 0; i < components.length; i++) {
     const comp = components[i];
-    const [cx, cy] = comp.center || [0, 0];
+    const [cx, rawCy] = comp.center || [0, 0];
+    const cy = flipY(rawCy);  // Flip Y to match outline orientation
     const ctype = comp.type || "";
     const cid = comp.id || comp.ref || ctype;
     const rotation = comp.rotation_deg || 0;
@@ -1943,9 +1922,10 @@ function _renderPlacementView(highlightIndices, svg) {
     
     // Check if this is one of the highlighted components
     const isCurrent = highlightSet.has(i);
-    const fillColor = isCurrent ? "rgba(59, 130, 246, 0.25)" : (isLight ? "rgba(107, 114, 128, 0.15)" : "rgba(75, 85, 99, 0.25)");
-    const strokeColor = isCurrent ? "#3b82f6" : (isLight ? "#9ca3af" : "#6b7280");
-    const strokeWidth = isCurrent ? "1.5" : "1";
+    // No fill highlight - only the animated outline shows which is current
+    const fillColor = isLight ? "rgba(107, 114, 128, 0.15)" : "rgba(75, 85, 99, 0.25)";
+    const strokeColor = isLight ? "#9ca3af" : "#6b7280";
+    const strokeWidth = "1";
     const pinColor = isLight ? "#4b5563" : "#9ca3af";
     const bodyColor = isLight ? "#374151" : "#4b5563";
     
@@ -1961,10 +1941,12 @@ function _renderPlacementView(highlightIndices, svg) {
     if (isCurrent) {
       const highlightW = w + 6;
       const highlightH = h + 6;
+      // Apply same rotation as component so highlight aligns properly
+      const rotationAttr = rotation !== 0 ? `transform="rotate(${rotation}, ${cx}, ${cy})"` : "";
       svgContent += `<rect x="${cx - highlightW/2}" y="${cy - highlightH/2}" 
         width="${highlightW}" height="${highlightH}" 
         fill="none" stroke="#3b82f6" stroke-width="1" rx="3" 
-        stroke-dasharray="4,2" opacity="0.7">
+        stroke-dasharray="4,2" opacity="0.7" ${rotationAttr}>
         <animate attributeName="stroke-dashoffset" from="0" to="12" dur="1s" repeatCount="indefinite"/>
       </rect>`;
     }
@@ -2099,72 +2081,68 @@ function _drawComponentSvg(ctype, cx, cy, w, h, rotation, opts) {
     svg += `</g>`;
     
   } else if (ctype === "diode") {
-    // 5mm T-1 3/4 IR LED realistic rendering
-    // LED protrudes from shell - dome faces outward (toward top of SVG)
+    // 5mm T-1 3/4 IR LED realistic rendering - TOP DOWN VIEW
+    // The LED is viewed from above, with dome protruding upward out of the remote
     const diameter = 5;  // 5mm LED
     const r = diameter / 2;
-    const domeHeight = 8.5;  // total height of LED
-    const flangeHeight = 1;
-    const legLength = 6;
-    const legWidth = 0.6;
+    const legLength = 5;
+    const legWidth = 0.5;
     const legSpacing = 1.27;  // 2.54mm pitch / 2
     
     svg += `<g ${rotationAttr}>`;
     
-    // Shadow for 3D effect
-    svg += `<ellipse cx="${cx + 0.3}" cy="${cy + 0.3}" rx="${r}" ry="${r * 0.4}" 
-      fill="rgba(0,0,0,0.2)"/>`;
-    
-    // LED base flange (wider ring at bottom of dome)
-    svg += `<rect x="${cx - r - 0.5}" y="${cy + r * 0.3}" width="${diameter + 1}" height="${flangeHeight}" 
-      fill="#d4d4d4" stroke="#a3a3a3" stroke-width="0.3" rx="0.3"/>`;
-    
-    // LED body/dome - clear plastic with slight IR tint
-    // Main dome oval shape (side view of cylindrical LED)
-    svg += `<ellipse cx="${cx}" cy="${cy - domeHeight/4}" rx="${r}" ry="${domeHeight/2.5}" 
-      fill="url(#irLedGradient${isCurrent ? 'Active' : ''})" stroke="${isCurrent ? '#3b82f6' : '#94a3b8'}" stroke-width="${strokeWidth}"/>`;
-    
-    // Define gradient for realistic plastic look
+    // Define gradient for realistic clear plastic dome look
     svg += `<defs>
-      <radialGradient id="irLedGradient${isCurrent ? 'Active' : ''}" cx="30%" cy="30%" r="70%">
-        <stop offset="0%" stop-color="${isLight ? '#f8fafc' : '#e2e8f0'}"/>
-        <stop offset="40%" stop-color="${isLight ? '#e0e7ff' : '#c7d2fe'}"/>
-        <stop offset="100%" stop-color="${isLight ? '#a5b4fc' : '#818cf8'}"/>
+      <radialGradient id="irLedDome${isCurrent ? 'Active' : ''}" cx="35%" cy="35%" r="65%">
+        <stop offset="0%" stop-color="${isLight ? '#ffffff' : '#f1f5f9'}"/>
+        <stop offset="30%" stop-color="${isLight ? '#e0e7ff' : '#c7d2fe'}"/>
+        <stop offset="70%" stop-color="${isLight ? '#a5b4fc' : '#818cf8'}"/>
+        <stop offset="100%" stop-color="${isLight ? '#6366f1' : '#4f46e5'}"/>
       </radialGradient>
     </defs>`;
     
-    // Internal LED die/chip (visible through clear plastic)
-    svg += `<rect x="${cx - 0.8}" y="${cy}" width="1.6" height="1.2" 
-      fill="#c4b5fd" stroke="none" rx="0.2"/>`;
+    // Shadow beneath LED
+    svg += `<ellipse cx="${cx + 0.5}" cy="${cy + 0.5}" rx="${r + 0.5}" ry="${r + 0.5}" 
+      fill="rgba(0,0,0,0.15)"/>`;
     
-    // Reflector cup outline
-    svg += `<ellipse cx="${cx}" cy="${cy + 0.3}" rx="${r * 0.7}" ry="${r * 0.3}" 
-      fill="none" stroke="#a5b4fc" stroke-width="0.3" opacity="0.5"/>`;
+    // LED base rim (the flange you see from top)
+    svg += `<circle cx="${cx}" cy="${cy}" r="${r + 0.8}" 
+      fill="#e5e5e5" stroke="#a3a3a3" stroke-width="0.4"/>`;
     
-    // Cathode flat edge indicator (flat side of LED)
-    svg += `<line x1="${cx - r}" y1="${cy - domeHeight/3}" x2="${cx - r}" y2="${cy + r * 0.3}" 
-      stroke="${isCurrent ? '#3b82f6' : '#64748b'}" stroke-width="1"/>`;
+    // Main LED dome (circular from top view)
+    svg += `<circle cx="${cx}" cy="${cy}" r="${r}" 
+      fill="url(#irLedDome${isCurrent ? 'Active' : ''})" stroke="#94a3b8" stroke-width="0.5"/>`;
     
-    // LED legs (metal leads coming out bottom)
-    // Anode (longer leg, +)
-    svg += `<rect x="${cx + legSpacing - legWidth/2}" y="${cy + r * 0.3 + flangeHeight}" 
-      width="${legWidth}" height="${legLength}" fill="#b8b8b8"/>`;
-    // Cathode (shorter leg, -)
-    svg += `<rect x="${cx - legSpacing - legWidth/2}" y="${cy + r * 0.3 + flangeHeight}" 
-      width="${legWidth}" height="${legLength * 0.7}" fill="#b8b8b8"/>`;
+    // Highlight/reflection on dome (gives 3D spherical look)
+    svg += `<ellipse cx="${cx - r*0.3}" cy="${cy - r*0.3}" rx="${r*0.4}" ry="${r*0.3}" 
+      fill="rgba(255,255,255,0.6)" transform="rotate(-30, ${cx - r*0.3}, ${cy - r*0.3})"/>`;
     
-    // Bent portion of legs (going into board)
-    svg += `<rect x="${cx + legSpacing - legWidth/2}" y="${cy + r * 0.3 + flangeHeight + legLength - 0.3}" 
-      width="${legWidth + 1}" height="${legWidth}" fill="#b8b8b8"/>`;
-    svg += `<rect x="${cx - legSpacing - legWidth/2}" y="${cy + r * 0.3 + flangeHeight + legLength * 0.7 - 0.3}" 
-      width="${legWidth + 1}" height="${legWidth}" fill="#b8b8b8"/>`;
+    // Internal LED die visible through dome (small square chip)
+    svg += `<rect x="${cx - 0.6}" y="${cy - 0.6}" width="1.2" height="1.2" 
+      fill="#a78bfa" stroke="none" rx="0.1" opacity="0.7"/>`;
+    
+    // Cathode flat edge indicator (the flat side of LED rim)
+    svg += `<path d="M ${cx - r - 0.8} ${cy - r*0.6} L ${cx - r - 0.8} ${cy + r*0.6}" 
+      stroke="#64748b" stroke-width="1.2" stroke-linecap="round"/>`;
+    
+    // LED legs extending downward (into the board - shown as going "into" the view)
+    // Anode (right, marked +)
+    svg += `<rect x="${cx + legSpacing - legWidth/2}" y="${cy + r + 1}" 
+      width="${legWidth}" height="${legLength}" fill="#a8a8a8" rx="0.1"/>`;
+    // Cathode (left, marked -, shorter)
+    svg += `<rect x="${cx - legSpacing - legWidth/2}" y="${cy + r + 1}" 
+      width="${legWidth}" height="${legLength * 0.7}" fill="#a8a8a8" rx="0.1"/>`;
     
     // Polarity labels
-    svg += `<text x="${cx + legSpacing + 2}" y="${cy + r + legLength/2}" text-anchor="start" font-size="2" fill="${pinColor}">+</text>`;
-    svg += `<text x="${cx - legSpacing - 2}" y="${cy + r + legLength * 0.35}" text-anchor="end" font-size="2" fill="${pinColor}">−</text>`;
+    svg += `<text x="${cx + legSpacing + 1.5}" y="${cy + r + legLength/2 + 1}" text-anchor="start" font-size="1.8" fill="${pinColor}">+</text>`;
+    svg += `<text x="${cx - legSpacing - 1.5}" y="${cy + r + legLength * 0.35 + 1}" text-anchor="end" font-size="1.8" fill="${pinColor}">−</text>`;
     
-    // Label showing it's IR
-    svg += `<text x="${cx}" y="${cy - domeHeight/2 - 1}" text-anchor="middle" font-size="2" fill="${isLight ? '#6366f1' : '#a5b4fc'}" font-weight="bold">IR</text>`;
+    // "IR" label
+    svg += `<text x="${cx}" y="${cy - r - 2}" text-anchor="middle" font-size="2.5" fill="${isLight ? '#4f46e5' : '#a5b4fc'}" font-weight="bold">IR</text>`;
+    
+    // Glow effect to show it emits light (protruding from shell)
+    svg += `<circle cx="${cx}" cy="${cy}" r="${r + 2}" 
+      fill="none" stroke="${isLight ? '#a5b4fc' : '#6366f1'}" stroke-width="0.3" opacity="0.4" stroke-dasharray="1,1"/>`;
     
     svg += `</g>`;
     
