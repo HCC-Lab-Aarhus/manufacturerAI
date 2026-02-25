@@ -10,7 +10,7 @@ one with the most breathing room.
 from __future__ import annotations
 import logging
 import math
-from typing import Optional
+from typing import Callable, Optional
 
 log = logging.getLogger("manufacturerAI.placer")
 
@@ -21,6 +21,11 @@ from src.geometry.polygon import (
     inset_polygon,
     polygon_bounds,
 )
+
+# Minimum clearance (mm) from component probe-points to the board
+# polygon edge.  Mirrors _EDGE_WARN_MM in app.js so that the placer
+# never produces a layout that the realign UI would flag as red.
+_MIN_EDGE_CLEARANCE = 5.0
 
 
 class PlacementError(Exception):
@@ -96,6 +101,7 @@ def place_components(
 
     # ── 1. Buttons (fixed from designer) ────────────────────────────
     for btn in button_positions:
+        shape_outline = btn.get("shape_outline")
         comp = {
             "id": btn["id"],
             "ref": btn.get("label", btn["id"]),
@@ -103,19 +109,40 @@ def place_components(
             "footprint": hw.button["switch_type"],
             "center": [btn["x"], btn["y"]],
             "rotation_deg": 0,
-            "keepout": {
-                "type": "circle",
-                "radius_mm": hw.button["cap_diameter_mm"] / 2 + hw.button["keepout_padding_mm"],
-            },
         }
+
+        # Default keepout based on switch footprint — same for all buttons.
+        # The cap shape only affects the shell cutout, not internal clearance.
+        default_ko = hw.button["cap_diameter_mm"] / 2 + hw.button["keepout_padding_mm"]
+
+        if shape_outline and len(shape_outline) >= 3:
+            # Custom shape — keepout is max(default, shape bbox + 1mm)
+            xs = [p[0] for p in shape_outline]
+            ys = [p[1] for p in shape_outline]
+            shape_hw = max(abs(min(xs)), abs(max(xs))) + 1.0
+            shape_hh = max(abs(min(ys)), abs(max(ys))) + 1.0
+            btn_ko_hw = max(default_ko, shape_hw)
+            btn_ko_hh = max(default_ko, shape_hh)
+            comp["keepout"] = {
+                "type": "rectangle",
+                "width_mm": btn_ko_hw * 2,
+                "height_mm": btn_ko_hh * 2,
+            }
+            comp["shape_outline"] = shape_outline
+        else:
+            # Default round cap
+            btn_ko_hw = default_ko
+            btn_ko_hh = default_ko
+            comp["keepout"] = {
+                "type": "circle",
+                "radius_mm": default_ko,
+            }
+
         components.append(comp)
-        # Use the keepout circle radius (not just pin spacing) so
-        # that battery/controller stay clear of the full button area.
-        btn_ko_r = hw.button["cap_diameter_mm"] / 2 + hw.button["keepout_padding_mm"]
         occupied.append({
             "cx": btn["x"], "cy": btn["y"],
-            "hw": btn_ko_r,
-            "hh": btn_ko_r,
+            "hw": btn_ko_hw,
+            "hh": btn_ko_hh,
         })
 
     # ── 2. Battery compartment ──────────────────────────────────────
@@ -128,26 +155,110 @@ def place_components(
     bat_place_w = bat_w + 2 * margin
     bat_place_h = bat_h + 2 * margin
 
-    # Place the battery in the lower-center area (30–55 % of the
-    # board height).  This prevents it from being shoved to the
-    # extreme bottom while keeping it in the lower half.
-    bat_pos, _ = _place_rect(
-        board_inset, occupied,
-        bat_place_w, bat_place_h, margin, prefer="bottom",
-        prefer_weight=0.05,
-        clearance_cap=3.0,
-        y_zone=(0.30, 0.55),
-        bottleneck_channel=3.0,
+    # Validity callback: ensures battery pad positions (above the body)
+    # also have sufficient clearance from the polygon edge.
+    bat_pad_check = _make_battery_pad_validator(
+        bat_h, _MIN_EDGE_CLEARANCE,
     )
-    # Fallback: full board area if lower-center is too narrow
-    if bat_pos is None:
+
+    # ── 2 & 3. Battery + Controller (joint search) ───────────────────
+    #   On narrow boards the battery's optimal-clearance position can
+    #   leave too little Y-gap for the controller between battery and
+    #   button row.  We sweep over battery prefer_weights (stronger
+    #   weight → battery pushed further down) and, for each,
+    #   progressively relax the battery spacing pad until the
+    #   controller fits.
+    ctrl = hw.controller
+    ctrl_w = ctrl["body_width_mm"]   # 10 mm (narrow side)
+    ctrl_h = ctrl["body_height_mm"]  # 36 mm (long side)
+    ctrl_pad = ctrl["keepout_padding_mm"]
+
+    ctrl_place_w = ctrl_w + ctrl_pad + 2 * margin
+    ctrl_place_h = ctrl_h + ctrl_pad + 2 * margin
+
+    btn_band = _button_y_band(button_positions, margin)
+
+    bat_pos = None
+    ctrl_pos = None
+    ctrl_rot = 0
+    bat_spacing_pad_used = 4.0
+
+    # Each battery position attempt: (y_zone, prefer_weight)
+    _bat_attempts = [
+        ((0.15, 0.55), 0.05),   # generous zone, weak push
+        ((0.15, 0.55), 0.10),   # same zone, stronger push → battery lower
+        ((0.10, 0.55), 0.15),   # wider zone, even stronger push
+    ]
+
+    for bat_yzone, bat_pw in _bat_attempts:
         bat_pos, _ = _place_rect(
             board_inset, occupied,
             bat_place_w, bat_place_h, margin, prefer="bottom",
-            prefer_weight=0.05,
+            prefer_weight=bat_pw,
             clearance_cap=3.0,
+            y_zone=bat_yzone,
             bottleneck_channel=3.0,
+            min_edge_clearance=_MIN_EDGE_CLEARANCE,
+            extra_validity_fn=bat_pad_check,
         )
+        if bat_pos is None:
+            # Fallback: full board area
+            bat_pos, _ = _place_rect(
+                board_inset, occupied,
+                bat_place_w, bat_place_h, margin, prefer="bottom",
+                prefer_weight=bat_pw,
+                clearance_cap=3.0,
+                bottleneck_channel=3.0,
+                min_edge_clearance=_MIN_EDGE_CLEARANCE,
+                extra_validity_fn=bat_pad_check,
+            )
+        if bat_pos is None:
+            # Last resort: relax edge clearance
+            bat_pos, _ = _place_rect(
+                board_inset, occupied,
+                bat_place_w, bat_place_h, margin, prefer="bottom",
+                prefer_weight=bat_pw,
+                clearance_cap=3.0,
+                bottleneck_channel=3.0,
+            )
+        if bat_pos is None:
+            continue  # try next battery attempt
+
+        bx, by = bat_pos
+
+        # Try progressively tighter battery spacing pads.
+        for bat_spacing_pad in [4.0, 2.0, 1.0, 0.0]:
+            occupied_trial = list(occupied)
+            occupied_trial.append({"cx": bx, "cy": by,
+                                   "hw": bat_w / 2 + bat_spacing_pad,
+                                   "hh": bat_h / 2 + bat_spacing_pad})
+
+            ctrl_pos, ctrl_rot = _place_rect_with_rotation(
+                board_inset, occupied_trial,
+                ctrl_place_w, ctrl_place_h, margin,
+                prefer="center",
+                avoid_y_band=btn_band,
+                bottleneck_channel=5.0,
+                clearance_cap=8.0,
+                min_edge_clearance=_MIN_EDGE_CLEARANCE,
+            )
+            if ctrl_pos is None:
+                ctrl_pos, ctrl_rot = _place_rect_with_rotation(
+                    board_inset, occupied_trial,
+                    ctrl_place_w, ctrl_place_h, margin,
+                    prefer="center",
+                    avoid_y_band=btn_band,
+                    bottleneck_channel=5.0,
+                    clearance_cap=8.0,
+                )
+            if ctrl_pos is not None:
+                bat_spacing_pad_used = bat_spacing_pad
+                occupied = occupied_trial
+                break
+
+        if ctrl_pos is not None:
+            break  # battery + controller both placed ✓
+
     if bat_pos is None:
         raise PlacementError(
             component="battery",
@@ -159,6 +270,21 @@ def place_components(
                 f"{bat_w:.0f} x {bat_h:.0f} mm. "
                 "Widen the outline or move buttons further apart "
                 "to free enough contiguous space."
+            ),
+        )
+
+    if ctrl_pos is None:
+        raise PlacementError(
+            component="controller",
+            dimensions={"width_mm": ctrl_w, "height_mm": ctrl_h},
+            available={"width_mm": board_width, "height_mm": board_height},
+            occupied=list(occupied),
+            suggestion=(
+                "The micro-controller requires a clear area of "
+                f"{ctrl_w:.0f} x {ctrl_h:.0f} mm. "
+                "Widen the outline, make it taller, or reposition "
+                "the buttons so there is an unobstructed strip "
+                "beside them."
             ),
         )
 
@@ -178,51 +304,6 @@ def place_components(
             "height_mm": bat_h,
         },
     })
-    # Extra padding around the battery so the controller doesn't
-    # crowd against it — gives room for traces to route between them.
-    bat_spacing_pad = 4.0  # mm extra on each side
-    occupied.append({"cx": bx, "cy": by,
-                     "hw": bat_w / 2 + bat_spacing_pad,
-                     "hh": bat_h / 2 + bat_spacing_pad})
-
-    # ── 3. Controller ──────────────────────────────────────────────
-    #      Smart placement: avoid putting the MC in the button Y-band
-    #      and try both orientations (0° and 90°) to find the best fit.
-    ctrl = hw.controller
-    ctrl_w = ctrl["body_width_mm"]   # 10 mm (narrow side)
-    ctrl_h = ctrl["body_height_mm"]  # 36 mm (long side)
-    ctrl_pad = ctrl["keepout_padding_mm"]
-
-    # For placement purposes, use the full cutout size (body + keepout + margin).
-    ctrl_place_w = ctrl_w + ctrl_pad + 2 * margin
-    ctrl_place_h = ctrl_h + ctrl_pad + 2 * margin
-
-    # Compute the button Y-band so we can penalise placement inside it.
-    btn_band = _button_y_band(button_positions, margin)
-
-    # Try both orientations: 0° (w×h) and 90° (h×w), keep best scoring.
-    ctrl_pos, ctrl_rot = _place_rect_with_rotation(
-        board_inset, occupied,
-        ctrl_place_w, ctrl_place_h, margin,
-        prefer="center",
-        avoid_y_band=btn_band,
-        bottleneck_channel=5.0,
-        clearance_cap=8.0,
-    )
-    if ctrl_pos is None:
-        raise PlacementError(
-            component="controller",
-            dimensions={"width_mm": ctrl_w, "height_mm": ctrl_h},
-            available={"width_mm": board_width, "height_mm": board_height},
-            occupied=list(occupied),
-            suggestion=(
-                "The micro-controller requires a clear area of "
-                f"{ctrl_w:.0f} x {ctrl_h:.0f} mm. "
-                "Widen the outline, make it taller, or reposition "
-                "the buttons so there is an unobstructed strip "
-                "beside them."
-            ),
-        )
 
     cx, cy = ctrl_pos
     # When rotated 90°, the keepout dimensions swap.
@@ -553,6 +634,36 @@ def _y_overlap(cy: float, hh: float, band: tuple[float, float] | None) -> float:
     return max(0.0, hi - lo)
 
 
+# Type alias for the extra validity callback accepted by _place_rect.
+_ValidityFn = Callable[[float, float, list[list[float]]], bool]
+
+
+def _make_battery_pad_validator(
+    body_height: float,
+    min_clearance: float,
+) -> _ValidityFn:
+    """Return a validity function that rejects positions where the
+    battery pad probe-points are outside the polygon or too close
+    to the edge.
+
+    The pads sit ~5 mm above the body top (matching the
+    ``_compEdgeClearance`` probes in ``app.js``).
+    """
+    pad_half = hw.battery["pad_spacing_mm"] / 2       # 3 mm
+    pad_offset = body_height / 2 + 5.0                # matches JS padOffset
+
+    def _check(cx: float, cy: float, polygon: list[list[float]]) -> bool:
+        pad_y = cy + pad_offset
+        for px in (cx - pad_half, cx + pad_half):
+            if not point_in_polygon(px, pad_y, polygon):
+                return False
+            if _dist_to_polygon(px, pad_y, polygon) < min_clearance:
+                return False
+        return True
+
+    return _check
+
+
 def _place_rect_with_rotation(
     polygon: list[list[float]],
     occupied: list[dict],
@@ -563,6 +674,8 @@ def _place_rect_with_rotation(
     avoid_y_band: tuple[float, float] | None = None,
     bottleneck_channel: float = 10.0,
     clearance_cap: float | None = None,
+    min_edge_clearance: float = 0.0,
+    extra_validity_fn: "_ValidityFn | None" = None,
 ) -> tuple[tuple[float, float] | None, int]:
     """
     Try both 0° and 90° orientations and return the best position
@@ -578,6 +691,8 @@ def _place_rect_with_rotation(
             prefer=prefer, avoid_y_band=avoid_y_band,
             bottleneck_channel=bottleneck_channel,
             clearance_cap=clearance_cap,
+            min_edge_clearance=min_edge_clearance,
+            extra_validity_fn=extra_validity_fn,
         )
         if pos is not None and score > best_score:
             best_pos = pos
@@ -600,6 +715,8 @@ def _place_rect(
     prefer_weight: float = 0.01,
     clearance_cap: float | None = None,
     bottleneck_channel: float = 10.0,
+    min_edge_clearance: float = 0.0,
+    extra_validity_fn: "_ValidityFn | None" = None,
 ) -> tuple[tuple[float, float] | None, float]:
     """
     Find the best position for a *width* × *height* rectangle inside
@@ -632,6 +749,12 @@ def _place_rect(
              component before a penalty applies (default 10.0).
              Use a lower value for components that don't need
              side channels (e.g. battery = 3.0).
+    min_edge_clearance : hard minimum distance (mm) from the
+             rectangle perimeter to the polygon edge.  Positions
+             with less clearance are skipped entirely.
+    extra_validity_fn : optional callback ``(cx, cy, polygon) -> bool``
+             for component-specific checks (e.g. battery pads).
+             Positions where it returns False are skipped.
 
     Returns
     -------
@@ -677,6 +800,17 @@ def _place_rect(
 
             # ── Score: minimum clearance to edges AND components ───
             poly_dist = _rect_edge_clearance(cx, cy, hw2, hh2, ccw)
+
+            # Hard minimum edge clearance — matches _EDGE_WARN_MM in
+            # the realign UI so the placer never produces red components.
+            if poly_dist < min_edge_clearance:
+                cy += step
+                continue
+
+            # Component-specific extra validity (e.g. battery pads).
+            if extra_validity_fn is not None and not extra_validity_fn(cx, cy, ccw):
+                cy += step
+                continue
 
             if occupied:
                 occ_dist = min(
@@ -815,22 +949,44 @@ def generate_placement_candidates(
     components_base: list[dict] = []
     occupied_base: list[dict] = []
     for btn in button_positions:
-        components_base.append({
+        shape_outline = btn.get("shape_outline")
+        comp = {
             "id": btn["id"],
             "ref": btn.get("label", btn["id"]),
             "type": "button",
             "footprint": hw.button["switch_type"],
             "center": [btn["x"], btn["y"]],
             "rotation_deg": 0,
-            "keepout": {
+        }
+
+        default_ko = hw.button["cap_diameter_mm"] / 2 + hw.button["keepout_padding_mm"]
+
+        if shape_outline and len(shape_outline) >= 3:
+            xs = [p[0] for p in shape_outline]
+            ys = [p[1] for p in shape_outline]
+            shape_hw = max(abs(min(xs)), abs(max(xs))) + 1.0
+            shape_hh = max(abs(min(ys)), abs(max(ys))) + 1.0
+            btn_ko_hw = max(default_ko, shape_hw)
+            btn_ko_hh = max(default_ko, shape_hh)
+            comp["keepout"] = {
+                "type": "rectangle",
+                "width_mm": btn_ko_hw * 2,
+                "height_mm": btn_ko_hh * 2,
+            }
+            comp["shape_outline"] = shape_outline
+        else:
+            btn_ko_hw = default_ko
+            btn_ko_hh = default_ko
+            comp["keepout"] = {
                 "type": "circle",
-                "radius_mm": hw.button["cap_diameter_mm"] / 2 + hw.button["keepout_padding_mm"],
-            },
-        })
+                "radius_mm": default_ko,
+            }
+
+        components_base.append(comp)
         occupied_base.append({
             "cx": btn["x"], "cy": btn["y"],
-            "hw": hw.button["cap_diameter_mm"] / 2 + hw.button["keepout_padding_mm"],
-            "hh": hw.button["cap_diameter_mm"] / 2 + hw.button["keepout_padding_mm"],
+            "hw": btn_ko_hw,
+            "hh": btn_ko_hh,
         })
 
     bat_fp = hw.battery
@@ -850,7 +1006,20 @@ def generate_placement_candidates(
     ctrl_place_w = ctrl_w + ctrl_pad + 2 * margin
     ctrl_place_h = ctrl_h + ctrl_pad + 2 * margin
 
-    battery_prefs = ["bottom", "center", "top"]
+    bat_pad_check = _make_battery_pad_validator(
+        bat_h, _MIN_EDGE_CLEARANCE,
+    )
+
+    # Battery placement attempts: (prefer, y_zone, prefer_weight)
+    # On narrow boards a stronger "bottom" weight pushes the battery
+    # further down, opening more Y-gap for the controller above it.
+    battery_attempts = [
+        ("bottom", (0.15, 0.55), 0.05),   # weak push, max clearance
+        ("bottom", (0.15, 0.55), 0.10),   # stronger push → battery lower
+        ("bottom", (0.10, 0.55), 0.15),   # widest zone, strongest push
+        ("center", None,         0.01),   # center of board
+        ("top",    None,         0.01),   # top of board
+    ]
     controller_prefs = ["center", "bottom", "top"]
 
     btn_band = _button_y_band(button_positions, margin)
@@ -858,123 +1027,133 @@ def generate_placement_candidates(
     candidates: list[dict] = []
     seen: set[tuple[int, int, int, int, int]] = set()
 
-    for bpref in battery_prefs:
-        # For "bottom" preference, constrain to 30–55 % of board
-        # height so the battery stays in the lower-center area.
-        bzone = (0.30, 0.55) if bpref == "bottom" else None
+    # Try multiple battery spacing pads — start generous, fall back to tight.
+    # This ensures controller placement can succeed on tighter boards.
+    bat_spacing_pads = [4.0, 2.0, 1.0, 0.0]
+
+    # Outer loop: battery position.  Inner loop: spacing pad.
+    # This avoids redundantly re-computing the same battery position
+    # for every spacing pad value.
+    bat_seen: set[tuple[int, int]] = set()
+
+    for bpref, bzone, bat_pw in battery_attempts:
         bat_pos, _ = _place_rect(
             board_inset, occupied_base,
             bat_place_w, bat_place_h, margin, prefer=bpref,
-            prefer_weight=0.05,
+            prefer_weight=bat_pw,
             clearance_cap=3.0,
             bottleneck_channel=3.0,
+            min_edge_clearance=_MIN_EDGE_CLEARANCE,
+            extra_validity_fn=bat_pad_check,
             **(dict(y_zone=bzone) if bzone else {}),
         )
         if bat_pos is None:
             continue
         bx, by = bat_pos
 
-        occupied_with_bat = list(occupied_base)
-        # Extra padding so the controller doesn't crowd the battery
-        bat_spacing_pad = 4.0
-        occupied_with_bat.append({"cx": bx, "cy": by,
-                                  "hw": bat_w / 2 + bat_spacing_pad,
-                                  "hh": bat_h / 2 + bat_spacing_pad})
+        # Skip duplicate battery positions (rounded to 2mm grid)
+        bkey = (int(bx / 2), int(by / 2))
+        if bkey in bat_seen:
+            continue
+        bat_seen.add(bkey)
 
-        for cpref in controller_prefs:
-            # Explicitly try BOTH rotations and create a candidate
-            # for each valid placement.  This ensures the layout
-            # scorer can compare horizontal vs vertical layouts
-            # fairly rather than pre-filtering via placement scores.
-            for force_rot, c_w, c_h in [(0, ctrl_place_w, ctrl_place_h),
-                                         (90, ctrl_place_h, ctrl_place_w)]:
-                ctrl_pos, _ = _place_rect(
-                    board_inset, occupied_with_bat,
-                    c_w, c_h, margin,
-                    prefer=cpref,
-                    avoid_y_band=btn_band,
-                    bottleneck_channel=5.0,
-                    clearance_cap=8.0,
-                )
-                if ctrl_pos is None:
-                    continue
-                cx, cy = ctrl_pos
-                ctrl_rot = force_rot
+        for bat_spacing_pad in bat_spacing_pads:
+            occupied_with_bat = list(occupied_base)
+            occupied_with_bat.append({"cx": bx, "cy": by,
+                                      "hw": bat_w / 2 + bat_spacing_pad,
+                                      "hh": bat_h / 2 + bat_spacing_pad})
 
-                if ctrl_rot == 90:
-                    ko_w = ctrl_h + ctrl_pad
-                    ko_h = ctrl_w + ctrl_pad
-                    occ_hw, occ_hh = ko_w / 2, ko_h / 2
-                else:
-                    ko_w = ctrl_w + ctrl_pad
-                    ko_h = ctrl_h + ctrl_pad
-                    occ_hw, occ_hh = ko_w / 2, ko_h / 2
+            for cpref in controller_prefs:
+                for force_rot, c_w, c_h in [(0, ctrl_place_w, ctrl_place_h),
+                                             (90, ctrl_place_h, ctrl_place_w)]:
+                    ctrl_pos, _ = _place_rect(
+                        board_inset, occupied_with_bat,
+                        c_w, c_h, margin,
+                        prefer=cpref,
+                        avoid_y_band=btn_band,
+                        bottleneck_channel=5.0,
+                        clearance_cap=8.0,
+                        min_edge_clearance=_MIN_EDGE_CLEARANCE,
+                    )
+                    if ctrl_pos is None:
+                        continue
+                    cx, cy = ctrl_pos
+                    ctrl_rot = force_rot
 
-                # Dedup on 2mm grid (include rotation)
-                key = (int(bx / 2), int(by / 2), int(cx / 2), int(cy / 2), ctrl_rot)
-                if key in seen:
-                    continue
-                seen.add(key)
+                    if ctrl_rot == 90:
+                        ko_w = ctrl_h + ctrl_pad
+                        ko_h = ctrl_w + ctrl_pad
+                        occ_hw, occ_hh = ko_w / 2, ko_h / 2
+                    else:
+                        ko_w = ctrl_w + ctrl_pad
+                        ko_h = ctrl_h + ctrl_pad
+                        occ_hw, occ_hh = ko_w / 2, ko_h / 2
 
-                occupied_all = list(occupied_with_bat)
-                occupied_all.append({"cx": cx, "cy": cy, "hw": occ_hw, "hh": occ_hh})
+                    # Dedup on 2mm grid (include rotation)
+                    key = (int(bx / 2), int(by / 2), int(cx / 2), int(cy / 2), ctrl_rot)
+                    if key in seen:
+                        continue
+                    seen.add(key)
 
-                # Diode — at top center; scan down until pads clear edge zone
-                dmin_x, _, dmax_x, dmax_y = polygon_bounds(board_inset)
-                diode_cx = (dmin_x + dmax_x) / 2
-                d_pad_half = hw.diode.get("pad_spacing_mm", 5.0) / 2
-                d_req_clr = hw.edge_clearance + 2.5
-                ddy = dmax_y - hw.edge_clearance
-                for _ds in range(200):
-                    dl = _dist_to_polygon(diode_cx - d_pad_half, ddy, board_inset)
-                    dr = _dist_to_polygon(diode_cx + d_pad_half, ddy, board_inset)
-                    if min(dl, dr) >= d_req_clr:
-                        break
-                    ddy -= 0.5
-                ddx = diode_cx
+                    occupied_all = list(occupied_with_bat)
+                    occupied_all.append({"cx": cx, "cy": cy, "hw": occ_hw, "hh": occ_hh})
 
-                comps = list(components_base)
-                comps.append({
-                    "id": "BAT1", "ref": "battery", "type": "battery",
-                    "footprint": battery_type,
-                    "center": [bx, by], "rotation_deg": 0,
-                    "body_width_mm": bat_w, "body_height_mm": bat_h,
-                    "keepout": {"type": "rectangle", "width_mm": bat_w, "height_mm": bat_h},
-                })
-                comps.append({
-                    "id": "U1", "ref": "controller", "type": "controller",
-                    "footprint": ctrl["type"],
-                    "center": [cx, cy], "rotation_deg": ctrl_rot,
-                    "keepout": {
-                        "type": "rectangle",
-                        "width_mm": ko_w,
-                        "height_mm": ko_h,
-                    },
-                })
-                comps.append({
-                    "id": "D1", "ref": "DIODE", "type": "diode",
-                    "footprint": hw.diode["type"],
-                    "center": [ddx, ddy], "rotation_deg": 0,
-                    "keepout": {"type": "circle", "radius_mm": d_r},
-                })
+                    # Diode — at top center; scan down until pads clear edge zone
+                    dmin_x, _, dmax_x, dmax_y = polygon_bounds(board_inset)
+                    diode_cx = (dmin_x + dmax_x) / 2
+                    d_pad_half = hw.diode.get("pad_spacing_mm", 5.0) / 2
+                    d_req_clr = hw.edge_clearance + 2.5
+                    ddy = dmax_y - hw.edge_clearance
+                    for _ds in range(200):
+                        dl = _dist_to_polygon(diode_cx - d_pad_half, ddy, board_inset)
+                        dr = _dist_to_polygon(diode_cx + d_pad_half, ddy, board_inset)
+                        if min(dl, dr) >= d_req_clr:
+                            break
+                        ddy -= 0.5
+                    ddx = diode_cx
 
-                layout = {
-                    "board": {
-                        "outline_polygon": [[v[0], v[1]] for v in board_inset],
-                        "thickness_mm": hw.pcb_thickness,
-                        "origin": "bottom_left",
-                    },
-                    "components": comps,
-                    "keepout_regions": [],
-                    "metadata": {
-                        "battery_prefer": bpref,
-                        "controller_prefer": cpref,
-                        "controller_rotation": ctrl_rot,
-                    },
-                }
-                candidates.append(layout)
-                if len(candidates) >= max_candidates:
-                    return candidates
+                    comps = list(components_base)
+                    comps.append({
+                        "id": "BAT1", "ref": "battery", "type": "battery",
+                        "footprint": battery_type,
+                        "center": [bx, by], "rotation_deg": 0,
+                        "body_width_mm": bat_w, "body_height_mm": bat_h,
+                        "keepout": {"type": "rectangle", "width_mm": bat_w, "height_mm": bat_h},
+                    })
+                    comps.append({
+                        "id": "U1", "ref": "controller", "type": "controller",
+                        "footprint": ctrl["type"],
+                        "center": [cx, cy], "rotation_deg": ctrl_rot,
+                        "keepout": {
+                            "type": "rectangle",
+                            "width_mm": ko_w,
+                            "height_mm": ko_h,
+                        },
+                    })
+                    comps.append({
+                        "id": "D1", "ref": "DIODE", "type": "diode",
+                        "footprint": hw.diode["type"],
+                        "center": [ddx, ddy], "rotation_deg": 0,
+                        "keepout": {"type": "circle", "radius_mm": d_r},
+                    })
+
+                    layout = {
+                        "board": {
+                            "outline_polygon": [[v[0], v[1]] for v in board_inset],
+                            "thickness_mm": hw.pcb_thickness,
+                            "origin": "bottom_left",
+                        },
+                        "components": comps,
+                        "keepout_regions": [],
+                        "metadata": {
+                            "battery_prefer": bpref,
+                            "controller_prefer": cpref,
+                            "controller_rotation": ctrl_rot,
+                        },
+                    }
+                    candidates.append(layout)
+                    if len(candidates) >= max_candidates:
+                        return candidates
 
     return candidates
 
