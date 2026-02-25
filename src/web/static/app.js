@@ -366,7 +366,15 @@ function exitRealignMode(apply) {
     applyRealignedLayout(_editedLayout);
   } else {
     // Cancel — resume the paused pipeline so it can finish
-    fetch("/api/realign/resume", { method: "POST" }).catch(() => {});
+    fetch("/api/realign/resume", { method: "POST" })
+      .then(r => r.json())
+      .then(data => {
+        if (data.stl_rebuilding) {
+          updateProgress("Compiling STL models...");
+          _pollForUpdatedModel(latestModelName || "print_plate");
+        }
+      })
+      .catch(() => {});
     renderOutlineWithComponents(_currentLayout);
   }
 }

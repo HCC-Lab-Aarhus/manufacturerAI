@@ -10,7 +10,7 @@ one with the most breathing room.
 from __future__ import annotations
 import logging
 import math
-from typing import Optional
+from typing import Callable, Optional
 
 log = logging.getLogger("manufacturerAI.placer")
 
@@ -21,6 +21,11 @@ from src.geometry.polygon import (
     inset_polygon,
     polygon_bounds,
 )
+
+# Minimum clearance (mm) from component probe-points to the board
+# polygon edge.  Mirrors _EDGE_WARN_MM in app.js so that the placer
+# never produces a layout that the realign UI would flag as red.
+_MIN_EDGE_CLEARANCE = 5.0
 
 
 class PlacementError(Exception):
@@ -128,6 +133,12 @@ def place_components(
     bat_place_w = bat_w + 2 * margin
     bat_place_h = bat_h + 2 * margin
 
+    # Validity callback: ensures battery pad positions (above the body)
+    # also have sufficient clearance from the polygon edge.
+    bat_pad_check = _make_battery_pad_validator(
+        bat_h, _MIN_EDGE_CLEARANCE,
+    )
+
     # Place the battery in the lower-center area (30–55 % of the
     # board height).  This prevents it from being shoved to the
     # extreme bottom while keeping it in the lower half.
@@ -138,8 +149,21 @@ def place_components(
         clearance_cap=3.0,
         y_zone=(0.30, 0.55),
         bottleneck_channel=3.0,
+        min_edge_clearance=_MIN_EDGE_CLEARANCE,
+        extra_validity_fn=bat_pad_check,
     )
     # Fallback: full board area if lower-center is too narrow
+    if bat_pos is None:
+        bat_pos, _ = _place_rect(
+            board_inset, occupied,
+            bat_place_w, bat_place_h, margin, prefer="bottom",
+            prefer_weight=0.05,
+            clearance_cap=3.0,
+            bottleneck_channel=3.0,
+            min_edge_clearance=_MIN_EDGE_CLEARANCE,
+            extra_validity_fn=bat_pad_check,
+        )
+    # Last resort: relax edge clearance on very tight boards
     if bat_pos is None:
         bat_pos, _ = _place_rect(
             board_inset, occupied,
@@ -208,7 +232,18 @@ def place_components(
         avoid_y_band=btn_band,
         bottleneck_channel=5.0,
         clearance_cap=8.0,
+        min_edge_clearance=_MIN_EDGE_CLEARANCE,
     )
+    # Fallback: relax edge clearance on very tight boards
+    if ctrl_pos is None:
+        ctrl_pos, ctrl_rot = _place_rect_with_rotation(
+            board_inset, occupied,
+            ctrl_place_w, ctrl_place_h, margin,
+            prefer="center",
+            avoid_y_band=btn_band,
+            bottleneck_channel=5.0,
+            clearance_cap=8.0,
+        )
     if ctrl_pos is None:
         raise PlacementError(
             component="controller",
@@ -553,6 +588,36 @@ def _y_overlap(cy: float, hh: float, band: tuple[float, float] | None) -> float:
     return max(0.0, hi - lo)
 
 
+# Type alias for the extra validity callback accepted by _place_rect.
+_ValidityFn = Callable[[float, float, list[list[float]]], bool]
+
+
+def _make_battery_pad_validator(
+    body_height: float,
+    min_clearance: float,
+) -> _ValidityFn:
+    """Return a validity function that rejects positions where the
+    battery pad probe-points are outside the polygon or too close
+    to the edge.
+
+    The pads sit ~5 mm above the body top (matching the
+    ``_compEdgeClearance`` probes in ``app.js``).
+    """
+    pad_half = hw.battery["pad_spacing_mm"] / 2       # 3 mm
+    pad_offset = body_height / 2 + 5.0                # matches JS padOffset
+
+    def _check(cx: float, cy: float, polygon: list[list[float]]) -> bool:
+        pad_y = cy + pad_offset
+        for px in (cx - pad_half, cx + pad_half):
+            if not point_in_polygon(px, pad_y, polygon):
+                return False
+            if _dist_to_polygon(px, pad_y, polygon) < min_clearance:
+                return False
+        return True
+
+    return _check
+
+
 def _place_rect_with_rotation(
     polygon: list[list[float]],
     occupied: list[dict],
@@ -563,6 +628,8 @@ def _place_rect_with_rotation(
     avoid_y_band: tuple[float, float] | None = None,
     bottleneck_channel: float = 10.0,
     clearance_cap: float | None = None,
+    min_edge_clearance: float = 0.0,
+    extra_validity_fn: "_ValidityFn | None" = None,
 ) -> tuple[tuple[float, float] | None, int]:
     """
     Try both 0° and 90° orientations and return the best position
@@ -578,6 +645,8 @@ def _place_rect_with_rotation(
             prefer=prefer, avoid_y_band=avoid_y_band,
             bottleneck_channel=bottleneck_channel,
             clearance_cap=clearance_cap,
+            min_edge_clearance=min_edge_clearance,
+            extra_validity_fn=extra_validity_fn,
         )
         if pos is not None and score > best_score:
             best_pos = pos
@@ -600,6 +669,8 @@ def _place_rect(
     prefer_weight: float = 0.01,
     clearance_cap: float | None = None,
     bottleneck_channel: float = 10.0,
+    min_edge_clearance: float = 0.0,
+    extra_validity_fn: "_ValidityFn | None" = None,
 ) -> tuple[tuple[float, float] | None, float]:
     """
     Find the best position for a *width* × *height* rectangle inside
@@ -632,6 +703,12 @@ def _place_rect(
              component before a penalty applies (default 10.0).
              Use a lower value for components that don't need
              side channels (e.g. battery = 3.0).
+    min_edge_clearance : hard minimum distance (mm) from the
+             rectangle perimeter to the polygon edge.  Positions
+             with less clearance are skipped entirely.
+    extra_validity_fn : optional callback ``(cx, cy, polygon) -> bool``
+             for component-specific checks (e.g. battery pads).
+             Positions where it returns False are skipped.
 
     Returns
     -------
@@ -677,6 +754,17 @@ def _place_rect(
 
             # ── Score: minimum clearance to edges AND components ───
             poly_dist = _rect_edge_clearance(cx, cy, hw2, hh2, ccw)
+
+            # Hard minimum edge clearance — matches _EDGE_WARN_MM in
+            # the realign UI so the placer never produces red components.
+            if poly_dist < min_edge_clearance:
+                cy += step
+                continue
+
+            # Component-specific extra validity (e.g. battery pads).
+            if extra_validity_fn is not None and not extra_validity_fn(cx, cy, ccw):
+                cy += step
+                continue
 
             if occupied:
                 occ_dist = min(
@@ -850,6 +938,10 @@ def generate_placement_candidates(
     ctrl_place_w = ctrl_w + ctrl_pad + 2 * margin
     ctrl_place_h = ctrl_h + ctrl_pad + 2 * margin
 
+    bat_pad_check = _make_battery_pad_validator(
+        bat_h, _MIN_EDGE_CLEARANCE,
+    )
+
     battery_prefs = ["bottom", "center", "top"]
     controller_prefs = ["center", "bottom", "top"]
 
@@ -868,6 +960,8 @@ def generate_placement_candidates(
             prefer_weight=0.05,
             clearance_cap=3.0,
             bottleneck_channel=3.0,
+            min_edge_clearance=_MIN_EDGE_CLEARANCE,
+            extra_validity_fn=bat_pad_check,
             **(dict(y_zone=bzone) if bzone else {}),
         )
         if bat_pos is None:
@@ -895,6 +989,7 @@ def generate_placement_candidates(
                     avoid_y_band=btn_band,
                     bottleneck_channel=5.0,
                     clearance_cap=8.0,
+                    min_edge_clearance=_MIN_EDGE_CLEARANCE,
                 )
                 if ctrl_pos is None:
                     continue

@@ -401,8 +401,20 @@ def realign_pause():
 
 @app.post("/api/realign/resume")
 def realign_resume():
-    """Resume after cancelling realign (no-op — pipeline was cancelled)."""
-    return {"status": "resumed"}
+    """Resume after cancelling realign — restart STL build if interrupted."""
+    if _run_dir is None:
+        return {"status": "resumed", "stl_rebuilding": False}
+
+    # Check if the build was interrupted (SCAD exists but STL doesn't)
+    has_scad = (_run_dir / "enclosure.scad").exists()
+    has_stl = any((_run_dir / f"{n}.stl").exists() for n in ("print_plate", "enclosure"))
+
+    if has_scad and not has_stl:
+        _bm_log.info("Realign cancelled without changes — restarting STL build")
+        _build.start_background(_run_dir, start_from="build", stop_after="build")
+        return {"status": "resumed", "stl_rebuilding": True}
+
+    return {"status": "resumed", "stl_rebuilding": False}
 
 
 @app.get("/api/stl_status")
