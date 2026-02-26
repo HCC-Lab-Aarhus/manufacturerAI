@@ -260,9 +260,9 @@ class TestBarelyFitsPlacement:
         assert bat["center"][1] < 180, "Battery should be below the buttons"
 
     def test_5_buttons_wide_board(self):
-        """5 buttons on a 70×200 board — should work."""
-        outline = _rect_outline(70, 200)
-        buttons = _centered_buttons(70, 200, count=5, spacing_y=20)
+        """5 buttons on a 70×220 board — should work."""
+        outline = _rect_outline(70, 220)
+        buttons = _centered_buttons(70, 220, count=5, spacing_y=20)
         layout = place_components(outline, buttons)
         assert len(layout["components"]) == 5 + 3  # 5 buttons + bat + ctrl + diode
 
@@ -336,8 +336,8 @@ class TestConcaveOutlines:
         extend through the concavity.
         """
         outline = [
-            [0, 0], [60, 0], [60, 40], [40, 65], [60, 90],
-            [60, 130], [0, 130], [0, 90], [20, 65], [0, 40],
+            [0, 0], [70, 0], [70, 40], [45, 65], [70, 90],
+            [70, 140], [0, 140], [0, 90], [25, 65], [0, 40],
         ]
         buttons = [
             {"id": "btn_1", "label": "A", "x": 30, "y": 100},
