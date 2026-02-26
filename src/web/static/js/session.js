@@ -6,14 +6,16 @@ import { loadCatalog } from './catalog.js';
 import { loadConversation } from './design.js';
 
 export function setSessionLabel(id, name) {
+    console.log('Setting session label:', { id, name });
     const label = document.getElementById('session-label');
     if (!id) {
         label.textContent = 'New session';
+        label.title = '';
     } else if (name) {
         label.textContent = name;
         label.title = id;
     } else {
-        label.textContent = `Session: ${id}`;
+        label.textContent = id;
         label.title = id;
     }
 }
@@ -73,8 +75,9 @@ export async function showSessionsModal() {
             const displayName = s.name || s.description || 'Unnamed session';
             const prettyDate = formatDate(s.created);
             const hasDesign = s.pipeline_state?.design === 'complete';
+            const isActive = s.id === state.session;
             return `
-                <div class="session-item" data-id="${s.id}" data-name="${escapeAttr(s.name || '')}">
+                <div class="session-item${isActive ? ' active' : ''}" data-id="${s.id}" data-name="${escapeAttr(s.name || '')}">
                     <div class="session-info">
                         <div class="session-name">${escapeHtml(displayName)}</div>
                         <div class="session-date">${prettyDate}</div>

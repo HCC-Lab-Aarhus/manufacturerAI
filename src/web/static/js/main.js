@@ -1,6 +1,6 @@
 /* Entry point — wires DOM events and kicks off initial load */
 
-import { state } from './state.js';
+import { API, state } from './state.js';
 import { closeModal } from './utils.js';
 import { setSessionLabel, startNewSession, showSessionsModal } from './session.js';
 import { loadCatalog, reloadCatalog } from './catalog.js';
@@ -13,10 +13,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (state.session) {
         setSessionLabel(state.session);
         loadConversation();
+        // Fetch session name for the label
+        fetch(`${API}/api/session?session=${encodeURIComponent(state.session)}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(data => { if (data?.name) setSessionLabel(state.session, data.name); })
+            .catch(() => {});
     }
 
-    // Pipeline nav
-    document.querySelectorAll('#pipeline-nav .step').forEach(btn => {
+    // Pipeline nav (step buttons only — not catalog/sessions)
+    document.querySelectorAll('#pipeline-nav .step[data-step]').forEach(btn => {
         btn.addEventListener('click', () => {
             if (btn.disabled) return;
             switchStep(btn.dataset.step);
@@ -83,14 +88,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function switchStep(step) {
     state.activeStep = step;
-    document.querySelectorAll('#pipeline-nav .step').forEach(btn => {
+    document.querySelectorAll('#pipeline-nav .step[data-step]').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.step === step);
     });
+    // Deselect catalog button
+    document.getElementById('btn-catalog').classList.remove('active');
     document.querySelectorAll('.step-panel').forEach(panel => {
         panel.hidden = panel.id !== `step-${step}`;
     });
-    // Lazy-load catalog on first visit
-    if (step === 'catalog' && !state.catalog) {
-        loadCatalog();
-    }
 }

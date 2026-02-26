@@ -139,6 +139,7 @@ async def api_get_session(session: str = Query(...)):
         "created": s.created,
         "last_modified": s.last_modified,
         "description": s.description,
+        "name": s.name,
         "pipeline_state": s.pipeline_state,
         "artifacts": {
             "catalog": s.has_artifact("catalog.json"),
