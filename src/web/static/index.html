@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ManufacturerAI</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <header>
+        <h1>ManufacturerAI</h1>
+        <div id="session-bar">
+            <span id="session-label">No session</span>
+            <button id="btn-new-session" title="New session">+ New</button>
+            <button id="btn-list-sessions" title="Browse sessions">Sessions</button>
+        </div>
+    </header>
+
+    <nav id="pipeline-nav">
+        <button class="step active" data-step="catalog">1. Catalog</button>
+        <button class="step" data-step="design" disabled>2. Design</button>
+        <button class="step" data-step="placement" disabled>3. Placement</button>
+        <button class="step" data-step="routing" disabled>4. Routing</button>
+        <button class="step" data-step="scad" disabled>5. SCAD</button>
+        <button class="step" data-step="manufacturing" disabled>6. Manufacturing</button>
+    </nav>
+
+    <main id="content">
+        <!-- Catalog step (default view) -->
+        <section id="step-catalog" class="step-panel">
+            <div class="step-header">
+                <h2>Component Catalog</h2>
+                <div class="step-actions">
+                    <button id="btn-reload-catalog">↻ Reload</button>
+                    <span id="catalog-status"></span>
+                </div>
+            </div>
+            <div id="catalog-errors" class="errors-panel" hidden></div>
+            <div id="catalog-grid" class="component-grid"></div>
+        </section>
+
+        <!-- Future step panels -->
+        <section id="step-design" class="step-panel" hidden>
+            <h2>Design Spec</h2>
+            <p class="placeholder">Coming in Stage 2</p>
+        </section>
+        <section id="step-placement" class="step-panel" hidden>
+            <h2>Placement</h2>
+            <p class="placeholder">Coming in Stage 3</p>
+        </section>
+        <section id="step-routing" class="step-panel" hidden>
+            <h2>Routing</h2>
+            <p class="placeholder">Coming in Stage 4</p>
+        </section>
+        <section id="step-scad" class="step-panel" hidden>
+            <h2>SCAD</h2>
+            <p class="placeholder">Coming in Stage 5</p>
+        </section>
+        <section id="step-manufacturing" class="step-panel" hidden>
+            <h2>Manufacturing</h2>
+            <p class="placeholder">Coming in Stage 6</p>
+        </section>
+
+    </main>
+
+    <!-- Sessions modal (outside main so position:fixed works) -->
+    <div id="sessions-modal" class="modal" hidden>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Sessions</h2>
+                <button class="modal-close" type="button">&times;</button>
+            </div>
+            <div id="sessions-list"></div>
+        </div>
+    </div>
+
+    <!-- Component detail modal -->
+    <div id="component-modal" class="modal" hidden>
+        <div class="modal-content modal-wide">
+            <div class="modal-header">
+                <h2 id="component-modal-title"></h2>
+                <button class="modal-close" type="button">&times;</button>
+            </div>
+            <div id="component-detail"></div>
+        </div>
+    </div>
+
+    <script type="module" src="/static/js/main.js"></script>
+</body>
+</html>
