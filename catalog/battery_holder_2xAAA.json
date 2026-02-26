@@ -1,0 +1,55 @@
+{
+    "id": "battery_holder_2xAAA",
+    "name": "2xAAA Battery Holder",
+    "description": "Holds two AAA batteries in series, providing 3.0V nominal (2x 1.5V). Spring contacts and snap-fit lid. Requires bottom access for battery replacement. Heavy component — placer should position near bottom of device for balance.",
+    "category": "power",
+    "ui_placement": false,
+    "body": {
+        "shape": "rect",
+        "width_mm": 25.0,
+        "length_mm": 48.0,
+        "height_mm": 12.0
+    },
+    "mounting": {
+        "style": "bottom",
+        "allowed_styles": [
+            "bottom"
+        ],
+        "blocks_routing": true,
+        "keepout_margin_mm": 2.0,
+        "hatch": {
+            "enabled": true,
+            "clearance_mm": 0.3,
+            "thickness_mm": 1.5
+        }
+    },
+    "pins": [
+        {
+            "id": "V+",
+            "label": "Positive (3V)",
+            "position_mm": [
+                0,
+                24.0
+            ],
+            "direction": "out",
+            "voltage_v": 3.0,
+            "current_max_ma": 1000,
+            "hole_diameter_mm": 1.2,
+            "description": "Positive terminal. Outputs ~3V from 2x AAA in series."
+        },
+        {
+            "id": "GND",
+            "label": "Ground (-)",
+            "position_mm": [
+                0,
+                -24.0
+            ],
+            "direction": "out",
+            "voltage_v": 0,
+            "current_max_ma": 1000,
+            "hole_diameter_mm": 1.2,
+            "description": "Negative terminal (ground)."
+        }
+    ],
+    "internal_nets": []
+}

@@ -1,0 +1,64 @@
+{
+    "id": "slide_switch_2p",
+    "name": "SPDT Slide Switch",
+    "description": "Single-pole double-throw slide switch. Common pin (C) connects to either position A or position B. Use as on/off power switch (wire one throw to VCC, common to load) or as a two-way selector.",
+    "category": "switch",
+    "ui_placement": true,
+    "body": {
+        "shape": "rect",
+        "width_mm": 8.0,
+        "length_mm": 3.5,
+        "height_mm": 4.0
+    },
+    "mounting": {
+        "style": "side",
+        "allowed_styles": [
+            "top",
+            "side"
+        ],
+        "blocks_routing": false,
+        "keepout_margin_mm": 1.5
+    },
+    "pins": [
+        {
+            "id": "A",
+            "label": "Position A",
+            "position_mm": [
+                -2.5,
+                0
+            ],
+            "direction": "bidirectional",
+            "voltage_v": null,
+            "current_max_ma": 300,
+            "hole_diameter_mm": 1.0,
+            "description": "Throw A. Connected to common when switch is in position A."
+        },
+        {
+            "id": "C",
+            "label": "Common",
+            "position_mm": [
+                0,
+                0
+            ],
+            "direction": "bidirectional",
+            "voltage_v": null,
+            "current_max_ma": 300,
+            "hole_diameter_mm": 1.0,
+            "description": "Common terminal. Always connected to one of the throws."
+        },
+        {
+            "id": "B",
+            "label": "Position B",
+            "position_mm": [
+                2.5,
+                0
+            ],
+            "direction": "bidirectional",
+            "voltage_v": null,
+            "current_max_ma": 300,
+            "hole_diameter_mm": 1.0,
+            "description": "Throw B. Connected to common when switch is in position B."
+        }
+    ],
+    "internal_nets": []
+}

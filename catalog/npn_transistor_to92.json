@@ -1,0 +1,63 @@
+{
+    "id": "npn_transistor_to92",
+    "name": "NPN Transistor (TO-92)",
+    "description": "General-purpose NPN transistor in TO-92 package. Use for switching loads that exceed MCU pin current capacity (e.g., driving IR LEDs at 100mA). Base connects to MCU digital/PWM pin through a base resistor (~1kΩ). Collector to load, emitter to ground.",
+    "category": "active",
+    "ui_placement": false,
+    "body": {
+        "shape": "rect",
+        "width_mm": 4.5,
+        "length_mm": 3.5,
+        "height_mm": 4.5
+    },
+    "mounting": {
+        "style": "internal",
+        "allowed_styles": [
+            "internal"
+        ],
+        "blocks_routing": false,
+        "keepout_margin_mm": 1.5
+    },
+    "pins": [
+        {
+            "id": "E",
+            "label": "Emitter",
+            "position_mm": [
+                -1.27,
+                0
+            ],
+            "direction": "out",
+            "voltage_v": null,
+            "current_max_ma": 200,
+            "hole_diameter_mm": 0.8,
+            "description": "Emitter. Connect to ground for common-emitter switching."
+        },
+        {
+            "id": "B",
+            "label": "Base",
+            "position_mm": [
+                0,
+                0
+            ],
+            "direction": "in",
+            "voltage_v": 0.7,
+            "current_max_ma": 10,
+            "hole_diameter_mm": 0.8,
+            "description": "Base. Control pin — connect to MCU output through a 1kΩ base resistor."
+        },
+        {
+            "id": "C",
+            "label": "Collector",
+            "position_mm": [
+                1.27,
+                0
+            ],
+            "direction": "in",
+            "voltage_v": null,
+            "current_max_ma": 200,
+            "hole_diameter_mm": 0.8,
+            "description": "Collector. Connect to load (e.g., LED cathode). Current flows from collector to emitter when base is driven."
+        }
+    ],
+    "internal_nets": []
+}
