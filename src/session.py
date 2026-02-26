@@ -58,7 +58,7 @@ class Session:
         """Write a JSON artifact to the session folder."""
         p = self.path / filename
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         self.save()  # update last_modified
         return p
 

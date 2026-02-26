@@ -3,6 +3,7 @@
 import { API, state } from './state.js';
 import { formatDate, closeModal, openModal } from './utils.js';
 import { loadCatalog } from './catalog.js';
+import { loadConversation } from './design.js';
 
 export function setSessionLabel(id) {
     document.getElementById('session-label').textContent = id ? `Session: ${id}` : 'No session';
@@ -22,6 +23,7 @@ export async function createNewSession() {
         const data = await res.json();
         setSessionUrl(data.session_id);
         loadCatalog();
+        loadConversation();
     } catch (err) {
         console.error('Failed to create session:', err);
     }
@@ -57,6 +59,7 @@ export async function showSessionsModal() {
                 setSessionUrl(item.dataset.id);
                 closeModal(modal);
                 loadCatalog();
+                loadConversation();
             });
         });
     } catch (err) {

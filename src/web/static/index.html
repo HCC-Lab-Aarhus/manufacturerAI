@@ -18,7 +18,7 @@
 
     <nav id="pipeline-nav">
         <button class="step active" data-step="catalog">1. Catalog</button>
-        <button class="step" data-step="design" disabled>2. Design</button>
+        <button class="step" data-step="design">2. Design</button>
         <button class="step" data-step="placement" disabled>3. Placement</button>
         <button class="step" data-step="routing" disabled>4. Routing</button>
         <button class="step" data-step="scad" disabled>5. SCAD</button>
@@ -40,9 +40,21 @@
         </section>
 
         <!-- Future step panels -->
+        <!-- Design step — chat interface -->
         <section id="step-design" class="step-panel" hidden>
-            <h2>Design Spec</h2>
-            <p class="placeholder">Coming in Stage 2</p>
+            <div class="step-header">
+                <h2>Design Agent</h2>
+                <div class="step-actions">
+                    <span id="design-status"></span>
+                </div>
+            </div>
+            <div id="design-chat" class="chat-container">
+                <div id="chat-messages" class="chat-messages"></div>
+                <div class="chat-input-row">
+                    <textarea id="chat-input" placeholder="Describe the device you want to design..." rows="2"></textarea>
+                    <button id="btn-send-design" title="Send">Send</button>
+                </div>
+            </div>
         </section>
         <section id="step-placement" class="step-panel" hidden>
             <h2>Placement</h2>

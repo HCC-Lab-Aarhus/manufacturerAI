@@ -4,6 +4,7 @@ import { state } from './state.js';
 import { closeModal } from './utils.js';
 import { setSessionLabel, createNewSession, showSessionsModal } from './session.js';
 import { loadCatalog, reloadCatalog } from './catalog.js';
+import { sendDesignPrompt, loadConversation } from './design.js';
 
 document.addEventListener('DOMContentLoaded', () => {
     // Restore session from URL
@@ -24,6 +25,15 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-list-sessions').addEventListener('click', showSessionsModal);
     document.getElementById('btn-reload-catalog').addEventListener('click', reloadCatalog);
 
+    // Design chat
+    document.getElementById('btn-send-design').addEventListener('click', sendDesignPrompt);
+    document.getElementById('chat-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendDesignPrompt();
+        }
+    });
+
     // Modal close buttons
     document.querySelectorAll('.modal-close').forEach(btn => {
         btn.addEventListener('click', () => closeModal(btn.closest('.modal')));
@@ -38,6 +48,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initial load
     loadCatalog();
+    loadConversation();
 });
 
 function switchStep(step) {

@@ -15,13 +15,14 @@ import json
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.catalog import load_catalog, catalog_to_dict, CatalogResult
 from src.session import create_session, load_session, list_sessions, Session
+from src.agent import DesignAgent
 
 # ── .env loader ────────────────────────────────────────────────────
 
@@ -188,6 +189,73 @@ async def api_session_catalog(session: str = Query(...)):
         s.pipeline_state["catalog"] = "loaded"
         s.save()
     return data
+
+
+# ── Routes: Design Agent API ──────────────────────────────────────
+
+@app.get("/api/session/conversation")
+async def api_conversation(session: str = Query(...)):
+    """Return the saved conversation history for a session."""
+    s = _resolve_session(session)
+    data = s.read_artifact("conversation.json")
+    return data if isinstance(data, list) else []
+
+
+@app.get("/api/session/design/result")
+async def api_design_result(session: str = Query(...)):
+    """Return the saved design spec for a session, if any."""
+    s = _resolve_session(session)
+    data = s.read_artifact("design.json")
+    if data is None:
+        raise HTTPException(404, "No design yet")
+    return data
+
+
+@app.post("/api/session/design")
+async def api_design(request: Request, session: str = Query(...)):
+    """
+    Run the design agent. Returns an SSE stream.
+
+    Body: {"prompt": "Design a flashlight with..."}
+
+    SSE event types:
+      thinking_start  — new thinking block
+      thinking_delta  — incremental thinking text (data: {"text": "..."})
+      message_start   — new text block
+      message_delta   — incremental text (data: {"text": "..."})
+      block_stop      — current content block finished
+      tool_call       — tool invocation
+      tool_result     — tool call result
+      design          — validated design spec
+      error           — error message
+      done            — agent finished
+    """
+    body = await request.json()
+    prompt = body.get("prompt", "")
+    if not prompt:
+        raise HTTPException(400, "Missing 'prompt' in request body")
+
+    sess = _resolve_session(session)
+    cat = _get_catalog()
+
+    async def event_stream():
+        try:
+            agent = DesignAgent(cat, sess)
+            async for event in agent.run(prompt):
+                data = json.dumps(event.data) if event.data else "{}"
+                yield f"event: {event.type}\ndata: {data}\n\n"
+        except Exception as e:
+            data = json.dumps({"message": str(e)})
+            yield f"event: error\ndata: {data}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ── Entry point ────────────────────────────────────────────────────
