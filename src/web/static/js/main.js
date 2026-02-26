@@ -25,7 +25,38 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Header buttons
     document.getElementById('btn-new-session').addEventListener('click', startNewSession);
+
+    // Nav-bar: Sessions (right side)
     document.getElementById('btn-list-sessions').addEventListener('click', showSessionsModal);
+
+    // Nav-bar: Catalog toggle (right side)
+    document.getElementById('btn-catalog').addEventListener('click', () => {
+        const catalogPanel = document.getElementById('step-catalog');
+        const catalogBtn = document.getElementById('btn-catalog');
+        const isVisible = !catalogPanel.hidden;
+        if (isVisible) {
+            catalogPanel.hidden = true;
+            catalogBtn.classList.remove('active');
+            // Restore the active pipeline step
+            const activeStep = state.activeStep || 'design';
+            const activePanel = document.getElementById(`step-${activeStep}`);
+            if (activePanel) activePanel.hidden = false;
+            // Re-highlight the active pipeline nav button
+            document.querySelectorAll('#pipeline-nav .step[data-step]').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.step === activeStep);
+            });
+        } else {
+            // Hide all step panels, show catalog
+            document.querySelectorAll('.step-panel').forEach(p => p.hidden = true);
+            catalogPanel.hidden = false;
+            if (!state.catalog) loadCatalog();
+            // Deselect pipeline buttons, highlight catalog
+            document.querySelectorAll('#pipeline-nav .step[data-step]').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            catalogBtn.classList.add('active');
+        }
+    });
     document.getElementById('btn-reload-catalog').addEventListener('click', reloadCatalog);
 
     // Design chat

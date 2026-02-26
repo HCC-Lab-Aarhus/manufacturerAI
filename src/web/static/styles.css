@@ -91,6 +91,10 @@ button:disabled {
     border-bottom: 1px solid var(--border);
 }
 
+#pipeline-nav .nav-spacer {
+    flex: 1;
+}
+
 #pipeline-nav .step {
     border: none;
     border-radius: 0;
@@ -116,7 +120,7 @@ button:disabled {
 /* ── Main content ────────────────────────────── */
 
 main {
-    padding: 24px;
+    padding: 0;
     max-width: 1400px;
     margin: 0 auto;
     height: calc(100vh - 90px);
@@ -188,6 +192,10 @@ main {
 
 .errors-panel li .err-field {
     color: var(--warning);
+}
+
+#step-catalog {
+    padding: 24px;
 }
 
 /* ── Component grid ──────────────────────────── */
@@ -379,6 +387,11 @@ main {
 
 .session-item:hover {
     border-color: var(--accent-dim);
+}
+
+.session-item.active {
+    border-color: var(--accent);
+    background: rgba(99, 102, 241, 0.08);
 }
 
 .session-info {

@@ -12,17 +12,18 @@
         <div id="session-bar">
             <span id="session-label">New session</span>
             <button id="btn-new-session" title="Start a new design session">+ New</button>
-            <button id="btn-list-sessions" title="Browse sessions">Sessions</button>
         </div>
     </header>
 
     <nav id="pipeline-nav">
         <button class="step active" data-step="design">1. Design</button>
-        <button class="step" data-step="catalog">Catalog</button>
         <button class="step" data-step="placement" disabled>2. Placement</button>
         <button class="step" data-step="routing" disabled>3. Routing</button>
         <button class="step" data-step="scad" disabled>4. SCAD</button>
         <button class="step" data-step="manufacturing" disabled>5. Manufacturing</button>
+        <div class="nav-spacer"></div>
+        <button class="step" id="btn-catalog">Catalog</button>
+        <button class="step" id="btn-list-sessions">Sessions</button>
     </nav>
 
     <main id="content">
