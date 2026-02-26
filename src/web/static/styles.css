@@ -381,15 +381,36 @@ main {
     border-color: var(--accent-dim);
 }
 
-.session-item .session-id {
-    font-family: var(--mono);
-    font-size: 13px;
-    color: var(--accent);
+.session-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.session-item .session-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .session-item .session-date {
     font-size: 11px;
     color: var(--text-dim);
+}
+
+.badge-small {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: var(--success-bg);
+    color: var(--success);
+    border: 1px solid var(--success);
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 .no-sessions {

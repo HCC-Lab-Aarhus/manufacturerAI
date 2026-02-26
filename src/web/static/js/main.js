@@ -2,7 +2,7 @@
 
 import { state } from './state.js';
 import { closeModal } from './utils.js';
-import { setSessionLabel, createNewSession, showSessionsModal } from './session.js';
+import { setSessionLabel, startNewSession, showSessionsModal } from './session.js';
 import { loadCatalog, reloadCatalog } from './catalog.js';
 import { sendDesignPrompt, loadConversation } from './design.js';
 
@@ -10,7 +10,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Restore session from URL
     const params = new URLSearchParams(window.location.search);
     state.session = params.get('session');
-    if (state.session) setSessionLabel(state.session);
+    if (state.session) {
+        setSessionLabel(state.session);
+        loadConversation();
+    }
 
     // Pipeline nav
     document.querySelectorAll('#pipeline-nav .step').forEach(btn => {
@@ -21,7 +24,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Header buttons
-    document.getElementById('btn-new-session').addEventListener('click', createNewSession);
+    document.getElementById('btn-new-session').addEventListener('click', startNewSession);
     document.getElementById('btn-list-sessions').addEventListener('click', showSessionsModal);
     document.getElementById('btn-reload-catalog').addEventListener('click', reloadCatalog);
 
@@ -45,10 +48,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (e.target === modal) closeModal(modal);
         });
     });
-
-    // Initial load
-    loadCatalog();
-    loadConversation();
 });
 
 function switchStep(step) {
@@ -59,4 +58,8 @@ function switchStep(step) {
     document.querySelectorAll('.step-panel').forEach(panel => {
         panel.hidden = panel.id !== `step-${step}`;
     });
+    // Lazy-load catalog on first visit
+    if (step === 'catalog' && !state.catalog) {
+        loadCatalog();
+    }
 }

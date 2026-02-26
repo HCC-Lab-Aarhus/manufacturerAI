@@ -3,7 +3,7 @@
 export const API = '';  // same origin
 
 export const state = {
-    session: null,    // current session ID from URL ?session=
+    session: null,    // current session ID (null = new/unsaved)
     catalog: null,    // cached catalog API response
-    activeStep: 'catalog',
+    activeStep: 'design',
 };

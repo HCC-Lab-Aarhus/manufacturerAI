@@ -38,6 +38,7 @@ class Session:
     created: str                         # ISO 8601
     last_modified: str                   # ISO 8601
     description: str = ""
+    name: str = ""                       # LLM-generated friendly name
     pipeline_state: dict = field(default_factory=dict)  # stage -> status
 
     def save(self) -> None:
@@ -49,6 +50,7 @@ class Session:
             "created": self.created,
             "last_modified": self.last_modified,
             "description": self.description,
+            "name": self.name,
             "pipeline_state": self.pipeline_state,
         }
         (self.path / "session.json").write_text(
@@ -117,6 +119,7 @@ def load_session(session_id: str) -> Session | None:
         created=meta["created"],
         last_modified=meta["last_modified"],
         description=meta.get("description", ""),
+        name=meta.get("name", ""),
         pipeline_state=meta.get("pipeline_state", {}),
     )
 
@@ -139,6 +142,7 @@ def list_sessions() -> list[dict]:
                 "created": meta["created"],
                 "last_modified": meta["last_modified"],
                 "description": meta.get("description", ""),
+                "name": meta.get("name", ""),
                 "pipeline_state": meta.get("pipeline_state", {}),
             })
         except (json.JSONDecodeError, OSError):

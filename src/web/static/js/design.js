@@ -1,6 +1,7 @@
 /* Design tab — chat interface for the LLM design agent (SSE streaming) */
 
 import { API, state } from './state.js';
+import { onSessionCreated, setSessionLabel } from './session.js';
 
 const messagesDiv = () => document.getElementById('chat-messages');
 const statusSpan = () => document.getElementById('design-status');
@@ -128,11 +129,6 @@ export async function sendDesignPrompt() {
     const prompt = input.value.trim();
     if (!prompt) return;
 
-    if (!state.session) {
-        appendMessage('system', 'Create a session first (click "+ New").');
-        return;
-    }
-
     // Show user message and clear input
     appendMessage('user', prompt);
     input.value = '';
@@ -141,14 +137,17 @@ export async function sendDesignPrompt() {
     statusSpan().textContent = 'Connecting…';
 
     try {
-        const response = await fetch(
-            `${API}/api/session/design?session=${encodeURIComponent(state.session)}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ prompt }),
-            }
-        );
+        // Build URL — session param is optional (server auto-creates if missing)
+        let url = `${API}/api/session/design`;
+        if (state.session) {
+            url += `?session=${encodeURIComponent(state.session)}`;
+        }
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt }),
+        });
 
         if (!response.ok) {
             const err = await response.text();
@@ -193,7 +192,7 @@ async function consumeSSE(response) {
 
         // SSE messages are separated by double newlines
         const parts = buffer.split('\n\n');
-        buffer = parts.pop(); // last part is incomplete
+        // buffer = parts.pop(); // last part is incomplete
 
         for (const part of parts) {
             if (!part.trim()) continue;
@@ -219,6 +218,10 @@ async function consumeSSE(response) {
             // ── Handle each event type ──
 
             switch (eventType) {
+                case 'session_created':
+                    onSessionCreated(data.session_id);
+                    break;
+
                 case 'thinking_start':
                     currentBlock = 'thinking';
                     toolGroup = null;
@@ -284,6 +287,12 @@ async function consumeSSE(response) {
                 case 'error':
                     appendMessage('error', data.message || 'Unknown error');
                     statusSpan().textContent = 'Error';
+                    break;
+
+                case 'session_named':
+                    if (data.name && state.session) {
+                        setSessionLabel(state.session, data.name);
+                    }
                     break;
 
                 case 'done':

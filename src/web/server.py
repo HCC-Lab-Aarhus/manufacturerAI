@@ -24,6 +24,8 @@ from src.catalog import load_catalog, catalog_to_dict, CatalogResult
 from src.session import create_session, load_session, list_sessions, Session
 from src.agent import DesignAgent
 
+import anthropic
+
 # ── .env loader ────────────────────────────────────────────────────
 
 def _load_env():
@@ -212,13 +214,17 @@ async def api_design_result(session: str = Query(...)):
 
 
 @app.post("/api/session/design")
-async def api_design(request: Request, session: str = Query(...)):
+async def api_design(request: Request, session: str = Query(None)):
     """
     Run the design agent. Returns an SSE stream.
+
+    If no session is provided, a new session is created automatically
+    and its ID is sent as the first SSE event.
 
     Body: {"prompt": "Design a flashlight with..."}
 
     SSE event types:
+      session_created — new session was auto-created (data: {"session_id": "..."})
       thinking_start  — new thinking block
       thinking_delta  — incremental thinking text (data: {"text": "..."})
       message_start   — new text block
@@ -235,15 +241,37 @@ async def api_design(request: Request, session: str = Query(...)):
     if not prompt:
         raise HTTPException(400, "Missing 'prompt' in request body")
 
-    sess = _resolve_session(session)
+    # Auto-create session if none specified
+    created_new = False
+    if session:
+        sess = _resolve_session(session)
+    else:
+        sess = create_session()
+        cat = _get_catalog()
+        sess.write_artifact("catalog.json", catalog_to_dict(cat))
+        sess.pipeline_state["catalog"] = "loaded"
+        sess.save()
+        created_new = True
+
     cat = _get_catalog()
 
     async def event_stream():
         try:
+            # Notify the client of the new session ID
+            if created_new:
+                data = json.dumps({"session_id": sess.id})
+                yield f"event: session_created\ndata: {data}\n\n"
+
             agent = DesignAgent(cat, sess)
             async for event in agent.run(prompt):
                 data = json.dumps(event.data) if event.data else "{}"
                 yield f"event: {event.type}\ndata: {data}\n\n"
+
+                # After a successful design submission, generate a session name
+                if event.type == "design":
+                    name = _generate_session_name(sess)
+                    if name:
+                        yield f"event: session_named\ndata: {json.dumps({'name': name})}\n\n"
         except Exception as e:
             data = json.dumps({"message": str(e)})
             yield f"event: error\ndata: {data}\n\n"
@@ -258,9 +286,60 @@ async def api_design(request: Request, session: str = Query(...)):
     )
 
 
+# ── Session naming (internal) ──────────────────────────────────────
+
+def _generate_session_name(sess) -> str | None:
+    """Generate a short name for the session from its conversation. Returns None on failure."""
+    conversation = sess.read_artifact("conversation.json")
+    if not conversation or not isinstance(conversation, list):
+        return None
+
+    # Build a compact summary: only user text and assistant text blocks
+    # (skip tool_use, tool_result, thinking blocks)
+    summary_parts = []
+    for msg in conversation:
+        role = msg.get("role", "")
+        content = msg.get("content")
+        if role == "user" and isinstance(content, str):
+            summary_parts.append(f"User: {content}")
+        elif role == "assistant" and isinstance(content, list):
+            for block in content:
+                if block.get("type") == "text" and block.get("text"):
+                    summary_parts.append(f"Assistant: {block['text']}")
+
+    if not summary_parts:
+        return None
+
+    # Truncate to avoid sending too much
+    summary = "\n".join(summary_parts)
+    if len(summary) > 2000:
+        summary = summary[:2000] + "\u2026"
+
+    try:
+        client = anthropic.Anthropic()
+        response = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=30,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Generate a short name (2-4 words, no quotes) for this device design conversation.\n\n"
+                    f"{summary}\n\n"
+                    "Reply with ONLY the name, nothing else."
+                ),
+            }],
+        )
+        name = response.content[0].text.strip().strip('"\'')
+        sess.name = name
+        sess.save()
+        return name
+    except Exception:
+        return None
+
+
 # ── Entry point ────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
     print("Starting ManufacturerAI server on http://localhost:8000")
-    uvicorn.run("src.web.server:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("src.web.server:app", host="127.0.0.1", port=8000, reload=True)
