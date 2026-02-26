@@ -499,7 +499,10 @@ main {
     display: flex;
 }
 
-#step-design .step-header {
+.design-status-inline {
+    font-size: 12px;
+    color: var(--text-secondary);
+    padding: 2px 8px;
     flex-shrink: 0;
 }
 
