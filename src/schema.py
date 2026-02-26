@@ -188,17 +188,48 @@ def validate_design(spec: DesignSpec, catalog: CatalogResult) -> list[str]:
                     f"'{iid}' (catalog: {cat.id})"
                 )
 
-    # ── Each pin in at most one net ──
+    # ── Each pin in at most one net (group refs are dynamic allocations) ──
+    # Build lookup: (instance_id, group_id) -> PinGroup for allocatable groups
+    allocatable_groups: dict[tuple[str, str], list[str]] = {}
+    for ci in spec.components:
+        if ci.instance_id not in instance_to_catalog:
+            continue
+        cat = instance_to_catalog[ci.instance_id]
+        if cat.pin_groups:
+            for g in cat.pin_groups:
+                if g.allocatable:
+                    allocatable_groups[(ci.instance_id, g.id)] = g.pin_ids
+
     pin_to_net: dict[str, str] = {}
+    group_alloc_count: dict[tuple[str, str], list[str]] = {}  # (iid, gid) -> [net_ids]
     for net in spec.nets:
         for pin_ref in net.pins:
-            if pin_ref in pin_to_net:
-                errors.append(
-                    f"Pin '{pin_ref}' in both net '{pin_to_net[pin_ref]}' "
-                    f"and net '{net.id}'"
-                )
+            if ":" not in pin_ref:
+                continue  # already reported above
+            iid, pid = pin_ref.split(":", 1)
+            key = (iid, pid)
+            if key in allocatable_groups:
+                # Dynamic group ref — each use allocates a different pin
+                group_alloc_count.setdefault(key, []).append(net.id)
             else:
-                pin_to_net[pin_ref] = net.id
+                # Direct pin ref — must be unique
+                if pin_ref in pin_to_net:
+                    errors.append(
+                        f"Pin '{pin_ref}' in both net '{pin_to_net[pin_ref]}' "
+                        f"and net '{net.id}'"
+                    )
+                else:
+                    pin_to_net[pin_ref] = net.id
+
+    # ── Validate group allocation counts don't exceed pool size ──
+    for (iid, gid), net_ids in group_alloc_count.items():
+        pool = allocatable_groups[(iid, gid)]
+        if len(net_ids) > len(pool):
+            errors.append(
+                f"Group '{iid}:{gid}' used in {len(net_ids)} nets "
+                f"but only has {len(pool)} pins available "
+                f"(nets: {', '.join(net_ids)})"
+            )
 
     # ── UI placements must reference ui_placement=true components ──
     for up in spec.ui_placements:

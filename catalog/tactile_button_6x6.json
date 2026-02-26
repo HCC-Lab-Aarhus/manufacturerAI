@@ -86,5 +86,25 @@
             "3",
             "4"
         ]
+    ],
+    "pin_groups": [
+        {
+            "id": "A",
+            "pin_ids": [
+                "1",
+                "2"
+            ],
+            "allocatable": true,
+            "description": "Side A of the button. Pins 1 and 2 are internally shorted. Router picks the physically optimal pin."
+        },
+        {
+            "id": "B",
+            "pin_ids": [
+                "3",
+                "4"
+            ],
+            "allocatable": true,
+            "description": "Side B of the button. Pins 3 and 4 are internally shorted. Router picks the physically optimal pin."
+        }
     ]
 }

@@ -248,9 +248,9 @@ Use `get_component` to read full pin/mounting details before using a component i
 
 ### Nets (electrical connections)
 - Pin addressing: `"instance_id:pin_id"` (e.g. `"bat_1:V+"`, `"led_1:anode"`)
-- For MCU GPIO: use `"instance_id:group_id"` (e.g. `"mcu_1:gpio"`) for dynamic pin allocation — the router picks the optimal physical pin
-- Each pin may appear in at most ONE net
-- Components with `internal_nets` have pins that are internally connected (e.g. ATmega VCC1↔AVCC) — connect at least one pin from each internal group to the appropriate net
+- **Dynamic pin allocation**: components with allocatable `pin_groups` support `"instance_id:group_id"` references (e.g. `"mcu_1:gpio"`, `"btn_1:A"`). You can use the same group reference in multiple nets — each use allocates a different physical pin from the pool. The router picks the optimal pin for each.
+- Each direct pin reference may appear in at most ONE net (group references are exempt — they're dynamic)
+- Components with `internal_nets` have pins that are internally connected (e.g. button pins 1↔2 are side A, 3↔4 are side B) — use the group reference instead of picking individual pins
 - Each net must have at least 2 pins
 
 ### Outline (device shape)
@@ -276,8 +276,8 @@ Use `get_component` to read full pin/mounting details before using a component i
   "nets": [
     {{"id": "POWER", "pins": ["bat_1:V+", "r_1:1"]}},
     {{"id": "LED_DRIVE", "pins": ["r_1:2", "led_1:anode"]}},
-    {{"id": "BTN_IN", "pins": ["btn_1:1", "bat_1:GND"]}},
-    {{"id": "BTN_OUT", "pins": ["btn_1:3", "led_1:cathode"]}}
+    {{"id": "BTN_IN", "pins": ["btn_1:A", "bat_1:GND"]}},
+    {{"id": "BTN_OUT", "pins": ["btn_1:B", "led_1:cathode"]}}
   ],
   "outline": {{
     "vertices": [[0,0], [30,0], [30,80], [0,80]],
