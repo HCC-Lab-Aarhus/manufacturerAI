@@ -121,9 +121,17 @@ button:disabled {
 
 main {
     padding: 0;
-    max-width: 1400px;
+    max-width: 1600px;
     margin: 0 auto;
     height: calc(100vh - 90px);
+    display: flex;
+    flex-direction: row;
+    overflow: hidden;
+}
+
+#step-panels {
+    flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -714,4 +722,163 @@ main {
 .chat-input-row button {
     padding: 10px 20px;
     white-space: nowrap;
+}
+
+/* ── Viewport (right panel) ──────────────────── */
+
+#viewport-resize-handle {
+    width: 4px;
+    flex-shrink: 0;
+    cursor: col-resize;
+    background: var(--border);
+    transition: background 0.15s;
+    z-index: 10;
+}
+
+#viewport-resize-handle:hover,
+#viewport-resize-handle:active {
+    background: var(--accent-dim);
+}
+
+#viewport {
+    width: 380px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--bg);
+}
+
+#viewport-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+}
+
+.viewport-empty {
+    color: var(--text-dim);
+    font-style: italic;
+    font-size: 13px;
+    text-align: center;
+    padding: 40px 16px;
+}
+
+/* ── Viewport: Design step ───────────────────── */
+
+.vp-design {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.vp-section h4 {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin-bottom: 10px;
+}
+
+.vp-outline-svg {
+    width: 100%;
+    height: auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.vp-outline-path {
+    fill: rgba(88, 166, 255, 0.08);
+    stroke: var(--accent);
+    stroke-width: 2;
+    stroke-linejoin: round;
+}
+
+.vp-ui-marker {
+    fill: var(--success);
+    opacity: 0.8;
+}
+
+.vp-ui-label {
+    fill: var(--text);
+    font-size: 9px;
+    font-family: var(--mono);
+    text-anchor: middle;
+    dominant-baseline: auto;
+}
+
+.vp-dim-label {
+    fill: var(--text-dim);
+    font-size: 10px;
+    font-family: var(--mono);
+    text-anchor: middle;
+}
+
+.vp-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.vp-table thead th {
+    text-align: left;
+    padding: 6px 8px;
+    color: var(--text-dim);
+    font-weight: 500;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+}
+
+.vp-table tbody td {
+    padding: 5px 8px;
+    border-bottom: 1px solid rgba(48, 54, 61, 0.5);
+    color: var(--text);
+}
+
+.vp-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.vp-mono {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+}
+
+.vp-net-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.vp-net-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 8px;
+    background: var(--surface);
+    border-radius: 4px;
+    border: 1px solid var(--border);
+}
+
+.vp-net-id {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+}
+
+.vp-net-pins {
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.6;
+}
+
+.vp-net-pins code {
+    font-family: var(--mono);
+    font-size: 10px;
+    background: var(--surface2);
+    padding: 1px 5px;
+    border-radius: 3px;
 }

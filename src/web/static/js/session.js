@@ -4,6 +4,7 @@ import { API, state } from './state.js';
 import { formatDate, closeModal, openModal } from './utils.js';
 import { loadCatalog } from './catalog.js';
 import { loadConversation } from './design.js';
+import { clearData as clearViewportData } from './viewport.js';
 
 export function setSessionLabel(id, name) {
     console.log('Setting session label:', { id, name });
@@ -36,6 +37,7 @@ export function startNewSession() {
     state.session = null;
     setSessionUrl(null);
     setSessionLabel(null);
+    clearViewportData();  // reset all viewport caches
     // Clear the chat
     const msgs = document.getElementById('chat-messages');
     if (msgs) msgs.innerHTML = '';
@@ -95,6 +97,7 @@ export async function showSessionsModal() {
                 setSessionLabel(id, name || null);
                 closeModal(modal);
                 state.catalog = null; // reset catalog cache
+                clearViewportData();  // reset viewport for new session
                 loadConversation();
             });
         });

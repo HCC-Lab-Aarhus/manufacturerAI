@@ -27,49 +27,59 @@
     </nav>
 
     <main id="content">
-        <!-- Design step — chat interface (default view) -->
-        <section id="step-design" class="step-panel">
-            <div id="design-chat" class="chat-container">
-                <div id="chat-messages" class="chat-messages"></div>
-                <div class="chat-input-row">
-                    <textarea id="chat-input" placeholder="Describe the device you want to design..." rows="2"></textarea>
-                    <button id="btn-send-design" title="Send">Send</button>
+        <!-- Left: step panels -->
+        <div id="step-panels">
+            <!-- Design step — chat interface (default view) -->
+            <section id="step-design" class="step-panel">
+                <div id="design-chat" class="chat-container">
+                    <div id="chat-messages" class="chat-messages"></div>
+                    <div class="chat-input-row">
+                        <textarea id="chat-input" placeholder="Describe the device you want to design..." rows="2"></textarea>
+                        <button id="btn-send-design" title="Send">Send</button>
+                    </div>
                 </div>
-            </div>
-            <span id="design-status" class="design-status-inline"></span>
-        </section>
+                <span id="design-status" class="design-status-inline"></span>
+            </section>
 
-        <!-- Catalog (reference view) -->
-        <section id="step-catalog" class="step-panel" hidden>
-            <div class="step-header">
-                <h2>Component Catalog</h2>
-                <div class="step-actions">
-                    <button id="btn-reload-catalog">↻ Reload</button>
-                    <span id="catalog-status"></span>
+            <!-- Catalog (reference view) -->
+            <section id="step-catalog" class="step-panel" hidden>
+                <div class="step-header">
+                    <h2>Component Catalog</h2>
+                    <div class="step-actions">
+                        <button id="btn-reload-catalog">↻ Reload</button>
+                        <span id="catalog-status"></span>
+                    </div>
                 </div>
+                <div id="catalog-errors" class="errors-panel" hidden></div>
+                <div id="catalog-grid" class="component-grid"></div>
+            </section>
+
+            <!-- Future step panels -->
+            <section id="step-placement" class="step-panel" hidden>
+                <h2>Placement</h2>
+                <p class="placeholder">Coming in Stage 3</p>
+            </section>
+            <section id="step-routing" class="step-panel" hidden>
+                <h2>Routing</h2>
+                <p class="placeholder">Coming in Stage 4</p>
+            </section>
+            <section id="step-scad" class="step-panel" hidden>
+                <h2>SCAD</h2>
+                <p class="placeholder">Coming in Stage 5</p>
+            </section>
+            <section id="step-manufacturing" class="step-panel" hidden>
+                <h2>Manufacturing</h2>
+                <p class="placeholder">Coming in Stage 6</p>
+            </section>
+        </div>
+
+        <!-- Right: step-dependent viewport -->
+        <div id="viewport-resize-handle"></div>
+        <aside id="viewport">
+            <div id="viewport-content">
+                <p class="viewport-empty">No preview available</p>
             </div>
-            <div id="catalog-errors" class="errors-panel" hidden></div>
-            <div id="catalog-grid" class="component-grid"></div>
-        </section>
-
-        <!-- Future step panels -->
-        <section id="step-placement" class="step-panel" hidden>
-            <h2>Placement</h2>
-            <p class="placeholder">Coming in Stage 3</p>
-        </section>
-        <section id="step-routing" class="step-panel" hidden>
-            <h2>Routing</h2>
-            <p class="placeholder">Coming in Stage 4</p>
-        </section>
-        <section id="step-scad" class="step-panel" hidden>
-            <h2>SCAD</h2>
-            <p class="placeholder">Coming in Stage 5</p>
-        </section>
-        <section id="step-manufacturing" class="step-panel" hidden>
-            <h2>Manufacturing</h2>
-            <p class="placeholder">Coming in Stage 6</p>
-        </section>
-
+        </aside>
     </main>
 
     <!-- Sessions modal (outside main so position:fixed works) -->

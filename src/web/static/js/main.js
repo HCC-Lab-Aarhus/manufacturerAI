@@ -5,6 +5,8 @@ import { closeModal } from './utils.js';
 import { setSessionLabel, startNewSession, showSessionsModal } from './session.js';
 import { loadCatalog, reloadCatalog } from './catalog.js';
 import { sendDesignPrompt, loadConversation } from './design.js';
+import { setStep } from './viewport.js';
+import './viewportDesign.js';   // registers the design viewport handler
 
 document.addEventListener('DOMContentLoaded', () => {
     // Restore session from URL
@@ -27,6 +29,9 @@ document.addEventListener('DOMContentLoaded', () => {
             switchStep(btn.dataset.step);
         });
     });
+
+    // Initialize viewport with active step
+    setStep(state.activeStep || 'design');
 
     // Header buttons
     document.getElementById('btn-new-session').addEventListener('click', startNewSession);
@@ -96,4 +101,6 @@ function switchStep(step) {
     document.querySelectorAll('.step-panel').forEach(panel => {
         panel.hidden = panel.id !== `step-${step}`;
     });
+    // Sync viewport
+    setStep(step);
 }

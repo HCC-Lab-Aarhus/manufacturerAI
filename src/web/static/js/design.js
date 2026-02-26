@@ -2,6 +2,7 @@
 
 import { API, state } from './state.js';
 import { onSessionCreated, setSessionLabel } from './session.js';
+import { setData as setViewportData, clearData as clearViewportData } from './viewport.js';
 
 const messagesDiv = () => document.getElementById('chat-messages');
 const statusSpan = () => document.getElementById('design-status');
@@ -117,6 +118,7 @@ async function loadDesignResult() {
         const design = await res.json();
         if (design && design.components) {
             appendDesignResult(design);
+            setViewportData('design', design);
         }
     } catch {
         // No design yet — that's fine
@@ -281,6 +283,7 @@ async function consumeSSE(response) {
 
                 case 'design':
                     appendDesignResult(data.design);
+                    setViewportData('design', data.design);
                     statusSpan().textContent = 'Design complete!';
                     break;
 
