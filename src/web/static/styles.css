@@ -1081,31 +1081,35 @@ main {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 0 4px 12px 0;
+    padding: 24px;
 }
 
 .placement-scroll[hidden] {
     display: none;
 }
 
-.placement-summary {
-    padding: 8px 12px;
-    background: rgba(63, 185, 80, 0.1);
-    border: 1px solid rgba(63, 185, 80, 0.3);
-    border-radius: var(--radius);
-    color: var(--success);
-    font-size: 13px;
-    margin-bottom: 4px;
-}
-
-.placement-rerun {
+.placement-toolbar {
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin-bottom: 12px;
+    gap: 12px;
+    padding: 10px 14px;
+    background: rgba(63, 185, 80, 0.08);
+    border: 1px solid rgba(63, 185, 80, 0.25);
+    border-radius: var(--radius);
+    margin-bottom: 14px;
 }
 
-.placement-rerun button {
+.placement-toolbar-summary {
+    flex: 1;
+    font-size: 13px;
+    color: var(--success);
+}
+
+.placement-toolbar-summary strong {
+    color: var(--success);
+}
+
+.placement-toolbar-rerun {
     padding: 5px 14px;
     font-size: 12px;
     font-weight: 500;
@@ -1114,11 +1118,13 @@ main {
     background: var(--surface);
     color: var(--text);
     cursor: pointer;
-    transition: background 0.15s;
+    flex-shrink: 0;
+    transition: background 0.15s, border-color 0.15s;
 }
 
-.placement-rerun button:hover {
+.placement-toolbar-rerun:hover {
     background: var(--surface2);
+    border-color: var(--text-dim);
 }
 
 .placement-error {

@@ -132,24 +132,20 @@ function renderResult(data) {
 
     el.innerHTML = '';
 
-    // Re-run bar
-    const rerun = document.createElement('div');
-    rerun.className = 'placement-rerun';
+    // Toolbar: summary + re-run button
+    const toolbar = document.createElement('div');
+    toolbar.className = 'placement-toolbar';
+    toolbar.innerHTML = `
+        <span class="placement-toolbar-summary">✅ Placed <strong>${comps.length}</strong> component${comps.length !== 1 ? 's' : ''}</span>
+    `;
     const rerunBtn = document.createElement('button');
+    rerunBtn.className = 'placement-toolbar-rerun';
     rerunBtn.textContent = '↻ Re-run Placer';
     rerunBtn.addEventListener('click', runPlacement);
-    rerun.appendChild(rerunBtn);
+    toolbar.appendChild(rerunBtn);
     const rerunStatus = statusSpan();
-    if (rerunStatus) rerun.appendChild(rerunStatus);
-    el.appendChild(rerun);
-
-    // Summary bar
-    const summary = document.createElement('div');
-    summary.className = 'placement-summary';
-    summary.innerHTML = `
-        <strong>✅ Placed ${comps.length} components</strong>
-    `;
-    el.appendChild(summary);
+    if (rerunStatus) toolbar.appendChild(rerunStatus);
+    el.appendChild(toolbar);
 
     // Component table
     if (comps.length > 0) {
