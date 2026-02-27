@@ -74,6 +74,14 @@ class Session:
     def has_artifact(self, filename: str) -> bool:
         return (self.path / filename).exists()
 
+    def delete_artifact(self, filename: str) -> bool:
+        """Delete a JSON artifact. Returns True if it existed."""
+        p = self.path / filename
+        if p.exists():
+            p.unlink()
+            return True
+        return False
+
 
 def _generate_session_id() -> str:
     """Generate a short, unique, human-readable session ID."""

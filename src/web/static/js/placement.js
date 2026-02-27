@@ -3,7 +3,7 @@
 import { API, state } from './state.js';
 import { setData as setViewportData } from './viewport.js';
 import { enableGuideBtn } from './guide.js';
-import { enableRoutingTab } from './routing.js';
+import { enableRoutingTab, resetRoutingPanel } from './routing.js';
 
 const statusSpan = () => document.getElementById('placement-status');
 const infoDiv    = () => document.getElementById('placement-info');
@@ -77,6 +77,8 @@ export async function runPlacement() {
         setViewportData('placement', data);
         stopTabFlash();
         enableGuideBtn(true);
+        // Reset routing (invalidated by new placement)
+        resetRoutingPanel();
         enableRoutingTab(true);
     } catch (e) {
         showStatus(`Error: ${e.message}`, true);

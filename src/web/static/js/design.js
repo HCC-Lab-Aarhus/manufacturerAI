@@ -3,7 +3,8 @@
 import { API, state } from './state.js';
 import { onSessionCreated, setSessionLabel } from './session.js';
 import { setData as setViewportData, clearData as clearViewportData } from './viewport.js';
-import { enablePlacementTab } from './placement.js';
+import { enablePlacementTab, resetPlacementPanel } from './placement.js';
+import { resetRoutingPanel } from './routing.js';
 
 const messagesDiv = () => document.getElementById('chat-messages');
 const statusSpan = () => document.getElementById('design-status');
@@ -305,6 +306,14 @@ async function consumeSSE(response) {
                     statusSpan().textContent = 'Design complete!';
                     // Enable placement step now that design exists
                     enablePlacementTab(true);
+                    // Invalidate downstream: placement + routing are stale
+                    resetPlacementPanel();
+                    resetRoutingPanel();
+                    // Disable routing tab until new placement
+                    {
+                        const rBtn = document.querySelector('#pipeline-nav .step[data-step="routing"]');
+                        if (rBtn) { rBtn.disabled = true; rBtn.classList.remove('tab-flash'); }
+                    }
                     break;
 
                 case 'error':

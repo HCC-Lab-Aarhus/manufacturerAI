@@ -5,8 +5,9 @@ import { formatDate, closeModal, openModal } from './utils.js';
 import { loadCatalog } from './catalog.js';
 import { loadConversation } from './design.js';
 import { loadPlacementResult, resetPlacementPanel } from './placement.js';
-import { clearData as clearViewportData } from './viewport.js';
+import { clearData as clearViewportData, setStep } from './viewport.js';
 import { enableGuideBtn, closeGuide } from './guide.js';
+import { resetRoutingPanel } from './routing.js';
 
 export function setSessionLabel(id, name) {
     const label = document.getElementById('session-label');
@@ -49,6 +50,24 @@ export function startNewSession() {
         placementBtn.disabled = true;
         placementBtn.classList.remove('tab-flash');
     }
+    // Reset routing panel and disable tab
+    resetRoutingPanel();
+    const routingBtn = document.querySelector('#pipeline-nav .step[data-step="routing"]');
+    if (routingBtn) {
+        routingBtn.disabled = true;
+        routingBtn.classList.remove('tab-flash');
+    }
+    // Switch to design tab
+    state.activeStep = 'design';
+    document.querySelectorAll('#pipeline-nav .step[data-step]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.step === 'design');
+        btn.classList.remove('tab-flash');
+    });
+    document.getElementById('btn-catalog')?.classList.remove('active');
+    document.querySelectorAll('.step-panel').forEach(panel => {
+        panel.hidden = panel.id !== 'step-design';
+    });
+    setStep('design');
     // Clear the chat
     const msgs = document.getElementById('chat-messages');
     if (msgs) msgs.innerHTML = '';

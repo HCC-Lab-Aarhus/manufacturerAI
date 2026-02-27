@@ -104,6 +104,27 @@ def _resolve_session(session_id: str | None) -> Session:
     return create_session()
 
 
+# Pipeline ordering — each step depends on everything before it.
+_PIPELINE_ORDER = ["design", "placement", "routing", "scad", "manufacturing"]
+
+
+def _invalidate_downstream(session: Session, current_step: str) -> list[str]:
+    """Delete artifacts and pipeline_state for steps after *current_step*.
+
+    Returns the list of step names that were invalidated.
+    """
+    idx = _PIPELINE_ORDER.index(current_step) if current_step in _PIPELINE_ORDER else -1
+    invalidated: list[str] = []
+    for later in _PIPELINE_ORDER[idx + 1:]:
+        artifact = f"{later}.json"
+        if session.has_artifact(artifact):
+            session.delete_artifact(artifact)
+        if later in session.pipeline_state:
+            del session.pipeline_state[later]
+            invalidated.append(later)
+    return invalidated
+
+
 # ── Routes: Pages ──────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
@@ -231,6 +252,8 @@ async def api_run_placement(session: str = Query(...)):
     data = placement_to_dict(result)
     s.write_artifact("placement.json", data)
     s.pipeline_state["placement"] = "complete"
+    # Invalidate downstream: routing depends on placement
+    _invalidate_downstream(s, "placement")
     s.save()
     return _enrich_placement(data, cat)
 
