@@ -434,7 +434,7 @@ function appendDesignResult(design) {
 
     const compCount = design.components?.length || 0;
     const netCount = design.nets?.length || 0;
-    const vertCount = design.outline?.vertices?.length || 0;
+    const vertCount = (Array.isArray(design.outline) ? design.outline : design.outline?.vertices)?.length || 0;
 
     div.innerHTML = `
         <div class="design-summary">
