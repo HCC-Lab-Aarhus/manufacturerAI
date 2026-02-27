@@ -335,10 +335,8 @@ def _generate_session_name(sess) -> str | None:
     if not summary_parts:
         return None
 
-    # Truncate to avoid sending too much
+    # Join the summary parts into a single string for the model prompt
     summary = "\n".join(summary_parts)
-    if len(summary) > 2000:
-        summary = summary[:2000] + "\u2026"
 
     try:
         client = anthropic.Anthropic()
