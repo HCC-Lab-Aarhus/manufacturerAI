@@ -25,6 +25,8 @@ body {
     color: var(--text);
     height: 100vh;
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
 }
 
 /* ── Header ──────────────────────────────────── */
@@ -130,9 +132,8 @@ button:disabled {
 
 main {
     padding: 0;
-    max-width: 1600px;
-    margin: 0 auto;
-    height: calc(100vh - 90px);
+    flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: row;
     overflow: hidden;
