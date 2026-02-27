@@ -42,6 +42,13 @@ export function startNewSession() {
     // Close guide if open
     closeGuide();
     enableGuideBtn(false);
+    // Reset placement panel and disable tab
+    resetPlacementPanel();
+    const placementBtn = document.querySelector('#pipeline-nav .step[data-step="placement"]');
+    if (placementBtn) {
+        placementBtn.disabled = true;
+        placementBtn.classList.remove('tab-flash');
+    }
     // Clear the chat
     const msgs = document.getElementById('chat-messages');
     if (msgs) msgs.innerHTML = '';
