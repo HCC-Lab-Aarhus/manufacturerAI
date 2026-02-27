@@ -425,7 +425,8 @@ function appendDesignResult(design) {
 
 function scrollToBottom() {
     const container = messagesDiv();
-    container.scrollTop = container.scrollHeight;
+    const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 40;
+    if (atBottom) container.scrollTop = container.scrollHeight;
 }
 
 function escapeHtml(text) {
