@@ -99,9 +99,9 @@ Key dimensions:
 
 **Goal:** Load all `catalog/*.json` files into Python dataclasses.
 
-**Files:** `src/catalog.py`
+**Files:** `src/catalog/` package — `models.py`, `loader.py`, `serialization.py`, `__init__.py`
 
-**Status:** Complete. All 11 catalog components load and validate. Also includes `catalog_to_dict()` and `_component_to_dict()` serialization for the web API.
+**Status:** Complete. All 11 catalog components load and validate. Also includes `catalog_to_dict()` and `component_to_dict()` serialization for the web API.
 
 **What it does:**
 - Glob `catalog/*.json`, parse each into a `Component` dataclass
@@ -180,7 +180,7 @@ CatalogResult
 
 **Goal:** Define the exact JSON schema the agent outputs after reasoning.
 
-**Files:** `src/schema.py`
+**Files:** `src/pipeline/design/` package — `models.py`, `parsing.py`, `validation.py`, `serialization.py`, `__init__.py`
 
 **Status:** Complete. Includes `parse_design()`, `validate_design()`, and `design_to_dict()` serialization.
 
@@ -287,7 +287,7 @@ UIPlacement
 
 **Goal:** Auto-place all non-UI components inside the outline, optimizing for short traces and no overlaps.
 
-**Files:** `src/placer.py`
+**Files:** `src/pipeline/placer.py`
 
 **Status:** 🔜 Next to implement.
 
@@ -334,7 +334,7 @@ FullPlacement
 
 **Goal:** Manhattan trace routing between all net pins, inside the device outline.
 
-**Files:** `src/router.py`
+**Files:** `src/pipeline/router.py`
 
 **Input:** `FullPlacement` + net list + component pin specs
 
@@ -381,7 +381,7 @@ Trace
 
 **Goal:** Generate OpenSCAD enclosure files from placement + routing data.
 
-**Files:** `src/scad.py`
+**Files:** `src/pipeline/scad.py`
 
 **Input:** `FullPlacement` + `RoutingResult` + component specs + outline
 
@@ -423,7 +423,7 @@ Trace
 
 **Goal:** Turn the SCAD output + routing data into printable files.
 
-**Files:** `src/manufacturing.py`
+**Files:** `src/pipeline/manufacturing.py`
 
 **This is the bridge to physical fabrication.** It takes the compiled STL and routing data and produces everything needed for the two-machine manufacturing process.
 
@@ -483,9 +483,16 @@ ManufacturingResult
 
 **Goal:** Wire the LLM agent to read the catalog and output a valid DesignSpec.
 
-**Files:** `src/agent.py`
+**Files:** `src/agent/` package — `config.py`, `tools.py`, `prompt.py`, `messages.py`, `core.py`, `__init__.py`
 
 **Status:** Complete. Uses Claude Sonnet 4.6 with extended thinking and the Anthropic streaming API. Yields token-level deltas for real-time UI updates.
+
+**Package layout:**
+- `config.py` — constants: `MODEL`, `MAX_TOKENS`, `THINKING_BUDGET`, `MAX_TURNS`, `TOKEN_BUDGET`
+- `tools.py` — Anthropic tool definitions (`list_components`, `get_component`, `submit_design`)
+- `prompt.py` — `_build_system_prompt()`, `_catalog_summary()`
+- `messages.py` — `_serialize_content()`, `_sanitize_messages()`, `_prune_messages()`
+- `core.py` — `DesignAgent` class, `AgentEvent` dataclass
 
 **System prompt construction:**
 - Catalog summary table in system prompt (ID, category, name, pin count, mounting style)
@@ -502,9 +509,14 @@ The agent has three tools:
 - If validation fails, error details returned to agent for self-correction
 - Agent retries via the conversation loop (up to `MAX_TURNS=25`)
 
+**Message pruning:**
+- Old `get_component`/`list_components` tool results (older than 6 assistant turns) replaced with `"[pruned]"` in the API-sent messages
+- Keeps tool_use IDs intact so the API message structure remains valid
+- Only affects what goes to the API — full history preserved on disk in `conversation.json`
+
 **Agent loop pattern:**
 - `DesignAgent(catalog, session)` — loads existing conversation from session for multi-turn
-- `async for event in agent.run(prompt)` — yields `AgentEvent` objects (thinking_start/delta, message_start/delta, block_stop, tool_call, tool_result, design, error, done)
+- `async for event in agent.run(prompt)` — yields `AgentEvent` objects (thinking_start/delta, message_start/delta, block_stop, tool_call, tool_result, token_usage, design, error, done)
 - Conversation persisted to `conversation.json` in session folder
 - Content block serialization strips SDK extras (parsed_output, citations, etc.) to avoid API rejection on re-submission
 
@@ -523,20 +535,25 @@ The agent has three tools:
 - Catalog API: load, reload, per-component lookup
 - Design agent API: SSE-streaming endpoint that auto-creates sessions
 - Session-scoped artifact access (catalog, design, placement, routing)
-- Auto-generates session names via Claude Haiku after design submission
+- Token counting endpoint (`/api/session/tokens`) using Anthropic `count_tokens()` API
 - Loads `.env` / `.env.local` for API keys
+
+**Session naming** (`src/web/naming.py`):
+- Auto-generates session names via Claude Haiku after design submission
+- Uses only the last 3 user turns (not full conversation) for efficiency
 
 **Static UI** (`src/web/static/`):
 - Chat interface with real-time thinking/message streaming
-- Design viewport that renders the outline polygon with corner easing curves
-- Component visualization (body shapes, pins, UI placements)
+- Design viewport that renders the outline polygon with corner easing curves (Y-axis flipped: math Y-up → SVG Y-down)
+- Component visualization (body shapes, pins, UI placements, side-mount markers)
+- Token usage pie chart above the send button
 - Session picker (list, create, resume sessions)
 
 **What remains for later stages:** Preview updates for placement, routing, and 3D model views will be added as those pipeline stages are built.
 
 ## Session System ✅ (infrastructure, not in original plan)
 
-**Files:** `src/session.py`
+**Files:** `src/session.py` (stays as a flat module — small and cohesive)
 
 **Status:** Complete. Added as cross-cutting infrastructure for the pipeline.
 
@@ -560,15 +577,15 @@ Session IDs are timestamp-based (e.g. `20260227_000915`). The `pipeline_state` d
 
 | Step | What | Status | Depends on |
 |------|------|--------|------------|
-| **1** | `src/catalog.py` — catalog loader + dataclasses | ✅ Done | catalog/*.json |
-| **2** | `src/schema.py` — DesignSpec dataclasses + validation | ✅ Done | Stage 1 |
+| **1** | `src/catalog/` — catalog loader + dataclasses | ✅ Done | catalog/*.json |
+| **2** | `src/pipeline/design/` — DesignSpec dataclasses + validation | ✅ Done | Stage 1 |
 | **∗** | `src/session.py` — session management | ✅ Done | — |
-| **7** | `src/agent.py` — LLM integration | ✅ Done | Stage 1, 2 |
+| **7** | `src/agent/` — LLM integration | ✅ Done | Stage 1, 2 |
 | **8** | `src/web/` — browser UI (design stage) | ✅ Done | Stage 1, 2, 7 |
-| **3** | `src/placer.py` — component placement | 🔜 Next | Stage 1, 2 |
-| **4** | `src/router.py` — trace routing + dynamic pins | Not started | Stage 1, 2, 3 |
-| **5** | `src/scad.py` — enclosure generation | Not started | Stage 1–4 |
-| **6** | `src/manufacturing.py` — slice, pause points, ink traces, G-code | Not started | Stage 1–5 |
+| **3** | `src/pipeline/placer.py` — component placement | 🔜 Next | Stage 1, 2 |
+| **4** | `src/pipeline/router.py` — trace routing + dynamic pins | Not started | Stage 1, 2, 3 |
+| **5** | `src/pipeline/scad.py` — enclosure generation | Not started | Stage 1–4 |
+| **6** | `src/pipeline/manufacturing.py` — slice, pause points, ink traces, G-code | Not started | Stage 1–5 |
 
 The agent and web UI were built early (before the mechanical pipeline) because the design stage is independent of placement/routing/SCAD. The pipeline stages (3–6) are built next, each reading the prior stage's output from the session folder.
 
@@ -588,6 +605,48 @@ Things we skip for now, to be added later:
 Everything else ships in the initial build — outline corner rounding, SCAD fillet, dynamic pin allocation, side-mount components, ink printer format conversion, ironing + trace highlight.
 
 The goal is: **a hardcoded flashlight design goes through all 6 stages → produces a filleted .scad that renders, a .gcode with ironing/pauses/trace highlights, and ink trace output in the printer's native format.** The agent already produces valid designs; stages 3–6 complete the pipeline.
+
+---
+
+## Codebase Structure
+
+After the refactoring, each domain is its own Python package with clear internal boundaries:
+
+```
+src/
+  __init__.py
+  __main__.py              ← python -m src
+  session.py               ← session management (flat module)
+  catalog/                  ← Stage 1
+    __init__.py             ← re-exports public API
+    models.py               ← Body, Cap, Hatch, Mounting, Pin, PinGroup, Component, etc.
+    loader.py               ← load_catalog(), get_component(), validation, parsing
+    serialization.py        ← catalog_to_dict(), component_to_dict()
+  agent/                    ← Stage 7 (LLM agent, calls into pipeline)
+    __init__.py             ← re-exports
+    config.py               ← MODEL, THINKING_BUDGET, TOKEN_BUDGET, etc.
+    tools.py                ← TOOLS list (Anthropic format)
+    prompt.py               ← _build_system_prompt(), _catalog_summary()
+    messages.py             ← _serialize_content(), _sanitize_messages(), _prune_messages()
+    core.py                 ← DesignAgent, AgentEvent
+  pipeline/                 ← Stages 2–6 (all pipeline stages)
+    __init__.py
+    design/                 ← Stage 2 (design schema)
+      __init__.py           ← re-exports
+      models.py             ← ComponentInstance, Net, OutlineVertex, Outline, UIPlacement, DesignSpec
+      parsing.py            ← parse_design(), _parse_outline()
+      validation.py         ← validate_design()
+      serialization.py      ← design_to_dict()
+    placer.py               ← Stage 3 (future)
+    router.py               ← Stage 4 (future)
+    scad.py                 ← Stage 5 (future)
+    manufacturing.py        ← Stage 6 (future)
+  web/                      ← Stage 8
+    __init__.py
+    server.py               ← FastAPI routes
+    naming.py               ← session naming via Claude Haiku
+    static/                 ← HTML, CSS, JS
+```
 
 ---
 
