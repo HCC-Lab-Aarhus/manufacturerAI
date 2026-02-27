@@ -1,149 +1,10 @@
-"""
-Design spec — dataclasses for the agent's output + validation.
-
-The DesignSpec is what the LLM agent produces: which components to use,
-how they connect electrically, the device outline shape, and where
-UI-facing components are placed.
-
-Usage:
-    spec = parse_design(json_dict)
-    errors = validate_design(spec, catalog)
-"""
+"""Design spec validation — check a DesignSpec against the catalog."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
-
 from src.catalog import CatalogResult
+from .models import DesignSpec
 
-
-# ── Dataclasses ────────────────────────────────────────────────────
-
-@dataclass
-class ComponentInstance:
-    catalog_id: str
-    instance_id: str
-    config: dict | None = None
-    mounting_style: str | None = None       # override from allowed_styles
-
-
-@dataclass
-class Net:
-    id: str
-    pins: list[str]     # "instance_id:pin_id" or "instance_id:group_id" for dynamic
-
-
-@dataclass
-class OutlineVertex:
-    """A single vertex with optional corner easing.
-
-    ease_in:  mm along the incoming edge (from prev vertex) where the
-              curve begins.  0 = no easing on that side.
-    ease_out: mm along the outgoing edge (to next vertex) where the
-              curve ends.    0 = no easing on that side.
-
-    If both are 0 the corner is sharp.  If only one is provided at
-    parse time, the other defaults to the same value (symmetric).
-    """
-    x: float
-    y: float
-    ease_in: float = 0
-    ease_out: float = 0
-
-
-@dataclass
-class Outline:
-    """Device outline as a list of vertices, each with its own corner easing."""
-    points: list[OutlineVertex]
-
-    @property
-    def vertices(self) -> list[tuple[float, float]]:
-        """List of (x, y) tuples for polygon operations."""
-        return [(p.x, p.y) for p in self.points]
-
-
-@dataclass
-class UIPlacement:
-    instance_id: str
-    x_mm: float
-    y_mm: float
-    edge_index: int | None = None       # side-mount: which outline edge (0-based)
-
-
-@dataclass
-class DesignSpec:
-    components: list[ComponentInstance]
-    nets: list[Net]
-    outline: Outline
-    ui_placements: list[UIPlacement]
-
-
-# ── Parsing ────────────────────────────────────────────────────────
-
-def parse_design(data: dict) -> DesignSpec:
-    """Parse a raw dict (from JSON / tool input) into a DesignSpec."""
-    components = [
-        ComponentInstance(
-            catalog_id=c["catalog_id"],
-            instance_id=c["instance_id"],
-            config=c.get("config"),
-            mounting_style=c.get("mounting_style"),
-        )
-        for c in data["components"]
-    ]
-
-    nets = [
-        Net(id=n["id"], pins=list(n["pins"]))
-        for n in data["nets"]
-    ]
-
-    outline_data = data["outline"]
-    outline = _parse_outline(outline_data)
-
-    ui_placements = [
-        UIPlacement(
-            instance_id=p["instance_id"],
-            x_mm=float(p["x_mm"]),
-            y_mm=float(p["y_mm"]),
-            edge_index=p.get("edge_index"),
-        )
-        for p in data["ui_placements"]
-    ]
-
-    return DesignSpec(
-        components=components,
-        nets=nets,
-        outline=outline,
-        ui_placements=ui_placements,
-    )
-
-
-def _parse_outline(data: list) -> Outline:
-    """Parse outline from a flat list of vertex objects.
-
-    Format:
-        [{"x": 0, "y": 0}, {"x": 30, "y": 0}, {"x": 30, "y": 80, "ease_in": 8}]
-    """
-    points = []
-    for v in data:
-        raw_in = v.get("ease_in")
-        raw_out = v.get("ease_out")
-        # If only one side is given, mirror it to the other
-        if raw_in is not None and raw_out is None:
-            raw_out = raw_in
-        elif raw_out is not None and raw_in is None:
-            raw_in = raw_out
-        points.append(OutlineVertex(
-            x=float(v["x"]),
-            y=float(v["y"]),
-            ease_in=float(raw_in) if raw_in else 0,
-            ease_out=float(raw_out) if raw_out else 0,
-        ))
-    return Outline(points=points)
-
-
-# ── Validation ─────────────────────────────────────────────────────
 
 def validate_design(spec: DesignSpec, catalog: CatalogResult) -> list[str]:
     """Validate a DesignSpec against the catalog. Returns error messages (empty = valid)."""
@@ -221,7 +82,6 @@ def validate_design(spec: DesignSpec, catalog: CatalogResult) -> list[str]:
                 )
 
     # ── Each pin in at most one net (group refs are dynamic allocations) ──
-    # Build lookup: (instance_id, group_id) -> PinGroup for allocatable groups
     allocatable_groups: dict[tuple[str, str], list[str]] = {}
     for ci in spec.components:
         if ci.instance_id not in instance_to_catalog:
@@ -233,18 +93,16 @@ def validate_design(spec: DesignSpec, catalog: CatalogResult) -> list[str]:
                     allocatable_groups[(ci.instance_id, g.id)] = g.pin_ids
 
     pin_to_net: dict[str, str] = {}
-    group_alloc_count: dict[tuple[str, str], list[str]] = {}  # (iid, gid) -> [net_ids]
+    group_alloc_count: dict[tuple[str, str], list[str]] = {}
     for net in spec.nets:
         for pin_ref in net.pins:
             if ":" not in pin_ref:
-                continue  # already reported above
+                continue
             iid, pid = pin_ref.split(":", 1)
             key = (iid, pid)
             if key in allocatable_groups:
-                # Dynamic group ref — each use allocates a different pin
                 group_alloc_count.setdefault(key, []).append(net.id)
             else:
-                # Direct pin ref — must be unique
                 if pin_ref in pin_to_net:
                     errors.append(
                         f"Pin '{pin_ref}' in both net '{pin_to_net[pin_ref]}' "
@@ -280,7 +138,6 @@ def validate_design(spec: DesignSpec, catalog: CatalogResult) -> list[str]:
         eff_style = (ci_match.mounting_style if ci_match and ci_match.mounting_style else cat.mounting.style)
 
         if eff_style == "side":
-            # Side-mount components must specify edge_index
             if up.edge_index is None:
                 errors.append(
                     f"UI placement '{up.instance_id}': side-mount components "
@@ -328,11 +185,9 @@ def validate_design(spec: DesignSpec, catalog: CatalogResult) -> list[str]:
             elif poly.area <= 0:
                 errors.append("Outline polygon has zero or negative area")
             else:
-                # Check UI placements are inside the outline
-                # (skip side-mount components — they sit on the wall)
                 for up in spec.ui_placements:
                     if up.edge_index is not None:
-                        continue  # side-mount: position is on the edge, not interior
+                        continue  # side-mount: on the edge, not interior
                     pt = Point(up.x_mm, up.y_mm)
                     if not poly.contains(pt):
                         errors.append(
@@ -343,42 +198,3 @@ def validate_design(spec: DesignSpec, catalog: CatalogResult) -> list[str]:
             pass  # Shapely optional for polygon checks
 
     return errors
-
-
-# ── Serialization ──────────────────────────────────────────────────
-
-def design_to_dict(spec: DesignSpec) -> dict:
-    """Convert a DesignSpec to a JSON-serializable dict."""
-    return {
-        "components": [
-            {
-                "catalog_id": ci.catalog_id,
-                "instance_id": ci.instance_id,
-                **({"config": ci.config} if ci.config else {}),
-                **({"mounting_style": ci.mounting_style} if ci.mounting_style else {}),
-            }
-            for ci in spec.components
-        ],
-        "nets": [
-            {"id": n.id, "pins": n.pins}
-            for n in spec.nets
-        ],
-        "outline": [
-            {
-                "x": p.x,
-                "y": p.y,
-                **({"ease_in": p.ease_in} if p.ease_in else {}),
-                **({"ease_out": p.ease_out} if p.ease_out else {}),
-            }
-            for p in spec.outline.points
-        ],
-        "ui_placements": [
-            {
-                "instance_id": p.instance_id,
-                "x_mm": p.x_mm,
-                "y_mm": p.y_mm,
-                **({"edge_index": p.edge_index} if p.edge_index is not None else {}),
-            }
-            for p in spec.ui_placements
-        ],
-    }
