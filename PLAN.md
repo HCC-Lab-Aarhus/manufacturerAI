@@ -19,7 +19,7 @@ User request
 │  Outputs:                                            │
 │    1. Component list + quantities                    │
 │    2. Net list (which pins connect to which)         │
-│    3. Device outline polygon (with edge styles)      │
+│    3. Device outline polygon (with corner easing)    │
 │    4. UI component positions (buttons, LEDs, etc.)   │
 │    5. Mounting style overrides (LED: top vs side)    │
 └─────────────────────────────────────────────────────┘
@@ -95,16 +95,19 @@ Key dimensions:
 
 ---
 
-## Stage 1: Catalog Loader
+## Stage 1: Catalog Loader ✅
 
 **Goal:** Load all `catalog/*.json` files into Python dataclasses.
 
 **Files:** `src/catalog.py`
 
+**Status:** Complete. All 11 catalog components load and validate. Also includes `catalog_to_dict()` and `_component_to_dict()` serialization for the web API.
+
 **What it does:**
 - Glob `catalog/*.json`, parse each into a `Component` dataclass
-- Provide `load_catalog() -> list[Component]` and `get_component(id) -> Component`
+- Provide `load_catalog() -> CatalogResult` and `get_component(catalog, id) -> Component`
 - Validate on load: pin IDs unique, internal_nets reference valid pins, pin_groups reference valid pins, body dimensions > 0
+- Returns `CatalogResult` with `.components` list and `.errors` list (`.ok` property)
 
 **Dataclasses** (mirrors the JSON schema exactly):
 ```
@@ -120,6 +123,7 @@ Component
   internal_nets: list[list[str]]
   pin_groups: list[PinGroup] | None      # MCU only
   configurable: dict | None              # e.g. resistor value
+  source_file: str                       # path of source JSON (for errors)
 
 Body
   shape: str           # "rect"|"circle"
@@ -128,13 +132,23 @@ Body
   diameter_mm: float | None
   height_mm: float
 
+Cap
+  diameter_mm: float
+  height_mm: float
+  hole_clearance_mm: float
+
+Hatch
+  enabled: bool
+  clearance_mm: float
+  thickness_mm: float
+
 Mounting
   style: str           # "top"|"side"|"internal"|"bottom"
   allowed_styles: list[str]
   blocks_routing: bool
   keepout_margin_mm: float
-  cap: dict | None
-  hatch: dict | None
+  cap: Cap | None
+  hatch: Hatch | None
 
 Pin
   id: str
@@ -149,21 +163,26 @@ Pin
 PinGroup
   id: str
   pin_ids: list[str]
+  description: str
   fixed_net: str | None
   allocatable: bool
   capabilities: list[str] | None
-  description: str
-```
 
-**Test:** Load all catalog files, verify no validation errors, check counts.
+CatalogResult
+  components: list[Component]
+  errors: list[ValidationError]
+  ok: bool             # property: len(errors) == 0
+```
 
 ---
 
-## Stage 2: Agent Design Schema
+## Stage 2: Design Schema ✅
 
 **Goal:** Define the exact JSON schema the agent outputs after reasoning.
 
-**Files:** `src/agent_schema.py`
+**Files:** `src/schema.py`
+
+**Status:** Complete. Includes `parse_design()`, `validate_design()`, and `design_to_dict()` serialization.
 
 **What the agent decides:**
 
@@ -182,23 +201,20 @@ PinGroup
 
   "nets": [
     {"id": "VCC",         "pins": ["bat_1:V+", "mcu_1:VCC1", "mcu_1:AVCC", "r_reset:1", "c_1:1"]},
-    {"id": "GND",         "pins": ["bat_1:GND", "mcu_1:GND1", "mcu_1:GND2", "led_1:cathode", "c_1:2", "btn_1:3", "btn_2:3"]},
+    {"id": "GND",         "pins": ["bat_1:GND", "mcu_1:GND1", "mcu_1:GND2", "led_1:cathode", "c_1:2", "btn_1:B", "btn_2:B"]},
     {"id": "LED_DRIVE",   "pins": ["r_1:2", "led_1:anode"]},
-    {"id": "MCU_TO_R1",   "pins": ["mcu_1:PD5", "r_1:1"]},
-    {"id": "BTN1_SIG",    "pins": ["btn_1:1", "mcu_1:PD2"]},
-    {"id": "BTN2_SIG",    "pins": ["btn_2:1", "mcu_1:PD3"]},
+    {"id": "MCU_TO_R1",   "pins": ["mcu_1:gpio", "r_1:1"]},
+    {"id": "BTN1_SIG",    "pins": ["btn_1:A", "mcu_1:gpio"]},
+    {"id": "BTN2_SIG",    "pins": ["btn_2:A", "mcu_1:gpio"]},
     {"id": "RESET_PU",    "pins": ["r_reset:2", "mcu_1:PC6"]}
   ],
 
-  "outline": {
-    "vertices": [[0,0], [50,0], [50,120], [0,120]],
-    "edges": [
-      {"style": "sharp"},
-      {"style": "sharp"},
-      {"style": "round", "curve": "ease_in_out", "radius_mm": 10},
-      {"style": "round", "curve": "ease_in_out", "radius_mm": 10}
-    ]
-  },
+  "outline": [
+    {"x": 0, "y": 0},
+    {"x": 50, "y": 0},
+    {"x": 50, "y": 120, "ease_in": 10},
+    {"x": 0, "y": 120, "ease_in": 10}
+  ],
 
   "ui_placements": [
     {"instance_id": "btn_1", "x_mm": 15, "y_mm": 60},
@@ -210,11 +226,12 @@ PinGroup
 
 **Key rules:**
 - `"instance_id:pin_id"` is the universal pin address format
-- When a net references `"mcu_1:gpio"`, the pin is **unresolved** — the router will pick the best physical MCU pin from the gpio pin_group. This is how dynamic pin allocation works. The agent uses group references for flexibility; the router resolves them to physical pins.
+- When a net references `"mcu_1:gpio"`, the pin is **unresolved** — the router will pick the best physical MCU pin from the gpio pin_group. This is how dynamic pin allocation works. The agent uses group references for flexibility; the router resolves them to physical pins. Components with `internal_nets` (like buttons with pins 1↔2 shorted, 3↔4 shorted) use group references (`"btn_1:A"`, `"btn_1:B"`) instead of raw pin IDs.
 - The agent only places `ui_placement: true` components. Everything else is auto-placed.
-- Each edge in `outline.edges[i]` describes the edge from `vertices[i]` to `vertices[(i+1) % n]`.
+- **Outline is a flat list** of vertex objects. Each vertex has `x`, `y` and optional `ease_in`/`ease_out` (mm) for corner rounding. Sharp corners omit both. If only one ease value is provided, the other mirrors it.
 - Winding is clockwise.
-- A pin can only appear in one net. If a pin needs to connect to a power rail, it's listed in the VCC or GND net directly.
+- A pin can only appear in one net (group refs are dynamic — each use allocates a different pin).
+- **Side-mount UI placements** include `edge_index` to specify which outline edge the component protrudes through.
 
 **Dataclasses:**
 ```
@@ -234,30 +251,35 @@ Net
   id: str
   pins: list[str]   # "instance_id:pin_id" or "instance_id:group_id" for dynamic
 
-Outline
-  vertices: list[tuple[float, float]]
-  edges: list[EdgeStyle]
+OutlineVertex
+  x: float
+  y: float
+  ease_in: float     # mm along incoming edge where curve begins (0 = sharp)
+  ease_out: float    # mm along outgoing edge where curve ends (0 = sharp)
 
-EdgeStyle
-  style: str         # "sharp"|"round"
-  curve: str | None  # "ease_in"|"ease_out"|"ease_in_out"
-  radius_mm: float | None
+Outline
+  points: list[OutlineVertex]
+  vertices: property  # list[tuple[float, float]] — for polygon ops
 
 UIPlacement
   instance_id: str
   x_mm: float
   y_mm: float
+  edge_index: int | None   # side-mount only: which outline edge (0-based)
 ```
 
 **Validation** (run before passing to placer):
 - All catalog_ids exist in catalog
 - All instance_ids unique
 - All pin references in nets are valid (pin exists on that component, or group exists for dynamic)
+- Mounting style overrides must be in `allowed_styles`
+- Config keys must exist in component's `configurable` dict
+- Group allocation counts don't exceed pool size
 - UI placements only reference ui_placement=true components
-- All ui_placement=true components have a placement
-- Outline is valid polygon (>= 3 vertices, non-self-intersecting)
-
-**Test:** Build a DesignSpec by hand for a simple flashlight (battery + resistor + LED + button, no MCU), validate it passes.
+- All ui_placement=true components must have a placement
+- Side-mount UI placements must have `edge_index`; non-side-mount must not
+- Outline is valid polygon (>= 3 vertices, non-self-intersecting, positive area)
+- UI placements (non-side-mount) must be inside the outline polygon (Shapely)
 
 ---
 
@@ -267,9 +289,11 @@ UIPlacement
 
 **Files:** `src/placer.py`
 
-**Input:** `DesignSpec` + loaded `Component` catalog data
+**Status:** 🔜 Next to implement.
 
-**Output:** `Placement` — adds (x, y, rotation_deg) for every component not in ui_placements.
+**Input:** `DesignSpec` + loaded `CatalogResult`
+
+**Output:** `FullPlacement` — adds (x, y, rotation_deg) for every component not in ui_placements. Saved to `session/placement.json`.
 
 ```
 PlacedComponent
@@ -281,15 +305,15 @@ PlacedComponent
 
 FullPlacement
   components: list[PlacedComponent]   # ALL components (UI + auto-placed)
-  outline: Outline
-  nets: list[Net]
+  outline: Outline                    # pass-through
+  nets: list[Net]                     # pass-through
 ```
 
 **Algorithm:**
 
-1. Start with UI components at fixed positions.
-2. Sort remaining components by size (largest first — battery, MCU, then small passives).
-3. **Side-mount components** get special treatment: they must be placed with their active face flush against an outline wall. The placer scans along each outline edge, testing positions where the component protrudes through the wall. Rotation is constrained to align the component's active face with the wall normal.
+1. Start with UI components at their fixed positions. For UI components that are side-mount (`edge_index` is set), snap them to the specified outline edge and compute the correct rotation so their active face is flush against the wall.
+2. Sort remaining (non-UI) components by size (largest first — battery, MCU, then small passives).
+3. **Side-mount non-UI components** (if any): must be placed with their active face flush against an outline wall. The placer scans along each outline edge, testing positions where the component protrudes through the wall. Rotation is constrained to align the component's active face with the wall normal.
 4. For each non-side-mount component, grid-scan over the inset polygon (inset by keepout_margin_mm):
    - Check: fits inside outline, no overlap with already-placed components (using AABB + margin)
    - Check: if blocks_routing=true, ensure it doesn't block needed routing corridors
@@ -300,11 +324,9 @@ FullPlacement
    - Try all valid rotations (0, 90, 180, 270).
    - Pick position + rotation with best score.
 
-This is a greedy approach similar to what the old placer does (see `old/src/pcb/placer.py` `_place_rect()` and `_place_rect_with_rotation()` for the grid-scan pattern), but generalized to any component rather than special-casing battery/controller/diode.
-
 **Reference:** `old/src/pcb/placer.py` lines 80-300 — the grid scan logic and clearance scoring. The old code special-cases each component type; the new code is generic.
 
-**Test:** Place a 2xAAA battery + ATmega328P + resistor inside a 60x130mm rectangle with two buttons pre-placed. Verify no overlaps, all inside outline.
+**Test:** Place a 2xAAA battery + resistor inside a 30×80mm rectangle with a button and LED pre-placed (the flashlight fixture). Verify no overlaps, all inside outline.
 
 ---
 
@@ -387,7 +409,7 @@ Trace
 **SCAD construction approach:**
 `polygon()` + `linear_extrude()` + `difference()` + `union()` for fillet stacking. No hull(), no high-$fn cylinders.
 
-**Edge rounding:** When `outline.edges[i].style == "round"`, the edge is replaced with a Bezier curve (ease_in, ease_out, or ease_in_out) using `radius_mm` to define the control point offset. The SCAD polygon vertices are generated by sampling the Bezier curve at sufficient resolution (e.g., 20 segments per curve).
+**Corner rounding:** Each outline vertex with non-zero `ease_in`/`ease_out` gets a rounded corner. `ease_in` controls how far along the incoming edge the curve starts; `ease_out` controls how far along the outgoing edge the curve ends. These define two control points for a quadratic Bezier curve sampled at sufficient resolution (e.g., 10–20 segments). Equal `ease_in`/`ease_out` gives a symmetric arc; different values give an asymmetric/oblong curve.
 
 **Fillet:** The enclosure gets a stacked-layer quarter-circle fillet on all vertical edges. Each Z-layer's polygon is inset by `r - sqrt(r² - (z-z₀)²)` where `r` is the fillet radius (e.g., 2mm) and `z₀` is the fillet start height. This is implemented as a `union()` of `linear_extrude(height=layer_h)` slices at each layer, matching the approach in the old code (`old/src/scad/shell.py`).
 
@@ -457,65 +479,100 @@ ManufacturingResult
 
 ---
 
-## Stage 7: Agent Integration
+## Stage 7: Agent Integration ✅
 
 **Goal:** Wire the LLM agent to read the catalog and output a valid DesignSpec.
 
 **Files:** `src/agent.py`
 
+**Status:** Complete. Uses Claude Sonnet 4.6 with extended thinking and the Anthropic streaming API. Yields token-level deltas for real-time UI updates.
+
 **System prompt construction:**
-- Serialize the full catalog to the system prompt (component names, descriptions, pin descriptions, categories)
-- Explain the DesignSpec JSON schema the agent must output
-- Explain the rules: pick components, define nets, define outline, place UI components
-- Include examples (the flashlight example from Stage 2)
+- Catalog summary table in system prompt (ID, category, name, pin count, mounting style)
+- Full design rules: components, nets (with dynamic pin allocation), outline format (vertex-based with ease_in/ease_out), UI placements (with edge_index for side-mount)
+- Flashlight example included in system prompt
 
 **Tool interface:**
-The agent has tools to:
-1. `submit_design(design_spec_json)` — validates and runs the pipeline (place → route → SCAD → manufacturing)
-2. `send_message(text)` — chat with the user
-3. `preview_outline(outline, ui_placements)` — quick 2D preview before committing
+The agent has three tools:
+1. `list_components` — catalog summary table (also in system prompt)
+2. `get_component(component_id)` — full component details as JSON
+3. `submit_design(components, nets, outline, ui_placements)` — parses, validates via `validate_design()`, saves `design.json` to session
 
 **Error recovery:**
-- If validation fails, return error details to agent for self-correction
-- If placer fails (component doesn't fit), return what failed and suggestion
-- If router fails (net unroutable), return which nets failed
-- Agent retries silently (up to 3 times) before telling user
+- If validation fails, error details returned to agent for self-correction
+- Agent retries via the conversation loop (up to `MAX_TURNS=25`)
 
-**Reference:** `old/src/agent/tools.py` for the tool pattern and event emission. `old/src/agent/prompts.py` for how the system prompt was structured (but the new one will be much more general since it's not remote-specific).
+**Agent loop pattern:**
+- `DesignAgent(catalog, session)` — loads existing conversation from session for multi-turn
+- `async for event in agent.run(prompt)` — yields `AgentEvent` objects (thinking_start/delta, message_start/delta, block_stop, tool_call, tool_result, design, error, done)
+- Conversation persisted to `conversation.json` in session folder
+- Content block serialization strips SDK extras (parsed_output, citations, etc.) to avoid API rejection on re-submission
 
 ---
 
-## Stage 8: Web UI
+## Stage 8: Web UI ✅
 
 **Goal:** Browser-based chat interface that shows design previews in real-time.
 
 **Files:** `src/web/` (server + static assets)
 
-**This is largely the same as the old web UI** (`old/src/web/`). Server-sent events stream pipeline stages to the browser. The main changes:
-- Preview renderer needs to handle arbitrary polygons (not just rectangles)
-- Component visualization is generic (render body shapes from catalog data)
-- Trace visualization from router output
+**Status:** Complete (design stage). FastAPI server with SSE streaming. Serves static HTML/CSS/JS.
 
-**This stage is last because everything above can be tested from Python directly.**
+**Server** (`src/web/server.py`):
+- Session management API: create, list, load sessions
+- Catalog API: load, reload, per-component lookup
+- Design agent API: SSE-streaming endpoint that auto-creates sessions
+- Session-scoped artifact access (catalog, design, placement, routing)
+- Auto-generates session names via Claude Haiku after design submission
+- Loads `.env` / `.env.local` for API keys
+
+**Static UI** (`src/web/static/`):
+- Chat interface with real-time thinking/message streaming
+- Design viewport that renders the outline polygon with corner easing curves
+- Component visualization (body shapes, pins, UI placements)
+- Session picker (list, create, resume sessions)
+
+**What remains for later stages:** Preview updates for placement, routing, and 3D model views will be added as those pipeline stages are built.
+
+## Session System ✅ (infrastructure, not in original plan)
+
+**Files:** `src/session.py`
+
+**Status:** Complete. Added as cross-cutting infrastructure for the pipeline.
+
+Each session is a folder under `outputs/sessions/<session_id>/` containing:
+- `session.json` — metadata (id, created, last_modified, name, description, pipeline_state)
+- `catalog.json` — catalog snapshot at session creation time
+- `conversation.json` — agent conversation history
+- `design.json` — agent's DesignSpec (once submitted)
+- `placement.json` — placer output (future)
+- `routing.json` — router output (future)
+- `enclosure.scad` / `enclosure.stl` (future)
+- `manufacturing/` — G-code + ink SVG (future)
+
+Session IDs are timestamp-based (e.g. `20260227_000915`). The `pipeline_state` dict tracks which stages are complete (e.g. `{"catalog": "loaded", "design": "complete"}`).
+
+**API:** `create_session()`, `load_session(id)`, `list_sessions()`, `session.write_artifact()`, `session.read_artifact()`, `session.has_artifact()`.
 
 ---
 
 ## Build Order
 
-| Step | What | Depends on | Test |
-|------|------|------------|------|
-| **1** | `src/catalog.py` — catalog loader + dataclasses | catalog/*.json | Load all 11 components, validate |
-| **2** | `src/schema.py` — DesignSpec dataclasses + validation | Stage 1 | Hand-build flashlight spec, validate |
-| **3** | `src/placer.py` — component placement | Stage 1, 2 | Place flashlight components, no overlaps |
-| **4** | `src/router.py` — trace routing + dynamic pins | Stage 1, 2, 3 | Route flashlight nets, all succeed |
-| **5** | `src/scad.py` — enclosure generation | Stage 1-4 | Render flashlight in OpenSCAD |
-| **6** | `src/manufacturing.py` — slice, pause points, ink traces, G-code post-process | Stage 1-5 | G-code with 2 pauses + ink trace coordinates |
-| **7** | `src/agent.py` — LLM integration | Stage 1-6 | Agent designs a flashlight end-to-end |
-| **8** | `src/web/` — browser UI | Stage 1-7 | Chat → design → preview in browser |
+| Step | What | Status | Depends on |
+|------|------|--------|------------|
+| **1** | `src/catalog.py` — catalog loader + dataclasses | ✅ Done | catalog/*.json |
+| **2** | `src/schema.py` — DesignSpec dataclasses + validation | ✅ Done | Stage 1 |
+| **∗** | `src/session.py` — session management | ✅ Done | — |
+| **7** | `src/agent.py` — LLM integration | ✅ Done | Stage 1, 2 |
+| **8** | `src/web/` — browser UI (design stage) | ✅ Done | Stage 1, 2, 7 |
+| **3** | `src/placer.py` — component placement | 🔜 Next | Stage 1, 2 |
+| **4** | `src/router.py` — trace routing + dynamic pins | Not started | Stage 1, 2, 3 |
+| **5** | `src/scad.py` — enclosure generation | Not started | Stage 1–4 |
+| **6** | `src/manufacturing.py` — slice, pause points, ink traces, G-code | Not started | Stage 1–5 |
 
-Each stage is independently testable. We build and verify one at a time.
+The agent and web UI were built early (before the mechanical pipeline) because the design stage is independent of placement/routing/SCAD. The pipeline stages (3–6) are built next, each reading the prior stage's output from the session folder.
 
-For stages 1–6, we use a **hardcoded flashlight DesignSpec** as the test fixture — no LLM needed. This lets us validate the entire pipeline mechanically before wiring up the agent.
+For stages 3–6, we use a **hardcoded flashlight DesignSpec** as the test fixture — no LLM needed.
 
 ---
 
@@ -528,15 +585,15 @@ Things we skip for now, to be added later:
 | **Binary G-code** | ASCII .gcode only | .bgcode conversion |
 | **Multiple printer profiles** | Single hardcoded printer | MK3S, Core One, etc. |
 
-Everything else ships in the initial build — outline edge rounding, SCAD fillet, dynamic pin allocation, side-mount components, ink printer format conversion, ironing + trace highlight.
+Everything else ships in the initial build — outline corner rounding, SCAD fillet, dynamic pin allocation, side-mount components, ink printer format conversion, ironing + trace highlight.
 
-The goal is: **a hardcoded flashlight design goes through all 6 stages → produces a filleted .scad that renders, a .gcode with ironing/pauses/trace highlights, and ink trace output in the printer's native format.**
+The goal is: **a hardcoded flashlight design goes through all 6 stages → produces a filleted .scad that renders, a .gcode with ironing/pauses/trace highlights, and ink trace output in the printer's native format.** The agent already produces valid designs; stages 3–6 complete the pipeline.
 
 ---
 
 ## Flashlight Test Fixture (End-to-End Validation)
 
-The flashlight is the simplest possible device that exercises every stage. We hardcode this as `tests/flashlight_fixture.py` and use it to validate stages 1–6 without any LLM.
+The flashlight is the simplest possible device that exercises every stage. We hardcode this as `tests/flashlight_fixture.py` and use it to validate stages 3–6 without any LLM.
 
 **Circuit:** Battery → button → resistor → LED → ground. No MCU.
 
@@ -582,21 +639,18 @@ The flashlight is the simplest possible device that exercises every stage. We ha
   ],
 
   "nets": [
-    {"id": "VCC",       "pins": ["bat_1:V+", "btn_1:1"]},
-    {"id": "BTN_GND",   "pins": ["btn_1:3", "r_1:1"]},
+    {"id": "VCC",       "pins": ["bat_1:V+", "btn_1:A"]},
+    {"id": "BTN_GND",   "pins": ["btn_1:B", "r_1:1"]},
     {"id": "LED_DRIVE", "pins": ["r_1:2", "led_1:anode"]},
     {"id": "GND",       "pins": ["led_1:cathode", "bat_1:GND"]}
   ],
 
-  "outline": {
-    "vertices": [[0,0], [30,0], [30,80], [0,80]],
-    "edges": [
-      {"style": "sharp"},
-      {"style": "sharp"},
-      {"style": "sharp"},
-      {"style": "sharp"}
-    ]
-  },
+  "outline": [
+    {"x": 0, "y": 0},
+    {"x": 30, "y": 0},
+    {"x": 30, "y": 80},
+    {"x": 0, "y": 80}
+  ],
 
   "ui_placements": [
     {"instance_id": "btn_1", "x_mm": 15, "y_mm": 45},
@@ -613,37 +667,42 @@ The flashlight is the simplest possible device that exercises every stage. We ha
 - **SCAD:** 30×80mm filleted rectangle box. Button hole on top, LED hole on top, battery hatch on bottom, resistor pocket internal
 - **Manufacturing:** G-code with ironing + 2 pauses + trace highlights, ink trace SVG with pad landings
 
-**This fixture validates the entire data flow** from catalog JSON → dataclasses → placement → routing → SCAD → manufacturing output, without needing an LLM or any intelligence. Once it works, we wire up the agent.
+**This fixture validates the entire data flow** from catalog JSON → dataclasses → placement → routing → SCAD → manufacturing output, without needing an LLM or any intelligence. It exercises the pipeline while the agent already produces more complex designs (like the IR remote with MCU, transistor, side-mount components, and dynamic pin allocation).
 
 ---
 
 ## Data Flow Summary
 
-Every stage has a clear input/output boundary. Data flows forward only — no stage reaches back.
+Every stage has a clear input/output boundary. Data flows forward only — no stage reaches back. All artifacts are persisted to the session folder.
 
 ```
 catalog/*.json
     │
     ▼
-┌─ CATALOG LOADER ─────────────────────────────────────┐
-│  list[Component]                                      │
+┌─ CATALOG LOADER (✅) ─────────────────────────────────┐
+│  CatalogResult                                        │
+│    .components: list[Component]                       │
+│    .errors: list[ValidationError]                     │
+│  Saved to: session/catalog.json                       │
 └───────────────────────────────────────────────────────┘
     │
     ▼
-┌─ DESIGN SPEC (from agent or test fixture) ───────────┐
+┌─ DESIGN SPEC (✅ from agent or test fixture) ─────────┐
 │  DesignSpec:                                          │
 │    .components   (what + how many)                    │
 │    .nets         (which pins connect)                 │
-│    .outline      (device shape)                       │
-│    .ui_placements (user-facing component positions)   │
+│    .outline      (device shape w/ corner easing)      │
+│    .ui_placements (UI positions + edge_index for side)│
+│  Saved to: session/design.json                        │
 └───────────────────────────────────────────────────────┘
     │
     ▼
-┌─ PLACER ──────────────────────────────────────────────┐
+┌─ PLACER (🔜 next) ────────────────────────────────────┐
 │  FullPlacement:                                       │
 │    .components  (ALL with x, y, rotation)             │
 │    .outline     (pass-through)                        │
 │    .nets        (pass-through)                        │
+│  Saved to: session/placement.json                     │
 └───────────────────────────────────────────────────────┘
     │
     ▼
@@ -652,11 +711,13 @@ catalog/*.json
 │    .traces          (Manhattan polylines in mm)        │
 │    .pin_assignments (resolved dynamic pins, if any)   │
 │    .failed_nets     (empty if all succeeded)           │
+│  Saved to: session/routing.json                       │
 └───────────────────────────────────────────────────────┘
     │
     ▼
 ┌─ SCAD GENERATOR ─────────────────────────────────────┐
 │  .scad source string → compiled to .stl               │
+│  Saved to: session/enclosure.scad + enclosure.stl     │
 └───────────────────────────────────────────────────────┘
     │
     ▼
@@ -667,5 +728,6 @@ catalog/*.json
 │    .ink_trace_svg_path  (SVG for ink printer)          │
 │    .ink_trace_paths     (mm polylines)                 │
 │    .pause_points        (Z-heights)                   │
+│  Saved to: session/manufacturing/                     │
 └───────────────────────────────────────────────────────┘
 ```
