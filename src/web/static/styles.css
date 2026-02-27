@@ -800,6 +800,16 @@ main {
     opacity: 0.8;
 }
 
+.vp-side-marker {
+    fill: var(--warning);
+    opacity: 0.85;
+}
+
+.vp-side-dot {
+    fill: var(--warning);
+    opacity: 1;
+}
+
 .vp-ui-label {
     fill: var(--text);
     font-size: 9px;

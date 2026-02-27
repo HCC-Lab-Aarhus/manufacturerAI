@@ -114,23 +114,29 @@ function buildOutlineSVG(design) {
 
     // UI placements
     for (const up of ui_placements) {
-        const cx = ox + up.x_mm * SCALE;
-        const cy = oy + up.y_mm * SCALE;
+        if (up.edge_index != null) {
+            // Side-mount component — render on the wall edge
+            drawSideMountMarker(svg, NS, up, outline, ox, oy);
+        } else {
+            // Interior component — circle marker
+            const cx = ox + up.x_mm * SCALE;
+            const cy = oy + up.y_mm * SCALE;
 
-        const marker = document.createElementNS(NS, 'circle');
-        marker.setAttribute('cx', cx);
-        marker.setAttribute('cy', cy);
-        marker.setAttribute('r', '6');
-        marker.setAttribute('class', 'vp-ui-marker');
+            const marker = document.createElementNS(NS, 'circle');
+            marker.setAttribute('cx', cx);
+            marker.setAttribute('cy', cy);
+            marker.setAttribute('r', '6');
+            marker.setAttribute('class', 'vp-ui-marker');
 
-        const label = document.createElementNS(NS, 'text');
-        label.setAttribute('x', cx);
-        label.setAttribute('y', cy - 10);
-        label.setAttribute('class', 'vp-ui-label');
-        label.textContent = up.instance_id;
+            const label = document.createElementNS(NS, 'text');
+            label.setAttribute('x', cx);
+            label.setAttribute('y', cy - 10);
+            label.setAttribute('class', 'vp-ui-label');
+            label.textContent = up.instance_id;
 
-        svg.appendChild(marker);
-        svg.appendChild(label);
+            svg.appendChild(marker);
+            svg.appendChild(label);
+        }
     }
 
     // Dimension labels
@@ -226,6 +232,82 @@ function buildNetList(nets = []) {
     }
     section.appendChild(list);
     return section;
+}
+
+
+// ── Side-mount component rendering ────────────────────────────
+
+/**
+ * Draw a side-mount component marker on the specified outline edge.
+ * The marker is a small diamond/arrow shape sitting on the wall to
+ * indicate the component protrudes through.
+ */
+function drawSideMountMarker(svg, NS, up, outline, ox, oy) {
+    const verts = outline.vertices;
+    const n = verts.length;
+    const i = up.edge_index;
+
+    // Edge endpoints
+    const v0 = verts[i];
+    const v1 = verts[(i + 1) % n];
+
+    // Project x/y onto the edge to find position along it
+    const ex = v1[0] - v0[0], ey = v1[1] - v0[1];
+    const edgeLen = Math.hypot(ex, ey);
+    if (edgeLen === 0) return;
+
+    // Normalised edge direction
+    const dx = ex / edgeLen, dy = ey / edgeLen;
+
+    // Vector from v0 to placement point
+    const px = up.x_mm - v0[0], py = up.y_mm - v0[1];
+
+    // Project onto edge (clamp to edge bounds)
+    let t = (px * dx + py * dy) / edgeLen;
+    t = Math.max(0.02, Math.min(0.98, t));
+
+    // Position on the edge
+    const cx = ox + (v0[0] + t * ex) * SCALE;
+    const cy = oy + (v0[1] + t * ey) * SCALE;
+
+    // Outward normal (pointing inside the polygon for CW winding)
+    const nx = -dy, ny = dx;
+
+    // Draw a small triangle/arrow pointing inward from the wall
+    const arrowLen = 8;   // length of arrow in px
+    const arrowW   = 5;   // half-width of arrow base in px
+
+    // Tip of arrow (pointing inward)
+    const tipX = cx + nx * arrowLen * SCALE / 4;
+    const tipY = cy + ny * arrowLen * SCALE / 4;
+
+    // Base corners (on the wall)
+    const b1x = cx + dx * arrowW;
+    const b1y = cy + dy * arrowW;
+    const b2x = cx - dx * arrowW;
+    const b2y = cy - dy * arrowW;
+
+    const arrow = document.createElementNS(NS, 'polygon');
+    arrow.setAttribute('points', `${b1x},${b1y} ${tipX},${tipY} ${b2x},${b2y}`);
+    arrow.setAttribute('class', 'vp-side-marker');
+
+    // Small circle on the wall edge itself
+    const dot = document.createElementNS(NS, 'circle');
+    dot.setAttribute('cx', cx);
+    dot.setAttribute('cy', cy);
+    dot.setAttribute('r', '3');
+    dot.setAttribute('class', 'vp-side-dot');
+
+    // Label — offset inward from the wall
+    const label = document.createElementNS(NS, 'text');
+    label.setAttribute('x', cx + nx * 16);
+    label.setAttribute('y', cy + ny * 16);
+    label.setAttribute('class', 'vp-ui-label');
+    label.textContent = up.instance_id;
+
+    svg.appendChild(arrow);
+    svg.appendChild(dot);
+    svg.appendChild(label);
 }
 
 

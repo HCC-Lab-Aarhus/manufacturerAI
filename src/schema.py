@@ -52,6 +52,7 @@ class UIPlacement:
     instance_id: str
     x_mm: float
     y_mm: float
+    edge_index: int | None = None       # side-mount: which outline edge (0-based)
 
 
 @dataclass
@@ -99,6 +100,7 @@ def parse_design(data: dict) -> DesignSpec:
             instance_id=p["instance_id"],
             x_mm=float(p["x_mm"]),
             y_mm=float(p["y_mm"]),
+            edge_index=p.get("edge_index"),
         )
         for p in data["ui_placements"]
     ]
@@ -243,6 +245,28 @@ def validate_design(spec: DesignSpec, catalog: CatalogResult) -> list[str]:
                 f"UI placement: '{up.instance_id}' ({cat.id}) has ui_placement=false"
             )
 
+        # Resolve effective mounting style
+        ci_match = next((ci for ci in spec.components if ci.instance_id == up.instance_id), None)
+        eff_style = (ci_match.mounting_style if ci_match and ci_match.mounting_style else cat.mounting.style)
+
+        if eff_style == "side":
+            # Side-mount components must specify edge_index
+            if up.edge_index is None:
+                errors.append(
+                    f"UI placement '{up.instance_id}': side-mount components "
+                    f"require edge_index (which outline edge to mount on)"
+                )
+            elif up.edge_index < 0 or up.edge_index >= len(spec.outline.vertices):
+                errors.append(
+                    f"UI placement '{up.instance_id}': edge_index {up.edge_index} "
+                    f"out of range (0–{len(spec.outline.vertices) - 1})"
+                )
+        elif up.edge_index is not None:
+            errors.append(
+                f"UI placement '{up.instance_id}': edge_index is only for "
+                f"side-mount components (mounting style is '{eff_style}')"
+            )
+
     # ── All ui_placement=true components must have a placement ──
     ui_placed = {up.instance_id for up in spec.ui_placements}
     for ci in spec.components:
@@ -284,7 +308,10 @@ def validate_design(spec: DesignSpec, catalog: CatalogResult) -> list[str]:
                 errors.append("Outline polygon has zero or negative area")
             else:
                 # Check UI placements are inside the outline
+                # (skip side-mount components — they sit on the wall)
                 for up in spec.ui_placements:
+                    if up.edge_index is not None:
+                        continue  # side-mount: position is on the edge, not interior
                     pt = Point(up.x_mm, up.y_mm)
                     if not poly.contains(pt):
                         errors.append(
@@ -327,7 +354,12 @@ def design_to_dict(spec: DesignSpec) -> dict:
             ],
         },
         "ui_placements": [
-            {"instance_id": p.instance_id, "x_mm": p.x_mm, "y_mm": p.y_mm}
+            {
+                "instance_id": p.instance_id,
+                "x_mm": p.x_mm,
+                "y_mm": p.y_mm,
+                **({"edge_index": p.edge_index} if p.edge_index is not None else {}),
+            }
             for p in spec.ui_placements
         ],
     }

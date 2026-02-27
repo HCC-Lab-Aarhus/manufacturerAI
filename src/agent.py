@@ -173,14 +173,37 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "array",
                     "description": (
                         "Positions for UI-facing components (buttons, LEDs, "
-                        "switches). Only for ui_placement=true components."
+                        "switches). Only for ui_placement=true components. "
+                        "Side-mount components must include edge_index."
                     ),
                     "items": {
                         "type": "object",
                         "properties": {
                             "instance_id": {"type": "string"},
-                            "x_mm": {"type": "number"},
-                            "y_mm": {"type": "number"},
+                            "x_mm": {
+                                "type": "number",
+                                "description": (
+                                    "X position in mm. For side-mount: "
+                                    "approximate position along the edge."
+                                ),
+                            },
+                            "y_mm": {
+                                "type": "number",
+                                "description": (
+                                    "Y position in mm. For side-mount: "
+                                    "approximate position along the edge."
+                                ),
+                            },
+                            "edge_index": {
+                                "type": "integer",
+                                "description": (
+                                    "Required for side-mount components. "
+                                    "Which outline edge (0-based) to mount on. "
+                                    "Edge i goes from vertices[i] to "
+                                    "vertices[(i+1) % n]. The component "
+                                    "protrudes through this wall."
+                                ),
+                            },
                         },
                         "required": ["instance_id", "x_mm", "y_mm"],
                     },
@@ -263,6 +286,8 @@ Use `get_component` to read full pin/mounting details before using a component i
 - Only for components with `ui_placement=true` (buttons, LEDs, switches)
 - Position them within the outline polygon
 - Internal components (MCU, resistors, caps, battery) are auto-placed by the placer — do NOT give them UI placements
+- **Side-mount components** must include `edge_index` — the outline edge (0-based) where the component protrudes through the wall. Edge i goes from `vertices[i]` to `vertices[(i+1) % n]`. Use `x_mm`/`y_mm` to specify the approximate position along that edge. The placer will snap the component to the wall and set the correct rotation.
+- Non-side-mount components must NOT have `edge_index`
 
 ## Example: Simple Flashlight
 ```json
@@ -294,6 +319,17 @@ Use `get_component` to read full pin/mounting details before using a component i
   ]
 }}
 ```
+
+Example with a side-mount component (IR LED on the top edge):
+```json
+{{
+  "ui_placements": [
+    {{"instance_id": "btn_1", "x_mm": 15, "y_mm": 25}},
+    {{"instance_id": "led_ir", "x_mm": 25, "y_mm": 0, "edge_index": 1}}
+  ]
+}}
+```
+Here `edge_index: 1` means the LED mounts on the edge from `vertices[1]` to `vertices[2]`.
 
 ## Process
 1. Analyze the user's request
