@@ -94,7 +94,7 @@ function buildPlacementSVG(data) {
     const w = (maxX - minX) * SCALE + PAD * 2;
     const h = (maxY - minY) * SCALE + PAD * 2;
     const ox = PAD - minX * SCALE;
-    const oy = PAD + maxY * SCALE;    // Y flipped
+    const oy = PAD - minY * SCALE;    // Screen convention: no Y flip
 
     const svg = document.createElementNS(NS, 'svg');
     svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
@@ -146,9 +146,9 @@ function buildPlacementSVG(data) {
 
     const dimV = document.createElementNS(NS, 'text');
     dimV.setAttribute('x', 8);
-    dimV.setAttribute('y', oy - ((maxY + minY) / 2) * SCALE);
+    dimV.setAttribute('y', oy + ((maxY + minY) / 2) * SCALE);
     dimV.setAttribute('class', 'vp-dim-label');
-    dimV.setAttribute('transform', `rotate(-90, 8, ${oy - ((maxY + minY) / 2) * SCALE})`);
+    dimV.setAttribute('transform', `rotate(-90, 8, ${oy + ((maxY + minY) / 2) * SCALE})`);
     dimV.textContent = `${(maxY - minY).toFixed(1)} mm`;
     svg.appendChild(dimV);
 
@@ -168,7 +168,7 @@ function buildPlacementSVG(data) {
 function drawComponent(svg, comp, ox, oy, color) {
     const body = comp.body || {};
     const cx = ox + comp.x_mm * SCALE;
-    const cy = oy - comp.y_mm * SCALE;
+    const cy = oy + comp.y_mm * SCALE;
     const rot = comp.rotation_deg || 0;
 
     if (body.shape === 'circle') {
@@ -330,7 +330,7 @@ function buildOutlinePath(verts, edges, ox, oy, scale) {
     const n = verts.length;
     if (n < 3) return '';
 
-    const pts = verts.map(v => ({ x: ox + v[0] * scale, y: oy - v[1] * scale }));
+    const pts = verts.map(v => ({ x: ox + v[0] * scale, y: oy + v[1] * scale }));
 
     const cornerInfo = [];
     for (let i = 0; i < n; i++) {

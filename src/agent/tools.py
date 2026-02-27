@@ -100,6 +100,8 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "array",
                     "description": (
                         "Device outline as a list of vertex objects (clockwise winding). "
+                        "Coordinate system: screen convention — x increases rightward, "
+                        "y increases downward (y=0 is the top of the device). "
                         "Each vertex has x, y (mm) and optional ease_in / ease_out "
                         "distances (mm) that round the corner. Omit both for sharp corners."
                     ),

@@ -65,6 +65,7 @@ Use `get_component` to read full pin/mounting details before using a component i
 - Each net must have at least 2 pins
 
 ### Outline (device shape)
+- Coordinate system: **screen convention** — x increases rightward, y increases **downward** (y=0 is the top of the device)
 - A flat list of vertex objects, clockwise winding
 - Each vertex: `{{"x": <mm>, "y": <mm>}}` — sharp corner by default
 - To round a corner, add `"ease_in"` and/or `"ease_out"` (in mm)
