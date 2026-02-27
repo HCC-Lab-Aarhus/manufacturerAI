@@ -23,6 +23,8 @@ from fastapi.staticfiles import StaticFiles
 from src.catalog import load_catalog, catalog_to_dict, CatalogResult
 from src.session import create_session, load_session, list_sessions, Session
 from src.agent import DesignAgent, TOOLS, MODEL, THINKING_BUDGET, TOKEN_BUDGET, _build_system_prompt, _prune_messages
+from src.pipeline.design import parse_design, validate_design
+from src.pipeline.placer import place_components, placement_to_dict, PlacementError
 from src.web.naming import generate_session_name
 
 import anthropic
@@ -192,6 +194,69 @@ async def api_session_catalog(session: str = Query(...)):
         s.write_artifact("catalog.json", data)
         s.pipeline_state["catalog"] = "loaded"
         s.save()
+    return data
+
+
+# ── Routes: Placer API ────────────────────────────────────────────
+
+@app.post("/api/session/placement")
+async def api_run_placement(session: str = Query(...)):
+    """Run the placer on the session's design. Saves placement.json."""
+    s = _resolve_session(session)
+    design_data = s.read_artifact("design.json")
+    if design_data is None:
+        raise HTTPException(400, "No design.json — run the design agent first")
+
+    cat = _get_catalog()
+    design = parse_design(design_data)
+
+    errors = validate_design(design, cat)
+    if errors:
+        raise HTTPException(400, f"Design validation failed: {'; '.join(errors)}")
+
+    try:
+        result = place_components(design, cat)
+    except PlacementError as e:
+        raise HTTPException(
+            422,
+            detail={
+                "error": "placement_failed",
+                "instance_id": e.instance_id,
+                "catalog_id": e.catalog_id,
+                "reason": e.reason,
+            },
+        )
+
+    data = placement_to_dict(result)
+    s.write_artifact("placement.json", data)
+    s.pipeline_state["placement"] = "complete"
+    s.save()
+    return _enrich_placement(data, cat)
+
+
+@app.get("/api/session/placement/result")
+async def api_placement_result(session: str = Query(...)):
+    """Return the saved placement for a session, if any."""
+    s = _resolve_session(session)
+    data = s.read_artifact("placement.json")
+    if data is None:
+        raise HTTPException(404, "No placement yet")
+    cat = _get_catalog()
+    return _enrich_placement(data, cat)
+
+
+def _enrich_placement(data: dict, cat) -> dict:
+    """Add body dimensions from the catalog to each placed component."""
+    cat_map = {c.id: c for c in cat.components}
+    for comp in data.get("components", []):
+        c = cat_map.get(comp["catalog_id"])
+        if c:
+            comp["body"] = {
+                "shape": c.body.shape,
+                "width_mm": c.body.width_mm,
+                "length_mm": c.body.length_mm,
+                "diameter_mm": c.body.diameter_mm,
+            }
     return data
 
 

@@ -64,10 +64,17 @@
                 <div id="catalog-grid" class="component-grid"></div>
             </section>
 
-            <!-- Future step panels -->
+            <!-- Placement step -->
             <section id="step-placement" class="step-panel" hidden>
-                <h2>Placement</h2>
-                <p class="placeholder">Coming in Stage 3</p>
+                <div id="placement-hero" class="placement-hero">
+                    <div class="placement-hero-icon">⚡</div>
+                    <p>Automatically position every component inside the device outline</p>
+                    <button id="btn-run-placement" class="placement-cta">Run Placer</button>
+                    <span id="placement-status" class="design-status-inline"></span>
+                </div>
+                <div id="placement-scroll" class="placement-scroll" hidden>
+                    <div id="placement-info" class="placement-info"></div>
+                </div>
             </section>
             <section id="step-routing" class="step-panel" hidden>
                 <h2>Routing</h2>

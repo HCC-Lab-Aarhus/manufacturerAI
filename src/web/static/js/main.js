@@ -5,8 +5,10 @@ import { closeModal } from './utils.js';
 import { setSessionLabel, startNewSession, showSessionsModal, setSessionUrl } from './session.js';
 import { loadCatalog, reloadCatalog } from './catalog.js';
 import { sendDesignPrompt, loadConversation } from './design.js';
+import { runPlacement, loadPlacementResult, enablePlacementTab } from './placement.js';
 import { setStep } from './viewport.js';
 import './viewportDesign.js';   // registers the design viewport handler
+import './viewportPlacement.js'; // registers the placement viewport handler
 
 document.addEventListener('DOMContentLoaded', () => {
     // Restore session from URL
@@ -15,6 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (state.session) {
         setSessionLabel(state.session);
         loadConversation();
+        loadPlacementResult();    // load existing placement if present
         // Fetch session name for the label; clear URL if session no longer exists
         fetch(`${API}/api/session?session=${encodeURIComponent(state.session)}`)
             .then(r => {
@@ -24,7 +27,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 return r.ok ? r.json() : null;
             })
-            .then(data => { if (data?.name) setSessionLabel(state.session, data.name); })
+            .then(data => {
+                if (data?.name) setSessionLabel(state.session, data.name);
+                // Enable placement nav if design is complete
+                if (data?.artifacts?.design) {
+                    enablePlacementTab(!data?.artifacts?.placement);
+                }
+            })
             .catch(() => {});
     }
 
@@ -75,6 +84,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.getElementById('btn-reload-catalog').addEventListener('click', reloadCatalog);
 
+    // Placement
+    document.getElementById('btn-run-placement').addEventListener('click', runPlacement);
+
     // Design chat
     document.getElementById('btn-send-design').addEventListener('click', sendDesignPrompt);
     document.getElementById('chat-input').addEventListener('keydown', (e) => {
@@ -101,6 +113,8 @@ function switchStep(step) {
     state.activeStep = step;
     document.querySelectorAll('#pipeline-nav .step[data-step]').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.step === step);
+        // Stop flashing when user clicks the tab
+        if (btn.dataset.step === step) btn.classList.remove('tab-flash');
     });
     // Deselect catalog button
     document.getElementById('btn-catalog').classList.remove('active');

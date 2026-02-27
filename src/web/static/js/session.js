@@ -4,6 +4,7 @@ import { API, state } from './state.js';
 import { formatDate, closeModal, openModal } from './utils.js';
 import { loadCatalog } from './catalog.js';
 import { loadConversation } from './design.js';
+import { loadPlacementResult, resetPlacementPanel } from './placement.js';
 import { clearData as clearViewportData } from './viewport.js';
 
 export function setSessionLabel(id, name) {
@@ -95,12 +96,22 @@ export async function showSessionsModal() {
             item.addEventListener('click', () => {
                 const id = item.dataset.id;
                 const name = item.dataset.name;
+                const hasDesign = item.querySelector('.badge') !== null;
                 setSessionUrl(id);
                 setSessionLabel(id, name || null);
                 closeModal(modal);
                 state.catalog = null; // reset catalog cache
                 clearViewportData();  // reset viewport for new session
+                resetPlacementPanel(); // reset placement panel to hero
                 loadConversation();
+
+                // Enable placement tab if design exists, disable otherwise
+                const placementBtn = document.querySelector('#pipeline-nav .step[data-step="placement"]');
+                if (placementBtn) {
+                    placementBtn.disabled = !hasDesign;
+                    placementBtn.classList.remove('tab-flash');
+                }
+                if (hasDesign) loadPlacementResult();
             });
         });
     } catch (err) {

@@ -3,6 +3,7 @@
 import { API, state } from './state.js';
 import { onSessionCreated, setSessionLabel } from './session.js';
 import { setData as setViewportData, clearData as clearViewportData } from './viewport.js';
+import { enablePlacementTab } from './placement.js';
 
 const messagesDiv = () => document.getElementById('chat-messages');
 const statusSpan = () => document.getElementById('design-status');
@@ -130,6 +131,8 @@ async function loadDesignResult() {
         if (design && design.components) {
             appendDesignResult(design);
             setViewportData('design', design);
+            // Enable placement tab since design exists
+            enablePlacementTab();
         }
     } catch {
         // No design yet — that's fine
@@ -300,6 +303,8 @@ async function consumeSSE(response) {
                     appendDesignResult(data.design);
                     setViewportData('design', data.design);
                     statusSpan().textContent = 'Design complete!';
+                    // Enable placement step now that design exists
+                    enablePlacementTab(true);
                     break;
 
                 case 'error':
