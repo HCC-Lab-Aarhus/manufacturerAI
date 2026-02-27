@@ -127,47 +127,44 @@ TOOLS: list[dict[str, Any]] = [
                     },
                 },
                 "outline": {
-                    "type": "object",
-                    "description": "Device outline polygon (clockwise winding).",
-                    "properties": {
-                        "vertices": {
-                            "type": "array",
-                            "description": "Polygon vertices as [x_mm, y_mm].",
-                            "items": {
-                                "type": "array",
-                                "items": {"type": "number"},
-                                "minItems": 2,
-                                "maxItems": 2,
+                    "type": "array",
+                    "description": (
+                        "Device outline as a list of vertex objects (clockwise winding). "
+                        "Each vertex has x, y (mm) and optional ease_in / ease_out "
+                        "distances (mm) that round the corner. Omit both for sharp corners."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x": {
+                                "type": "number",
+                                "description": "X coordinate in mm",
+                            },
+                            "y": {
+                                "type": "number",
+                                "description": "Y coordinate in mm",
+                            },
+                            "ease_in": {
+                                "type": "number",
+                                "description": (
+                                    "Distance in mm along the incoming edge "
+                                    "(from previous vertex) where the curve "
+                                    "begins. If omitted, defaults to ease_out "
+                                    "when ease_out is set, otherwise 0."
+                                ),
+                            },
+                            "ease_out": {
+                                "type": "number",
+                                "description": (
+                                    "Distance in mm along the outgoing edge "
+                                    "(toward next vertex) where the curve "
+                                    "ends. If omitted, defaults to ease_in "
+                                    "when ease_in is set, otherwise 0."
+                                ),
                             },
                         },
-                        "edges": {
-                            "type": "array",
-                            "description": (
-                                "Edge styles. edges[i] = vertex[i] to "
-                                "vertex[(i+1) % n]."
-                            ),
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "style": {
-                                        "type": "string",
-                                        "enum": ["sharp", "round"],
-                                    },
-                                    "curve": {
-                                        "type": "string",
-                                        "enum": [
-                                            "ease_in",
-                                            "ease_out",
-                                            "ease_in_out",
-                                        ],
-                                    },
-                                    "radius_mm": {"type": "number"},
-                                },
-                                "required": ["style"],
-                            },
-                        },
+                        "required": ["x", "y"],
                     },
-                    "required": ["vertices", "edges"],
                 },
                 "ui_placements": {
                     "type": "array",
@@ -277,16 +274,22 @@ Use `get_component` to read full pin/mounting details before using a component i
 - Each net must have at least 2 pins
 
 ### Outline (device shape)
-- `vertices`: [[x,y], ...] coordinates in mm, clockwise winding
-- `edges`: one per edge; `edges[i]` describes the edge from `vertices[i]` to `vertices[(i+1) % n]`
-- Edge styles: `"sharp"` (straight) or `"round"` (curved, with `radius_mm` and `curve`: `"ease_in"`, `"ease_out"`, or `"ease_in_out"`)
+- A flat list of vertex objects, clockwise winding
+- Each vertex: `{{"x": <mm>, "y": <mm>}}` — sharp corner by default
+- To round a corner, add `"ease_in"` and/or `"ease_out"` (in mm)
+  - `ease_in`: how far along the *incoming* edge (from previous vertex) the curve starts
+  - `ease_out`: how far along the *outgoing* edge (toward next vertex) the curve ends
+  - If only one is set, the other mirrors it (symmetric rounding)
+  - Equal values → symmetric arc; different values → asymmetric/oblong curve
+  - Example: `{{"ease_in": 5, "ease_out": 10}}` curves gently on the incoming side and extends further on the outgoing side
+  - Example: `{{"ease_in": 8}}` is equivalent to `{{"ease_in": 8, "ease_out": 8}}`
 - Must be a valid non-self-intersecting polygon with positive area
 
 ### UI Placements
 - Only for components with `ui_placement=true` (buttons, LEDs, switches)
 - Position them within the outline polygon
 - Internal components (MCU, resistors, caps, battery) are auto-placed by the placer — do NOT give them UI placements
-- **Side-mount components** must include `edge_index` — the outline edge (0-based) where the component protrudes through the wall. Edge i goes from `vertices[i]` to `vertices[(i+1) % n]`. Use `x_mm`/`y_mm` to specify the approximate position along that edge. The placer will snap the component to the wall and set the correct rotation.
+- **Side-mount components** must include `edge_index` — which outline edge (0-based) the component protrudes through. Edge i goes from `outline[i]` to `outline[(i+1) % n]`. Use `x_mm`/`y_mm` to specify the approximate position along that edge. The placer will snap the component to the wall and set the correct rotation.
 - Non-side-mount components must NOT have `edge_index`
 
 ## Example: Simple Flashlight
@@ -304,15 +307,12 @@ Use `get_component` to read full pin/mounting details before using a component i
     {{"id": "BTN_IN", "pins": ["btn_1:A", "bat_1:GND"]}},
     {{"id": "BTN_OUT", "pins": ["btn_1:B", "led_1:cathode"]}}
   ],
-  "outline": {{
-    "vertices": [[0,0], [30,0], [30,80], [0,80]],
-    "edges": [
-      {{"style": "sharp"}},
-      {{"style": "sharp"}},
-      {{"style": "round", "curve": "ease_in_out", "radius_mm": 8}},
-      {{"style": "round", "curve": "ease_in_out", "radius_mm": 8}}
-    ]
-  }},
+  "outline": [
+    {{"x": 0, "y": 0}},
+    {{"x": 30, "y": 0}},
+    {{"x": 30, "y": 80, "ease_in": 8}},
+    {{"x": 0, "y": 80, "ease_in": 8}}
+  ],
   "ui_placements": [
     {{"instance_id": "btn_1", "x_mm": 15, "y_mm": 25}},
     {{"instance_id": "led_1", "x_mm": 15, "y_mm": 65}}
@@ -329,7 +329,7 @@ Example with a side-mount component (IR LED on the top edge):
   ]
 }}
 ```
-Here `edge_index: 1` means the LED mounts on the edge from `vertices[1]` to `vertices[2]`.
+Here `edge_index: 1` means the LED mounts on the edge from `outline[1]` to `outline[2]`.
 
 ## Process
 1. Analyze the user's request

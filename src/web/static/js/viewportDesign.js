@@ -10,7 +10,7 @@
  * {
  *   components: [{ catalog_id, instance_id, config?, mounting_style? }]
  *   nets:       [{ id, pins: ["instance:pin", …] }]
- *   outline:    { vertices: [[x,y], …], edges: [{ style, curve?, radius_mm? }] }
+ *   outline:    [{ x, y, ease_in?, ease_out? }, ...]
  *   ui_placements: [{ instance_id, x_mm, y_mm }]
  * }
  */
@@ -55,7 +55,9 @@ const PAD   = 32;    // px padding around the SVG content
 
 function buildOutlineSVG(design) {
     const { outline, ui_placements = [] } = design;
-    const verts = outline?.vertices ?? [];
+
+    // Normalise outline to { verts: [[x,y],...], corners: [{ease_in, ease_out},...] }
+    const { verts, corners } = normaliseOutline(outline);
 
     if (verts.length < 3) {
         const p = document.createElement('p');
@@ -105,8 +107,7 @@ function buildOutlineSVG(design) {
     svg.appendChild(gridRect);
 
     // Build outline path with proper rounded corners
-    const edges = outline.edges ?? [];
-    const pathD = buildOutlinePath(verts, edges, ox, oy, SCALE);
+    const pathD = buildOutlinePath(verts, corners, ox, oy, SCALE);
     const pathEl = document.createElementNS(NS, 'path');
     pathEl.setAttribute('d', pathD);
     pathEl.setAttribute('class', 'vp-outline-path');
@@ -116,7 +117,7 @@ function buildOutlineSVG(design) {
     for (const up of ui_placements) {
         if (up.edge_index != null) {
             // Side-mount component — render on the wall edge
-            drawSideMountMarker(svg, NS, up, outline, ox, oy);
+            drawSideMountMarker(svg, NS, up, { vertices: verts }, ox, oy);
         } else {
             // Interior component — circle marker
             const cx = ox + up.x_mm * SCALE;
@@ -311,6 +312,30 @@ function drawSideMountMarker(svg, NS, up, outline, ox, oy) {
 }
 
 
+// ── Outline normalisation ─────────────────────────────────────
+
+/**
+ * Normalise outline to a consistent internal shape:
+ *   { verts: [[x,y],...], corners: [{ease_in, ease_out},...] }
+ *
+ * Input: [{ x, y, ease_in?, ease_out? }, ...]
+ */
+function normaliseOutline(outline) {
+    if (!outline || !Array.isArray(outline)) return { verts: [], corners: [] };
+
+    const verts = outline.map(p => [p.x, p.y]);
+    const corners = outline.map(p => {
+        let ein = p.ease_in ?? null;
+        let eout = p.ease_out ?? null;
+        // If only one side given, mirror to the other (symmetric)
+        if (ein != null && eout == null) eout = ein;
+        if (eout != null && ein == null) ein = eout;
+        return { ease_in: ein ?? 0, ease_out: eout ?? 0 };
+    });
+    return { verts, corners };
+}
+
+
 // ── Helpers ───────────────────────────────────────────────────
 
 function esc(text) {
@@ -324,12 +349,12 @@ function esc(text) {
 
 /**
  * Build an SVG path `d` string for the outline polygon.
- * Sharp edges get straight line-to; round edges get an arc that
- * trims into the two adjacent edges by `radius_mm`.
+ * Sharp corners get straight line-to; eased corners get a quadratic
+ * Bézier with the vertex as the control point and tangent points
+ * at ease_in / ease_out distances along the adjacent edges.
  *
- * curve = ease_in  → starts gentle, ends at full radius  (larger sweep start)
- * curve = ease_out → starts at full radius, tapers off
- * curve = ease_in_out → symmetric (default circular arc)
+ * When ease_in == ease_out the curve is symmetric (close to a circular arc).
+ * When they differ the curve is asymmetric / oblong.
  */
 function buildOutlinePath(verts, edges, ox, oy, scale) {
     const n = verts.length;
@@ -338,14 +363,13 @@ function buildOutlinePath(verts, edges, ox, oy, scale) {
     // Convert vertices to screen coords
     const pts = verts.map(v => ({ x: ox + v[0] * scale, y: oy + v[1] * scale }));
 
-    // Pre-compute edge info: which vertex has a round corner and its radius in px
+    // Pre-compute ease info per vertex in px
     const corners = [];
     for (let i = 0; i < n; i++) {
-        const edge = edges[i] ?? { style: 'sharp' };
-        const isRound = edge.style === 'round';
-        const rPx = isRound ? (edge.radius_mm ?? 3) * scale : 0;
-        const curve = edge.curve ?? null;
-        corners.push({ round: isRound, r: rPx, curve });
+        const edge = edges[i] ?? { ease_in: 0, ease_out: 0 };
+        const eIn  = (edge.ease_in  ?? 0) * scale;
+        const eOut = (edge.ease_out ?? 0) * scale;
+        corners.push({ round: eIn > 0 || eOut > 0, eIn, eOut });
     }
 
     const segments = [];
@@ -355,15 +379,15 @@ function buildOutlinePath(verts, edges, ox, oy, scale) {
         const next = (i + 1) % n;
         const P = pts[prev], C = pts[i], N = pts[next];
 
-        if (!corners[i].round || corners[i].r <= 0) {
+        if (!corners[i].round) {
             // Sharp corner — just go to the vertex
             if (i === 0) segments.push(`M ${C.x} ${C.y}`);
             else segments.push(`L ${C.x} ${C.y}`);
             continue;
         }
 
-        // Rounded corner — compute tangent points
-        const r = corners[i].r;
+        // Rounded corner — tangent points at ease distances from C
+        let { eIn, eOut } = corners[i];
 
         // Direction vectors from C toward P and N
         const dPx = P.x - C.x, dPy = P.y - C.y;
@@ -377,44 +401,22 @@ function buildOutlinePath(verts, edges, ox, oy, scale) {
             continue;
         }
 
-        // Clamp radius so it doesn't exceed half of either adjacent edge
-        const maxR = Math.min(lenP, lenN) * 0.45;
-        const rClamped = Math.min(r, maxR);
+        // Clamp so we don't exceed ~45% of either adjacent edge
+        eIn  = Math.min(eIn,  lenP * 0.45);
+        eOut = Math.min(eOut, lenN * 0.45);
 
-        // Tangent points: where the arc meets each edge
-        const t1x = C.x + (dPx / lenP) * rClamped;
-        const t1y = C.y + (dPy / lenP) * rClamped;
-        const t2x = C.x + (dNx / lenN) * rClamped;
-        const t2y = C.y + (dNy / lenN) * rClamped;
-
-        // Determine sweep direction (CW vs CCW) using cross product
-        const cross = dPx * dNy - dPy * dNx;
-        const sweepFlag = cross > 0 ? 0 : 1;
+        // Tangent points: t1 on incoming edge, t2 on outgoing edge
+        const t1x = C.x + (dPx / lenP) * eIn;
+        const t1y = C.y + (dPy / lenP) * eIn;
+        const t2x = C.x + (dNx / lenN) * eOut;
+        const t2y = C.y + (dNy / lenN) * eOut;
 
         // Line to the first tangent point
         if (i === 0) segments.push(`M ${t1x} ${t1y}`);
         else segments.push(`L ${t1x} ${t1y}`);
 
-        // Arc or quadratic Bézier depending on curve type
-        const curveType = corners[i].curve;
-        if (!curveType || curveType === 'ease_in_out') {
-            // Symmetric circular arc
-            segments.push(`A ${rClamped} ${rClamped} 0 0 ${sweepFlag} ${t2x} ${t2y}`);
-        } else {
-            // Use a quadratic Bézier through the corner vertex for
-            // ease_in / ease_out feel; shift the control point to bias the curve
-            let cpx, cpy;
-            if (curveType === 'ease_in') {
-                // Control point biased toward the incoming edge (holds straight longer on entry)
-                cpx = (t1x + C.x * 2) / 3;
-                cpy = (t1y + C.y * 2) / 3;
-            } else {
-                // ease_out — biased toward outgoing edge
-                cpx = (t2x + C.x * 2) / 3;
-                cpy = (t2y + C.y * 2) / 3;
-            }
-            segments.push(`Q ${cpx} ${cpy} ${t2x} ${t2y}`);
-        }
+        // Quadratic Bézier: control point = vertex, end = second tangent
+        segments.push(`Q ${C.x} ${C.y} ${t2x} ${t2y}`);
     }
 
     segments.push('Z');

@@ -35,16 +35,32 @@ class Net:
 
 
 @dataclass
-class EdgeStyle:
-    style: str                              # "sharp" | "round"
-    curve: str | None = None                # "ease_in" | "ease_out" | "ease_in_out"
-    radius_mm: float | None = None
+class OutlineVertex:
+    """A single vertex with optional corner easing.
+
+    ease_in:  mm along the incoming edge (from prev vertex) where the
+              curve begins.  0 = no easing on that side.
+    ease_out: mm along the outgoing edge (to next vertex) where the
+              curve ends.    0 = no easing on that side.
+
+    If both are 0 the corner is sharp.  If only one is provided at
+    parse time, the other defaults to the same value (symmetric).
+    """
+    x: float
+    y: float
+    ease_in: float = 0
+    ease_out: float = 0
 
 
 @dataclass
 class Outline:
-    vertices: list[tuple[float, float]]
-    edges: list[EdgeStyle]
+    """Device outline as a list of vertices, each with its own corner easing."""
+    points: list[OutlineVertex]
+
+    @property
+    def vertices(self) -> list[tuple[float, float]]:
+        """List of (x, y) tuples for polygon operations."""
+        return [(p.x, p.y) for p in self.points]
 
 
 @dataclass
@@ -83,17 +99,7 @@ def parse_design(data: dict) -> DesignSpec:
     ]
 
     outline_data = data["outline"]
-    outline = Outline(
-        vertices=[(float(v[0]), float(v[1])) for v in outline_data["vertices"]],
-        edges=[
-            EdgeStyle(
-                style=e["style"],
-                curve=e.get("curve"),
-                radius_mm=e.get("radius_mm"),
-            )
-            for e in outline_data["edges"]
-        ],
-    )
+    outline = _parse_outline(outline_data)
 
     ui_placements = [
         UIPlacement(
@@ -111,6 +117,30 @@ def parse_design(data: dict) -> DesignSpec:
         outline=outline,
         ui_placements=ui_placements,
     )
+
+
+def _parse_outline(data: list) -> Outline:
+    """Parse outline from a flat list of vertex objects.
+
+    Format:
+        [{"x": 0, "y": 0}, {"x": 30, "y": 0}, {"x": 30, "y": 80, "ease_in": 8}]
+    """
+    points = []
+    for v in data:
+        raw_in = v.get("ease_in")
+        raw_out = v.get("ease_out")
+        # If only one side is given, mirror it to the other
+        if raw_in is not None and raw_out is None:
+            raw_out = raw_in
+        elif raw_out is not None and raw_in is None:
+            raw_in = raw_out
+        points.append(OutlineVertex(
+            x=float(v["x"]),
+            y=float(v["y"]),
+            ease_in=float(raw_in) if raw_in else 0,
+            ease_out=float(raw_out) if raw_out else 0,
+        ))
+    return Outline(points=points)
 
 
 # ── Validation ─────────────────────────────────────────────────────
@@ -256,10 +286,10 @@ def validate_design(spec: DesignSpec, catalog: CatalogResult) -> list[str]:
                     f"UI placement '{up.instance_id}': side-mount components "
                     f"require edge_index (which outline edge to mount on)"
                 )
-            elif up.edge_index < 0 or up.edge_index >= len(spec.outline.vertices):
+            elif up.edge_index < 0 or up.edge_index >= len(spec.outline.points):
                 errors.append(
                     f"UI placement '{up.instance_id}': edge_index {up.edge_index} "
-                    f"out of range (0–{len(spec.outline.vertices) - 1})"
+                    f"out of range (0–{len(spec.outline.points) - 1})"
                 )
         elif up.edge_index is not None:
             errors.append(
@@ -279,23 +309,14 @@ def validate_design(spec: DesignSpec, catalog: CatalogResult) -> list[str]:
                 )
 
     # ── Outline validation ──
-    if len(spec.outline.vertices) < 3:
+    if len(spec.outline.points) < 3:
         errors.append("Outline must have at least 3 vertices")
 
-    if len(spec.outline.edges) != len(spec.outline.vertices):
-        errors.append(
-            f"Outline has {len(spec.outline.vertices)} vertices but "
-            f"{len(spec.outline.edges)} edges (must match)"
-        )
-
-    for i, edge in enumerate(spec.outline.edges):
-        if edge.style not in ("sharp", "round"):
-            errors.append(f"Edge {i}: unknown style '{edge.style}'")
-        if edge.style == "round":
-            if edge.radius_mm is None or edge.radius_mm <= 0:
-                errors.append(f"Edge {i}: round edge requires radius_mm > 0")
-            if edge.curve and edge.curve not in ("ease_in", "ease_out", "ease_in_out"):
-                errors.append(f"Edge {i}: unknown curve '{edge.curve}'")
+    for i, pt in enumerate(spec.outline.points):
+        if pt.ease_in < 0:
+            errors.append(f"Vertex {i}: ease_in must be >= 0")
+        if pt.ease_out < 0:
+            errors.append(f"Vertex {i}: ease_out must be >= 0")
 
     # ── Outline polygon validity (Shapely) ──
     if len(spec.outline.vertices) >= 3:
@@ -342,17 +363,15 @@ def design_to_dict(spec: DesignSpec) -> dict:
             {"id": n.id, "pins": n.pins}
             for n in spec.nets
         ],
-        "outline": {
-            "vertices": [list(v) for v in spec.outline.vertices],
-            "edges": [
-                {
-                    "style": e.style,
-                    **({"curve": e.curve} if e.curve else {}),
-                    **({"radius_mm": e.radius_mm} if e.radius_mm else {}),
-                }
-                for e in spec.outline.edges
-            ],
-        },
+        "outline": [
+            {
+                "x": p.x,
+                "y": p.y,
+                **({"ease_in": p.ease_in} if p.ease_in else {}),
+                **({"ease_out": p.ease_out} if p.ease_out else {}),
+            }
+            for p in spec.outline.points
+        ],
         "ui_placements": [
             {
                 "instance_id": p.instance_id,
