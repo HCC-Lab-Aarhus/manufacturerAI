@@ -22,6 +22,7 @@
         <button class="step" data-step="scad" disabled>4. SCAD</button>
         <button class="step" data-step="manufacturing" disabled>5. Manufacturing</button>
         <div class="nav-spacer"></div>
+        <button class="step" id="btn-guide" disabled>Guide</button>
         <button class="step" id="btn-catalog">Catalog</button>
         <button class="step" id="btn-list-sessions">Sessions</button>
     </nav>
@@ -98,6 +99,63 @@
             </div>
         </aside>
     </main>
+
+    <!-- Step-by-step Guide screen (full-screen overlay) -->
+    <div id="guide-screen" class="guide-screen" hidden>
+        <!-- Manual sliding sidebar overlay -->
+        <div id="manualSidebarOverlay" class="manual-sidebar-overlay"></div>
+
+        <!-- Manual sliding sidebar -->
+        <aside id="manualSidebar" class="manual-sidebar">
+            <div class="manual-sidebar-header"><h3>Manual</h3></div>
+            <div class="manual-sidebar-content" id="manualSidebarContent"></div>
+        </aside>
+
+        <div class="guide-header">
+            <button id="manualSidebarToggle" class="manual-toggle-btn" title="Open manual navigation">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                </svg>
+                Manual
+            </button>
+            <button id="guideBackBtn" class="guide-back-btn">← Back</button>
+            <button id="toggleQuestionWindowBtn" class="toggle-question-btn">Question window: Off</button>
+        </div>
+
+        <div class="guide-layout">
+            <!-- Question/Prompt sidebar -->
+            <aside id="questionSidebar" class="question-sidebar" style="display: none;">
+                <h3>Ask a Question</h3>
+                <textarea id="guidePromptInput" placeholder="Ask about this step..."></textarea>
+                <button id="guideAskBtn" class="guide-ask-btn">Ask</button>
+                <div id="guideResponse" class="guide-response"></div>
+            </aside>
+
+            <div class="guide-main">
+                <div class="guide-content" id="guideContent">
+                    <h2>Step by Step Guide</h2>
+                    <p>Your assembly guide will appear here.</p>
+                </div>
+                <div class="guide-navigation">
+                    <button id="guidePrevBtn" class="guide-nav-btn">Previous</button>
+                    <button id="guideNextBtn" class="guide-nav-btn">Next</button>
+                </div>
+            </div>
+
+            <!-- Component placement view panel -->
+            <div id="guidePlacementView" class="guide-placement-view" style="display: none;">
+                <div class="placement-view-header"><h3>Component Placement</h3></div>
+                <div class="placement-view-content">
+                    <svg id="guidePlacementSvg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet"></svg>
+                </div>
+                <div class="placement-view-legend">
+                    <span class="legend-item"><span class="legend-dot current"></span> Current component</span>
+                    <span class="legend-item"><span class="legend-dot other"></span> Other components</span>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- Sessions modal (outside main so position:fixed works) -->
     <div id="sessions-modal" class="modal" hidden>

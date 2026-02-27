@@ -2,6 +2,7 @@
 
 import { API, state } from './state.js';
 import { setData as setViewportData } from './viewport.js';
+import { enableGuideBtn } from './guide.js';
 
 const statusSpan = () => document.getElementById('placement-status');
 const infoDiv    = () => document.getElementById('placement-info');
@@ -74,6 +75,7 @@ export async function runPlacement() {
         renderResult(data);
         setViewportData('placement', data);
         stopTabFlash();
+        enableGuideBtn(true);
     } catch (e) {
         showStatus(`Error: ${e.message}`, true);
     } finally {
@@ -97,6 +99,7 @@ export async function loadPlacementResult() {
         renderResult(data);
         setViewportData('placement', data);
         stopTabFlash();
+        enableGuideBtn(true);
     } catch {
         // No placement available yet — that's fine
     }

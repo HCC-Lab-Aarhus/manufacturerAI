@@ -6,6 +6,7 @@ import { setSessionLabel, startNewSession, showSessionsModal, setSessionUrl } fr
 import { loadCatalog, reloadCatalog } from './catalog.js';
 import { sendDesignPrompt, loadConversation } from './design.js';
 import { runPlacement, loadPlacementResult, enablePlacementTab } from './placement.js';
+import { initGuide, openGuide, enableGuideBtn } from './guide.js';
 import { setStep } from './viewport.js';
 import './viewportDesign.js';   // registers the design viewport handler
 import './viewportPlacement.js'; // registers the placement viewport handler
@@ -33,6 +34,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (data?.artifacts?.design) {
                     enablePlacementTab(!data?.artifacts?.placement);
                 }
+                // Enable guide if placement is complete
+                if (data?.artifacts?.placement) {
+                    enableGuideBtn(true);
+                }
             })
             .catch(() => {});
     }
@@ -48,11 +53,17 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize viewport with active step
     setStep(state.activeStep || 'design');
 
+    // Initialize guide controls
+    initGuide();
+
     // Header buttons
     document.getElementById('btn-new-session').addEventListener('click', startNewSession);
 
     // Nav-bar: Sessions (right side)
     document.getElementById('btn-list-sessions').addEventListener('click', showSessionsModal);
+
+    // Nav-bar: Guide (right side)
+    document.getElementById('btn-guide').addEventListener('click', openGuide);
 
     // Nav-bar: Catalog toggle (right side)
     document.getElementById('btn-catalog').addEventListener('click', () => {

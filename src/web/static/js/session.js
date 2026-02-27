@@ -6,6 +6,7 @@ import { loadCatalog } from './catalog.js';
 import { loadConversation } from './design.js';
 import { loadPlacementResult, resetPlacementPanel } from './placement.js';
 import { clearData as clearViewportData } from './viewport.js';
+import { enableGuideBtn, closeGuide } from './guide.js';
 
 export function setSessionLabel(id, name) {
     const label = document.getElementById('session-label');
@@ -38,6 +39,9 @@ export function startNewSession() {
     setSessionUrl(null);
     setSessionLabel(null);
     clearViewportData();  // reset all viewport caches
+    // Close guide if open
+    closeGuide();
+    enableGuideBtn(false);
     // Clear the chat
     const msgs = document.getElementById('chat-messages');
     if (msgs) msgs.innerHTML = '';
@@ -103,6 +107,8 @@ export async function showSessionsModal() {
                 state.catalog = null; // reset catalog cache
                 clearViewportData();  // reset viewport for new session
                 resetPlacementPanel(); // reset placement panel to hero
+                closeGuide();          // close guide if open
+                enableGuideBtn(false); // disable guide until placement exists
                 loadConversation();
 
                 // Enable placement tab if design exists, disable otherwise
