@@ -6,10 +6,12 @@ import { setSessionLabel, startNewSession, showSessionsModal, setSessionUrl } fr
 import { loadCatalog, reloadCatalog } from './catalog.js';
 import { sendDesignPrompt, loadConversation } from './design.js';
 import { runPlacement, loadPlacementResult, enablePlacementTab } from './placement.js';
+import { runRouting, loadRoutingResult, enableRoutingTab } from './routing.js';
 import { initGuide, openGuide, enableGuideBtn } from './guide.js';
 import { setStep } from './viewport.js';
 import './viewportDesign.js';   // registers the design viewport handler
 import './viewportPlacement.js'; // registers the placement viewport handler
+import './viewportRouting.js';   // registers the routing viewport handler
 
 document.addEventListener('DOMContentLoaded', () => {
     // Restore session from URL
@@ -19,6 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setSessionLabel(state.session);
         loadConversation();
         loadPlacementResult();    // load existing placement if present
+        loadRoutingResult();      // load existing routing if present
         // Fetch session name for the label; clear URL if session no longer exists
         fetch(`${API}/api/session?session=${encodeURIComponent(state.session)}`)
             .then(r => {
@@ -33,6 +36,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Enable placement nav if design is complete
                 if (data?.artifacts?.design) {
                     enablePlacementTab(!data?.artifacts?.placement);
+                }
+                // Enable routing nav if placement is complete
+                if (data?.artifacts?.placement) {
+                    enableRoutingTab(!data?.artifacts?.routing);
                 }
                 // Enable guide if placement is complete
                 if (data?.artifacts?.placement) {
@@ -97,6 +104,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Placement
     document.getElementById('btn-run-placement').addEventListener('click', runPlacement);
+
+    // Routing
+    document.getElementById('btn-run-routing').addEventListener('click', runRouting);
 
     // Design chat
     document.getElementById('btn-send-design').addEventListener('click', sendDesignPrompt);

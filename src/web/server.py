@@ -24,7 +24,8 @@ from src.catalog import load_catalog, catalog_to_dict, CatalogResult
 from src.session import create_session, load_session, list_sessions, Session
 from src.agent import DesignAgent, TOOLS, MODEL, THINKING_BUDGET, TOKEN_BUDGET, _build_system_prompt, _prune_messages
 from src.pipeline.design import parse_design, validate_design
-from src.pipeline.placer import place_components, placement_to_dict, PlacementError
+from src.pipeline.placer import place_components, placement_to_dict, parse_placement, PlacementError
+from src.pipeline.router import route_traces, routing_to_dict
 from src.web.naming import generate_session_name
 
 import anthropic
@@ -257,6 +258,76 @@ def _enrich_placement(data: dict, cat) -> dict:
                 "length_mm": c.body.length_mm,
                 "diameter_mm": c.body.diameter_mm,
             }
+    return data
+
+
+# ── Routes: Router API ────────────────────────────────────────────
+
+@app.post("/api/session/routing")
+async def api_run_routing(session: str = Query(...)):
+    """Run the router on the session's placement. Saves routing.json."""
+    s = _resolve_session(session)
+    placement_data = s.read_artifact("placement.json")
+    if placement_data is None:
+        raise HTTPException(400, "No placement.json — run the placer first")
+
+    cat = _get_catalog()
+    placement = parse_placement(placement_data)
+
+    try:
+        result = route_traces(placement, cat)
+    except Exception as e:
+        raise HTTPException(
+            422,
+            detail={
+                "error": "routing_failed",
+                "reason": str(e),
+            },
+        )
+
+    data = routing_to_dict(result)
+    # Attach outline + components for the viewport renderer
+    data["outline"] = placement_data.get("outline", [])
+    data["components"] = placement_data.get("components", [])
+
+    # Enrich components with body dimensions for rendering
+    cat_map = {c.id: c for c in cat.components}
+    for comp in data.get("components", []):
+        c = cat_map.get(comp["catalog_id"])
+        if c:
+            comp["body"] = {
+                "shape": c.body.shape,
+                "width_mm": c.body.width_mm,
+                "length_mm": c.body.length_mm,
+                "diameter_mm": c.body.diameter_mm,
+            }
+
+    s.write_artifact("routing.json", data)
+    s.pipeline_state["routing"] = "complete"
+    s.save()
+    return data
+
+
+@app.get("/api/session/routing/result")
+async def api_routing_result(session: str = Query(...)):
+    """Return the saved routing for a session, if any."""
+    s = _resolve_session(session)
+    data = s.read_artifact("routing.json")
+    if data is None:
+        raise HTTPException(404, "No routing yet")
+    # Re-enrich components with body data if missing
+    cat = _get_catalog()
+    cat_map = {c.id: c for c in cat.components}
+    for comp in data.get("components", []):
+        if "body" not in comp:
+            c = cat_map.get(comp.get("catalog_id"))
+            if c:
+                comp["body"] = {
+                    "shape": c.body.shape,
+                    "width_mm": c.body.width_mm,
+                    "length_mm": c.body.length_mm,
+                    "diameter_mm": c.body.diameter_mm,
+                }
     return data
 
 
