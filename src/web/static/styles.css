@@ -527,6 +527,53 @@ main {
     flex-shrink: 0;
 }
 
+.design-status-inline:empty {
+    display: none;
+}
+
+/* ── Token meter pie chart ────────────────────── */
+
+.token-meter {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+}
+
+.token-pie {
+    width: 22px;
+    height: 22px;
+    transform: rotate(-90deg);
+}
+
+.token-pie-bg {
+    fill: none;
+    stroke: var(--bg-tertiary);
+    stroke-width: 3;
+}
+
+.token-pie-fill {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 3;
+    stroke-linecap: round;
+    transition: stroke-dasharray 0.4s ease, stroke 0.3s ease;
+}
+
+.token-pie-fill.warn {
+    stroke: #e8a735;
+}
+
+.token-pie-fill.critical {
+    stroke: #e05252;
+}
+
+.token-label {
+    font-size: 11px;
+    color: var(--text-dim);
+    white-space: nowrap;
+}
+
 .chat-container {
     display: flex;
     flex-direction: column;
@@ -699,6 +746,14 @@ main {
     padding: 12px 16px;
     border-top: 1px solid var(--border);
     background: var(--surface);
+    flex-shrink: 0;
+}
+
+.chat-input-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
     flex-shrink: 0;
 }
 

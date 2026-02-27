@@ -298,6 +298,10 @@ async function consumeSSE(response) {
                     }
                     break;
 
+                case 'token_usage':
+                    updateTokenMeter(data.input_tokens, data.budget);
+                    break;
+
                 case 'done':
                     statusSpan().textContent = 'Done';
                     break;
@@ -433,4 +437,28 @@ function escapeHtml(text) {
     const el = document.createElement('div');
     el.textContent = text;
     return el.innerHTML;
+}
+
+// ── Token meter ───────────────────────────────────────────────────
+
+function updateTokenMeter(inputTokens, budget) {
+    const meter = document.getElementById('token-meter');
+    const fill = meter?.querySelector('.token-pie-fill');
+    const label = document.getElementById('token-label');
+    if (!meter || !fill || !label) return;
+
+    meter.hidden = false;
+
+    const pct = Math.min(inputTokens / budget, 1);
+    const dashLen = (pct * 100).toFixed(1);
+    fill.setAttribute('stroke-dasharray', `${dashLen} 100`);
+
+    // Color thresholds
+    fill.classList.remove('warn', 'critical');
+    if (pct >= 0.9) fill.classList.add('critical');
+    else if (pct >= 0.7) fill.classList.add('warn');
+
+    const usedK = (inputTokens / 1000).toFixed(1);
+    const budgetK = (budget / 1000).toFixed(0);
+    label.textContent = `${usedK}k / ${budgetK}k`;
 }

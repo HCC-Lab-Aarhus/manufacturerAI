@@ -35,10 +35,20 @@
                     <div id="chat-messages" class="chat-messages"></div>
                     <div class="chat-input-row">
                         <textarea id="chat-input" placeholder="Describe the device you want to design..." rows="2"></textarea>
-                        <button id="btn-send-design" title="Send">Send</button>
+                        <div class="chat-input-right">
+                            <div id="token-meter" class="token-meter" hidden>
+                                <svg viewBox="0 0 36 36" class="token-pie">
+                                    <circle class="token-pie-bg" cx="18" cy="18" r="15.9155" />
+                                    <circle class="token-pie-fill" cx="18" cy="18" r="15.9155"
+                                        stroke-dasharray="0 100" />
+                                </svg>
+                                <span class="token-label" id="token-label">0k / 50k</span>
+                            </div>
+                            <button id="btn-send-design" title="Send">Send</button>
+                        </div>
                     </div>
+                    <span id="design-status" class="design-status-inline"></span>
                 </div>
-                <span id="design-status" class="design-status-inline"></span>
             </section>
 
             <!-- Catalog (reference view) -->

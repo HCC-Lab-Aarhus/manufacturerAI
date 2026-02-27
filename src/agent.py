@@ -31,6 +31,7 @@ MODEL = "claude-sonnet-4-6"
 MAX_TOKENS = 16384
 THINKING_BUDGET = 16000
 MAX_TURNS = 25
+TOKEN_BUDGET = 50000       # UI pie chart fills toward this limit
 
 
 # ── Tool definitions (Anthropic format) ────────────────────────────
@@ -440,6 +441,25 @@ class DesignAgent:
                 "role": "assistant",
                 "content": content_blocks,
             })
+
+            # ── Count conversation tokens (free API) ──
+            try:
+                token_count = await self.client.messages.count_tokens(
+                    model=MODEL,
+                    messages=self.messages,
+                    system=system,
+                    tools=TOOLS,
+                    thinking={
+                        "type": "enabled",
+                        "budget_tokens": THINKING_BUDGET,
+                    },
+                )
+                yield AgentEvent("token_usage", {
+                    "input_tokens": token_count.input_tokens,
+                    "budget": TOKEN_BUDGET,
+                })
+            except Exception:
+                pass  # token counting is best-effort
 
             # ── Check stop reason ──
             if stop_reason == "max_tokens":
