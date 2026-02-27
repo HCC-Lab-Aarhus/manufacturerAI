@@ -194,7 +194,7 @@ async function consumeSSE(response) {
 
         // SSE messages are separated by double newlines
         const parts = buffer.split('\n\n');
-        // buffer = parts.pop(); // last part is incomplete
+        buffer = parts.pop(); // last part is incomplete
 
         for (const part of parts) {
             if (!part.trim()) continue;
