@@ -2,7 +2,7 @@
 
 import { API, state } from './state.js';
 import { closeModal } from './utils.js';
-import { setSessionLabel, startNewSession, showSessionsModal } from './session.js';
+import { setSessionLabel, startNewSession, showSessionsModal, setSessionUrl } from './session.js';
 import { loadCatalog, reloadCatalog } from './catalog.js';
 import { sendDesignPrompt, loadConversation } from './design.js';
 import { setStep } from './viewport.js';
@@ -15,9 +15,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (state.session) {
         setSessionLabel(state.session);
         loadConversation();
-        // Fetch session name for the label
+        // Fetch session name for the label; clear URL if session no longer exists
         fetch(`${API}/api/session?session=${encodeURIComponent(state.session)}`)
-            .then(r => r.ok ? r.json() : null)
+            .then(r => {
+                if (r.status === 404) {
+                    startNewSession();
+                    return null;
+                }
+                return r.ok ? r.json() : null;
+            })
             .then(data => { if (data?.name) setSessionLabel(state.session, data.name); })
             .catch(() => {});
     }

@@ -107,7 +107,7 @@ function renderAssistantBlocks(blocks) {
                 flushToolItems();
                 if (block.text) {
                     const div = createMessageBubble();
-                    div.textContent = block.text;
+                    div.innerHTML = renderMarkdown(block.text);
                 }
                 break;
             case 'tool_use':
@@ -193,6 +193,7 @@ async function consumeSSE(response) {
     // Track current live-updating elements
     let thinkingPre = null;   // <pre> inside the thinking bubble
     let messageBubble = null; // <div> for the assistant text bubble
+    let messageBubbleText = ''; // raw text buffer for markdown re-rendering
     let currentBlock = null;  // 'thinking' | 'message' | null
     let toolGroup = null;     // current tool group <details> element
     let toolGroupItems = null; // container for tool items inside the group
@@ -255,12 +256,14 @@ async function consumeSSE(response) {
                     toolGroup = null;
                     toolGroupItems = null;
                     messageBubble = createMessageBubble();
+                    messageBubbleText = '';
                     statusSpan().textContent = '';
                     break;
 
                 case 'message_delta':
                     if (messageBubble && data.text) {
-                        messageBubble.textContent += data.text;
+                        messageBubbleText += data.text;
+                        messageBubble.innerHTML = renderMarkdown(messageBubbleText);
                         scrollToBottom();
                     }
                     break;
@@ -270,6 +273,7 @@ async function consumeSSE(response) {
                         thinkingPre = null;
                     } else if (currentBlock === 'message') {
                         messageBubble = null;
+                        messageBubbleText = '';
                     }
                     currentBlock = null;
                     break;
@@ -454,6 +458,49 @@ function scrollToBottom() {
     const container = messagesDiv();
     const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 40;
     if (atBottom) container.scrollTop = container.scrollHeight;
+}
+
+// ── Markdown renderer (lightweight, XSS-safe) ─────────────────────
+
+/**
+ * Convert a small subset of Markdown to safe HTML.
+ * Handles: **bold**, *italic*, `code`, - lists, blank line breaks.
+ */
+function renderMarkdown(text) {
+    const lines = text.split('\n');
+    const out = [];
+    let inList = false;
+
+    const closeList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+
+    for (const line of lines) {
+        if (/^[-*] /.test(line)) {
+            if (!inList) { out.push('<ul>'); inList = true; }
+            out.push(`<li>${inlineMarkdown(line.slice(2))}</li>`);
+        } else {
+            closeList();
+            if (line.trim() === '') {
+                out.push('<br>');
+            } else {
+                out.push(`<p>${inlineMarkdown(line)}</p>`);
+            }
+        }
+    }
+    closeList();
+    return out.join('');
+}
+
+function inlineMarkdown(raw) {
+    // Escape HTML first to prevent XSS
+    const esc = raw
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    // Then apply inline patterns
+    return esc
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+        .replace(/`(.+?)`/g, '<code>$1</code>');
 }
 
 function escapeHtml(text) {

@@ -7,17 +7,16 @@ import { loadConversation } from './design.js';
 import { clearData as clearViewportData } from './viewport.js';
 
 export function setSessionLabel(id, name) {
-    console.log('Setting session label:', { id, name });
     const label = document.getElementById('session-label');
     if (!id) {
         label.textContent = 'New session';
         label.title = '';
     } else if (name) {
         label.textContent = name;
-        label.title = id;
+        label.title = '';
     } else {
-        label.textContent = id;
-        label.title = id;
+        label.textContent = 'Unnamed Session';
+        label.title = '';
     }
 }
 
@@ -41,6 +40,9 @@ export function startNewSession() {
     // Clear the chat
     const msgs = document.getElementById('chat-messages');
     if (msgs) msgs.innerHTML = '';
+    // Reset token meter
+    const meter = document.getElementById('token-meter');
+    if (meter) meter.hidden = true;
     // Focus input
     const input = document.getElementById('chat-input');
     if (input) { input.value = ''; input.focus(); }

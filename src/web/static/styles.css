@@ -540,6 +540,10 @@ main {
     flex-shrink: 0;
 }
 
+.token-meter[hidden] {
+    display: none;
+}
+
 .token-pie {
     width: 22px;
     height: 22px;
@@ -610,7 +614,19 @@ main {
     align-self: flex-start;
     background: var(--surface2);
     color: var(--text);
-    white-space: pre-wrap;
+}
+
+.chat-bubble.assistant p {
+    margin: 0.25em 0;
+}
+
+.chat-bubble.assistant ul {
+    margin: 0.4em 0;
+    padding-left: 1.4em;
+}
+
+.chat-bubble.assistant li {
+    margin: 0.15em 0;
 }
 
 .chat-bubble.system {
