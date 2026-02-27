@@ -408,6 +408,7 @@ class DesignAgent:
         for turn in range(MAX_TURNS):
             content_blocks: list[dict] = []
             stop_reason = None
+            api_messages = _prune_messages(self.messages)
 
             try:
                 async with self.client.messages.stream(
@@ -419,7 +420,7 @@ class DesignAgent:
                     },
                     system=system,
                     tools=TOOLS,
-                    messages=self.messages,
+                    messages=api_messages,
                 ) as stream:
                     async for event in stream:
                         agent_event = self._handle_stream_event(event)
@@ -446,7 +447,7 @@ class DesignAgent:
             try:
                 token_count = await self.client.messages.count_tokens(
                     model=MODEL,
-                    messages=self.messages,
+                    messages=api_messages,
                     system=system,
                     tools=TOOLS,
                     thinking={
@@ -655,3 +656,69 @@ def _sanitize_messages(messages: list[dict]) -> list[dict]:
             msg = {**msg, "content": _serialize_content(content)}
         clean.append(msg)
     return clean
+
+
+# Lookup tools whose results are safe to prune from old turns
+_LOOKUP_TOOLS = {"list_components", "get_component"}
+
+
+def _prune_messages(messages: list[dict], keep_recent_turns: int = 6) -> list[dict]:
+    """
+    Shrink the context sent to the API by replacing old informational
+    tool results with a stub, without touching the saved history on disk.
+
+    For assistant turns older than `keep_recent_turns`:
+    - list_components / get_component tool_result content is replaced
+      with "[pruned]" (the pairing id is preserved so the API stays happy)
+    - submit_design tool calls + results are always kept verbatim
+    - All user text prompts and assistant text / thinking blocks are kept
+
+    This only affects what is sent to the API — self.messages is never
+    mutated by this function.
+    """
+    # Count assistant messages to know how many turns exist
+    assistant_indices = [i for i, m in enumerate(messages) if m["role"] == "assistant"]
+
+    if len(assistant_indices) <= keep_recent_turns:
+        return messages  # Nothing old enough to prune
+
+    # First assistant message index that counts as "recent"
+    cutoff_msg_index = assistant_indices[-keep_recent_turns]
+
+    # Collect tool_use ids for lookup tools in OLD turns only
+    prunable_ids: set[str] = set()
+    for msg in messages[:cutoff_msg_index]:
+        if msg["role"] == "assistant" and isinstance(msg.get("content"), list):
+            for block in msg["content"]:
+                if (
+                    block.get("type") == "tool_use"
+                    and block.get("name") in _LOOKUP_TOOLS
+                    and "id" in block
+                ):
+                    prunable_ids.add(block["id"])
+
+    if not prunable_ids:
+        return messages  # Nothing to replace
+
+    result = []
+    for idx, msg in enumerate(messages):
+        if idx >= cutoff_msg_index:
+            result.append(msg)  # Recent — keep verbatim
+            continue
+
+        content = msg.get("content")
+        if msg["role"] == "user" and isinstance(content, list):
+            # Replace content of prunable tool_result blocks
+            new_content = [
+                (
+                    {"type": "tool_result", "tool_use_id": b["tool_use_id"], "content": "[pruned]"}
+                    if b.get("type") == "tool_result" and b.get("tool_use_id") in prunable_ids
+                    else b
+                )
+                for b in content
+            ]
+            result.append({**msg, "content": new_content})
+        else:
+            result.append(msg)
+
+    return result

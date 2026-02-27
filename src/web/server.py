@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 from src.catalog import load_catalog, catalog_to_dict, CatalogResult
 from src.session import create_session, load_session, list_sessions, Session
-from src.agent import DesignAgent, TOOLS, MODEL, THINKING_BUDGET, TOKEN_BUDGET, _build_system_prompt
+from src.agent import DesignAgent, TOOLS, MODEL, THINKING_BUDGET, TOKEN_BUDGET, _build_system_prompt, _prune_messages
 
 import anthropic
 
@@ -206,11 +206,12 @@ def api_session_tokens(session: str = Query(...)):
 
     cat = _get_catalog()
     system = _build_system_prompt(cat)
+    pruned = _prune_messages(conversation)
     client = anthropic.Anthropic()
     try:
         result = client.messages.count_tokens(
             model=MODEL,
-            messages=conversation,
+            messages=pruned,
             system=system,
             tools=TOOLS,
             thinking={"type": "enabled", "budget_tokens": THINKING_BUDGET},
