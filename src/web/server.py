@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 from src.catalog import load_catalog, catalog_to_dict, CatalogResult
 from src.session import create_session, load_session, list_sessions, Session
-from src.agent import DesignAgent
+from src.agent import DesignAgent, TOOLS, MODEL, THINKING_BUDGET, TOKEN_BUDGET, _build_system_prompt
 
 import anthropic
 
@@ -195,6 +195,30 @@ async def api_session_catalog(session: str = Query(...)):
 
 
 # ── Routes: Design Agent API ──────────────────────────────────────
+
+@app.get("/api/session/tokens")
+def api_session_tokens(session: str = Query(...)):
+    """Return the current input token count for the session's conversation."""
+    s = _resolve_session(session)
+    conversation = s.read_artifact("conversation.json")
+    if not conversation or not isinstance(conversation, list):
+        return {"input_tokens": 0, "budget": TOKEN_BUDGET}
+
+    cat = _get_catalog()
+    system = _build_system_prompt(cat)
+    client = anthropic.Anthropic()
+    try:
+        result = client.messages.count_tokens(
+            model=MODEL,
+            messages=conversation,
+            system=system,
+            tools=TOOLS,
+            thinking={"type": "enabled", "budget_tokens": THINKING_BUDGET},
+        )
+        return {"input_tokens": result.input_tokens, "budget": TOKEN_BUDGET}
+    except Exception:
+        return {"input_tokens": 0, "budget": TOKEN_BUDGET}
+
 
 @app.get("/api/session/conversation")
 async def api_conversation(session: str = Query(...)):

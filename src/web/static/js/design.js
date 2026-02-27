@@ -29,6 +29,17 @@ export async function loadConversation() {
     } catch {
         // Silently ignore — empty chat is fine
     }
+
+    // Fetch current token count and update the meter
+    if (state.session) {
+        try {
+            const res = await fetch(`${API}/api/session/tokens?session=${encodeURIComponent(state.session)}`);
+            if (res.ok) {
+                const t = await res.json();
+                updateTokenMeter(t.input_tokens, t.budget);
+            }
+        } catch { /* best-effort */ }
+    }
 }
 
 /**
@@ -301,6 +312,18 @@ async function consumeSSE(response) {
                 case 'token_usage':
                     updateTokenMeter(data.input_tokens, data.budget);
                     break;
+
+                case 'done': {
+                    // Refresh token count from server after turn completes
+                    // (includes any tool_result messages appended after last count)
+                    if (state.session) {
+                        fetch(`${API}/api/session/tokens?session=${encodeURIComponent(state.session)}`)
+                            .then(r => r.ok ? r.json() : null)
+                            .then(t => { if (t) updateTokenMeter(t.input_tokens, t.budget); })
+                            .catch(() => {});
+                    }
+                    break;
+                }
 
                 case 'done':
                     statusSpan().textContent = 'Done';
