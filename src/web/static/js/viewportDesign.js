@@ -75,7 +75,9 @@ function buildOutlineSVG(design) {
     const w = (maxX - minX) * SCALE + PAD * 2;
     const h = (maxY - minY) * SCALE + PAD * 2;
     const ox = PAD - minX * SCALE;
-    const oy = PAD - minY * SCALE;
+    // oy is set so that design y=maxY maps to SVG y=PAD (top),
+    // flipping the Y axis to match math convention (y increases upward).
+    const oy = PAD + maxY * SCALE;
 
     const NS = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(NS, 'svg');
@@ -121,7 +123,7 @@ function buildOutlineSVG(design) {
         } else {
             // Interior component — circle marker
             const cx = ox + up.x_mm * SCALE;
-            const cy = oy + up.y_mm * SCALE;
+            const cy = oy - up.y_mm * SCALE;
 
             const marker = document.createElementNS(NS, 'circle');
             marker.setAttribute('cx', cx);
@@ -150,9 +152,9 @@ function buildOutlineSVG(design) {
 
     const dimLabelV = document.createElementNS(NS, 'text');
     dimLabelV.setAttribute('x', 8);
-    dimLabelV.setAttribute('y', oy + ((maxY - minY) / 2) * SCALE);
+    dimLabelV.setAttribute('y', oy - ((maxY + minY) / 2) * SCALE);
     dimLabelV.setAttribute('class', 'vp-dim-label');
-    dimLabelV.setAttribute('transform', `rotate(-90, 8, ${oy + ((maxY - minY) / 2) * SCALE})`);
+    dimLabelV.setAttribute('transform', `rotate(-90, 8, ${oy - ((maxY + minY) / 2) * SCALE})`);
     dimLabelV.textContent = `${(maxY - minY).toFixed(1)} mm`;
     svg.appendChild(dimLabelV);
 
@@ -267,12 +269,14 @@ function drawSideMountMarker(svg, NS, up, outline, ox, oy) {
     let t = (px * dx + py * dy) / edgeLen;
     t = Math.max(0.02, Math.min(0.98, t));
 
-    // Position on the edge
+    // Position on the edge (Y flipped: design y=up, SVG y=down)
     const cx = ox + (v0[0] + t * ex) * SCALE;
-    const cy = oy + (v0[1] + t * ey) * SCALE;
+    const cy = oy - (v0[1] + t * ey) * SCALE;
 
-    // Outward normal (pointing inside the polygon for CW winding)
-    const nx = -dy, ny = dx;
+    // Edge direction in screen space (Y is flipped, so screen dy = -dy)
+    const sdx = dx, sdy = -dy;
+    // Inward normal in screen space: perpendicular to (sdx,sdy) rotated 90° CCW
+    const nx = -sdy, ny = sdx;
 
     // Draw a small triangle/arrow pointing inward from the wall
     const arrowLen = 8;   // length of arrow in px
@@ -283,10 +287,10 @@ function drawSideMountMarker(svg, NS, up, outline, ox, oy) {
     const tipY = cy + ny * arrowLen * SCALE / 4;
 
     // Base corners (on the wall)
-    const b1x = cx + dx * arrowW;
-    const b1y = cy + dy * arrowW;
-    const b2x = cx - dx * arrowW;
-    const b2y = cy - dy * arrowW;
+    const b1x = cx + sdx * arrowW;
+    const b1y = cy + sdy * arrowW;
+    const b2x = cx - sdx * arrowW;
+    const b2y = cy - sdy * arrowW;
 
     const arrow = document.createElementNS(NS, 'polygon');
     arrow.setAttribute('points', `${b1x},${b1y} ${tipX},${tipY} ${b2x},${b2y}`);
@@ -360,8 +364,8 @@ function buildOutlinePath(verts, edges, ox, oy, scale) {
     const n = verts.length;
     if (n < 3) return '';
 
-    // Convert vertices to screen coords
-    const pts = verts.map(v => ({ x: ox + v[0] * scale, y: oy + v[1] * scale }));
+    // Convert vertices to screen coords (Y flipped: design y=up, SVG y=down)
+    const pts = verts.map(v => ({ x: ox + v[0] * scale, y: oy - v[1] * scale }));
 
     // Pre-compute ease info per vertex in px
     const corners = [];
