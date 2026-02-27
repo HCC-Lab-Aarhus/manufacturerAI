@@ -9,13 +9,13 @@ Submodules:
   serialization JSON conversion (routing_to_dict, parse_routing).
 """
 
-from .models import Trace, RoutingResult
+from .models import Trace, RoutingResult, RouterConfig
 from .engine import route_traces
 from .serialization import routing_to_dict, parse_routing
 
 __all__ = [
     # Models
-    "Trace", "RoutingResult",
+    "Trace", "RoutingResult", "RouterConfig",
     # Engine
     "route_traces",
     # Serialization

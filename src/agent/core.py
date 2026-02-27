@@ -274,6 +274,12 @@ class DesignAgent:
         self.design = spec
         self.session.write_artifact("design.json", input_data)
         self.session.pipeline_state["design"] = "complete"
+        # Invalidate downstream: placement and routing depend on design
+        for step in ("placement", "routing"):
+            artifact = f"{step}.json"
+            if self.session.has_artifact(artifact):
+                self.session.delete_artifact(artifact)
+            self.session.pipeline_state.pop(step, None)
         self.session.save()
 
         return "Design validated successfully! Saved to session.", True
