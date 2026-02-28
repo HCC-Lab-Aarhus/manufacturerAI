@@ -269,18 +269,28 @@ async def api_placement_result(session: str = Query(...)):
     return _enrich_placement(data, cat)
 
 
-def _enrich_placement(data: dict, cat) -> dict:
-    """Add body dimensions from the catalog to each placed component."""
+def _enrich_components(components: list, cat) -> None:
+    """Add body dimensions and pin positions from the catalog."""
     cat_map = {c.id: c for c in cat.components}
-    for comp in data.get("components", []):
-        c = cat_map.get(comp["catalog_id"])
-        if c:
-            comp["body"] = {
-                "shape": c.body.shape,
-                "width_mm": c.body.width_mm,
-                "length_mm": c.body.length_mm,
-                "diameter_mm": c.body.diameter_mm,
-            }
+    for comp in components:
+        c = cat_map.get(comp.get("catalog_id"))
+        if not c:
+            continue
+        comp["body"] = {
+            "shape": c.body.shape,
+            "width_mm": c.body.width_mm,
+            "length_mm": c.body.length_mm,
+            "diameter_mm": c.body.diameter_mm,
+        }
+        comp["pins"] = [
+            {"id": p.id, "position_mm": list(p.position_mm)}
+            for p in c.pins
+        ]
+
+
+def _enrich_placement(data: dict, cat) -> dict:
+    """Add body dimensions and pin positions to each placed component."""
+    _enrich_components(data.get("components", []), cat)
     return data
 
 
@@ -313,17 +323,8 @@ async def api_run_routing(session: str = Query(...)):
     data["outline"] = placement_data.get("outline", [])
     data["components"] = placement_data.get("components", [])
 
-    # Enrich components with body dimensions for rendering
-    cat_map = {c.id: c for c in cat.components}
-    for comp in data.get("components", []):
-        c = cat_map.get(comp["catalog_id"])
-        if c:
-            comp["body"] = {
-                "shape": c.body.shape,
-                "width_mm": c.body.width_mm,
-                "length_mm": c.body.length_mm,
-                "diameter_mm": c.body.diameter_mm,
-            }
+    # Enrich components with body + pin data for rendering
+    _enrich_components(data.get("components", []), cat)
 
     s.write_artifact("routing.json", data)
     s.pipeline_state["routing"] = "complete"
@@ -338,19 +339,11 @@ async def api_routing_result(session: str = Query(...)):
     data = s.read_artifact("routing.json")
     if data is None:
         raise HTTPException(404, "No routing yet")
-    # Re-enrich components with body data if missing
+    # Re-enrich components with body + pin data if missing
     cat = _get_catalog()
-    cat_map = {c.id: c for c in cat.components}
     for comp in data.get("components", []):
-        if "body" not in comp:
-            c = cat_map.get(comp.get("catalog_id"))
-            if c:
-                comp["body"] = {
-                    "shape": c.body.shape,
-                    "width_mm": c.body.width_mm,
-                    "length_mm": c.body.length_mm,
-                    "diameter_mm": c.body.diameter_mm,
-                }
+        if "body" not in comp or "pins" not in comp:
+            _enrich_components([comp], cat)
     return data
 
 
@@ -396,6 +389,9 @@ async def api_design_result(session: str = Query(...)):
     data = s.read_artifact("design.json")
     if data is None:
         raise HTTPException(404, "No design yet")
+    # Enrich components with body + pin data for rendering
+    cat = _get_catalog()
+    _enrich_components(data.get("components", []), cat)
     return data
 
 
@@ -450,6 +446,13 @@ async def api_design(request: Request, session: str = Query(None)):
 
             agent = DesignAgent(cat, sess)
             async for event in agent.run(prompt):
+                # Enrich design components with body + pin data
+                if event.type == "design" and event.data:
+                    design = event.data.get("design")
+                    if design:
+                        _enrich_components(
+                            design.get("components", []), cat,
+                        )
                 data = json.dumps(event.data) if event.data else "{}"
                 yield f"event: {event.type}\ndata: {data}\n\n"
 

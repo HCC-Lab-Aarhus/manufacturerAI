@@ -19,6 +19,7 @@
  */
 
 import { registerHandler } from './viewport.js';
+import { drawComponentIcon } from './componentRenderer.js';
 
 // ── Register ──────────────────────────────────────────────────
 
@@ -42,20 +43,6 @@ registerHandler('placement', {
 const SCALE = 4;      // mm → px
 const PAD   = 40;     // px padding around the SVG content
 const NS    = 'http://www.w3.org/2000/svg';
-
-// Distinct colours for placed components
-const COMP_COLORS = [
-    '#58a6ff',   // blue
-    '#3fb950',   // green
-    '#d29922',   // yellow
-    '#f778ba',   // pink
-    '#bc8cff',   // purple
-    '#79c0ff',   // light blue
-    '#56d364',   // lime
-    '#e3b341',   // gold
-    '#ff7b72',   // red-light
-    '#a5d6ff',   // ice blue
-];
 
 
 // ── Preview builder ───────────────────────────────────────────
@@ -131,9 +118,17 @@ function buildPlacementSVG(data) {
     svg.appendChild(pathEl);
 
     // ── Placed components ──
+    const COMP_COLORS = [
+        '#58a6ff', '#3fb950', '#d29922', '#f778ba', '#bc8cff',
+        '#79c0ff', '#56d364', '#e3b341', '#ff7b72', '#a5d6ff',
+    ];
     components.forEach((comp, idx) => {
         const color = COMP_COLORS[idx % COMP_COLORS.length];
-        drawComponent(svg, comp, ox, oy, color);
+        drawComponentIcon(svg, comp, ox, oy, SCALE, {
+            color,
+            bodyOpacity: 0.2,
+            showPins: !!(comp.pins && comp.pins.length),
+        });
     });
 
     // ── Dimension labels ──

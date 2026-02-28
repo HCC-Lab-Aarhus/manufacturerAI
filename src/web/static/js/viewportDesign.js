@@ -16,6 +16,7 @@
  */
 
 import { registerHandler } from './viewport.js';
+import { drawComponentIcon } from './componentRenderer.js';
 
 // ── Register ──────────────────────────────────────────────────
 
@@ -114,32 +115,69 @@ function buildOutlineSVG(design) {
     pathEl.setAttribute('class', 'vp-outline-path');
     svg.appendChild(pathEl);
 
-    // UI placements
-    for (const up of ui_placements) {
-        if (up.edge_index != null) {
-            // Side-mount component — render on the wall edge
-            drawSideMountMarker(svg, NS, up, { vertices: verts }, ox, oy);
-        } else {
-            // Interior component — circle marker
-            const cx = ox + up.x_mm * SCALE;
-            const cy = oy + up.y_mm * SCALE;
-
-            const marker = document.createElementNS(NS, 'circle');
-            marker.setAttribute('cx', cx);
-            marker.setAttribute('cy', cy);
-            marker.setAttribute('r', '6');
-            marker.setAttribute('class', 'vp-ui-marker');
-
-            const label = document.createElementNS(NS, 'text');
-            label.setAttribute('x', cx);
-            label.setAttribute('y', cy - 10);
-            label.setAttribute('class', 'vp-ui-label');
-            label.textContent = up.instance_id;
-
-            svg.appendChild(marker);
-            svg.appendChild(label);
-        }
+    // UI placements — use shared component renderer when body data
+    // is available, otherwise fall back to simple marker dots.
+    const compMap = {};
+    for (const c of (design.components || [])) {
+        compMap[c.instance_id] = c;
     }
+
+    const UI_COLORS = [
+        '#58a6ff', '#3fb950', '#d29922', '#f778ba', '#bc8cff',
+        '#79c0ff', '#56d364', '#e3b341', '#ff7b72', '#a5d6ff',
+    ];
+
+    ui_placements.forEach((up, idx) => {
+        const comp = compMap[up.instance_id];
+        const color = UI_COLORS[idx % UI_COLORS.length];
+
+        if (up.edge_index != null) {
+            // Side-mount — snap to wall, then draw component icon
+            const snapInfo = _snapToEdge(up, verts);
+            if (comp && comp.body) {
+                const fakeComp = {
+                    ...comp,
+                    x_mm: snapInfo.x, y_mm: snapInfo.y,
+                    rotation_deg: snapInfo.rot,
+                };
+                drawComponentIcon(svg, fakeComp, ox, oy, SCALE, {
+                    color, bodyOpacity: 0.2, showPins: !!(comp.pins),
+                });
+            } else {
+                drawSideMountMarker(svg, NS, up, { vertices: verts }, ox, oy);
+            }
+        } else {
+            // Interior UI component
+            if (comp && comp.body) {
+                const fakeComp = {
+                    ...comp,
+                    x_mm: up.x_mm, y_mm: up.y_mm,
+                    rotation_deg: 0,
+                };
+                drawComponentIcon(svg, fakeComp, ox, oy, SCALE, {
+                    color, bodyOpacity: 0.2, showPins: !!(comp.pins),
+                });
+            } else {
+                const cx = ox + up.x_mm * SCALE;
+                const cy = oy + up.y_mm * SCALE;
+
+                const marker = document.createElementNS(NS, 'circle');
+                marker.setAttribute('cx', cx);
+                marker.setAttribute('cy', cy);
+                marker.setAttribute('r', '6');
+                marker.setAttribute('class', 'vp-ui-marker');
+
+                const label = document.createElementNS(NS, 'text');
+                label.setAttribute('x', cx);
+                label.setAttribute('y', cy - 10);
+                label.setAttribute('class', 'vp-ui-label');
+                label.textContent = up.instance_id;
+
+                svg.appendChild(marker);
+                svg.appendChild(label);
+            }
+        }
+    });
 
     // Dimension labels
     const dimLabel = document.createElementNS(NS, 'text');
@@ -425,4 +463,36 @@ function buildOutlinePath(verts, edges, ox, oy, scale) {
 
     segments.push('Z');
     return segments.join(' ');
+}
+
+
+// ── Edge snap helper ──────────────────────────────────────────
+
+/**
+ * Snap a UI placement onto its outline edge and compute rotation.
+ * Returns { x, y, rot } in mm.
+ */
+function _snapToEdge(up, verts) {
+    const n = verts.length;
+    const i = up.edge_index;
+    const v0 = verts[i];
+    const v1 = verts[(i + 1) % n];
+    const ex = v1[0] - v0[0], ey = v1[1] - v0[1];
+    const edgeLen = Math.hypot(ex, ey);
+    if (edgeLen === 0) return { x: up.x_mm, y: up.y_mm, rot: 0 };
+
+    const dx = ex / edgeLen, dy = ey / edgeLen;
+    const px = up.x_mm - v0[0], py = up.y_mm - v0[1];
+    let t = (px * dx + py * dy) / edgeLen;
+    t = Math.max(0, Math.min(1, t));
+
+    const x = v0[0] + t * ex;
+    const y = v0[1] + t * ey;
+
+    // Outward normal rotation (same logic as Python _edge_rotation)
+    const angle = Math.atan2(ey, ex) * 180 / Math.PI;
+    const normalAngle = angle - 90;
+    const rot = ((Math.round(normalAngle / 90) * 90) % 360 + 360) % 360;
+
+    return { x, y, rot };
 }

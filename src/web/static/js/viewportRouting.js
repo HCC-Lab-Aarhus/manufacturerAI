@@ -16,6 +16,7 @@
  */
 
 import { registerHandler } from './viewport.js';
+import { drawComponentIcon } from './componentRenderer.js';
 
 // ── Register ──────────────────────────────────────────────────
 
@@ -39,12 +40,6 @@ registerHandler('routing', {
 const SCALE = 4;      // mm → px
 const PAD   = 40;     // px padding around the SVG content
 const NS    = 'http://www.w3.org/2000/svg';
-
-// Colours for component bodies (dimmed in routing view)
-const COMP_COLORS = [
-    '#58a6ff', '#3fb950', '#d29922', '#f778ba', '#bc8cff',
-    '#79c0ff', '#56d364', '#e3b341', '#ff7b72', '#a5d6ff',
-];
 
 // Distinct trace colours (brighter, higher contrast)
 const TRACE_COLORS = [
@@ -136,9 +131,18 @@ function buildRoutingSVG(data) {
     svg.appendChild(pathEl);
 
     // ── Components (dimmed) ──
+    const COMP_COLORS = [
+        '#58a6ff', '#3fb950', '#d29922', '#f778ba', '#bc8cff',
+        '#79c0ff', '#56d364', '#e3b341', '#ff7b72', '#a5d6ff',
+    ];
     components.forEach((comp, idx) => {
         const color = COMP_COLORS[idx % COMP_COLORS.length];
-        drawComponent(svg, comp, ox, oy, color, 0.10);  // lower opacity
+        drawComponentIcon(svg, comp, ox, oy, SCALE, {
+            color,
+            bodyOpacity: 0.10,
+            showPins: !!(comp.pins && comp.pins.length),
+            pinRadius: 2,
+        });
     });
 
     // ── Traces ──
@@ -256,62 +260,6 @@ function drawTrace(svg, trace, ox, oy, color) {
         pad.setAttribute('stroke-width', '1');
         svg.appendChild(pad);
     }
-}
-
-
-// ── Draw a placed component (dimmed) ──────────────────────────
-
-function drawComponent(svg, comp, ox, oy, color, opacity = 0.15) {
-    const body = comp.body || {};
-    const cx = ox + comp.x_mm * SCALE;
-    const cy = oy + comp.y_mm * SCALE;
-    const rot = comp.rotation_deg || 0;
-
-    if (body.shape === 'circle') {
-        const r = ((body.diameter_mm || 5) / 2) * SCALE;
-        const circle = document.createElementNS(NS, 'circle');
-        circle.setAttribute('cx', cx);
-        circle.setAttribute('cy', cy);
-        circle.setAttribute('r', r);
-        circle.setAttribute('fill', color);
-        circle.setAttribute('fill-opacity', String(opacity));
-        circle.setAttribute('stroke', color);
-        circle.setAttribute('stroke-width', '1');
-        circle.setAttribute('stroke-opacity', '0.3');
-        svg.appendChild(circle);
-    } else {
-        let bw = (body.width_mm || 4) * SCALE;
-        let bh = (body.length_mm || 4) * SCALE;
-        if (rot === 90 || rot === 270) [bw, bh] = [bh, bw];
-
-        const rect = document.createElementNS(NS, 'rect');
-        rect.setAttribute('x', cx - bw / 2);
-        rect.setAttribute('y', cy - bh / 2);
-        rect.setAttribute('width', bw);
-        rect.setAttribute('height', bh);
-        rect.setAttribute('rx', '2');
-        rect.setAttribute('fill', color);
-        rect.setAttribute('fill-opacity', String(opacity));
-        rect.setAttribute('stroke', color);
-        rect.setAttribute('stroke-width', '1');
-        rect.setAttribute('stroke-opacity', '0.3');
-        svg.appendChild(rect);
-    }
-
-    // Label
-    const label = document.createElementNS(NS, 'text');
-    label.setAttribute('x', cx);
-    label.setAttribute('y', cy - ((body.shape === 'circle'
-        ? (body.diameter_mm || 5) / 2
-        : (rot === 90 || rot === 270
-            ? (body.width_mm || 4) / 2
-            : (body.length_mm || 4) / 2)
-    ) * SCALE) - 5);
-    label.setAttribute('class', 'vp-placed-label');
-    label.setAttribute('fill', color);
-    label.setAttribute('opacity', '0.5');
-    label.textContent = comp.instance_id;
-    svg.appendChild(label);
 }
 
 
