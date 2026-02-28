@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import heapq
 
-from .grid import RoutingGrid
+from .grid import RoutingGrid, TRACE_PATH
 from .models import TURN_PENALTY, CROSSING_PENALTY
 
 
@@ -36,6 +36,11 @@ def find_path(
     tx, ty = sink
 
     if not grid.in_bounds(sx, sy) or not grid.in_bounds(tx, ty):
+        return None
+    # Reject if source or sink is occupied by another net's trace
+    if grid._cells[sy * grid.width + sx] == TRACE_PATH:
+        return None
+    if grid._cells[ty * grid.width + tx] == TRACE_PATH:
         return None
     if source == sink:
         return [source]
@@ -92,9 +97,13 @@ def find_path(
             nkey = encode(nx, ny)
             if nkey in closed:
                 continue
-            # Allow stepping onto the source or sink even if blocked
-            if not grid.is_free(nx, ny) and (nx, ny) != sink and (nx, ny) != source:
-                continue
+            # Allow stepping onto the source or sink even if blocked,
+            # but NEVER if occupied by another net's trace (TRACE_PATH).
+            if not grid.is_free(nx, ny):
+                if grid._cells[ny * grid.width + nx] == TRACE_PATH:
+                    continue
+                if (nx, ny) != sink and (nx, ny) != source:
+                    continue
 
             is_turn = direction != -1 and direction != d
             cost = 1 + (turn_penalty if is_turn else 0)
@@ -129,6 +138,9 @@ def find_path_to_tree(
     """
     sx, sy = source
     if not grid.in_bounds(sx, sy):
+        return None
+    # Reject if source is occupied by another net's trace
+    if grid._cells[sy * grid.width + sx] == TRACE_PATH:
         return None
     if (sx, sy) in tree:
         return [(sx, sy)]
@@ -196,8 +208,12 @@ def find_path_to_tree(
             is_tree_cell = nkey in tree_keys
             cell_free = grid.is_free(nx, ny)
 
+            # Never cross an existing trace, even in crossing-aware mode
             if not cell_free and not is_tree_cell:
-                if not allow_crossings or grid.is_permanently_blocked(nx, ny):
+                cell_val = grid._cells[ny * grid.width + nx]
+                if cell_val == TRACE_PATH:
+                    continue
+                if not allow_crossings or cell_val == 2:  # PERMANENTLY_BLOCKED
                     continue
 
             is_turn = direction != -1 and direction != d
@@ -247,14 +263,19 @@ def _l_route(
         x, y = sx, sy
         while x != tx:
             x += dx
-            if not grid.is_free(x, y) and (x, y) != sink:
+            if (x, y) != sink and not grid.is_free(x, y):
+                return None
+            # Never cross an existing trace, even at the sink
+            if grid.in_bounds(x, y) and grid._cells[y * grid.width + x] == TRACE_PATH:
                 return None
             path.append((x, y))
         # Vertical leg
         dy = 1 if ty > sy else -1
         while y != ty:
             y += dy
-            if not grid.is_free(x, y) and (x, y) != sink:
+            if (x, y) != sink and not grid.is_free(x, y):
+                return None
+            if grid.in_bounds(x, y) and grid._cells[y * grid.width + x] == TRACE_PATH:
                 return None
             path.append((x, y))
     else:
@@ -263,14 +284,18 @@ def _l_route(
         x, y = sx, sy
         while y != ty:
             y += dy
-            if not grid.is_free(x, y) and (x, y) != sink:
+            if (x, y) != sink and not grid.is_free(x, y):
+                return None
+            if grid.in_bounds(x, y) and grid._cells[y * grid.width + x] == TRACE_PATH:
                 return None
             path.append((x, y))
         # Horizontal leg
         dx = 1 if tx > sx else -1
         while x != tx:
             x += dx
-            if not grid.is_free(x, y) and (x, y) != sink:
+            if (x, y) != sink and not grid.is_free(x, y):
+                return None
+            if grid.in_bounds(x, y) and grid._cells[y * grid.width + x] == TRACE_PATH:
                 return None
             path.append((x, y))
 

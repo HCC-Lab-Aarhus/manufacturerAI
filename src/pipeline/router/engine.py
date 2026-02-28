@@ -23,13 +23,13 @@ import random
 import time
 from dataclasses import dataclass
 
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, Point
 
 from src.catalog.models import CatalogResult
 from src.pipeline.placer.models import FullPlacement, PlacedComponent
 from src.pipeline.placer.geometry import footprint_halfdims
 
-from .grid import RoutingGrid
+from .grid import RoutingGrid, TRACE_PATH, FREE, BLOCKED, PERMANENTLY_BLOCKED
 from .models import (
     Trace, RoutingResult, RouterConfig,
     GRID_RESOLUTION_MM, TRACE_WIDTH_MM, TRACE_CLEARANCE_MM,
@@ -106,7 +106,17 @@ def route_traces(
     placed_map = {p.instance_id: p for p in placement.components}
     outline_poly = Polygon(placement.outline.vertices)
 
+    log.info("Router: starting — %d components, %d nets, outline area=%.1f mm²",
+             len(placement.components), len(placement.nets), outline_poly.area)
+    log.info("Router config: grid=%.2fmm, trace_w=%.1fmm, clearance=%.1fmm, "
+             "edge_clr=%.1fmm, time_budget=%.0fs, max_attempts=%d",
+             config.grid_resolution_mm, config.trace_width_mm,
+             config.trace_clearance_mm, config.edge_clearance_mm,
+             config.time_budget_s, config.max_rip_up_attempts)
+
     if not outline_poly.is_valid or outline_poly.area <= 0:
+        log.error("Router: invalid outline polygon (valid=%s, area=%.1f) — all nets fail",
+                  outline_poly.is_valid, outline_poly.area)
         return RoutingResult(traces=[], pin_assignments={}, failed_nets=[
             n.id for n in placement.nets
         ])
@@ -255,7 +265,11 @@ def _carve_escape_channel(
     permanently-blocked cells until reaching a non-permanently-blocked
     cell.  Frees all cells along the two shortest directions to ensure
     the pin has a clear path out of the blocked zone.
+
+    Only frees cells whose world-space centre falls inside the outline
+    polygon, preventing traces from clipping outside the board edge.
     """
+    outline = grid.outline_poly
     directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
     dir_dists: list[tuple[int, tuple[int, int]]] = []
 
@@ -290,11 +304,18 @@ def _carve_escape_channel(
             if not grid.is_permanently_blocked(gx, gy):
                 # Reached open space — done with this direction
                 break
+            # Only free cells whose world centre is inside the outline
+            wx, wy = grid.grid_to_world(gx, gy)
+            if not outline.contains(Point(wx, wy)):
+                break
             grid.force_free_cell(gx, gy)
             # Free one cell on each side perpendicular for clearance
             perp_dx, perp_dy = dy, dx
-            grid.force_free_cell(gx + perp_dx, gy + perp_dy)
-            grid.force_free_cell(gx - perp_dx, gy - perp_dy)
+            for pdx, pdy in [(perp_dx, perp_dy), (-perp_dx, -perp_dy)]:
+                nx, ny = gx + pdx, gy + pdy
+                pwx, pwy = grid.grid_to_world(nx, ny)
+                if grid.in_bounds(nx, ny) and outline.contains(Point(pwx, pwy)):
+                    grid.force_free_cell(nx, ny)
 
 
 # ── Pad resolution (deferred for group pins) ──────────────────────
@@ -341,7 +362,7 @@ def _resolve_pads(
         else:
             # Check if this group ref was already assigned (from a
             # previous routing attempt)
-            assignment_key = ref.raw
+            assignment_key = f"{net_id}|{ref.raw}"
             if assignment_key in pin_assignments:
                 assigned_pin = pin_assignments[assignment_key].split(":", 1)[1]
                 pos = get_pin_world_pos(
@@ -410,7 +431,7 @@ def _resolve_pads(
             gx=gx, gy=gy,
             world_x=pos[0], world_y=pos[1],
         )
-        pin_assignments[ref.raw] = f"{ref.instance_id}:{chosen_pin}"
+        pin_assignments[f"{net_id}|{ref.raw}"] = f"{ref.instance_id}:{chosen_pin}"
 
     # All should be resolved
     result = [p for p in pads if p is not None]
@@ -594,11 +615,19 @@ def _route_single_net(
     grid: RoutingGrid,
     pad_radius: int = _PAD_RADIUS,
     turn_penalty: int = TURN_PENALTY,
+    *,
+    all_pin_cells: dict[str, set[tuple[int, int]]] | None = None,
+    foreign_pin_radius: int = 1,
 ) -> tuple[list[list[tuple[int, int]]], bool]:
     """Route a single net by connecting pads via greedy spanning tree.
 
     Returns (list_of_grid_paths, success).
     Each path is a list of (gx, gy) cells.
+
+    If *all_pin_cells* is provided, foreign-pin blocking is applied
+    AFTER pad neighbourhood freeing so that ``_free_pad_neighborhood``
+    cannot erase the foreign-pin blocks (which happens when the pad
+    radius overlaps neighbouring pins on the same component).
     """
     if len(pads) < 2:
         return ([], True)
@@ -613,8 +642,17 @@ def _route_single_net(
         freed_src = _free_pad_neighborhood(grid, *src, pad_radius)
         freed_snk = _free_pad_neighborhood(grid, *snk, pad_radius)
 
+        # Block foreign pins AFTER freeing pad neighbourhoods so the
+        # 11×11 free zone cannot erase the 5×5 foreign-pin blocks.
+        fp_blocked: list[tuple[int, int]] = []
+        if all_pin_cells is not None:
+            fp_blocked = _block_foreign_pins(
+                grid, all_pin_cells, pads, foreign_pin_radius,
+            )
+
         path = find_path(grid, src, snk, turn_penalty=turn_penalty)
 
+        _unblock_foreign_pins(grid, fp_blocked)
         _restore_cells(grid, freed_src)
         _restore_cells(grid, freed_snk)
 
@@ -622,51 +660,159 @@ def _route_single_net(
             return ([], False)
         return ([path], True)
 
-    # Multi-pin net: greedy Steiner tree approximation
-    # Start from pad 0, iteratively connect nearest unconnected pad
-    tree_cells: set[tuple[int, int]] = {(pads[0].gx, pads[0].gy)}
-    connected: set[int] = {0}
+    # Multi-pin net: MST-guided Steiner tree
+    # Use MST to determine optimal connection order, then route
+    # each edge using A* pathfinder.  Growing a single tree greedily
+    # from pad 0 can miss good topologies; the MST gives us the
+    # globally-optimal set of connections.
+    mst_edges = _compute_mst(pads)
+    tree_cells: set[tuple[int, int]] = set()
+    connected_components: list[set[int]] = [{i} for i in range(len(pads))]
     all_paths: list[list[tuple[int, int]]] = []
 
-    while len(connected) < len(pads):
+    # Map from pad index → which component set it belongs to
+    def _find_comp(idx: int) -> int:
+        for ci, comp in enumerate(connected_components):
+            if idx in comp:
+                return ci
+        return -1
+
+    log.debug("  [MP] %-20s multi-pin (%d pads, %d MST edges)",
+              net_id, len(pads), len(mst_edges))
+
+    for edge_idx, (pa, pb) in enumerate(mst_edges):
+        ca, cb = _find_comp(pa), _find_comp(pb)
+        if ca == cb:
+            continue  # already connected
+
+        # Build target tree from the component containing pb
+        target_cells: set[tuple[int, int]] = set()
+        for pidx in connected_components[cb]:
+            target_cells.add((pads[pidx].gx, pads[pidx].gy))
+        # Include any tree cells from previously routed paths in this component
+        target_cells |= tree_cells & target_cells  # keep only relevant ones
+
+        # Actually, use ALL tree_cells that belong to cb's component
+        # This means we need to track which tree_cells belong to which component
+        # For simplicity, use the full tree + target pad cells as the target
+        # (the pathfinder will find the nearest reachable cell)
+        combined_target = set()
+        for pidx in connected_components[cb]:
+            combined_target.add((pads[pidx].gx, pads[pidx].gy))
+
+        src = (pads[pa].gx, pads[pa].gy)
+
+        # Free tree cells and target pad neighborhoods
+        freed: list[tuple[int, int]] = []
+        for cell in combined_target:
+            if grid.is_blocked(*cell) and not grid.is_permanently_blocked(*cell):
+                grid.free_cell(*cell)
+                freed.append(cell)
+
+        freed_src = _free_pad_neighborhood(grid, *src, pad_radius)
+        for pidx in connected_components[cb]:
+            px, py = pads[pidx].gx, pads[pidx].gy
+            freed.extend(_free_pad_neighborhood(grid, px, py, pad_radius))
+
+        # Block foreign pins AFTER pad freeing
+        fp_blocked: list[tuple[int, int]] = []
+        if all_pin_cells is not None:
+            fp_blocked = _block_foreign_pins(
+                grid, all_pin_cells, pads, foreign_pin_radius,
+            )
+
+        path = find_path_to_tree(grid, src, combined_target,
+                                 turn_penalty=turn_penalty)
+
+        _unblock_foreign_pins(grid, fp_blocked)
+        _restore_cells(grid, freed)
+        _restore_cells(grid, freed_src)
+
+        if path is not None:
+            all_paths.append(path)
+            for cell in path:
+                tree_cells.add(cell)
+            # Merge components
+            merged = connected_components[ca] | connected_components[cb]
+            # Remove old components and add merged
+            new_comps = []
+            for ci, comp in enumerate(connected_components):
+                if ci != ca and ci != cb:
+                    new_comps.append(comp)
+            new_comps.append(merged)
+            connected_components = new_comps
+            log.debug("  [MP] %-20s edge %d: %s:%s → %s:%s OK (len=%d)",
+                      net_id, edge_idx,
+                      pads[pa].instance_id, pads[pa].pin_id,
+                      pads[pb].instance_id, pads[pb].pin_id,
+                      len(path))
+        else:
+            log.debug("  [MP] %-20s edge %d: %s:%s → %s:%s NO PATH",
+                      net_id, edge_idx,
+                      pads[pa].instance_id, pads[pa].pin_id,
+                      pads[pb].instance_id, pads[pb].pin_id)
+
+    # Check if all pads are connected
+    if len(connected_components) == 1:
+        return (all_paths, True)
+
+    # Some pads couldn't be reached — try greedy fallback for remaining
+    # disconnected components against the largest component's tree
+    main_comp = max(connected_components, key=len)
+    main_tree = set(tree_cells)
+    for pidx in main_comp:
+        main_tree.add((pads[pidx].gx, pads[pidx].gy))
+
+    for comp in connected_components:
+        if comp is main_comp:
+            continue
+        # Try each pad in this component
         best_path: list[tuple[int, int]] | None = None
-        best_idx = -1
-        best_len = float("inf")
+        best_pidx = -1
+        for pidx in comp:
+            src = (pads[pidx].gx, pads[pidx].gy)
 
-        for i in range(len(pads)):
-            if i in connected:
-                continue
-
-            src = (pads[i].gx, pads[i].gy)
-
-            # Free tree cells so pathfinder can reach them
-            freed: list[tuple[int, int]] = []
-            for cell in tree_cells:
+            freed = []
+            for cell in main_tree:
                 if grid.is_blocked(*cell) and not grid.is_permanently_blocked(*cell):
                     grid.free_cell(*cell)
                     freed.append(cell)
 
-            # Free pad neighbourhood for source
             freed_src = _free_pad_neighborhood(grid, *src, pad_radius)
 
-            path = find_path_to_tree(grid, src, tree_cells, turn_penalty=turn_penalty)
+            fp_blocked_f: list[tuple[int, int]] = []
+            if all_pin_cells is not None:
+                fp_blocked_f = _block_foreign_pins(
+                    grid, all_pin_cells, pads, foreign_pin_radius,
+                )
 
-            # Restore freed cells
+            path = find_path_to_tree(grid, src, main_tree,
+                                     turn_penalty=turn_penalty)
+
+            _unblock_foreign_pins(grid, fp_blocked_f)
             _restore_cells(grid, freed)
             _restore_cells(grid, freed_src)
 
-            if path is not None and len(path) < best_len:
-                best_path = path
-                best_idx = i
-                best_len = len(path)
+            if path is not None:
+                if best_path is None or len(path) < len(best_path):
+                    best_path = path
+                    best_pidx = pidx
 
-        if best_path is None or best_idx == -1:
+        if best_path is not None:
+            all_paths.append(best_path)
+            for cell in best_path:
+                main_tree.add(cell)
+                tree_cells.add(cell)
+            main_comp |= comp
+            log.debug("  [MP] %-20s fallback: pad %d (%s:%s) connected (len=%d)",
+                      net_id, best_pidx,
+                      pads[best_pidx].instance_id, pads[best_pidx].pin_id,
+                      len(best_path))
+        else:
+            pad_names = [f"{pads[p].instance_id}:{pads[p].pin_id}" for p in comp]
+            log.debug("  [MP] %-20s fallback FAIL: pads %s unreachable",
+                      net_id, pad_names)
             return (all_paths, False)
-
-        connected.add(best_idx)
-        for cell in best_path:
-            tree_cells.add(cell)
-        all_paths.append(best_path)
 
     return (all_paths, True)
 
@@ -692,10 +838,15 @@ def _route_with_ripup(
     Returns the best result found.
     """
     net_ids = [n.id for n in placement.nets if len(net_pad_map.get(n.id, [])) >= 2]
+    skipped_nets = [n.id for n in placement.nets if len(net_pad_map.get(n.id, [])) < 2]
+    if skipped_nets:
+        log.info("Router: skipping %d nets with <2 pins: %s", len(skipped_nets), skipped_nets)
 
     if not net_ids:
+        log.info("Router: no nets to route")
         return RoutingResult(traces=[], pin_assignments={}, failed_nets=[])
 
+    log.info("Router: routing %d nets", len(net_ids))
     start_time = time.monotonic()
     best_traces: list[Trace] = []
     best_assignments: dict[str, str] = {}
@@ -704,13 +855,14 @@ def _route_with_ripup(
     def _time_left() -> bool:
         return (time.monotonic() - start_time) < config.time_budget_s
 
-    # Sort nets: signal first, then by their total Manhattan span
-    # (shorter nets are easier to route and less likely to block others)
+    # Sort nets: multi-pin power nets first (they need the most
+    # routing resources), then signal nets shortest-first.
     def net_priority(nid: str) -> tuple[int, int]:
         refs = net_pad_map.get(nid, [])
-        is_power = nid in ("VCC", "GND")
-        # Estimate span from pin refs (use centroid distances)
-        return (1 if is_power else 0, len(refs))
+        is_power = nid in ("VCC", "GND", "VBAT")
+        # Power nets first (0), then signals (1).
+        # Within each group, more pins first (negative for descending).
+        return (0 if is_power else 1, -len(refs))
 
     base_order = sorted(net_ids, key=net_priority)
 
@@ -740,6 +892,7 @@ def _route_with_ripup(
         grid.height = base_grid.height
         grid._cells = bytearray(base_grid._cells)
         grid._protected = set(base_grid._protected)
+        grid.outline_poly = base_grid.outline_poly
 
         # Build pin-cell map for foreign-pin blocking
         all_pin_cells = _build_all_pin_cells(placement, catalog, grid)
@@ -756,31 +909,49 @@ def _route_with_ripup(
                 attempt_pools, grid, attempt_assignments,
             )
             if pads is None or len(pads) < 2:
+                log.debug("  [P1] %-20s FAIL — pad resolution failed", nid)
                 failed_set.add(nid)
                 continue
 
-            foreign_blocked = _block_foreign_pins(grid, all_pin_cells, pads, foreign_pin_radius)
-            paths, ok = _route_single_net(nid, pads, grid, pad_radius, config.turn_penalty)
-            _unblock_foreign_pins(grid, foreign_blocked)
+            log.debug("  [P1] %-20s routing %d pads: %s", nid, len(pads),
+                      ", ".join(f"{p.instance_id}:{p.pin_id}@({p.world_x:.1f},{p.world_y:.1f})" for p in pads))
+
+            paths, ok = _route_single_net(
+                nid, pads, grid, pad_radius, config.turn_penalty,
+                all_pin_cells=all_pin_cells, foreign_pin_radius=foreign_pin_radius,
+            )
             if ok and paths:
+                total_cells = sum(len(p) for p in paths)
                 routed_paths[nid] = paths
                 # Block trace cells
                 for path in paths:
                     grid.block_trace(path)
+                log.debug("  [P1] %-20s OK — %d segments, %d cells", nid, len(paths), total_cells)
             else:
                 failed_set.add(nid)
+                log.debug("  [P1] %-20s FAIL — pathfinder found no route", nid)
 
-        log.info("Router attempt %d: %d/%d nets routed (phase 1)",
-                 attempt + 1, len(order) - len(failed_set), len(order))
+        phase1_stats = _grid_stats(grid)
+        log.info("Router attempt %d: %d/%d nets routed (phase 1), "
+                 "grid %.1f%% free",
+                 attempt + 1, len(order) - len(failed_set), len(order),
+                 phase1_stats['free_pct'])
+        if failed_set:
+            log.info("  Phase 1 failed nets: %s", sorted(failed_set))
 
         if not failed_set:
-            # All routed on first pass!
-            traces = _grid_paths_to_traces(routed_paths, grid)
-            return RoutingResult(
-                traces=traces,
-                pin_assignments=attempt_assignments,
-                failed_nets=[],
-            )
+            # All routed on first pass — validate no crossings
+            stripped = _strip_crossing_traces(routed_paths, grid, config)
+            if stripped:
+                log.warning("Phase 1 crossing validation stripped %d nets", len(stripped))
+                failed_set.update(stripped)
+            else:
+                traces = _grid_paths_to_traces(routed_paths, grid)
+                return RoutingResult(
+                    traces=traces,
+                    pin_assignments=attempt_assignments,
+                    failed_nets=[],
+                )
 
         # ── Phase 2: Inner rip-up loop ─────────────────────────────
         for inner_iter in range(config.inner_rip_up_limit):
@@ -803,24 +974,17 @@ def _route_with_ripup(
                 if pads is None or len(pads) < 2:
                     continue
 
-                # Try routing with crossing allowed
-                # First, free pad neighbourhoods for the failed net's pads
-                freed_pads: list[tuple[int, int]] = []
-                for pad in pads:
-                    freed_pads.extend(_free_pad_neighborhood(grid, pad.gx, pad.gy, pad_radius))
-
-                # Block foreign pins to prevent routing through other pins
-                foreign_blocked = _block_foreign_pins(grid, all_pin_cells, pads, foreign_pin_radius)
-
-                # Try simple route first
-                paths, ok = _route_single_net(failed_net, pads, grid, pad_radius, config.turn_penalty)
+                # Try simple route first (foreign pins handled internally)
+                paths, ok = _route_single_net(
+                    failed_net, pads, grid, pad_radius, config.turn_penalty,
+                    all_pin_cells=all_pin_cells, foreign_pin_radius=foreign_pin_radius,
+                )
                 if ok and paths:
-                    _unblock_foreign_pins(grid, foreign_blocked)
-                    _restore_cells(grid, freed_pads)
                     routed_paths[failed_net] = paths
                     for path in paths:
                         grid.block_trace(path)
                     failed_set.discard(failed_net)
+                    log.debug("  [P2] %-20s OK — simple re-route succeeded", failed_net)
                     progress = True
                     continue
 
@@ -845,13 +1009,19 @@ def _route_with_ripup(
                     src = (pads[pad_idx].gx, pads[pad_idx].gy)
                     freed_src = _free_pad_neighborhood(grid, *src, pad_radius)
 
+                    # Block foreign pins AFTER pad freeing
+                    fp_blocked = _block_foreign_pins(
+                        grid, all_pin_cells, pads, foreign_pin_radius,
+                    )
+
                     path = find_path_to_tree(
                         grid, src, tree_cells,
                         turn_penalty=config.turn_penalty,
                         allow_crossings=True,
                     )
 
-                    # Restore
+                    # Restore: unblock foreign pins first
+                    _unblock_foreign_pins(grid, fp_blocked)
                     _restore_cells(grid, freed)
                     _restore_cells(grid, freed_src)
 
@@ -867,8 +1037,10 @@ def _route_with_ripup(
                     crossing_paths.append(path)
 
                 if not route_ok or not crossed_cells:
-                    _unblock_foreign_pins(grid, foreign_blocked)
-                    _restore_cells(grid, freed_pads)
+                    if not route_ok:
+                        log.debug("  [P2] %-20s FAIL — crossing-aware pathfinder also failed", failed_net)
+                    else:
+                        log.debug("  [P2] %-20s SKIP — crossing path found no actual crossings", failed_net)
                     continue
 
                 # Find which nets were crossed
@@ -885,15 +1057,15 @@ def _route_with_ripup(
                             break
 
                 if not ripped_nets:
-                    _unblock_foreign_pins(grid, foreign_blocked)
-                    _restore_cells(grid, freed_pads)
                     continue
 
-                log.debug("  Rip-up %s: crosses %d nets", failed_net, len(ripped_nets))
+                log.debug("  [P2] %-20s rip-up: crosses %d nets (%s)",
+                          failed_net, len(ripped_nets), sorted(ripped_nets))
 
-                # Restore foreign pins and freed pad cells before modifying traces
-                _unblock_foreign_pins(grid, foreign_blocked)
-                _restore_cells(grid, freed_pads)
+                # Snapshot the grid so we can roll back if the ripped nets
+                # fail to re-route (we must never leave crossings in place).
+                snap_before_rip = grid.snapshot()
+                saved_routed = {nid: list(ps) for nid, ps in routed_paths.items()}
 
                 # Rip up crossed nets
                 for ripped in ripped_nets:
@@ -901,39 +1073,73 @@ def _route_with_ripup(
                         for rpath in routed_paths[ripped]:
                             grid.free_trace(rpath)
                         del routed_paths[ripped]
-                    failed_set.add(ripped)
 
                 # Place the crossing net
                 routed_paths[failed_net] = crossing_paths
                 for cpath in crossing_paths:
                     grid.block_trace(cpath)
-                failed_set.discard(failed_net)
 
-                # Try to re-route the ripped nets
+                # Try to re-route ALL ripped nets — must succeed for every
+                # one, otherwise we roll back and leave the failed_net unrouted.
+                rerouted: dict[str, list[list[tuple[int, int]]]] = {}
+                all_rerouted = True
                 for ripped in ripped_nets:
-                    if ripped not in failed_set:
-                        continue
                     rrefs = net_pad_map[ripped]
                     rpads = _resolve_pads(
                         rrefs, ripped, placement, catalog,
                         attempt_pools, grid, attempt_assignments,
                     )
                     if rpads is None or len(rpads) < 2:
-                        continue
-                    rforeign = _block_foreign_pins(grid, all_pin_cells, rpads, foreign_pin_radius)
-                    rpaths, rok = _route_single_net(ripped, rpads, grid, pad_radius, config.turn_penalty)
-                    _unblock_foreign_pins(grid, rforeign)
+                        all_rerouted = False
+                        break
+                    rpaths, rok = _route_single_net(
+                        ripped, rpads, grid, pad_radius, config.turn_penalty,
+                        all_pin_cells=all_pin_cells, foreign_pin_radius=foreign_pin_radius,
+                    )
                     if rok and rpaths:
-                        routed_paths[ripped] = rpaths
+                        rerouted[ripped] = rpaths
                         for rp in rpaths:
                             grid.block_trace(rp)
-                        failed_set.discard(ripped)
+                    else:
+                        all_rerouted = False
+                        break
 
-                progress = True
-                break  # restart inner loop
+                if all_rerouted:
+                    # Commit: update routed_paths, update failed_set
+                    for ripped, rpaths in rerouted.items():
+                        routed_paths[ripped] = rpaths
+                    failed_set.discard(failed_net)
+                    # ripped nets are now routed, remove from failed
+                    for ripped in ripped_nets:
+                        failed_set.discard(ripped)
+                    log.debug("  [P2] %-20s COMMIT — rip-up succeeded, all %d ripped nets re-routed",
+                              failed_net, len(ripped_nets))
+                    progress = True
+                    break  # restart inner loop
+                else:
+                    # Roll back — restore grid and routed_paths
+                    log.debug("  [P2] %-20s ROLLBACK — ripped nets failed to re-route", failed_net)
+                    grid.restore(snap_before_rip)
+                    routed_paths.clear()
+                    routed_paths.update(saved_routed)
+                    # Restore ripped nets to failed_set only if they
+                    # were not there before (they were routed before rip)
+                    for ripped in ripped_nets:
+                        if ripped not in routed_paths:
+                            failed_set.add(ripped)
+                    # failed_net stays in failed_set
+                    # Don't count as progress — try next failed net
+                    continue
 
             if not progress:
                 break
+
+        # Final crossing validation — strip any nets that still cross
+        stripped = _strip_crossing_traces(routed_paths, grid, config)
+        if stripped:
+            log.warning("Attempt %d: crossing validation stripped %d nets: %s",
+                        attempt + 1, len(stripped), stripped)
+            failed_set.update(stripped)
 
         # Check if this attempt is best so far
         if len(failed_set) < len(best_failed):
@@ -949,7 +1155,16 @@ def _route_with_ripup(
                 failed_nets=[],
             )
 
-    log.info("Router: finished with %d failed nets", len(best_failed))
+    elapsed = time.monotonic() - start_time
+    log.info("Router: finished in %.1fs with %d/%d nets routed, %d failed",
+             elapsed, len(net_ids) - len(best_failed), len(net_ids), len(best_failed))
+    if best_failed:
+        log.warning("Router: FAILED nets: %s", best_failed)
+        # Log detailed per-net failure diagnostics
+        for fnid in best_failed:
+            refs = net_pad_map.get(fnid, [])
+            pin_desc = ", ".join(r.raw for r in refs)
+            log.warning("  %s (%d pins): %s", fnid, len(refs), pin_desc)
     return RoutingResult(
         traces=best_traces,
         pin_assignments=best_assignments,
@@ -960,6 +1175,34 @@ def _route_with_ripup(
 # ── Helpers ────────────────────────────────────────────────────────
 
 
+def _grid_stats(grid: RoutingGrid) -> dict[str, int | float]:
+    """Count cell states in the grid for diagnostic logging."""
+    total = grid.width * grid.height
+    free = 0
+    blocked = 0
+    perm = 0
+    trace = 0
+    for i in range(total):
+        v = grid._cells[i]
+        if v == 0:
+            free += 1
+        elif v == 1:
+            blocked += 1
+        elif v == 2:
+            perm += 1
+        else:  # TRACE_PATH = 3
+            trace += 1
+    return {
+        'total': total,
+        'free': free,
+        'free_pct': (free / total * 100) if total else 0.0,
+        'blocked': blocked,
+        'perm_blocked': perm,
+        'trace_path': trace,
+        'protected': len(grid._protected),
+    }
+
+
 def _grid_paths_to_traces(
     routed_paths: dict[str, list[list[tuple[int, int]]]],
     grid: RoutingGrid,
@@ -968,14 +1211,29 @@ def _grid_paths_to_traces(
 
     Also simplifies paths: removes intermediate collinear points
     (keeps only waypoints where direction changes).
+
+    Any waypoint that falls outside the outline polygon is snapped to
+    the nearest point on the outline boundary.
     """
+    outline = grid.outline_poly
     traces: list[Trace] = []
     for net_id, paths in routed_paths.items():
         for grid_path in paths:
             if len(grid_path) < 2:
                 continue
             world_path = _simplify_path(grid_path, grid)
-            traces.append(Trace(net_id=net_id, path=world_path))
+            # Clamp waypoints to outline
+            clamped: list[tuple[float, float]] = []
+            for wx, wy in world_path:
+                pt = Point(wx, wy)
+                if not outline.contains(pt):
+                    nearest = outline.exterior.interpolate(
+                        outline.exterior.project(pt)
+                    )
+                    clamped.append((nearest.x, nearest.y))
+                else:
+                    clamped.append((wx, wy))
+            traces.append(Trace(net_id=net_id, path=clamped))
     return traces
 
 
@@ -1017,3 +1275,106 @@ def _copy_pools(pools: dict[str, PinPool]) -> dict[str, PinPool]:
         )
         for iid, pool in pools.items()
     }
+
+
+# ── Post-routing crossing validation ──────────────────────────────
+
+
+def _find_crossing_nets(
+    routed_paths: dict[str, list[list[tuple[int, int]]]],
+    clearance_cells: int,
+    grid: RoutingGrid | None = None,
+) -> list[str]:
+    """Identify nets whose trace cells physically overlap another net.
+
+    A crossing occurs when two different nets occupy the **same** grid
+    cell.  Clearance-zone overlap near protected pin pads is acceptable
+    (handled by the block_trace / protect_cell mechanism) and is NOT
+    flagged here.
+
+    Returns a list of net IDs involved in crossings.
+    """
+    # Build a map: grid cell -> first net ID that occupies it
+    cell_owner: dict[tuple[int, int], str] = {}
+    crossing_nets: set[str] = set()
+    # Collect crossing details for diagnostics
+    crossing_details: list[tuple[tuple[int, int], str, str]] = []
+
+    for net_id, paths in routed_paths.items():
+        for path in paths:
+            for cell in path:
+                existing = cell_owner.get(cell)
+                if existing is not None and existing != net_id:
+                    # Two different nets share the same physical cell
+                    crossing_nets.add(net_id)
+                    crossing_nets.add(existing)
+                    crossing_details.append((cell, existing, net_id))
+                else:
+                    cell_owner[cell] = net_id
+
+    # Log crossing diagnostics
+    if crossing_details and grid is not None:
+        state_names = {FREE: 'FREE', BLOCKED: 'BLOCKED',
+                       PERMANENTLY_BLOCKED: 'PERM_BLOCKED',
+                       TRACE_PATH: 'TRACE_PATH'}
+        logged: set[tuple[int, int]] = set()
+        for cell, net_a, net_b in crossing_details:
+            if cell in logged:
+                continue
+            logged.add(cell)
+            gx, gy = cell
+            wx, wy = grid.grid_to_world(gx, gy)
+            v = grid._cells[gy * grid.width + gx] if grid.in_bounds(gx, gy) else -1
+            prot = cell in grid._protected
+            log.warning(
+                "  CROSSING: cell (%d,%d) world(%.1f,%.1f) state=%s "
+                "protected=%s  nets: %s vs %s",
+                gx, gy, wx, wy, state_names.get(v, f'?{v}'),
+                prot, net_a, net_b,
+            )
+    elif crossing_details:
+        for cell, net_a, net_b in crossing_details[:5]:
+            log.warning("  CROSSING: cell %s  nets: %s vs %s",
+                        cell, net_a, net_b)
+
+    return list(crossing_nets)
+
+
+def _strip_crossing_traces(
+    routed_paths: dict[str, list[list[tuple[int, int]]]],
+    grid: RoutingGrid,
+    config: RouterConfig,
+) -> list[str]:
+    """Remove traces that cross other nets, returning them to failed.
+
+    Iteratively finds crossing nets and removes them until no crossings
+    remain.  Removes the net with the longest total trace length in each
+    iteration to preserve shorter (harder-to-reroute) nets.
+
+    Returns the list of net IDs that were removed.
+    """
+    clearance_cells = max(1, math.ceil(
+        (config.trace_width_mm / 2 + config.trace_clearance_mm) / config.grid_resolution_mm
+    ))
+
+    removed: list[str] = []
+    max_iters = len(routed_paths) + 1  # safety bound
+
+    for _ in range(max_iters):
+        crossing = _find_crossing_nets(routed_paths, clearance_cells, grid)
+        if not crossing:
+            break
+
+        # Remove the longest crossing net (least likely to re-route anyway)
+        def net_length(nid: str) -> int:
+            return sum(len(p) for p in routed_paths.get(nid, []))
+
+        victim = max(crossing, key=net_length)
+        log.info("Crossing validation: removing %s (crosses %s)",
+                 victim, [n for n in crossing if n != victim])
+        for path in routed_paths[victim]:
+            grid.free_trace(path)
+        del routed_paths[victim]
+        removed.append(victim)
+
+    return removed

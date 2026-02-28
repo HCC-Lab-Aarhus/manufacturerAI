@@ -19,6 +19,7 @@ from .models import GRID_RESOLUTION_MM, EDGE_CLEARANCE_MM, TRACE_CLEARANCE_MM, T
 FREE = 0
 BLOCKED = 1
 PERMANENTLY_BLOCKED = 2
+TRACE_PATH = 3     # Occupied by an actual trace (not just clearance)
 
 
 class RoutingGrid:
@@ -37,6 +38,7 @@ class RoutingGrid:
     ) -> None:
         self.resolution = resolution
         self.edge_clearance = edge_clearance
+        self.outline_poly = outline_poly
 
         # Bounding box of the outline
         xmin, ymin, xmax, ymax = outline_poly.bounds
@@ -45,7 +47,7 @@ class RoutingGrid:
         self.width = int(math.ceil((xmax - xmin) / resolution)) + 1
         self.height = int(math.ceil((ymax - ymin) / resolution)) + 1
 
-        # Cell state: 0 = free, 1 = blocked (temporary), 2 = permanently blocked
+        # Cell state: 0=free, 1=blocked(temp), 2=perm blocked, 3=trace path
         self._cells = bytearray(self.width * self.height)
 
         # Protected cells: pin pad positions that trace clearance must not block.
@@ -169,8 +171,13 @@ class RoutingGrid:
     ) -> None:
         """Block cells along a trace path, including clearance radius.
 
-        Protected pin cells are skipped — they stay free so that pads
-        remain accessible for other nets.
+        Path cells themselves are ALWAYS marked as TRACE_PATH,
+        regardless of protection — the physical trace is there and no
+        other net may use those cells.
+
+        Clearance-zone cells (surrounding the path) are marked as
+        BLOCKED, but protected pin-pad cells are skipped so that
+        other nets can still reach their pin pads.
         """
         if clearance_cells is None:
             clearance_cells = max(
@@ -179,16 +186,31 @@ class RoutingGrid:
                     (TRACE_WIDTH_MM / 2 + TRACE_CLEARANCE_MM) / self.resolution
                 ))
             )
+        path_set = set(path)
         protected = self._protected
+
+        # 1) Mark actual trace cells as TRACE_PATH (always)
+        for gx, gy in path_set:
+            if self.in_bounds(gx, gy):
+                v = self._cells[gy * self.width + gx]
+                if v == FREE or v == BLOCKED:
+                    self._cells[gy * self.width + gx] = TRACE_PATH
+
+        # 2) Mark clearance zone as BLOCKED (skip protected & path cells)
         for gx, gy in path:
             for dy in range(-clearance_cells, clearance_cells + 1):
                 for dx in range(-clearance_cells, clearance_cells + 1):
                     nx, ny = gx + dx, gy + dy
-                    if (nx, ny) not in protected:
+                    if (nx, ny) not in path_set and (nx, ny) not in protected:
                         self.block_cell(nx, ny)
 
     def free_trace(self, path: list[tuple[int, int]], clearance_cells: int | None = None) -> None:
-        """Free cells along a trace path (for rip-up)."""
+        """Free cells along a trace path (for rip-up).
+
+        Frees both TRACE_PATH cells (the path itself) and BLOCKED
+        cells (the clearance zone).  Permanently-blocked cells are
+        never touched.
+        """
         if clearance_cells is None:
             clearance_cells = max(
                 1,
@@ -199,7 +221,11 @@ class RoutingGrid:
         for gx, gy in path:
             for dy in range(-clearance_cells, clearance_cells + 1):
                 for dx in range(-clearance_cells, clearance_cells + 1):
-                    self.free_cell(gx + dx, gy + dy)
+                    nx, ny = gx + dx, gy + dy
+                    if self.in_bounds(nx, ny):
+                        v = self._cells[ny * self.width + nx]
+                        if v == BLOCKED or v == TRACE_PATH:
+                            self._cells[ny * self.width + nx] = FREE
 
     # ── Snapshot / restore for rip-up ──────────────────────────────
 

@@ -228,6 +228,60 @@ class TestFlashlightRouting(unittest.TestCase):
         """The ok property should be True when all nets routed."""
         self.assertTrue(self.result.ok)
 
+    def test_no_trace_crossings(self):
+        """No two traces from different nets may share the same grid cell."""
+        # Reconstruct grid cells from world-coordinate traces
+        from src.pipeline.router.models import RouterConfig
+        cfg = RouterConfig()
+        res = cfg.grid_resolution_mm
+
+        # Build outline polygon to get grid origin
+        outline_poly = Polygon(self.placement.outline.vertices)
+        xmin, ymin, _, _ = outline_poly.bounds
+
+        # Map every trace waypoint + interpolated cells to net IDs
+        cell_owner: dict[tuple[int, int], str] = {}
+        crossings: list[str] = []
+
+        for trace in self.result.traces:
+            net = trace.net_id
+            for i in range(len(trace.path) - 1):
+                x1, y1 = trace.path[i]
+                x2, y2 = trace.path[i + 1]
+                # Interpolate Manhattan segment
+                if abs(x2 - x1) > 0.001:  # horizontal
+                    step = res if x2 > x1 else -res
+                    x = x1
+                    while (step > 0 and x <= x2 + 0.001) or (step < 0 and x >= x2 - 0.001):
+                        gx = round((x - xmin) / res)
+                        gy = round((y1 - ymin) / res)
+                        cell = (gx, gy)
+                        existing = cell_owner.get(cell)
+                        if existing is not None and existing != net:
+                            crossings.append(
+                                f"{net} crosses {existing} at cell {cell}"
+                            )
+                        else:
+                            cell_owner[cell] = net
+                        x += step
+                else:  # vertical
+                    step = res if y2 > y1 else -res
+                    y = y1
+                    while (step > 0 and y <= y2 + 0.001) or (step < 0 and y >= y2 - 0.001):
+                        gx = round((x1 - xmin) / res)
+                        gy = round((y - ymin) / res)
+                        cell = (gx, gy)
+                        existing = cell_owner.get(cell)
+                        if existing is not None and existing != net:
+                            crossings.append(
+                                f"{net} crosses {existing} at cell {cell}"
+                            )
+                        else:
+                            cell_owner[cell] = net
+                        y += step
+
+        self.assertEqual(crossings, [], f"Found {len(crossings)} crossings: {crossings[:5]}")
+
 
 class TestRoutingSerialization(unittest.TestCase):
     """Test JSON round-trip for routing results."""
