@@ -34,6 +34,7 @@ from src.pipeline.placer import (
     placement_to_dict,
     parse_placement,
     footprint_halfdims,
+    footprint_envelope_halfdims,
     pin_world_xy,
     aabb_gap,
     rect_inside_polygon,
@@ -103,6 +104,39 @@ class TestPlacerGeometryHelpers(unittest.TestCase):
         self.assertFalse(rect_inside_polygon(1, 1, 5, 5, poly))   # extends outside
         self.assertFalse(rect_inside_polygon(28, 40, 5, 5, poly))  # right edge out
 
+    def test_footprint_envelope_larger_than_body(self):
+        """Envelope includes pins that extend beyond the body."""
+        from src.catalog.models import Component, Body, Mounting, Pin
+        cat = Component(
+            id="test_env", name="test", description="", category="passive",
+            ui_placement=False,
+            body=Body(shape="rect", width_mm=6.5, length_mm=2.5, height_mm=2.5),
+            mounting=Mounting(style="internal", allowed_styles=["internal"],
+                              blocks_routing=False, keepout_margin_mm=1.0),
+            pins=[
+                Pin(id="1", label="L1", position_mm=(-5.0, 0),
+                    direction="bidirectional", hole_diameter_mm=0.8,
+                    description=""),
+                Pin(id="2", label="L2", position_mm=(5.0, 0),
+                    direction="bidirectional", hole_diameter_mm=0.8,
+                    description=""),
+            ],
+        )
+        # Body half-dims: (3.25, 1.25)
+        body_hw, body_hh = footprint_halfdims(cat, 0)
+        self.assertAlmostEqual(body_hw, 3.25)
+        self.assertAlmostEqual(body_hh, 1.25)
+
+        # Envelope must cover pins at ±5.0 + pad radius 0.4
+        env_hw, env_hh = footprint_envelope_halfdims(cat, 0)
+        self.assertAlmostEqual(env_hw, 5.4)   # 5.0 + 0.4
+        self.assertGreaterEqual(env_hh, body_hh)
+
+        # At 90° rotation the axes swap
+        env_hw90, env_hh90 = footprint_envelope_halfdims(cat, 90)
+        self.assertAlmostEqual(env_hh90, 5.4)
+        self.assertGreaterEqual(env_hw90, body_hh)
+
 
 class TestFlashlightPlacement(unittest.TestCase):
     """Integration test using the flashlight fixture."""
@@ -140,44 +174,44 @@ class TestFlashlightPlacement(unittest.TestCase):
         self.assertAlmostEqual(led.y_mm, 100.0)
 
     def test_all_inside_outline(self):
-        """Every component footprint must lie inside the outline."""
+        """Every component envelope (body + pins) must lie inside the outline."""
         result = place_components(self.design, self.catalog)
         outline_poly = Polygon(self.design.outline.vertices)
 
         for pc in result.components:
             cat = self.catalog_map[pc.catalog_id]
-            hw, hh = footprint_halfdims(cat, pc.rotation_deg)
+            ehw, ehh = footprint_envelope_halfdims(cat, pc.rotation_deg)
             rect = shapely_box(
-                pc.x_mm - hw, pc.y_mm - hh,
-                pc.x_mm + hw, pc.y_mm + hh,
+                pc.x_mm - ehw, pc.y_mm - ehh,
+                pc.x_mm + ehw, pc.y_mm + ehh,
             )
             self.assertTrue(
                 outline_poly.contains(rect),
-                f"{pc.instance_id} at ({pc.x_mm}, {pc.y_mm}) is outside outline",
+                f"{pc.instance_id} at ({pc.x_mm}, {pc.y_mm}) envelope outside outline",
             )
 
     def test_no_overlaps(self):
-        """No two components should overlap (respecting keepout margins)."""
+        """No two component envelopes should overlap (respecting keepout)."""
         result = place_components(self.design, self.catalog)
         comps = result.components
         for i in range(len(comps)):
             ci = comps[i]
             cat_i = self.catalog_map[ci.catalog_id]
-            hw_i, hh_i = footprint_halfdims(cat_i, ci.rotation_deg)
+            ehw_i, ehh_i = footprint_envelope_halfdims(cat_i, ci.rotation_deg)
             ko_i = cat_i.mounting.keepout_margin_mm
             for j in range(i + 1, len(comps)):
                 cj = comps[j]
                 cat_j = self.catalog_map[cj.catalog_id]
-                hw_j, hh_j = footprint_halfdims(cat_j, cj.rotation_deg)
+                ehw_j, ehh_j = footprint_envelope_halfdims(cat_j, cj.rotation_deg)
                 ko_j = cat_j.mounting.keepout_margin_mm
                 gap = aabb_gap(
-                    ci.x_mm, ci.y_mm, hw_i, hh_i,
-                    cj.x_mm, cj.y_mm, hw_j, hh_j,
+                    ci.x_mm, ci.y_mm, ehw_i, ehh_i,
+                    cj.x_mm, cj.y_mm, ehw_j, ehh_j,
                 )
                 required = max(ko_i, ko_j)
                 self.assertGreaterEqual(
-                    gap, required - 0.01,  # small tolerance for float precision
-                    f"{ci.instance_id} and {cj.instance_id} overlap: "
+                    gap, required - 0.01,
+                    f"{ci.instance_id} and {cj.instance_id} envelopes overlap: "
                     f"gap={gap:.2f}mm < required={required:.2f}mm",
                 )
 

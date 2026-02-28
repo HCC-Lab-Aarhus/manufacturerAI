@@ -27,6 +27,15 @@ class Placed:
     hw: float       # half width (rotated body)
     hh: float       # half height (rotated body)
     keepout: float   # keepout_margin_mm
+    env_hw: float = 0.0   # half width of pin-inclusive envelope
+    env_hh: float = 0.0   # half height of pin-inclusive envelope
+
+    def __post_init__(self) -> None:
+        # Default envelope to body dims if not explicitly set
+        if self.env_hw == 0.0:
+            self.env_hw = self.hw
+        if self.env_hh == 0.0:
+            self.env_hh = self.hh
 
 
 # ── Net-segment types for crossing detection ──────────────────────
@@ -109,12 +118,19 @@ def score_candidate(
     outline_bounds: tuple[float, float, float, float],
     mounting_style: str,
     existing_segments: list[WireSegment] | None = None,
+    env_hw: float = 0.0,
+    env_hh: float = 0.0,
 ) -> float:
     """Score a candidate position.  Higher = better.
 
     Combines net proximity (dominant), edge clearance, uniform clearance
     among neighbors, compactness, and mounting-style preferences.
     """
+    # Fall back to body dims if envelope not supplied
+    if env_hw == 0.0:
+        env_hw = hw
+    if env_hh == 0.0:
+        env_hh = hh
     score = 0.0
 
     # ── 1. Net proximity (MAIN driver) ──────────────────────────────
@@ -146,7 +162,8 @@ def score_candidate(
     # ── 3. Uniform clearance to neighbors ───────────────────────────
     if placed:
         for p in placed:
-            gap = aabb_gap(cx, cy, hw, hh, p.x, p.y, p.hw, p.hh)
+            gap = aabb_gap(cx, cy, env_hw, env_hh,
+                           p.x, p.y, p.env_hw, p.env_hh)
             target = max(keepout, p.keepout)
             if gap > 0:
                 deviation = abs(gap - target)

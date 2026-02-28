@@ -12,7 +12,10 @@ Submodules:
 from .models import PlacedComponent, FullPlacement, PlacementError
 from .engine import place_components
 from .serialization import placement_to_dict, parse_placement
-from .geometry import footprint_halfdims, pin_world_xy, aabb_gap, rect_inside_polygon
+from .geometry import (
+    footprint_halfdims, footprint_envelope_halfdims,
+    pin_world_xy, aabb_gap, rect_inside_polygon,
+)
 
 __all__ = [
     # Models
@@ -22,5 +25,6 @@ __all__ = [
     # Serialization
     "placement_to_dict", "parse_placement",
     # Geometry (used by tests)
-    "footprint_halfdims", "pin_world_xy", "aabb_gap", "rect_inside_polygon",
+    "footprint_halfdims", "footprint_envelope_halfdims",
+    "pin_world_xy", "aabb_gap", "rect_inside_polygon",
 ]

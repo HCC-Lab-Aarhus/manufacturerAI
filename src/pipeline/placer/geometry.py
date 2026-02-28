@@ -29,6 +29,37 @@ def footprint_halfdims(
     return (w, h)
 
 
+def footprint_envelope_halfdims(
+    cat: Component, rotation_deg: int,
+) -> tuple[float, float]:
+    """Return (half_width, half_height) of the pin-inclusive envelope.
+
+    The envelope is the smallest axis-aligned bounding box that
+    contains both the component body *and* all pin positions.
+    This is strictly >= the body-only half-dims returned by
+    ``footprint_halfdims``.
+    """
+    body_hw, body_hh = footprint_halfdims(cat, rotation_deg)
+    if not cat.pins:
+        return (body_hw, body_hh)
+
+    max_x = body_hw
+    max_y = body_hh
+    rad = math.radians(rotation_deg)
+    cos_r = math.cos(rad)
+    sin_r = math.sin(rad)
+    for pin in cat.pins:
+        px, py = pin.position_mm
+        # Rotated pin offset from component centre
+        rx = abs(px * cos_r - py * sin_r)
+        ry = abs(px * sin_r + py * cos_r)
+        # Include half the hole diameter so the full pad is covered
+        pad = pin.hole_diameter_mm / 2
+        max_x = max(max_x, rx + pad)
+        max_y = max(max_y, ry + pad)
+    return (max_x, max_y)
+
+
 def footprint_area(cat: Component) -> float:
     """Footprint area in mm², used for placement ordering."""
     if cat.body.shape == "circle":

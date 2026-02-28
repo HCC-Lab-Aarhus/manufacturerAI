@@ -11,7 +11,7 @@ from src.catalog.models import CatalogResult
 from src.pipeline.design.models import DesignSpec, Outline
 
 from .geometry import (
-    footprint_halfdims, footprint_area,
+    footprint_halfdims, footprint_envelope_halfdims, footprint_area,
     rect_inside_polygon, rect_edge_clearance, aabb_gap,
 )
 from .models import (
@@ -145,12 +145,14 @@ def place_components(
             x, y, rot = up.x_mm, up.y_mm, 0
 
         hw, hh = footprint_halfdims(cat, rot)
+        ehw, ehh = footprint_envelope_halfdims(cat, rot)
         placed.append(Placed(
             instance_id=ci.instance_id,
             catalog_id=ci.catalog_id,
             x=x, y=y, rotation=rot,
             hw=hw, hh=hh,
             keepout=cat.mounting.keepout_margin_mm,
+            env_hw=ehw, env_hh=ehh,
         ))
         ui_ids.add(ci.instance_id)
         log.info("UI-placed %s at (%.1f, %.1f) rot=%d°",
@@ -186,11 +188,12 @@ def place_components(
 
         for rotation in VALID_ROTATIONS:
             hw, hh = footprint_halfdims(cat, rotation)
+            ehw, ehh = footprint_envelope_halfdims(cat, rotation)
 
-            # Inflated half-dims: the body + edge clearance must
-            # fit inside the outline.
-            ihw = hw + MIN_EDGE_CLEARANCE_MM
-            ihh = hh + MIN_EDGE_CLEARANCE_MM
+            # Inflated half-dims: the envelope (body + pins) + edge
+            # clearance must fit inside the outline.
+            ihw = ehw + MIN_EDGE_CLEARANCE_MM
+            ihh = ehh + MIN_EDGE_CLEARANCE_MM
 
             # Scan range: outline bounding box shrunk by inflated
             # half-dims.
@@ -211,13 +214,13 @@ def place_components(
                         cy += grid_step
                         continue
 
-                    # Hard constraint 2: no overlap
+                    # Hard constraint 2: no overlap (using pin envelopes)
                     overlap = False
                     for p in placed:
                         required_gap = max(keepout, p.keepout)
                         actual_gap = aabb_gap(
-                            cx, cy, hw, hh,
-                            p.x, p.y, p.hw, p.hh,
+                            cx, cy, ehw, ehh,
+                            p.x, p.y, p.env_hw, p.env_hh,
                         )
                         if actual_gap < required_gap:
                             overlap = True
@@ -227,8 +230,10 @@ def place_components(
                         continue
 
                     # Hard constraint 3: minimum edge clearance
+                    # Check against envelope so pins don't land
+                    # outside or too close to the outline wall.
                     edge_dist = rect_edge_clearance(
-                        cx, cy, hw, hh, outline_verts)
+                        cx, cy, ehw, ehh, outline_verts)
                     if edge_dist < MIN_EDGE_CLEARANCE_MM:
                         cy += grid_step
                         continue
@@ -241,6 +246,7 @@ def place_components(
                         outline_verts, outline_bounds,
                         style,
                         existing_segments,
+                        env_hw=ehw, env_hh=ehh,
                     )
 
                     if score > best_score:
@@ -265,6 +271,7 @@ def place_components(
             )
 
         hw_final, hh_final = footprint_halfdims(cat, best_rot)
+        ehw_final, ehh_final = footprint_envelope_halfdims(cat, best_rot)
         placed.append(Placed(
             instance_id=ci.instance_id,
             catalog_id=ci.catalog_id,
@@ -272,6 +279,7 @@ def place_components(
             rotation=best_rot,
             hw=hw_final, hh=hh_final,
             keepout=keepout,
+            env_hw=ehw_final, env_hh=ehh_final,
         ))
         log.info(
             "Auto-placed %s at (%.1f, %.1f) rot=%d° score=%.2f",
