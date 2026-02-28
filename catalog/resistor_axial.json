@@ -6,8 +6,8 @@
     "ui_placement": false,
     "body": {
         "shape": "rect",
-        "width_mm": 2.5,
-        "length_mm": 6.5,
+        "width_mm": 6.5,
+        "length_mm": 2.5,
         "height_mm": 2.5
     },
     "mounting": {
@@ -23,8 +23,8 @@
             "id": "1",
             "label": "Lead 1",
             "position_mm": [
-                0,
-                -5.0
+                -5.0,
+                0
             ],
             "direction": "bidirectional",
             "voltage_v": null,
@@ -36,8 +36,8 @@
             "id": "2",
             "label": "Lead 2",
             "position_mm": [
-                0,
-                5.0
+                5.0,
+                0
             ],
             "direction": "bidirectional",
             "voltage_v": null,

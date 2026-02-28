@@ -28,8 +28,8 @@
             "id": "V+",
             "label": "Positive (9V)",
             "position_mm": [
-                3.5,
-                0
+                13.5,
+                2.8
             ],
             "direction": "out",
             "voltage_v": 9.0,
@@ -41,8 +41,8 @@
             "id": "GND",
             "label": "Ground (-)",
             "position_mm": [
-                -3.5,
-                0
+                13.5,
+                -2.8
             ],
             "direction": "out",
             "voltage_v": 0,

@@ -196,7 +196,7 @@ CatalogResult
     {"catalog_id": "tactile_button_6x6",   "instance_id": "btn_1"},
     {"catalog_id": "tactile_button_6x6",   "instance_id": "btn_2"},
     {"catalog_id": "capacitor_100nf",      "instance_id": "c_1"},
-    {"catalog_id": "resistor_10k_pullup",  "instance_id": "r_reset"}
+    {"catalog_id": "resistor_axial",       "instance_id": "r_reset"}
   ],
 
   "nets": [
