@@ -532,26 +532,47 @@ def _build_all_pin_cells(
     return result
 
 
+def _compute_foreign_pin_radius(cfg: RouterConfig) -> int:
+    """Blocking radius around foreign pins during routing.
+
+    Ensures traces (with their physical width) cannot overlap with
+    pin pads they don't belong to.  Uses trace_width + a small
+    clearance margin so the conductive-ink trace edge stays clear
+    of foreign pin holes.
+    """
+    return max(1, math.ceil(cfg.trace_width_mm / cfg.grid_resolution_mm))
+
+
 def _block_foreign_pins(
     grid: RoutingGrid,
     all_pin_cells: dict[str, set[tuple[int, int]]],
     net_pads: list[NetPad],
+    pin_radius: int = 1,
 ) -> list[tuple[int, int]]:
-    """Temporarily block pin cells not belonging to the current net.
+    """Temporarily block cells around pins not belonging to the current net.
+
+    Blocks a *pin_radius* neighbourhood around each foreign pin so
+    that traces cannot physically overlap with pin pads of other nets.
 
     Returns the list of cells that were blocked (for later restore).
     """
-    # Collect cells belonging to this net's pins
+    # Collect cells belonging to this net's pads (including neighbourhood)
+    # so we never block our own reachable pad zone.
     net_cells: set[tuple[int, int]] = set()
     for pad in net_pads:
-        net_cells.add((pad.gx, pad.gy))
+        for dx in range(-pin_radius, pin_radius + 1):
+            for dy in range(-pin_radius, pin_radius + 1):
+                net_cells.add((pad.gx + dx, pad.gy + dy))
 
     blocked: list[tuple[int, int]] = []
     for _key, cells in all_pin_cells.items():
-        for cell in cells:
-            if cell not in net_cells and grid.is_free(*cell):
-                grid.block_cell(*cell)
-                blocked.append(cell)
+        for cx, cy in cells:
+            for dx in range(-pin_radius, pin_radius + 1):
+                for dy in range(-pin_radius, pin_radius + 1):
+                    cell = (cx + dx, cy + dy)
+                    if cell not in net_cells and grid.is_free(*cell):
+                        grid.block_cell(*cell)
+                        blocked.append(cell)
     return blocked
 
 
@@ -722,6 +743,7 @@ def _route_with_ripup(
 
         # Build pin-cell map for foreign-pin blocking
         all_pin_cells = _build_all_pin_cells(placement, catalog, grid)
+        foreign_pin_radius = _compute_foreign_pin_radius(config)
 
         # ── Phase 1: Route all nets in order ───────────────────────
         routed_paths: dict[str, list[list[tuple[int, int]]]] = {}
@@ -737,7 +759,7 @@ def _route_with_ripup(
                 failed_set.add(nid)
                 continue
 
-            foreign_blocked = _block_foreign_pins(grid, all_pin_cells, pads)
+            foreign_blocked = _block_foreign_pins(grid, all_pin_cells, pads, foreign_pin_radius)
             paths, ok = _route_single_net(nid, pads, grid, pad_radius, config.turn_penalty)
             _unblock_foreign_pins(grid, foreign_blocked)
             if ok and paths:
@@ -788,7 +810,7 @@ def _route_with_ripup(
                     freed_pads.extend(_free_pad_neighborhood(grid, pad.gx, pad.gy, pad_radius))
 
                 # Block foreign pins to prevent routing through other pins
-                foreign_blocked = _block_foreign_pins(grid, all_pin_cells, pads)
+                foreign_blocked = _block_foreign_pins(grid, all_pin_cells, pads, foreign_pin_radius)
 
                 # Try simple route first
                 paths, ok = _route_single_net(failed_net, pads, grid, pad_radius, config.turn_penalty)
@@ -898,7 +920,7 @@ def _route_with_ripup(
                     )
                     if rpads is None or len(rpads) < 2:
                         continue
-                    rforeign = _block_foreign_pins(grid, all_pin_cells, rpads)
+                    rforeign = _block_foreign_pins(grid, all_pin_cells, rpads, foreign_pin_radius)
                     rpaths, rok = _route_single_net(ripped, rpads, grid, pad_radius, config.turn_penalty)
                     _unblock_foreign_pins(grid, rforeign)
                     if rok and rpaths:
