@@ -56,6 +56,12 @@ MIN_EDGE_CLEARANCE_MM = 1.5
 # TRACE_CLEARANCE_MM=2.0).
 ROUTING_CHANNEL_MM = 3.0     # width needed per trace channel (mm)
 
+# Minimum centre-to-centre distance between pin holes of different
+# components.  Prevents pad overlaps and ensures the router can
+# address each pad independently.  Set to the largest common hole
+# diameter (1.2 mm) plus one trace clearance (2.0 mm).
+MIN_PIN_CLEARANCE_MM = 3.2
+
 # Scoring weights — higher absolute value = more influence.
 W_NET_PROXIMITY = 5.0       # MAIN driver: connected components close
 W_EDGE_CLEARANCE = 0.5      # prefer safe distance from outline
@@ -63,3 +69,4 @@ W_COMPACTNESS = 0.3          # weakly prefer compact layouts
 W_CLEARANCE_UNIFORM = 1.0   # prefer uniform gaps between components
 W_BOTTOM_PREFERENCE = 0.08  # bottom-mount components prefer low Y
 W_CROSSING = 50.0            # heavy penalty per inter-net crossing
+W_PIN_COLLOCATION = 40.0     # heavy penalty per near-colliding pin pair

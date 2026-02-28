@@ -13,11 +13,12 @@ from src.pipeline.design.models import DesignSpec, Outline
 from .geometry import (
     footprint_halfdims, footprint_envelope_halfdims, footprint_area,
     rect_inside_polygon, rect_edge_clearance, aabb_gap,
+    pin_world_xy,
 )
 from .models import (
     PlacedComponent, FullPlacement, PlacementError,
     GRID_STEP_MM, VALID_ROTATIONS, MIN_EDGE_CLEARANCE_MM,
-    ROUTING_CHANNEL_MM,
+    ROUTING_CHANNEL_MM, MIN_PIN_CLEARANCE_MM,
 )
 from .nets import build_net_graph, count_shared_nets
 from .scoring import Placed, score_candidate, compute_placed_segments
@@ -245,7 +246,33 @@ def place_components(
                     if edge_dist < MIN_EDGE_CLEARANCE_MM:
                         cy += grid_step
                         continue
-
+                    # Hard constraint 4: pin-to-pin clearance
+                    # Reject if any pin of this candidate is too
+                    # close to a pin of an already-placed component.
+                    pin_clash = False
+                    my_pins_world = [
+                        pin_world_xy(pin.position_mm, cx, cy, rotation)
+                        for pin in cat.pins
+                    ]
+                    for p in placed:
+                        if pin_clash:
+                            break
+                        p_cat = catalog_map.get(p.catalog_id)
+                        if p_cat is None:
+                            continue
+                        for opin in p_cat.pins:
+                            if pin_clash:
+                                break
+                            opx, opy = pin_world_xy(
+                                opin.position_mm, p.x, p.y, p.rotation,
+                            )
+                            for mpx, mpy in my_pins_world:
+                                if math.hypot(mpx - opx, mpy - opy) < MIN_PIN_CLEARANCE_MM:
+                                    pin_clash = True
+                                    break
+                    if pin_clash:
+                        cy += grid_step
+                        continue
                     # Soft constraints: score position
                     score = score_candidate(
                         cx, cy, rotation, hw, hh, keepout,

@@ -40,7 +40,7 @@ from src.pipeline.placer import (
     rect_inside_polygon,
 )
 from src.pipeline.placer.nets import build_net_graph, count_shared_nets
-from src.pipeline.placer.models import ROUTING_CHANNEL_MM
+from src.pipeline.placer.models import ROUTING_CHANNEL_MM, MIN_PIN_CLEARANCE_MM
 from tests.flashlight_fixture import make_flashlight_design
 
 
@@ -239,6 +239,35 @@ class TestFlashlightPlacement(unittest.TestCase):
         result = place_components(self.design, self.catalog)
         self.assertEqual(result.outline, self.design.outline)
         self.assertEqual(result.nets, self.design.nets)
+
+    def test_no_pin_collocation(self):
+        """No pin from one component should be too close to another's pin."""
+        result = place_components(self.design, self.catalog)
+        comps = result.components
+        for i in range(len(comps)):
+            ci = comps[i]
+            cat_i = self.catalog_map[ci.catalog_id]
+            pins_i = [
+                pin_world_xy(p.position_mm, ci.x_mm, ci.y_mm, ci.rotation_deg)
+                for p in cat_i.pins
+            ]
+            for j in range(i + 1, len(comps)):
+                cj = comps[j]
+                cat_j = self.catalog_map[cj.catalog_id]
+                pins_j = [
+                    pin_world_xy(p.position_mm, cj.x_mm, cj.y_mm, cj.rotation_deg)
+                    for p in cat_j.pins
+                ]
+                for pi_idx, (px, py) in enumerate(pins_i):
+                    for pj_idx, (qx, qy) in enumerate(pins_j):
+                        dist = math.hypot(px - qx, py - qy)
+                        self.assertGreaterEqual(
+                            dist, MIN_PIN_CLEARANCE_MM - 0.01,
+                            f"{ci.instance_id}.{cat_i.pins[pi_idx].id} and "
+                            f"{cj.instance_id}.{cat_j.pins[pj_idx].id} "
+                            f"are only {dist:.2f}mm apart "
+                            f"(min {MIN_PIN_CLEARANCE_MM}mm)",
+                        )
 
     def test_routing_channel_gaps(self):
         """Connected components must have enough gap for trace channels."""

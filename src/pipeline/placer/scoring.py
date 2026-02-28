@@ -11,6 +11,7 @@ from .geometry import pin_world_xy, rect_edge_clearance, aabb_gap, segments_cros
 from .models import (
     W_NET_PROXIMITY, W_EDGE_CLEARANCE, W_COMPACTNESS,
     W_CLEARANCE_UNIFORM, W_BOTTOM_PREFERENCE, W_CROSSING,
+    W_PIN_COLLOCATION, MIN_PIN_CLEARANCE_MM,
     ROUTING_CHANNEL_MM,
 )
 from .nets import NetEdge, count_shared_nets, resolve_pin_positions
@@ -232,5 +233,30 @@ def score_candidate(
                     crossings += 1
 
         score -= crossings * W_CROSSING
+
+    # ── 7. Pin-collocation penalty ────────────────────────────────
+    #
+    # Penalise candidate positions where any of this component’s
+    # pins land too close to a pin of an already-placed component.
+    # This catches cases the envelope AABB check misses (e.g.
+    # diagonal pin proximity).
+    if placed:
+        my_pin_world = [
+            pin_world_xy(p.position_mm, cx, cy, rotation)
+            for p in cat.pins
+        ]
+        near_pins = 0
+        for p in placed:
+            other_cat = catalog_map.get(p.catalog_id)
+            if other_cat is None:
+                continue
+            for opin in other_cat.pins:
+                opx, opy = pin_world_xy(
+                    opin.position_mm, p.x, p.y, p.rotation,
+                )
+                for mpx, mpy in my_pin_world:
+                    if math.hypot(mpx - opx, mpy - opy) < MIN_PIN_CLEARANCE_MM:
+                        near_pins += 1
+        score -= near_pins * W_PIN_COLLOCATION
 
     return score
