@@ -46,6 +46,22 @@ def build_net_graph(nets: list[Net]) -> dict[str, list[NetEdge]]:
     return graph
 
 
+def count_shared_nets(
+    iid_a: str, iid_b: str,
+    net_graph: dict[str, list[NetEdge]],
+) -> int:
+    """Count distinct nets connecting two component instances.
+
+    This tells the placer how many trace channels must fit in the
+    gap between two components.
+    """
+    nets: set[str] = set()
+    for edge in net_graph.get(iid_a, []):
+        if edge.other_iid == iid_b:
+            nets.add(edge.net_id)
+    return len(nets)
+
+
 def resolve_pin_positions(
     pin_ids: list[str],
     cat: Component,

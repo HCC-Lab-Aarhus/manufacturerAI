@@ -17,8 +17,9 @@ from .geometry import (
 from .models import (
     PlacedComponent, FullPlacement, PlacementError,
     GRID_STEP_MM, VALID_ROTATIONS, MIN_EDGE_CLEARANCE_MM,
+    ROUTING_CHANNEL_MM,
 )
-from .nets import build_net_graph
+from .nets import build_net_graph, count_shared_nets
 from .scoring import Placed, score_candidate, compute_placed_segments
 
 
@@ -215,9 +216,16 @@ def place_components(
                         continue
 
                     # Hard constraint 2: no overlap (using pin envelopes)
+                    # The required gap accounts for both keepout and
+                    # the number of trace channels that must pass
+                    # between the two components.
                     overlap = False
                     for p in placed:
-                        required_gap = max(keepout, p.keepout)
+                        n_channels = count_shared_nets(
+                            ci.instance_id, p.instance_id, net_graph,
+                        )
+                        channel_gap = n_channels * ROUTING_CHANNEL_MM
+                        required_gap = max(keepout, p.keepout, channel_gap)
                         actual_gap = aabb_gap(
                             cx, cy, ehw, ehh,
                             p.x, p.y, p.env_hw, p.env_hh,

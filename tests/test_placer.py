@@ -39,6 +39,8 @@ from src.pipeline.placer import (
     aabb_gap,
     rect_inside_polygon,
 )
+from src.pipeline.placer.nets import build_net_graph, count_shared_nets
+from src.pipeline.placer.models import ROUTING_CHANNEL_MM
 from tests.flashlight_fixture import make_flashlight_design
 
 
@@ -237,6 +239,54 @@ class TestFlashlightPlacement(unittest.TestCase):
         result = place_components(self.design, self.catalog)
         self.assertEqual(result.outline, self.design.outline)
         self.assertEqual(result.nets, self.design.nets)
+
+    def test_routing_channel_gaps(self):
+        """Connected components must have enough gap for trace channels."""
+        result = place_components(self.design, self.catalog)
+        net_graph = build_net_graph(self.design.nets)
+        comps = result.components
+        for i in range(len(comps)):
+            ci = comps[i]
+            cat_i = self.catalog_map[ci.catalog_id]
+            ehw_i, ehh_i = footprint_envelope_halfdims(cat_i, ci.rotation_deg)
+            for j in range(i + 1, len(comps)):
+                cj = comps[j]
+                cat_j = self.catalog_map[cj.catalog_id]
+                ehw_j, ehh_j = footprint_envelope_halfdims(cat_j, cj.rotation_deg)
+                n_ch = count_shared_nets(
+                    ci.instance_id, cj.instance_id, net_graph,
+                )
+                if n_ch == 0:
+                    continue
+                gap = aabb_gap(
+                    ci.x_mm, ci.y_mm, ehw_i, ehh_i,
+                    cj.x_mm, cj.y_mm, ehw_j, ehh_j,
+                )
+                required = n_ch * ROUTING_CHANNEL_MM
+                self.assertGreaterEqual(
+                    gap, required - 0.01,
+                    f"{ci.instance_id}-{cj.instance_id} need {n_ch} "
+                    f"channel(s) ({required:.1f}mm) but gap={gap:.2f}mm",
+                )
+
+
+class TestCountSharedNets(unittest.TestCase):
+    """Unit tests for count_shared_nets."""
+
+    def test_flashlight_nets(self):
+        """In the flashlight, each adjacent pair shares exactly 1 net."""
+        design = make_flashlight_design()
+        net_graph = build_net_graph(design.nets)
+        # bat_1 <-> btn_1 via VCC
+        self.assertEqual(count_shared_nets("bat_1", "btn_1", net_graph), 1)
+        # btn_1 <-> r_1 via BTN_GND
+        self.assertEqual(count_shared_nets("btn_1", "r_1", net_graph), 1)
+        # r_1 <-> led_1 via LED_DRIVE
+        self.assertEqual(count_shared_nets("r_1", "led_1", net_graph), 1)
+        # bat_1 <-> led_1 via GND
+        self.assertEqual(count_shared_nets("bat_1", "led_1", net_graph), 1)
+        # non-adjacent: btn_1 <-> led_1 — no direct net
+        self.assertEqual(count_shared_nets("btn_1", "led_1", net_graph), 0)
 
 
 class TestPlacementSerialization(unittest.TestCase):

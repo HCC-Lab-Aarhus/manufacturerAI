@@ -49,6 +49,13 @@ VALID_ROTATIONS = (0, 90, 180, 270)
 # outline polygon.  Positions with less clearance are rejected.
 MIN_EDGE_CLEARANCE_MM = 1.5
 
+# Routing-channel sizing — the gap between two components must
+# leave room for all traces that need to pass between them.
+# Each trace channel needs trace_width + clearance on each side.
+# These match the router defaults (TRACE_WIDTH_MM=1.0,
+# TRACE_CLEARANCE_MM=2.0).
+ROUTING_CHANNEL_MM = 3.0     # width needed per trace channel (mm)
+
 # Scoring weights — higher absolute value = more influence.
 W_NET_PROXIMITY = 5.0       # MAIN driver: connected components close
 W_EDGE_CLEARANCE = 0.5      # prefer safe distance from outline

@@ -11,8 +11,9 @@ from .geometry import pin_world_xy, rect_edge_clearance, aabb_gap, segments_cros
 from .models import (
     W_NET_PROXIMITY, W_EDGE_CLEARANCE, W_COMPACTNESS,
     W_CLEARANCE_UNIFORM, W_BOTTOM_PREFERENCE, W_CROSSING,
+    ROUTING_CHANNEL_MM,
 )
-from .nets import NetEdge, resolve_pin_positions
+from .nets import NetEdge, count_shared_nets, resolve_pin_positions
 
 
 @dataclass
@@ -164,7 +165,11 @@ def score_candidate(
         for p in placed:
             gap = aabb_gap(cx, cy, env_hw, env_hh,
                            p.x, p.y, p.env_hw, p.env_hh)
-            target = max(keepout, p.keepout)
+            n_channels = count_shared_nets(
+                instance_id, p.instance_id, net_graph,
+            )
+            channel_gap = n_channels * ROUTING_CHANNEL_MM
+            target = max(keepout, p.keepout, channel_gap)
             if gap > 0:
                 deviation = abs(gap - target)
                 score -= deviation * W_CLEARANCE_UNIFORM / len(placed)
