@@ -123,6 +123,7 @@ def place_components(
 
     # Build net connectivity graph
     net_graph = build_net_graph(design.nets)
+    outline_area = outline_poly.area
 
     # Resolve effective mounting style for each instance
     effective_style: dict[str, str] = {}
@@ -282,6 +283,7 @@ def place_components(
                         style,
                         existing_segments,
                         env_hw=ehw, env_hh=ehh,
+                        outline_area=outline_area,
                     )
 
                     if score > best_score:

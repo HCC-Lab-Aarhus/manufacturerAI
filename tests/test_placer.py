@@ -298,6 +298,38 @@ class TestFlashlightPlacement(unittest.TestCase):
                     f"channel(s) ({required:.1f}mm) but gap={gap:.2f}mm",
                 )
 
+    def test_spread_uses_available_space(self):
+        """Auto-placed components should spread out when ample space exists.
+
+        The flashlight outline is 35×120mm = 4200mm².  Components use
+        roughly 30% of that.  The minimum gap between any two auto-placed
+        components should be well above the bare keepout minimum (2mm).
+        """
+        result = place_components(self.design, self.catalog)
+        auto_ids = {"bat_1", "r_1"}
+        auto_comps = [c for c in result.components if c.instance_id in auto_ids]
+        self.assertEqual(len(auto_comps), 2)
+
+        bat = next(c for c in auto_comps if c.instance_id == "bat_1")
+        res = next(c for c in auto_comps if c.instance_id == "r_1")
+
+        cat_bat = self.catalog_map[bat.catalog_id]
+        cat_res = self.catalog_map[res.catalog_id]
+        ehw_b, ehh_b = footprint_envelope_halfdims(cat_bat, bat.rotation_deg)
+        ehw_r, ehh_r = footprint_envelope_halfdims(cat_res, res.rotation_deg)
+
+        gap = aabb_gap(
+            bat.x_mm, bat.y_mm, ehw_b, ehh_b,
+            res.x_mm, res.y_mm, ehw_r, ehh_r,
+        )
+        # With spread preference they should not be crammed at the
+        # bare minimum; expect at least 4mm gap (> keepout of 2mm).
+        self.assertGreater(
+            gap, 4.0,
+            f"bat_1 and r_1 are too close (gap={gap:.1f}mm) — "
+            f"spread preference should have used available space",
+        )
+
 
 class TestCountSharedNets(unittest.TestCase):
     """Unit tests for count_shared_nets."""

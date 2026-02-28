@@ -12,7 +12,7 @@ from .models import (
     W_NET_PROXIMITY, W_EDGE_CLEARANCE, W_COMPACTNESS,
     W_CLEARANCE_UNIFORM, W_BOTTOM_PREFERENCE, W_CROSSING,
     W_PIN_COLLOCATION, MIN_PIN_CLEARANCE_MM,
-    ROUTING_CHANNEL_MM,
+    ROUTING_CHANNEL_MM, W_SPREAD,
 )
 from .nets import NetEdge, count_shared_nets, resolve_pin_positions
 
@@ -122,6 +122,7 @@ def score_candidate(
     existing_segments: list[WireSegment] | None = None,
     env_hw: float = 0.0,
     env_hh: float = 0.0,
+    outline_area: float = 0.0,
 ) -> float:
     """Score a candidate position.  Higher = better.
 
@@ -175,11 +176,30 @@ def score_candidate(
                 deviation = abs(gap - target)
                 score -= deviation * W_CLEARANCE_UNIFORM / len(placed)
 
-    # ── 4. Compactness ──────────────────────────────────────────────
+    # ── 4. Compactness (weakened when there is ample space) ────────
     if placed:
         centroid_x = sum(p.x for p in placed) / len(placed)
         centroid_y = sum(p.y for p in placed) / len(placed)
         score -= math.hypot(cx - centroid_x, cy - centroid_y) * W_COMPACTNESS
+
+    # ── 4b. Spread preference ─────────────────────────────────
+    # When the outline is much larger than the component footprints,
+    # reward positions that keep a healthy minimum gap to all
+    # neighbours.  The reward scales with how much slack exists.
+    if placed and outline_area > 0:
+        total_comp_area = env_hw * 2 * env_hh * 2
+        for p in placed:
+            total_comp_area += p.env_hw * 2 * p.env_hh * 2
+        slack = max(0.0, 1.0 - total_comp_area / outline_area)
+        if slack > 0.15:  # only kick in when >15% free
+            min_gap = float("inf")
+            for p in placed:
+                g = aabb_gap(cx, cy, env_hw, env_hh,
+                             p.x, p.y, p.env_hw, p.env_hh)
+                if g < min_gap:
+                    min_gap = g
+            if min_gap < float("inf"):
+                score += min(min_gap, 15.0) * W_SPREAD * slack
 
     # ── 5. Bottom preference for bottom-mount components ────────────
     if mounting_style == "bottom":

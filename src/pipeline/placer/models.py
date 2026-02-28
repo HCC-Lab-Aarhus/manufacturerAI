@@ -70,3 +70,4 @@ W_CLEARANCE_UNIFORM = 1.0   # prefer uniform gaps between components
 W_BOTTOM_PREFERENCE = 0.08  # bottom-mount components prefer low Y
 W_CROSSING = 50.0            # heavy penalty per inter-net crossing
 W_PIN_COLLOCATION = 40.0     # heavy penalty per near-colliding pin pair
+W_SPREAD = 0.6               # reward for spreading out when space allows
