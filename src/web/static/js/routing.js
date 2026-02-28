@@ -49,8 +49,11 @@ export async function runRouting() {
         return;
     }
 
-    const btn = runBtn();
-    btn.disabled = true;
+    // Disable both the hero CTA and any toolbar re-run button
+    const heroBtn = runBtn();
+    const rerun = document.querySelector('#routing-info .placement-toolbar-rerun');
+    if (heroBtn) heroBtn.disabled = true;
+    if (rerun) rerun.disabled = true;
     showStatus('Running router…');
 
     try {
@@ -77,7 +80,8 @@ export async function runRouting() {
     } catch (e) {
         showStatus(`Error: ${e.message}`, true);
     } finally {
-        btn.disabled = false;
+        if (heroBtn) heroBtn.disabled = false;
+        if (rerun) rerun.disabled = false;
     }
 }
 
@@ -145,8 +149,12 @@ function renderResult(data) {
     rerunBtn.textContent = '↻ Re-run Router';
     rerunBtn.addEventListener('click', runRouting);
     toolbar.appendChild(rerunBtn);
-    const rerunStatus = statusSpan();
-    if (rerunStatus) toolbar.appendChild(rerunStatus);
+    const oldStatus = document.getElementById('routing-status');
+    if (oldStatus) oldStatus.remove();
+    const rerunStatus = document.createElement('span');
+    rerunStatus.id = 'routing-status';
+    rerunStatus.className = 'design-status-inline';
+    toolbar.appendChild(rerunStatus);
     el.appendChild(toolbar);
 
     // Failed nets warning

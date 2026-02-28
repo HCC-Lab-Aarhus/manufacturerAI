@@ -51,8 +51,11 @@ export async function runPlacement() {
         return;
     }
 
-    const btn = runBtn();
-    btn.disabled = true;
+    // Disable both the hero CTA and any toolbar re-run button
+    const heroBtn = runBtn();
+    const rerun = document.querySelector('#placement-info .placement-toolbar-rerun');
+    if (heroBtn) heroBtn.disabled = true;
+    if (rerun) rerun.disabled = true;
     showStatus('Running placer…');
 
     try {
@@ -83,7 +86,10 @@ export async function runPlacement() {
     } catch (e) {
         showStatus(`Error: ${e.message}`, true);
     } finally {
-        btn.disabled = false;
+        if (heroBtn) heroBtn.disabled = false;
+        // rerun button is recreated by renderResult; re-enable the old
+        // reference in case of error (renderError doesn't recreate it)
+        if (rerun) rerun.disabled = false;
     }
 }
 
@@ -148,8 +154,15 @@ function renderResult(data) {
     rerunBtn.textContent = '↻ Re-run Placer';
     rerunBtn.addEventListener('click', runPlacement);
     toolbar.appendChild(rerunBtn);
-    const rerunStatus = statusSpan();
-    if (rerunStatus) toolbar.appendChild(rerunStatus);
+    // Create a fresh status span inside the toolbar (the original in the
+    // hero gets hidden; re-creating avoids the span being destroyed when
+    // the toolbar is rebuilt on re-runs).
+    const oldStatus = document.getElementById('placement-status');
+    if (oldStatus) oldStatus.remove();
+    const rerunStatus = document.createElement('span');
+    rerunStatus.id = 'placement-status';
+    rerunStatus.className = 'design-status-inline';
+    toolbar.appendChild(rerunStatus);
     el.appendChild(toolbar);
 
     // Component table
