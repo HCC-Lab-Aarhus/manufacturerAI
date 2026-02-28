@@ -19,7 +19,7 @@ from .models import (
     GRID_STEP_MM, VALID_ROTATIONS, MIN_EDGE_CLEARANCE_MM,
 )
 from .nets import build_net_graph
-from .scoring import Placed, score_candidate
+from .scoring import Placed, score_candidate, compute_placed_segments
 
 
 log = logging.getLogger(__name__)
@@ -174,6 +174,12 @@ def place_components(
         style = effective_style.get(ci.instance_id, cat.mounting.style)
         keepout = cat.mounting.keepout_margin_mm
 
+        # Precompute existing virtual wire segments between all
+        # already-placed components (for crossing detection).
+        existing_segments = compute_placed_segments(
+            placed, catalog_map, net_graph,
+        )
+
         best_pos: tuple[float, float] | None = None
         best_rot = 0
         best_score = -float("inf")
@@ -234,6 +240,7 @@ def place_components(
                         placed, catalog_map, net_graph,
                         outline_verts, outline_bounds,
                         style,
+                        existing_segments,
                     )
 
                     if score > best_score:

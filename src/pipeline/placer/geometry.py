@@ -148,3 +148,70 @@ def aabb_gap(
     # But for placement scoring Chebyshev (max) is a good conservative
     # approximation and much cheaper.
     return max(gap_x, gap_y)
+
+
+# ── Segment intersection (planarity check) ─────────────────────────
+
+
+def _on_segment(
+    p: tuple[float, float],
+    q: tuple[float, float],
+    r: tuple[float, float],
+) -> bool:
+    """Check if point *q* lies on segment *p*–*r* (assuming collinear)."""
+    return (
+        min(p[0], r[0]) <= q[0] + 1e-9
+        and q[0] <= max(p[0], r[0]) + 1e-9
+        and min(p[1], r[1]) <= q[1] + 1e-9
+        and q[1] <= max(p[1], r[1]) + 1e-9
+    )
+
+
+def segments_cross(
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    p3: tuple[float, float],
+    p4: tuple[float, float],
+) -> bool:
+    """Return True if segments p1–p2 and p3–p4 properly intersect.
+
+    Segments that share an endpoint are NOT considered crossing.
+    This is used during placement scoring to detect net crossings
+    that would make single-layer routing impossible.
+    """
+    eps = 1e-9
+
+    # Shared-endpoint check — touching is fine, not a crossing
+    for a in (p1, p2):
+        for b in (p3, p4):
+            if abs(a[0] - b[0]) < eps and abs(a[1] - b[1]) < eps:
+                return False
+
+    def _cross2d(
+        o: tuple[float, float],
+        a: tuple[float, float],
+        b: tuple[float, float],
+    ) -> float:
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    d1 = _cross2d(p3, p4, p1)
+    d2 = _cross2d(p3, p4, p2)
+    d3 = _cross2d(p1, p2, p3)
+    d4 = _cross2d(p1, p2, p4)
+
+    # Standard proper-intersection test
+    if ((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and \
+       ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0)):
+        return True
+
+    # Collinear overlap checks
+    if abs(d1) < eps and _on_segment(p3, p1, p4):
+        return True
+    if abs(d2) < eps and _on_segment(p3, p2, p4):
+        return True
+    if abs(d3) < eps and _on_segment(p1, p3, p2):
+        return True
+    if abs(d4) < eps and _on_segment(p1, p4, p2):
+        return True
+
+    return False
