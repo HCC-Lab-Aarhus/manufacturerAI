@@ -1,0 +1,64 @@
+{
+    "id": "ir_receiver_tsop",
+    "name": "IR Receiver Module (TSOP-style)",
+    "description": "Infrared receiver/demodulator for 38kHz remote control signals. 3-pin through-hole package. Receives modulated IR from standard remotes and outputs a demodulated digital signal to an MCU pin. Use with IRremote library. Requires 100nF bypass cap near VCC/GND pins.",
+    "category": "sensor",
+    "ui_placement": true,
+    "body": {
+        "shape": "rect",
+        "width_mm": 6.0,
+        "length_mm": 5.5,
+        "height_mm": 8.0
+    },
+    "mounting": {
+        "style": "side",
+        "allowed_styles": [
+            "side",
+            "top"
+        ],
+        "blocks_routing": false,
+        "keepout_margin_mm": 1.5
+    },
+    "pins": [
+        {
+            "id": "OUT",
+            "label": "Signal Out",
+            "position_mm": [
+                -2.54,
+                0
+            ],
+            "direction": "out",
+            "voltage_v": null,
+            "current_max_ma": 5,
+            "hole_diameter_mm": 0.8,
+            "description": "Demodulated output. Active low — goes LOW when IR signal detected. Connect to any MCU digital input pin."
+        },
+        {
+            "id": "GND",
+            "label": "Ground",
+            "position_mm": [
+                0,
+                0
+            ],
+            "direction": "in",
+            "voltage_v": 0,
+            "current_max_ma": 5,
+            "hole_diameter_mm": 0.8,
+            "description": "Ground pin."
+        },
+        {
+            "id": "VCC",
+            "label": "VCC",
+            "position_mm": [
+                2.54,
+                0
+            ],
+            "direction": "in",
+            "voltage_v": 5.0,
+            "current_max_ma": 5,
+            "hole_diameter_mm": 0.8,
+            "description": "Power supply. 2.7V–5.5V. Place 100nF decoupling capacitor close to this pin."
+        }
+    ],
+    "internal_nets": []
+}

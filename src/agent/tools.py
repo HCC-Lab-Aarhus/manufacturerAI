@@ -32,7 +32,7 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "component_id": {
                     "type": "string",
-                    "description": "Component ID from the catalog (e.g. 'led_5mm_red')",
+                    "description": "Component ID from the catalog (e.g. 'led_5mm')",
                 },
             },
             "required": ["component_id"],

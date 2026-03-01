@@ -41,9 +41,10 @@ def make_flashlight_design() -> DesignSpec:
                 config={"resistance_ohms": 50},
             ),
             ComponentInstance(
-                catalog_id="led_5mm_red",
+                catalog_id="led_5mm",
                 instance_id="led_1",
                 mounting_style="top",
+                config={"wavelength_nm": 620, "forward_voltage_v": 2.0},
             ),
         ],
         nets=[

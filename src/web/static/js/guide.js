@@ -74,7 +74,7 @@ function _buildSteps(data) {
     guideSteps = [];
     guideSections = [];
 
-    // Group components by catalog_id prefix (e.g. "led_5mm_red" → LED,
+    // Group components by catalog_id prefix (e.g. "led_5mm" → LED,
     // "resistor_*" → Resistor, "atmega*" → Microcontroller, etc.)
     const grouped = {};
     for (const comp of components) {

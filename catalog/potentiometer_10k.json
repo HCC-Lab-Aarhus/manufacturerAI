@@ -1,0 +1,67 @@
+{
+    "id": "potentiometer_10k",
+    "name": "10kΩ Potentiometer",
+    "description": "Single-turn rotary potentiometer, 10kΩ, through-hole. Three pins: two fixed ends and a variable wiper. Use as a voltage divider for analog input to MCU (connect ends to VCC and GND, wiper to ADC pin), or as a variable resistor. Shaft protrudes through enclosure for user adjustment.",
+    "category": "input",
+    "ui_placement": true,
+    "body": {
+        "shape": "circle",
+        "diameter_mm": 16.0,
+        "height_mm": 10.0
+    },
+    "mounting": {
+        "style": "top",
+        "allowed_styles": [
+            "top"
+        ],
+        "blocks_routing": true,
+        "keepout_margin_mm": 2.0,
+        "shaft": {
+            "diameter_mm": 6.0,
+            "height_mm": 15.0,
+            "hole_clearance_mm": 0.5
+        }
+    },
+    "pins": [
+        {
+            "id": "1",
+            "label": "End 1",
+            "position_mm": [
+                -2.5,
+                -5.0
+            ],
+            "direction": "bidirectional",
+            "voltage_v": null,
+            "current_max_ma": 50,
+            "hole_diameter_mm": 1.0,
+            "description": "Fixed terminal 1. Use as one end of the voltage divider (e.g., connect to VCC)."
+        },
+        {
+            "id": "W",
+            "label": "Wiper",
+            "position_mm": [
+                0,
+                -5.0
+            ],
+            "direction": "bidirectional",
+            "voltage_v": null,
+            "current_max_ma": 50,
+            "hole_diameter_mm": 1.0,
+            "description": "Wiper (variable output). Connect to MCU analog input pin."
+        },
+        {
+            "id": "2",
+            "label": "End 2",
+            "position_mm": [
+                2.5,
+                -5.0
+            ],
+            "direction": "bidirectional",
+            "voltage_v": null,
+            "current_max_ma": 50,
+            "hole_diameter_mm": 1.0,
+            "description": "Fixed terminal 2. Use as other end of the voltage divider (e.g., connect to GND)."
+        }
+    ],
+    "internal_nets": []
+}

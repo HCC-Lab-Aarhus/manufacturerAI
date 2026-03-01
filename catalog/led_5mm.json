@@ -1,7 +1,7 @@
 {
-    "id": "led_5mm_red",
-    "name": "5mm Red LED",
-    "description": "Standard 5mm through-hole red LED. Forward voltage 2.0V, max 20mA. Requires a current-limiting resistor when powered above 2V. Anode (+) connects to positive supply through resistor, cathode (-) to ground.",
+    "id": "led_5mm",
+    "name": "5mm LED",
+    "description": "Standard 5mm through-hole LED. Wavelength/color chosen by the agent at design time. Requires a current-limiting resistor. Anode (+) connects to positive supply through resistor, cathode (-) to ground. Forward voltage varies by color: IR ~1.2V, Red ~2.0V, Orange ~2.1V, Yellow ~2.1V, Green ~2.2V, Blue ~3.2V, White ~3.3V, UV ~3.4V.",
     "category": "indicator",
     "ui_placement": true,
     "body": {
@@ -27,7 +27,7 @@
                 0
             ],
             "direction": "in",
-            "voltage_v": 2.0,
+            "voltage_v": null,
             "current_max_ma": 20,
             "hole_diameter_mm": 0.8,
             "description": "Positive terminal. Connect through current-limiting resistor to V+."
@@ -46,5 +46,15 @@
             "description": "Negative terminal. Connect to ground."
         }
     ],
-    "internal_nets": []
+    "internal_nets": [],
+    "configurable": {
+        "wavelength_nm": {
+            "description": "Wavelength in nm, chosen by agent. Common values: 940 (IR), 620 (red), 590 (yellow), 525 (green), 470 (blue), 400 (UV), or 0 for white",
+            "agent_decides": true
+        },
+        "forward_voltage_v": {
+            "description": "Forward voltage corresponding to chosen wavelength. Agent must set consistently: IR=1.2, Red=2.0, Orange=2.1, Yellow=2.1, Green=2.2, Blue=3.2, White=3.3, UV=3.4",
+            "agent_decides": true
+        }
+    }
 }

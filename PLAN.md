@@ -192,7 +192,7 @@ CatalogResult
     {"catalog_id": "battery_holder_2xAAA", "instance_id": "bat_1"},
     {"catalog_id": "atmega328p_dip28",     "instance_id": "mcu_1"},
     {"catalog_id": "resistor_axial",       "instance_id": "r_1", "config": {"resistance_ohms": 150}},
-    {"catalog_id": "led_5mm_red",          "instance_id": "led_1", "mounting_style": "top"},
+    {"catalog_id": "led_5mm",              "instance_id": "led_1", "mounting_style": "top", "config": {"wavelength_nm": 620, "forward_voltage_v": 2.0}},
     {"catalog_id": "tactile_button_6x6",   "instance_id": "btn_1"},
     {"catalog_id": "tactile_button_6x6",   "instance_id": "btn_2"},
     {"catalog_id": "capacitor_100nf",      "instance_id": "c_1"},
@@ -694,7 +694,7 @@ The flashlight is the simplest possible device that exercises every stage. We ha
     {"catalog_id": "battery_holder_2xAAA", "instance_id": "bat_1"},
     {"catalog_id": "tactile_button_6x6",   "instance_id": "btn_1"},
     {"catalog_id": "resistor_axial",       "instance_id": "r_1", "config": {"resistance_ohms": 50}},
-    {"catalog_id": "led_5mm_red",          "instance_id": "led_1", "mounting_style": "top"}
+    {"catalog_id": "led_5mm",              "instance_id": "led_1", "mounting_style": "top", "config": {"wavelength_nm": 620, "forward_voltage_v": 2.0}}
   ],
 
   "nets": [

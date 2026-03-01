@@ -1,0 +1,103 @@
+{
+    "id": "usb_a_female_dip",
+    "name": "USB Type A Female DIP Connector",
+    "description": "Standard USB Type A female receptacle, through-hole DIP mount. Used for constant 5V power input from USB chargers/power banks. Data pins exposed but primary use is power delivery. 5V/500mA from standard USB. Shield tabs provide mechanical stability.",
+    "category": "power",
+    "ui_placement": true,
+    "body": {
+        "shape": "rect",
+        "width_mm": 14.0,
+        "length_mm": 13.0,
+        "height_mm": 7.0
+    },
+    "mounting": {
+        "style": "side",
+        "allowed_styles": [
+            "side",
+            "top"
+        ],
+        "blocks_routing": true,
+        "keepout_margin_mm": 2.0
+    },
+    "pins": [
+        {
+            "id": "VBUS",
+            "label": "VBUS (+5V)",
+            "position_mm": [
+                -3.5,
+                -6.5
+            ],
+            "direction": "out",
+            "voltage_v": 5.0,
+            "current_max_ma": 500,
+            "hole_diameter_mm": 1.0,
+            "description": "USB 5V power pin. Provides 5V when cable is connected."
+        },
+        {
+            "id": "D-",
+            "label": "Data -",
+            "position_mm": [
+                -1.0,
+                -6.5
+            ],
+            "direction": "bidirectional",
+            "voltage_v": null,
+            "current_max_ma": 10,
+            "hole_diameter_mm": 1.0,
+            "description": "USB Data minus. Leave unconnected for power-only use."
+        },
+        {
+            "id": "D+",
+            "label": "Data +",
+            "position_mm": [
+                1.0,
+                -6.5
+            ],
+            "direction": "bidirectional",
+            "voltage_v": null,
+            "current_max_ma": 10,
+            "hole_diameter_mm": 1.0,
+            "description": "USB Data plus. Leave unconnected for power-only use."
+        },
+        {
+            "id": "GND",
+            "label": "Ground",
+            "position_mm": [
+                3.5,
+                -6.5
+            ],
+            "direction": "out",
+            "voltage_v": 0,
+            "current_max_ma": 500,
+            "hole_diameter_mm": 1.0,
+            "description": "USB ground pin."
+        },
+        {
+            "id": "SHIELD1",
+            "label": "Shield 1",
+            "position_mm": [
+                -6.5,
+                0
+            ],
+            "direction": "bidirectional",
+            "voltage_v": 0,
+            "current_max_ma": 0,
+            "hole_diameter_mm": 2.3,
+            "description": "Mechanical shield tab. Connect to ground or leave floating."
+        },
+        {
+            "id": "SHIELD2",
+            "label": "Shield 2",
+            "position_mm": [
+                6.5,
+                0
+            ],
+            "direction": "bidirectional",
+            "voltage_v": 0,
+            "current_max_ma": 0,
+            "hole_diameter_mm": 2.3,
+            "description": "Mechanical shield tab. Connect to ground or leave floating."
+        }
+    ],
+    "internal_nets": []
+}
