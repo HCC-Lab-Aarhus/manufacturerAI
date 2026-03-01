@@ -41,19 +41,18 @@ const SCALE = 4;      // mm → px
 const PAD   = 40;     // px padding around the SVG content
 const NS    = 'http://www.w3.org/2000/svg';
 
-// Distinct trace colours (brighter, higher contrast)
-const TRACE_COLORS = [
-    '#ff6b6b',   // red
-    '#51cf66',   // green
-    '#339af0',   // blue
-    '#fcc419',   // yellow
-    '#cc5de8',   // purple
-    '#22b8cf',   // cyan
-    '#ff922b',   // orange
-    '#f06595',   // pink
-    '#20c997',   // teal
-    '#845ef7',   // violet
-];
+// Build a colour map for a list of net names by distributing hues
+// evenly around the HSL wheel so every net gets a maximally distinct colour.
+function buildNetColorMap(netIds) {
+    const unique = [...new Set(netIds)];
+    const n = unique.length;
+    const map = {};
+    unique.forEach((id, i) => {
+        const hue = Math.round((i * 360) / (n || 1));
+        map[id] = `hsl(${hue}, 75%, 60%)`;
+    });
+    return map;
+}
 
 
 // ── Preview builder ───────────────────────────────────────────
@@ -146,13 +145,8 @@ function buildRoutingSVG(data) {
     });
 
     // ── Traces ──
-    const netColorMap = {};
-    let colorIdx = 0;
+    const netColorMap = buildNetColorMap(traces.map(t => t.net_id));
     traces.forEach(trace => {
-        if (!netColorMap[trace.net_id]) {
-            netColorMap[trace.net_id] = TRACE_COLORS[colorIdx % TRACE_COLORS.length];
-            colorIdx++;
-        }
         drawTrace(svg, trace, ox, oy, netColorMap[trace.net_id]);
     });
 
