@@ -47,7 +47,7 @@ class RouterConfig:
     turn_penalty: int = 5                # A* cost penalty for changing direction
     crossing_penalty: int = 500          # A* cost for crossing an occupied cell (rip-up)
 
-    max_rip_up_attempts: int = 20        # outer random-ordering attempts
+    max_rip_up_attempts: int = 200       # outer random-ordering attempts (pruning skips dead orderings)
     inner_rip_up_limit: int = 100        # inner rip-up iterations per attempt
     time_budget_s: float = 60.0          # maximum wall-clock time for routing
 

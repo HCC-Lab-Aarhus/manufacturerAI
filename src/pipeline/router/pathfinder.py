@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import heapq
 
-from .grid import RoutingGrid, TRACE_PATH
+from .grid import RoutingGrid, FREE, TRACE_PATH, PERMANENTLY_BLOCKED
 from .models import TURN_PENALTY, CROSSING_PENALTY
 
 
@@ -35,12 +35,18 @@ def find_path(
     sx, sy = source
     tx, ty = sink
 
-    if not grid.in_bounds(sx, sy) or not grid.in_bounds(tx, ty):
+    # Cache grid internals as locals — avoids repeated attribute
+    # lookups and method-call overhead in the inner loop.
+    W = grid.width
+    H = grid.height
+    cells = grid._cells
+
+    if not (0 <= sx < W and 0 <= sy < H and 0 <= tx < W and 0 <= ty < H):
         return None
     # Reject if source or sink is occupied by another net's trace
-    if grid._cells[sy * grid.width + sx] == TRACE_PATH:
+    if cells[sy * W + sx] == TRACE_PATH:
         return None
-    if grid._cells[ty * grid.width + tx] == TRACE_PATH:
+    if cells[ty * W + tx] == TRACE_PATH:
         return None
     if source == sink:
         return [source]
@@ -51,13 +57,9 @@ def find_path(
         return l_path
 
     # Full A*
-    W = grid.width
-    encode = lambda x, y: y * W + x
-
-    # heap entries: (f, g, x, y, direction, parent_key)
-    start_key = encode(sx, sy)
+    start_key = sy * W + sx
+    sink_key = ty * W + tx
     h0 = abs(sx - tx) + abs(sy - ty)
-    # use counter for tiebreaking
     counter = 0
     heap: list[tuple[int, int, int, int, int, int]] = [(h0, counter, sx, sy, -1, -1)]
     g_scores: dict[int, int] = {start_key: 0}
@@ -66,7 +68,7 @@ def find_path(
 
     while heap:
         f, _cnt, cx, cy, direction, parent_key = heapq.heappop(heap)
-        key = encode(cx, cy)
+        key = cy * W + cx
 
         if key in closed:
             continue
@@ -74,7 +76,7 @@ def find_path(
         if key != start_key:
             parents[key] = (parent_key, direction)
 
-        if cx == tx and cy == ty:
+        if key == sink_key:
             # Reconstruct path
             path = [(cx, cy)]
             k = key
@@ -82,8 +84,7 @@ def find_path(
                 pk, _ = parents[k]
                 if pk < 0:
                     break
-                px, py = pk % W, pk // W
-                path.append((px, py))
+                path.append((pk % W, pk // W))
                 k = pk
             path.reverse()
             return path
@@ -92,15 +93,16 @@ def find_path(
 
         for d, (dx, dy) in enumerate(DIRS):
             nx, ny = cx + dx, cy + dy
-            if not grid.in_bounds(nx, ny):
+            if not (0 <= nx < W and 0 <= ny < H):
                 continue
-            nkey = encode(nx, ny)
+            nkey = ny * W + nx
             if nkey in closed:
                 continue
             # Allow stepping onto the source or sink even if blocked,
             # but NEVER if occupied by another net's trace (TRACE_PATH).
-            if not grid.is_free(nx, ny):
-                if grid._cells[ny * grid.width + nx] == TRACE_PATH:
+            nval = cells[nkey]
+            if nval != FREE:
+                if nval == TRACE_PATH:
                     continue
                 if (nx, ny) != sink and (nx, ny) != source:
                     continue
@@ -137,22 +139,29 @@ def find_path_to_tree(
     Returns the path (grid cells) or None.
     """
     sx, sy = source
-    if not grid.in_bounds(sx, sy):
+
+    # Cache grid internals as locals
+    W = grid.width
+    H = grid.height
+    cells = grid._cells
+
+    if not (0 <= sx < W and 0 <= sy < H):
         return None
     # Reject if source is occupied by another net's trace
-    if grid._cells[sy * grid.width + sx] == TRACE_PATH:
+    if cells[sy * W + sx] == TRACE_PATH:
         return None
     if (sx, sy) in tree:
         return [(sx, sy)]
 
     # Precompute tree coordinates for fast heuristic
     tree_list = list(tree)
-    tree_xs = [t[0] for t in tree_list]
-    tree_ys = [t[1] for t in tree_list]
+    tree_xs = tuple(t[0] for t in tree_list)
+    tree_ys = tuple(t[1] for t in tree_list)
+    n_tree = len(tree_list)
 
     def min_h(x: int, y: int) -> int:
         best = abs(x - tree_xs[0]) + abs(y - tree_ys[0])
-        for i in range(1, len(tree_xs)):
+        for i in range(1, n_tree):
             d = abs(x - tree_xs[i]) + abs(y - tree_ys[i])
             if d < best:
                 best = d
@@ -160,25 +169,24 @@ def find_path_to_tree(
                     return 0
         return best
 
-    W = grid.width
-    encode = lambda x, y: y * W + x
-    tree_keys = {encode(t[0], t[1]) for t in tree}
+    start_key = sy * W + sx
+    tree_keys = frozenset(t[1] * W + t[0] for t in tree_list)
 
     h0 = min_h(sx, sy)
     counter = 0
     heap: list[tuple[int, int, int, int, int, int]] = [(h0, counter, sx, sy, -1, -1)]
-    g_scores: dict[int, int] = {encode(sx, sy): 0}
+    g_scores: dict[int, int] = {start_key: 0}
     parents: dict[int, tuple[int, int]] = {}
     closed: set[int] = set()
 
     while heap:
         f, _cnt, cx, cy, direction, parent_key = heapq.heappop(heap)
-        key = encode(cx, cy)
+        key = cy * W + cx
 
         if key in closed:
             continue
         closed.add(key)
-        if key != encode(sx, sy):
+        if key != start_key:
             parents[key] = (parent_key, direction)
 
         if key in tree_keys:
@@ -189,8 +197,7 @@ def find_path_to_tree(
                 pk, _ = parents[k]
                 if pk < 0:
                     break
-                px, py = pk % W, pk // W
-                path.append((px, py))
+                path.append((pk % W, pk // W))
                 k = pk
             path.reverse()
             return path
@@ -199,21 +206,21 @@ def find_path_to_tree(
 
         for d, (dx, dy) in enumerate(DIRS):
             nx, ny = cx + dx, cy + dy
-            if not grid.in_bounds(nx, ny):
+            if not (0 <= nx < W and 0 <= ny < H):
                 continue
-            nkey = encode(nx, ny)
+            nkey = ny * W + nx
             if nkey in closed:
                 continue
 
             is_tree_cell = nkey in tree_keys
-            cell_free = grid.is_free(nx, ny)
+            nval = cells[nkey]
+            cell_free = nval == FREE
 
             # Never cross an existing trace, even in crossing-aware mode
             if not cell_free and not is_tree_cell:
-                cell_val = grid._cells[ny * grid.width + nx]
-                if cell_val == TRACE_PATH:
+                if nval == TRACE_PATH:
                     continue
-                if not allow_crossings or cell_val == 2:  # PERMANENTLY_BLOCKED
+                if not allow_crossings or nval == PERMANENTLY_BLOCKED:
                     continue
 
             is_turn = direction != -1 and direction != d
@@ -255,6 +262,12 @@ def _l_route(
 ) -> list[tuple[int, int]] | None:
     sx, sy = source
     tx, ty = sink
+
+    # Cache grid internals as locals
+    cells = grid._cells
+    W = grid.width
+    H = grid.height
+
     path: list[tuple[int, int]] = [(sx, sy)]
 
     if horizontal_first:
@@ -263,19 +276,24 @@ def _l_route(
         x, y = sx, sy
         while x != tx:
             x += dx
-            if (x, y) != sink and not grid.is_free(x, y):
+            if not (0 <= x < W and 0 <= y < H):
                 return None
-            # Never cross an existing trace, even at the sink
-            if grid.in_bounds(x, y) and grid._cells[y * grid.width + x] == TRACE_PATH:
+            val = cells[y * W + x]
+            if val == TRACE_PATH:
+                return None
+            if val != FREE and (x, y) != sink:
                 return None
             path.append((x, y))
         # Vertical leg
         dy = 1 if ty > sy else -1
         while y != ty:
             y += dy
-            if (x, y) != sink and not grid.is_free(x, y):
+            if not (0 <= x < W and 0 <= y < H):
                 return None
-            if grid.in_bounds(x, y) and grid._cells[y * grid.width + x] == TRACE_PATH:
+            val = cells[y * W + x]
+            if val == TRACE_PATH:
+                return None
+            if val != FREE and (x, y) != sink:
                 return None
             path.append((x, y))
     else:
@@ -284,18 +302,24 @@ def _l_route(
         x, y = sx, sy
         while y != ty:
             y += dy
-            if (x, y) != sink and not grid.is_free(x, y):
+            if not (0 <= x < W and 0 <= y < H):
                 return None
-            if grid.in_bounds(x, y) and grid._cells[y * grid.width + x] == TRACE_PATH:
+            val = cells[y * W + x]
+            if val == TRACE_PATH:
+                return None
+            if val != FREE and (x, y) != sink:
                 return None
             path.append((x, y))
         # Horizontal leg
         dx = 1 if tx > sx else -1
         while x != tx:
             x += dx
-            if (x, y) != sink and not grid.is_free(x, y):
+            if not (0 <= x < W and 0 <= y < H):
                 return None
-            if grid.in_bounds(x, y) and grid._cells[y * grid.width + x] == TRACE_PATH:
+            val = cells[y * W + x]
+            if val == TRACE_PATH:
+                return None
+            if val != FREE and (x, y) != sink:
                 return None
             path.append((x, y))
 

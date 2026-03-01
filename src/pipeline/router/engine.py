@@ -866,37 +866,62 @@ def _route_with_ripup(
 
     base_order = sorted(net_ids, key=net_priority)
 
+    # ── Precompute per-attempt invariants ────────────────────
+    # These depend only on placement, catalog, and the base grid's
+    # coordinate mapping, which stay constant across attempts.
+    all_pin_cells = _build_all_pin_cells(placement, catalog, base_grid)
+    foreign_pin_radius = _compute_foreign_pin_radius(config)
+
+    # ── Prefix-based search-space pruning ───────────────────────
+    # After each failed attempt we record the Phase-1 ordering prefix
+    # (the ordered subsequence of nets that were successfully routed).
+    # Any future ordering that starts with the same prefix will produce
+    # an identical grid state, guaranteeing the same nets fail again.
+    dead_prefixes: list[tuple[str, ...]] = []
+    pruned_count = 0  # how many orderings were skipped by pruning
+
+    def _starts_with_dead_prefix(ordering: list[str]) -> bool:
+        """Return True if *ordering* starts with any known-dead prefix."""
+        t = tuple(ordering)
+        for pfx in dead_prefixes:
+            if len(pfx) <= len(t) and t[: len(pfx)] == pfx:
+                return True
+        return False
+
     for attempt in range(config.max_rip_up_attempts):
         if not _time_left():
-            log.info("Router: time budget exhausted after %d attempts", attempt)
+            log.info("Router: time budget exhausted after %d attempts "
+                     "(%d pruned)", attempt, pruned_count)
             break
 
-        # First attempt uses the sorted order; subsequent use random shuffles
+        # First attempt uses the priority-sorted order;
+        # subsequent attempts use random shuffles, skipping any
+        # ordering that starts with a known-dead prefix.
         if attempt == 0:
             order = list(base_order)
         else:
             order = list(base_order)
             random.shuffle(order)
+            # Re-shuffle if the ordering starts with a dead prefix
+            for _reshuffle in range(100):
+                if not _starts_with_dead_prefix(order):
+                    break
+                random.shuffle(order)
+                pruned_count += 1
+            else:
+                # Exhausted reshuffles — all orderings appear pruned.
+                # The search space is saturated; stop early.
+                log.info("Router: search space exhausted after %d attempts "
+                         "(%d pruned, %d dead prefixes)",
+                         attempt, pruned_count, len(dead_prefixes))
+                break
 
         # Fresh pin pools for this attempt (deep copy)
         attempt_pools = _copy_pools(pin_pools)
         attempt_assignments: dict[str, str] = {}
 
         # Fresh grid (restore to base state)
-        grid = RoutingGrid.__new__(RoutingGrid)
-        grid.resolution = base_grid.resolution
-        grid.edge_clearance = base_grid.edge_clearance
-        grid.origin_x = base_grid.origin_x
-        grid.origin_y = base_grid.origin_y
-        grid.width = base_grid.width
-        grid.height = base_grid.height
-        grid._cells = bytearray(base_grid._cells)
-        grid._protected = set(base_grid._protected)
-        grid.outline_poly = base_grid.outline_poly
-
-        # Build pin-cell map for foreign-pin blocking
-        all_pin_cells = _build_all_pin_cells(placement, catalog, grid)
-        foreign_pin_radius = _compute_foreign_pin_radius(config)
+        grid = base_grid.clone()
 
         # ── Phase 1: Route all nets in order ───────────────────────
         routed_paths: dict[str, list[list[tuple[int, int]]]] = {}
@@ -1148,12 +1173,33 @@ def _route_with_ripup(
             best_failed = list(failed_set)
 
         if not failed_set:
-            log.info("Router: all nets routed on attempt %d", attempt + 1)
+            log.info("Router: all nets routed on attempt %d "
+                     "(%d pruned)", attempt + 1, pruned_count)
             return RoutingResult(
                 traces=best_traces,
                 pin_assignments=best_assignments,
                 failed_nets=[],
             )
+
+        # ── Record dead prefix for search-space pruning ────────
+        # The prefix is the ordered subsequence of `order` that
+        # was successfully routed.  Any future ordering starting
+        # with this same prefix produces an identical grid state,
+        # so the same nets will fail again.
+        routed_prefix = tuple(nid for nid in order if nid not in failed_set)
+        if len(routed_prefix) >= 1:
+            # Only record if we haven't already got a shorter prefix
+            # that subsumes this one (a shorter prefix prunes more).
+            already_covered = False
+            for pfx in dead_prefixes:
+                if (len(pfx) <= len(routed_prefix)
+                        and routed_prefix[: len(pfx)] == pfx):
+                    already_covered = True
+                    break
+            if not already_covered:
+                dead_prefixes.append(routed_prefix)
+                log.debug("Router: recorded dead prefix len=%d: %s",
+                          len(routed_prefix), routed_prefix)
 
     elapsed = time.monotonic() - start_time
     log.info("Router: finished in %.1fs with %d/%d nets routed, %d failed",
@@ -1178,20 +1224,11 @@ def _route_with_ripup(
 def _grid_stats(grid: RoutingGrid) -> dict[str, int | float]:
     """Count cell states in the grid for diagnostic logging."""
     total = grid.width * grid.height
-    free = 0
-    blocked = 0
-    perm = 0
-    trace = 0
-    for i in range(total):
-        v = grid._cells[i]
-        if v == 0:
-            free += 1
-        elif v == 1:
-            blocked += 1
-        elif v == 2:
-            perm += 1
-        else:  # TRACE_PATH = 3
-            trace += 1
+    cells = grid._cells
+    free = cells.count(FREE)
+    blocked = cells.count(BLOCKED)
+    perm = cells.count(PERMANENTLY_BLOCKED)
+    trace = cells.count(TRACE_PATH)
     return {
         'total': total,
         'free': free,

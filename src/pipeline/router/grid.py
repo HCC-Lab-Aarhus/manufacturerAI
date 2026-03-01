@@ -229,6 +229,25 @@ class RoutingGrid:
 
     # ── Snapshot / restore for rip-up ──────────────────────────────
 
+    def clone(self) -> 'RoutingGrid':
+        """Return a full (shallow) copy of this grid.
+
+        The cell array and protected set are deep-copied so mutations
+        to the clone don't affect the original.  The outline polygon
+        is shared (immutable geometry).
+        """
+        g = RoutingGrid.__new__(RoutingGrid)
+        g.resolution = self.resolution
+        g.edge_clearance = self.edge_clearance
+        g.origin_x = self.origin_x
+        g.origin_y = self.origin_y
+        g.width = self.width
+        g.height = self.height
+        g._cells = bytearray(self._cells)
+        g._protected = set(self._protected)
+        g.outline_poly = self.outline_poly
+        return g
+
     def snapshot(self) -> bytearray:
         """Return a copy of the cell state for later restore."""
         return bytearray(self._cells)
