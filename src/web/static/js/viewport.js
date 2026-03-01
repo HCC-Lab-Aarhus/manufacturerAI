@@ -14,12 +14,21 @@
 
 const handlers = new Map();
 const cache = new Map();       // step -> last data payload
+const staleSteps = new Set(); // steps whose cached data is outdated
 let activeStep = null;
 
 // ── DOM refs (lazy) ───────────────────────────────────────────
 
 const contentEl  = () => document.getElementById('viewport-content');
 const viewportEl = () => document.getElementById('viewport');
+
+// ── Internal helpers ──────────────────────────────────────────
+
+function applyStaleClass() {
+    const el = contentEl();
+    if (!el) return;
+    el.classList.toggle('viewport-stale', staleSteps.has(activeStep));
+}
 
 // ── Public API ────────────────────────────────────────────────
 
@@ -44,6 +53,7 @@ export function setStep(step) {
 
     if (!handler) {
         el.innerHTML = '<p class="viewport-empty">No preview available for this step</p>';
+        applyStaleClass();
         return;
     }
 
@@ -53,6 +63,7 @@ export function setStep(step) {
     } else {
         handler.clear(el);
     }
+    applyStaleClass();
 }
 
 /**
@@ -61,9 +72,11 @@ export function setStep(step) {
  */
 export function setData(step, data) {
     cache.set(step, data);
+    staleSteps.delete(step);   // fresh data clears stale flag
     if (step === activeStep) {
         const handler = handlers.get(step);
         if (handler) handler.render(contentEl(), data);
+        applyStaleClass();
     }
 }
 
@@ -73,15 +86,32 @@ export function setData(step, data) {
 export function clearData(step) {
     if (step) {
         cache.delete(step);
+        staleSteps.delete(step);
         if (step === activeStep) {
             const handler = handlers.get(step);
             if (handler) handler.clear(contentEl());
+            applyStaleClass();
         }
     } else {
         cache.clear();
+        staleSteps.clear();
         const handler = handlers.get(activeStep);
         if (handler) handler.clear(contentEl());
+        applyStaleClass();
     }
+}
+
+/**
+ * Mark a step's viewport data as stale (or clear the stale flag).
+ * If the step is currently active, applies/removes the visual stale style.
+ */
+export function setStale(step, isStale) {
+    if (isStale) {
+        staleSteps.add(step);
+    } else {
+        staleSteps.delete(step);
+    }
+    if (step === activeStep) applyStaleClass();
 }
 
 // ── Drag-resize ───────────────────────────────────────────────

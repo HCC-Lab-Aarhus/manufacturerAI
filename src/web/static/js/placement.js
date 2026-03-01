@@ -3,8 +3,17 @@
 import { API, state } from './state.js';
 import { setData as setViewportData } from './viewport.js';
 import { enableGuideBtn } from './guide.js';
-import { enableRoutingTab, resetRoutingPanel } from './routing.js';
+import { enableRoutingTab, markRoutingStale } from './routing.js';
 
+function addStaleBanner(el, msg) {
+    if (!el) return;
+    const existing = el.querySelector('.stale-banner');
+    if (existing) { existing.textContent = msg; return; }
+    const banner = document.createElement('div');
+    banner.className = 'stale-banner';
+    banner.textContent = msg;
+    el.prepend(banner);
+}
 const statusSpan = () => document.getElementById('placement-status');
 const infoDiv    = () => document.getElementById('placement-info');
 const runBtn     = () => document.getElementById('btn-run-placement');
@@ -51,6 +60,9 @@ export async function runPlacement() {
         return;
     }
 
+    // Mark current view stale while the new run is in progress
+    addStaleBanner(infoDiv(), '⏳ Re-running placer…');
+
     // Disable both the hero CTA and any toolbar re-run button
     const heroBtn = runBtn();
     const rerun = document.querySelector('#placement-info .placement-toolbar-rerun');
@@ -87,8 +99,8 @@ export async function runPlacement() {
         setViewportData('placement', data);
         stopTabFlash();
         enableGuideBtn(true);
-        // Reset routing (invalidated by new placement)
-        resetRoutingPanel();
+        // Mark routing as stale (invalidated by new placement)
+        markRoutingStale();
         enableRoutingTab(true);
     } catch (e) {
         if (rerun) {

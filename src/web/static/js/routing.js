@@ -1,7 +1,31 @@
 /* Routing tab — run the router and display results */
 
 import { API, state } from './state.js';
-import { setData as setViewportData } from './viewport.js';
+import { setData as setViewportData, setStale } from './viewport.js';
+
+function addStaleBanner(el, msg) {
+    if (!el) return;
+    const existing = el.querySelector('.stale-banner');
+    if (existing) { existing.textContent = msg; return; }
+    const banner = document.createElement('div');
+    banner.className = 'stale-banner';
+    banner.textContent = msg;
+    el.prepend(banner);
+}
+
+/**
+ * Mark the routing panel as stale (e.g. because placement changed).
+ * Only acts if routing results are currently visible.
+ */
+export function markRoutingStale() {
+    // Always mark the viewport stale (visible even if the info panel isn't shown)
+    setStale('routing', true);
+    // Add the text banner only when routing results are already rendered
+    const scroll = document.getElementById('routing-scroll');
+    const info = infoDiv();
+    if (!scroll || scroll.hidden || !info) return;
+    addStaleBanner(info, '⚠ Placement changed — routing data is stale. Re-run the router to update.');
+}
 
 const statusSpan = () => document.getElementById('routing-status');
 const infoDiv    = () => document.getElementById('routing-info');
@@ -48,6 +72,9 @@ export async function runRouting() {
         showStatus('No active session', true);
         return;
     }
+
+    // Mark current view stale while the new run is in progress
+    addStaleBanner(infoDiv(), '⏳ Re-running router…');
 
     // Disable both the hero CTA and any toolbar re-run button
     const heroBtn = runBtn();
