@@ -52,9 +52,14 @@ export async function runRouting() {
     // Disable both the hero CTA and any toolbar re-run button
     const heroBtn = runBtn();
     const rerun = document.querySelector('#routing-info .placement-toolbar-rerun');
-    if (heroBtn) heroBtn.disabled = true;
-    if (rerun) rerun.disabled = true;
-    showStatus('Running router…');
+    if (heroBtn) {
+        heroBtn.disabled = true;
+        heroBtn.textContent = '⏳ Running…';
+    }
+    if (rerun) {
+        rerun.disabled = true;
+        rerun.textContent = '⏳ Running…';
+    }
 
     try {
         const res = await fetch(
@@ -67,21 +72,32 @@ export async function runRouting() {
             const msg = typeof err.detail === 'string'
                 ? err.detail
                 : err.detail?.reason || JSON.stringify(err.detail);
+            if (rerun) {
+                rerun.textContent = '❌ Failed';
+            }
             showStatus(`Routing failed: ${msg}`, true);
             renderError(msg);
             return;
         }
 
         const data = await res.json();
-        showStatus('Routing complete!');
         renderResult(data);
         setViewportData('routing', data);
         stopTabFlash();
     } catch (e) {
+        if (rerun) {
+            rerun.textContent = '❌ Error';
+        }
         showStatus(`Error: ${e.message}`, true);
     } finally {
-        if (heroBtn) heroBtn.disabled = false;
-        if (rerun) rerun.disabled = false;
+        if (heroBtn) {
+            heroBtn.disabled = false;
+            heroBtn.textContent = 'Run Router';
+        }
+        if (rerun) {
+            rerun.disabled = false;
+            rerun.textContent = '↻ Re-run Router';
+        }
     }
 }
 
@@ -132,6 +148,32 @@ function renderResult(data) {
     const traces = data.traces || [];
     const failedNets = data.failed_nets || [];
     const pinAssignments = data.pin_assignments || {};
+    const nets = data.nets || [];
+
+    // Build a map: net_id -> list of pin strings from the design
+    const netPinMap = {};
+    for (const n of nets) {
+        const key = n.id;
+        if (!netPinMap[key]) {
+            netPinMap[key] = new Set();
+        }
+        for (const p of (n.pins || [])) {
+            netPinMap[key].add(p);
+        }
+    }
+
+    // Merge traces by net_id: aggregate segments + total length
+    const mergedNets = {};
+    const netOrder = [];
+    for (const t of traces) {
+        const key = t.net_id;
+        if (!mergedNets[key]) {
+            mergedNets[key] = { net_id: key, segments: 0, length: 0 };
+            netOrder.push(key);
+        }
+        mergedNets[key].segments += t.path.length - 1;
+        mergedNets[key].length += traceLength(t.path);
+    }
 
     el.innerHTML = '';
 
@@ -141,48 +183,54 @@ function renderResult(data) {
 
     const ok = failedNets.length === 0;
     const icon = ok ? '✅' : '⚠️';
+    const netCount = netOrder.length;
     toolbar.innerHTML = `
-        <span class="placement-toolbar-summary">${icon} Routed <strong>${traces.length}</strong> trace${traces.length !== 1 ? 's' : ''}${failedNets.length > 0 ? `, <span style="color:var(--error)">${failedNets.length} failed</span>` : ''}</span>
+        <span class="placement-toolbar-summary">${icon} Routed <strong>${netCount}</strong> net${netCount !== 1 ? 's' : ''}${failedNets.length > 0 ? `, <span style="color:var(--error)">${failedNets.length} failed</span>` : ''}</span>
     `;
     const rerunBtn = document.createElement('button');
     rerunBtn.className = 'placement-toolbar-rerun';
     rerunBtn.textContent = '↻ Re-run Router';
     rerunBtn.addEventListener('click', runRouting);
     toolbar.appendChild(rerunBtn);
-    const oldStatus = document.getElementById('routing-status');
-    if (oldStatus) oldStatus.remove();
-    const rerunStatus = document.createElement('span');
-    rerunStatus.id = 'routing-status';
-    rerunStatus.className = 'design-status-inline';
-    toolbar.appendChild(rerunStatus);
     el.appendChild(toolbar);
 
-    // Failed nets warning
+    // Failed nets warning with pins
     if (failedNets.length > 0) {
         const warn = document.createElement('div');
         warn.className = 'placement-error';
-        warn.innerHTML = `<strong>Failed nets:</strong> ${failedNets.map(n => esc(n)).join(', ')}`;
+        const failedRows = failedNets.map(n => {
+            const pins = netPinMap[n]
+                ? [...netPinMap[n]].map(p => esc(p)).join(', ')
+                : '?';
+            return `<div style="margin:4px 0"><strong>${esc(n)}</strong> <span style="font-size:11px; opacity:0.85">${pins}</span></div>`;
+        }).join('');
+        warn.innerHTML = `<strong>Failed nets (${failedNets.length}):</strong>${failedRows}`;
         el.appendChild(warn);
     }
 
-    // Trace table
-    if (traces.length > 0) {
+    // Net table (merged by net_id, with pins)
+    if (netOrder.length > 0) {
         const table = document.createElement('table');
         table.className = 'vp-table';
         table.innerHTML = `
             <thead><tr>
                 <th>Net</th>
+                <th>Pins</th>
                 <th>Segments</th>
                 <th>Length (mm)</th>
             </tr></thead>
             <tbody>
-                ${traces.map(t => {
-                    const len = traceLength(t.path);
+                ${netOrder.map(key => {
+                    const m = mergedNets[key];
+                    const pins = netPinMap[key]
+                        ? [...netPinMap[key]].map(p => esc(p)).join(', ')
+                        : '';
                     return `
                     <tr>
-                        <td class="vp-mono">${esc(t.net_id)}</td>
-                        <td class="vp-mono">${t.path.length - 1}</td>
-                        <td class="vp-mono">${len.toFixed(1)}</td>
+                        <td class="vp-mono">${esc(m.net_id)}</td>
+                        <td class="vp-mono" style="font-size:11px; color:var(--text-muted)">${pins}</td>
+                        <td class="vp-mono">${m.segments}</td>
+                        <td class="vp-mono">${m.length.toFixed(1)}</td>
                     </tr>`;
                 }).join('')}
             </tbody>`;

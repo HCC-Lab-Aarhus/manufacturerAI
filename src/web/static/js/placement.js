@@ -54,9 +54,14 @@ export async function runPlacement() {
     // Disable both the hero CTA and any toolbar re-run button
     const heroBtn = runBtn();
     const rerun = document.querySelector('#placement-info .placement-toolbar-rerun');
-    if (heroBtn) heroBtn.disabled = true;
-    if (rerun) rerun.disabled = true;
-    showStatus('Running placer…');
+    if (heroBtn) {
+        heroBtn.disabled = true;
+        heroBtn.textContent = '⏳ Running…';
+    }
+    if (rerun) {
+        rerun.disabled = true;
+        rerun.textContent = '⏳ Running…';
+    }
 
     try {
         const res = await fetch(
@@ -69,13 +74,15 @@ export async function runPlacement() {
             const msg = typeof err.detail === 'string'
                 ? err.detail
                 : err.detail?.reason || JSON.stringify(err.detail);
+            if (rerun) {
+                rerun.textContent = '❌ Failed';
+            }
             showStatus(`Placement failed: ${msg}`, true);
             renderError(msg);
             return;
         }
 
         const data = await res.json();
-        showStatus('Placement complete!');
         renderResult(data);
         setViewportData('placement', data);
         stopTabFlash();
@@ -84,12 +91,21 @@ export async function runPlacement() {
         resetRoutingPanel();
         enableRoutingTab(true);
     } catch (e) {
+        if (rerun) {
+            rerun.textContent = '❌ Error';
+        }
         showStatus(`Error: ${e.message}`, true);
     } finally {
-        if (heroBtn) heroBtn.disabled = false;
+        if (heroBtn) {
+            heroBtn.disabled = false;
+            heroBtn.textContent = 'Run Placer';
+        }
         // rerun button is recreated by renderResult; re-enable the old
         // reference in case of error (renderError doesn't recreate it)
-        if (rerun) rerun.disabled = false;
+        if (rerun) {
+            rerun.disabled = false;
+            rerun.textContent = '↻ Re-run Placer';
+        }
     }
 }
 
@@ -154,15 +170,6 @@ function renderResult(data) {
     rerunBtn.textContent = '↻ Re-run Placer';
     rerunBtn.addEventListener('click', runPlacement);
     toolbar.appendChild(rerunBtn);
-    // Create a fresh status span inside the toolbar (the original in the
-    // hero gets hidden; re-creating avoids the span being destroyed when
-    // the toolbar is rebuilt on re-runs).
-    const oldStatus = document.getElementById('placement-status');
-    if (oldStatus) oldStatus.remove();
-    const rerunStatus = document.createElement('span');
-    rerunStatus.id = 'placement-status';
-    rerunStatus.className = 'design-status-inline';
-    toolbar.appendChild(rerunStatus);
     el.appendChild(toolbar);
 
     // Component table

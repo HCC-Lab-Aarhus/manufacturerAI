@@ -319,9 +319,10 @@ async def api_run_routing(session: str = Query(...)):
         )
 
     data = routing_to_dict(result)
-    # Attach outline + components for the viewport renderer
+    # Attach outline + components + nets for the viewport renderer
     data["outline"] = placement_data.get("outline", [])
     data["components"] = placement_data.get("components", [])
+    data["nets"] = placement_data.get("nets", [])
 
     # Enrich components with body + pin data for rendering
     _enrich_components(data.get("components", []), cat)
