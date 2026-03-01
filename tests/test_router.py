@@ -232,12 +232,19 @@ class TestFlashlightRouting(unittest.TestCase):
         """No two traces from different nets may share the same grid cell."""
         # Reconstruct grid cells from world-coordinate traces
         from src.pipeline.router.models import RouterConfig
+        from src.pipeline.router.grid import RoutingGrid
         cfg = RouterConfig()
         res = cfg.grid_resolution_mm
 
         # Build outline polygon to get grid origin
         outline_poly = Polygon(self.placement.outline.vertices)
         xmin, ymin, _, _ = outline_poly.bounds
+
+        # Use the same world-to-grid conversion as the router
+        def w2g(wx: float, wy: float) -> tuple[int, int]:
+            gx = int(round((wx - xmin) / res - 0.5))
+            gy = int(round((wy - ymin) / res - 0.5))
+            return (gx, gy)
 
         # Map every trace waypoint + interpolated cells to net IDs
         cell_owner: dict[tuple[int, int], str] = {}
@@ -253,9 +260,7 @@ class TestFlashlightRouting(unittest.TestCase):
                     step = res if x2 > x1 else -res
                     x = x1
                     while (step > 0 and x <= x2 + 0.001) or (step < 0 and x >= x2 - 0.001):
-                        gx = round((x - xmin) / res)
-                        gy = round((y1 - ymin) / res)
-                        cell = (gx, gy)
+                        cell = w2g(x, y1)
                         existing = cell_owner.get(cell)
                         if existing is not None and existing != net:
                             crossings.append(
@@ -268,9 +273,7 @@ class TestFlashlightRouting(unittest.TestCase):
                     step = res if y2 > y1 else -res
                     y = y1
                     while (step > 0 and y <= y2 + 0.001) or (step < 0 and y >= y2 - 0.001):
-                        gx = round((x1 - xmin) / res)
-                        gy = round((y - ymin) / res)
-                        cell = (gx, gy)
+                        cell = w2g(x1, y)
                         existing = cell_owner.get(cell)
                         if existing is not None and existing != net:
                             crossings.append(

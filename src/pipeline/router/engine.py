@@ -253,6 +253,43 @@ def _block_components(
                     grid.force_free_cell(gx + dx, gy + dy)
                     grid.protect_cell(gx + dx, gy + dy)
 
+    # ── Re-block body interiors of routing-blocked components ──
+    #
+    # The pad_radius freeing above may have freed cells deep inside
+    # the physical component body (e.g. battery holder).  While the
+    # keepout margin around the body should be routable near pins, the
+    # body interior itself must remain a hard block so traces never
+    # cross through a component.
+    #
+    # After re-blocking, pin cells at the body boundary are force-freed
+    # again so they remain reachable from the keepout-zone side.
+    for pc in placement.components:
+        cat = catalog_map.get(pc.catalog_id)
+        if cat is None or not cat.mounting.blocks_routing:
+            continue
+        hw, hh = footprint_halfdims(cat, pc.rotation_deg)
+        # Re-permanently-block the body rectangle (no keepout margin)
+        grid.block_rect_world(pc.x_mm, pc.y_mm, hw, hh, permanent=True)
+        log.debug("Re-blocked body interior of %s (%s): "
+                  "%.1f×%.1f mm at (%.1f,%.1f)",
+                  pc.instance_id, pc.catalog_id,
+                  hw * 2, hh * 2, pc.x_mm, pc.y_mm)
+
+    # Re-free pin positions that may have been re-blocked by the body
+    # re-blocking pass.  Only the pin cell + immediate 1-cell ring is
+    # freed, NOT the full pad_radius zone, so body interior stays blocked.
+    for pc in placement.components:
+        cat = catalog_map.get(pc.catalog_id)
+        if cat is None or not cat.mounting.blocks_routing:
+            continue
+        for pin in cat.pins:
+            wx, wy = pin_world_xy(pin.position_mm, pc.x_mm, pc.y_mm, pc.rotation_deg)
+            gx, gy = grid.world_to_grid(wx, wy)
+            # Free just the pin cell and 1-cell ring for basic reachability
+            for dx in range(-1, 2):
+                for dy in range(-1, 2):
+                    grid.force_free_cell(gx + dx, gy + dy)
+                    grid.protect_cell(gx + dx, gy + dy)
 
 def _carve_escape_channel(
     grid: RoutingGrid,
@@ -777,28 +814,44 @@ def _route_single_net(
         if _uf_find(pa) == _uf_find(pb):
             continue  # already connected
 
-        # Target = full tree of pb's component (pad positions + path cells)
-        target_tree = _get_comp_tree(pb)
+        # Use the larger tree as the A* target so the pathfinder can
+        # connect to the nearest backbone cell.  The smaller tree
+        # supplies multi-source starting points, preventing parallel
+        # duplicate traces.
+        tree_pa = _get_comp_tree(pa)
+        tree_pb = _get_comp_tree(pb)
+        if len(tree_pa) >= len(tree_pb):
+            src_tree = tree_pb
+            target_tree = tree_pa
+            src_idx, tgt_idx = pb, pa
+        else:
+            src_tree = tree_pa
+            target_tree = tree_pb
+            src_idx, tgt_idx = pa, pb
 
-        # Also free/include src component's tree cells so the pathfinder
-        # can start from any cell in pa's tree
-        src = (pads[pa].gx, pads[pa].gy)
-
-        # Free target tree cells and pad neighborhoods
+        # Free target tree cells (may be blocked by other nets' clearance)
         freed: list[tuple[int, int]] = []
         for cell in target_tree:
             if grid.is_blocked(*cell) and not grid.is_permanently_blocked(*cell):
                 grid.free_cell(*cell)
                 freed.append(cell)
 
-        freed_src = _free_pad_neighborhood(grid, *src, pad_radius)
+        # Free source tree cells too
+        freed_src: list[tuple[int, int]] = []
+        for cell in src_tree:
+            if grid.is_blocked(*cell) and not grid.is_permanently_blocked(*cell):
+                grid.free_cell(*cell)
+                freed_src.append(cell)
 
-        # Free pad neighbourhoods for all pads in the target component
-        rb = _uf_find(pb)
+        # Free pad neighbourhoods for all pads in BOTH components
+        src_root = _uf_find(src_idx)
+        tgt_root = _uf_find(tgt_idx)
         for pidx in range(len(pads)):
-            if _uf_find(pidx) == rb:
-                px, py = pads[pidx].gx, pads[pidx].gy
-                freed.extend(_free_pad_neighborhood(grid, px, py, pad_radius))
+            proot = _uf_find(pidx)
+            if proot == src_root:
+                freed_src.extend(_free_pad_neighborhood(grid, pads[pidx].gx, pads[pidx].gy, pad_radius))
+            elif proot == tgt_root:
+                freed.extend(_free_pad_neighborhood(grid, pads[pidx].gx, pads[pidx].gy, pad_radius))
 
         # Block foreign pins AFTER pad freeing
         fp_blocked: list[tuple[int, int]] = []
@@ -807,7 +860,10 @@ def _route_single_net(
                 grid, all_pin_cells, pads, foreign_pin_radius,
             )
 
-        path = find_path_to_tree(grid, src, target_tree,
+        # Multi-source A*: search from all source tree cells to any
+        # cell in the target tree (finds shortest bridge between the
+        # two sub-trees).
+        path = find_path_to_tree(grid, src_tree, target_tree,
                                  turn_penalty=turn_penalty)
 
         _unblock_foreign_pins(grid, fp_blocked)
@@ -817,25 +873,24 @@ def _route_single_net(
         if path is not None:
             all_paths.append(path)
             _merge_comps(pa, pb, path)
-            log.debug("  [MP] %-20s edge %d: %s:%s → %s:%s OK (len=%d, tree=%d)",
+            log.debug("  [MP] %-20s edge %d: src_tree=%d → tgt_tree=%d  OK "
+                      "(path_len=%d, merged_tree=%d)",
                       net_id, edge_idx,
-                      pads[pa].instance_id, pads[pa].pin_id,
-                      pads[pb].instance_id, pads[pb].pin_id,
+                      len(src_tree), len(target_tree),
                       len(path), len(_get_comp_tree(pa)))
         else:
-            src_diag = _pad_cell_diagnostic(grid, pads[pa].gx, pads[pa].gy, pad_radius)
-            rb = _uf_find(pb)
+            src_diag = _pad_cell_diagnostic(grid, pads[src_idx].gx, pads[src_idx].gy, pad_radius)
             tgt_diags = []
             for pidx in range(len(pads)):
-                if _uf_find(pidx) == rb:
+                if _uf_find(pidx) == tgt_root:
                     td = _pad_cell_diagnostic(grid, pads[pidx].gx, pads[pidx].gy, pad_radius)
                     tgt_diags.append(f"{pads[pidx].instance_id}:{pads[pidx].pin_id}[{td}]")
-            log.info("  [MP] %-20s edge %d: %s:%s @(%d,%d) [%s] → %s:%s NO PATH  "
-                     "target_tree=%d cells  targets: %s",
+            log.info("  [MP] %-20s edge %d: src=%s:%s @(%d,%d) [%s]  src_tree=%d  "
+                     "→ tgt_tree=%d cells  NO PATH  targets: %s",
                      net_id, edge_idx,
-                     pads[pa].instance_id, pads[pa].pin_id,
-                     pads[pa].gx, pads[pa].gy, src_diag,
-                     pads[pb].instance_id, pads[pb].pin_id,
+                     pads[src_idx].instance_id, pads[src_idx].pin_id,
+                     pads[src_idx].gx, pads[src_idx].gy, src_diag,
+                     len(src_tree),
                      len(target_tree),
                      '; '.join(tgt_diags) if tgt_diags else 'none')
 
@@ -845,66 +900,71 @@ def _route_single_net(
         return (all_paths, True)
 
     # Some pads couldn't be reached — try greedy fallback for remaining
-    # disconnected components against the largest component's tree
+    # disconnected components against the largest component's tree.
+    # Uses multi-source A* from the full disconnected sub-tree.
     main_root = max(roots, key=lambda r: len(comp_trees[r]))
     main_tree = comp_trees[main_root]
 
     remaining_roots = [r for r in roots if r != main_root]
     for rr in remaining_roots:
-        # Collect pads in this disconnected component
         comp_pads = [i for i in range(len(pads)) if _uf_find(i) == rr]
+        comp_tree = comp_trees[rr]
 
-        # Try each pad in this component
-        best_path: list[tuple[int, int]] | None = None
-        best_pidx = -1
-        for pidx in comp_pads:
-            src = (pads[pidx].gx, pads[pidx].gy)
+        # Free main tree cells
+        freed: list[tuple[int, int]] = []
+        for cell in main_tree:
+            if grid.is_blocked(*cell) and not grid.is_permanently_blocked(*cell):
+                grid.free_cell(*cell)
+                freed.append(cell)
 
-            freed = []
-            for cell in main_tree:
-                if grid.is_blocked(*cell) and not grid.is_permanently_blocked(*cell):
-                    grid.free_cell(*cell)
-                    freed.append(cell)
+        # Free source component's tree cells
+        freed_src: list[tuple[int, int]] = []
+        for cell in comp_tree:
+            if grid.is_blocked(*cell) and not grid.is_permanently_blocked(*cell):
+                grid.free_cell(*cell)
+                freed_src.append(cell)
 
-            freed_src = _free_pad_neighborhood(grid, *src, pad_radius)
+        # Free pad neighbourhoods for both components
+        for pidx in range(len(pads)):
+            proot = _uf_find(pidx)
+            if proot == rr:
+                freed_src.extend(_free_pad_neighborhood(grid, pads[pidx].gx, pads[pidx].gy, pad_radius))
+            elif proot == main_root:
+                freed.extend(_free_pad_neighborhood(grid, pads[pidx].gx, pads[pidx].gy, pad_radius))
 
-            fp_blocked_f: list[tuple[int, int]] = []
-            if all_pin_cells is not None:
-                fp_blocked_f = _block_foreign_pins(
-                    grid, all_pin_cells, pads, foreign_pin_radius,
-                )
+        fp_blocked: list[tuple[int, int]] = []
+        if all_pin_cells is not None:
+            fp_blocked = _block_foreign_pins(
+                grid, all_pin_cells, pads, foreign_pin_radius,
+            )
 
-            path = find_path_to_tree(grid, src, main_tree,
-                                     turn_penalty=turn_penalty)
+        # Multi-source: route from comp_tree to main_tree
+        path = find_path_to_tree(grid, comp_tree, main_tree,
+                                 turn_penalty=turn_penalty)
 
-            _unblock_foreign_pins(grid, fp_blocked_f)
-            _restore_cells(grid, freed)
-            _restore_cells(grid, freed_src)
+        _unblock_foreign_pins(grid, fp_blocked)
+        _restore_cells(grid, freed)
+        _restore_cells(grid, freed_src)
 
-            if path is not None:
-                if best_path is None or len(path) < len(best_path):
-                    best_path = path
-                    best_pidx = pidx
-
-        if best_path is not None:
-            all_paths.append(best_path)
-            # Merge into main tree
-            _merge_comps(best_pidx, main_root, best_path)
-            main_root = _uf_find(best_pidx)
+        if path is not None:
+            all_paths.append(path)
+            merge_pidx = comp_pads[0]
+            _merge_comps(merge_pidx, main_root, path)
+            main_root = _uf_find(merge_pidx)
             main_tree = comp_trees[main_root]
-            log.debug("  [MP] %-20s fallback: pad %d (%s:%s) connected (len=%d)",
-                      net_id, best_pidx,
-                      pads[best_pidx].instance_id, pads[best_pidx].pin_id,
-                      len(best_path))
+            log.debug("  [MP] %-20s fallback: comp_tree=%d → main_tree=%d  "
+                      "OK (len=%d)",
+                      net_id, len(comp_tree), len(main_tree), len(path))
         else:
             pad_diags = []
             for p in comp_pads:
                 pd = _pad_cell_diagnostic(grid, pads[p].gx, pads[p].gy, pad_radius)
                 pad_diags.append(f"{pads[p].instance_id}:{pads[p].pin_id}@({pads[p].gx},{pads[p].gy})[{pd}]")
             tree_sample = list(main_tree)[:5]
-            log.info("  [MP] %-20s fallback FAIL: unreachable pads: %s  "
-                     "tree_size=%d tree_sample=%s",
-                     net_id, '; '.join(pad_diags),
+            log.info("  [MP] %-20s fallback FAIL: unreachable comp (tree=%d): %s  "
+                     "main_tree=%d sample=%s",
+                     net_id, len(comp_tree),
+                     '; '.join(pad_diags),
                      len(main_tree), tree_sample)
             return (all_paths, False)
 

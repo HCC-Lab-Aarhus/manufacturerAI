@@ -122,15 +122,21 @@ def find_path(
 
 def find_path_to_tree(
     grid: RoutingGrid,
-    source: tuple[int, int],
+    source: tuple[int, int] | set[tuple[int, int]],
     tree: set[tuple[int, int]],
     *,
     turn_penalty: int = TURN_PENALTY,
     allow_crossings: bool = False,
 ) -> list[tuple[int, int]] | None:
-    """A* from a source point to any cell in an existing routing tree.
+    """A* from source point(s) to any cell in an existing routing tree.
 
     Used for multi-pin nets: connect each pad to the growing tree.
+
+    *source* may be a single ``(gx, gy)`` tuple **or** a set of
+    candidate source cells (multi-source A*).  Multi-source routing
+    simultaneously searches from every source cell and returns the
+    shortest path from any source to any target tree cell.  This
+    prevents parallel duplicate traces when connecting two sub-trees.
 
     If allow_crossings=True, blocked (non-permanent) cells can be
     traversed with a heavy penalty.  This is used during rip-up to
@@ -138,20 +144,23 @@ def find_path_to_tree(
 
     Returns the path (grid cells) or None.
     """
-    sx, sy = source
 
     # Cache grid internals as locals
     W = grid.width
     H = grid.height
     cells = grid._cells
 
-    if not (0 <= sx < W and 0 <= sy < H):
-        return None
-    # Reject if source is occupied by another net's trace
-    if cells[sy * W + sx] == TRACE_PATH:
-        return None
-    if (sx, sy) in tree:
-        return [(sx, sy)]
+    # ── Normalise source to a set ──────────────────────────────
+    if isinstance(source, set):
+        sources = source
+    else:
+        sources = {source}
+
+    # Quick overlap check
+    overlap = sources & tree
+    if overlap:
+        cell = next(iter(overlap))
+        return [cell]
 
     # Precompute tree coordinates for fast heuristic
     tree_list = list(tree)
@@ -169,13 +178,31 @@ def find_path_to_tree(
                     return 0
         return best
 
-    start_key = sy * W + sx
     tree_keys = frozenset(t[1] * W + t[0] for t in tree_list)
 
-    h0 = min_h(sx, sy)
+    # ── Seed heap with all valid source cells ──────────────────
     counter = 0
-    heap: list[tuple[int, int, int, int, int, int]] = [(h0, counter, sx, sy, -1, -1)]
-    g_scores: dict[int, int] = {start_key: 0}
+    heap: list[tuple[int, int, int, int, int, int]] = []
+    g_scores: dict[int, int] = {}
+    source_keys: set[int] = set()
+
+    for sx, sy in sources:
+        if not (0 <= sx < W and 0 <= sy < H):
+            continue
+        skey = sy * W + sx
+        sval = cells[skey]
+        # Skip cells occupied by another net's trace or permanently blocked
+        if sval == TRACE_PATH or sval == PERMANENTLY_BLOCKED:
+            continue
+        source_keys.add(skey)
+        h0 = min_h(sx, sy)
+        heapq.heappush(heap, (h0, counter, sx, sy, -1, -1))
+        g_scores[skey] = 0
+        counter += 1
+
+    if not heap:
+        return None
+
     parents: dict[int, tuple[int, int]] = {}
     closed: set[int] = set()
 
@@ -186,7 +213,7 @@ def find_path_to_tree(
         if key in closed:
             continue
         closed.add(key)
-        if key != start_key:
+        if key not in source_keys:
             parents[key] = (parent_key, direction)
 
         if key in tree_keys:
