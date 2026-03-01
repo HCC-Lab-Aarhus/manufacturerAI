@@ -138,6 +138,9 @@ def score_candidate(
         env_hh = hh
     score = 0.0
 
+    # O(1) placed-component lookup (replaces 3 linear scans)
+    placed_map: dict[str, Placed] = {p.instance_id: p for p in placed}
+
     # ── 1. Net proximity (MAIN driver) ──────────────────────────────
     #
     # High-fanout nets (3+ instances, e.g. GND, VCC) get a boosted
@@ -145,7 +148,7 @@ def score_candidate(
     # boost is log-based to avoid over-dominating with very large
     # nets: fanout 2 → 1×, fanout 3 → ~1.6×, fanout 6 → ~2.6×.
     for edge in net_graph.get(instance_id, []):
-        other = next((p for p in placed if p.instance_id == edge.other_iid), None)
+        other = placed_map.get(edge.other_iid)
         if other is None:
             continue
 
@@ -225,9 +228,7 @@ def score_candidate(
     if existing_segments:
         crossings = 0
         for edge in net_graph.get(instance_id, []):
-            other = next(
-                (p for p in placed if p.instance_id == edge.other_iid), None,
-            )
+            other = placed_map.get(edge.other_iid)
             if other is None:
                 continue
 
@@ -309,7 +310,7 @@ def score_candidate(
     # go around the placed component — the penalty is proportional
     # to the placed component's size (half-perimeter).
     for edge in net_graph.get(instance_id, []):
-        other = next((p for p in placed if p.instance_id == edge.other_iid), None)
+        other = placed_map.get(edge.other_iid)
         if other is None:
             continue
         other_cat = catalog_map.get(other.catalog_id)

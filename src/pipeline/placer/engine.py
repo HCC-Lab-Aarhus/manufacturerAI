@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 import math
 
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, box as shapely_box
+from shapely.prepared import prep as shapely_prep
 
 from src.catalog.models import CatalogResult
 from src.pipeline.design.models import DesignSpec, Outline
@@ -188,7 +189,12 @@ def place_components(
     to_place = [ci_map[iid] for iid in ordered_ids]
 
     # ── 3. Auto-place each component via grid search ───────────────
-
+    # Precompute for speed: prepared polygon for O(1) containment,
+    # shared-nets cache (persists across components), and squared
+    # pin clearance threshold to avoid sqrt in inner loop.
+    prep_poly = shapely_prep(outline_poly)
+    shared_nets_cache: dict[tuple[str, str], int] = {}
+    _min_pin_sq = MIN_PIN_CLEARANCE_MM * MIN_PIN_CLEARANCE_MM
     for ci in to_place:
         cat = catalog_map[ci.catalog_id]
         style = effective_style.get(ci.instance_id, cat.mounting.style)
@@ -199,6 +205,17 @@ def place_components(
         existing_segments = compute_placed_segments(
             placed, catalog_map, net_graph,
         )
+
+        # Precompute placed-component pin world positions — constant
+        # during this component's grid scan (saves trig per cell).
+        placed_pin_positions: dict[str, list[tuple[float, float]]] = {}
+        for _p in placed:
+            _p_cat = catalog_map.get(_p.catalog_id)
+            if _p_cat is not None:
+                placed_pin_positions[_p.instance_id] = [
+                    pin_world_xy(pin.position_mm, _p.x, _p.y, _p.rotation)
+                    for pin in _p_cat.pins
+                ]
 
         best_pos: tuple[float, float] | None = None
         best_rot = 0
@@ -223,12 +240,25 @@ def place_components(
             if scan_xmin > scan_xmax or scan_ymin > scan_ymax:
                 continue
 
+            # Precompute rotated pin offsets (rotation-dependent,
+            # position-independent — just add cx, cy in inner loop).
+            _rad = math.radians(rotation)
+            _cos_r, _sin_r = math.cos(_rad), math.sin(_rad)
+            my_pin_offsets = [
+                (pin.position_mm[0] * _cos_r - pin.position_mm[1] * _sin_r,
+                 pin.position_mm[0] * _sin_r + pin.position_mm[1] * _cos_r)
+                for pin in cat.pins
+            ]
+
             cx = scan_xmin
             while cx <= scan_xmax + 1e-6:
                 cy = scan_ymin
                 while cy <= scan_ymax + 1e-6:
                     # Hard constraint 1: inflated footprint inside outline
-                    if not rect_inside_polygon(cx, cy, ihw, ihh, outline_poly):
+                    # Uses prepared polygon for fast repeated containment.
+                    if not prep_poly.contains(
+                        shapely_box(cx - ihw, cy - ihh, cx + ihw, cy + ihh)
+                    ):
                         cy += grid_step
                         continue
 
@@ -238,9 +268,13 @@ def place_components(
                     # between the two components.
                     overlap = False
                     for p in placed:
-                        n_channels = count_shared_nets(
-                            ci.instance_id, p.instance_id, net_graph,
-                        )
+                        _sn_key = (min(ci.instance_id, p.instance_id),
+                                   max(ci.instance_id, p.instance_id))
+                        if _sn_key not in shared_nets_cache:
+                            shared_nets_cache[_sn_key] = count_shared_nets(
+                                ci.instance_id, p.instance_id, net_graph,
+                            )
+                        n_channels = shared_nets_cache[_sn_key]
                         channel_gap = n_channels * ROUTING_CHANNEL_MM
                         required_gap = max(keepout, p.keepout, channel_gap)
                         actual_gap = aabb_gap(
@@ -263,27 +297,22 @@ def place_components(
                         cy += grid_step
                         continue
                     # Hard constraint 4: pin-to-pin clearance
-                    # Reject if any pin of this candidate is too
-                    # close to a pin of an already-placed component.
+                    # Uses precomputed pin offsets and placed pin
+                    # world positions; squared distance avoids sqrt.
                     pin_clash = False
-                    my_pins_world = [
-                        pin_world_xy(pin.position_mm, cx, cy, rotation)
-                        for pin in cat.pins
-                    ]
+                    my_pins_world = [(cx + ox, cy + oy)
+                                     for ox, oy in my_pin_offsets]
                     for p in placed:
                         if pin_clash:
                             break
-                        p_cat = catalog_map.get(p.catalog_id)
-                        if p_cat is None:
-                            continue
-                        for opin in p_cat.pins:
+                        _other_pins = placed_pin_positions.get(
+                            p.instance_id, ())
+                        for opx, opy in _other_pins:
                             if pin_clash:
                                 break
-                            opx, opy = pin_world_xy(
-                                opin.position_mm, p.x, p.y, p.rotation,
-                            )
                             for mpx, mpy in my_pins_world:
-                                if math.hypot(mpx - opx, mpy - opy) < MIN_PIN_CLEARANCE_MM:
+                                dx, dy = mpx - opx, mpy - opy
+                                if dx * dx + dy * dy < _min_pin_sq:
                                     pin_clash = True
                                     break
                     if pin_clash:
