@@ -15,14 +15,16 @@ class NetEdge:
     other_iid: str
     my_pins: list[str]
     other_pins: list[str]
+    fanout: int = 2   # number of unique instances on this net
 
 
 def build_net_graph(nets: list[Net]) -> dict[str, list[NetEdge]]:
     """Build net connectivity: instance_id -> [NetEdge, ...].
 
     For each net, creates edges between every pair of participating
-    component instances.  Used during scoring to compute pin-to-pin
-    proximity.
+    component instances.  Each edge carries the net's *fanout* — the
+    number of distinct instances on the net — so scoring can give
+    high-fanout nets (e.g. GND, VCC) stronger proximity weight.
     """
     graph: dict[str, list[NetEdge]] = {}
 
@@ -35,15 +37,33 @@ def build_net_graph(nets: list[Net]) -> dict[str, list[NetEdge]]:
             iid, pid = ref.split(":", 1)
             by_inst.setdefault(iid, []).append(pid)
 
+        fanout = len(by_inst)
         iids = list(by_inst.keys())
         for i, a in enumerate(iids):
             for b in iids[i + 1:]:
                 graph.setdefault(a, []).append(
-                    NetEdge(net.id, b, by_inst[a], by_inst[b]))
+                    NetEdge(net.id, b, by_inst[a], by_inst[b], fanout))
                 graph.setdefault(b, []).append(
-                    NetEdge(net.id, a, by_inst[b], by_inst[a]))
+                    NetEdge(net.id, a, by_inst[b], by_inst[a], fanout))
 
     return graph
+
+
+def net_fanout_map(nets: list[Net]) -> dict[str, int]:
+    """Return a mapping net_id -> number of unique component instances.
+
+    Nets with fanout >= 3 are considered "high-fanout" — their
+    connected components should be kept especially close together
+    to avoid long-distance routing that blocks other traces.
+    """
+    result: dict[str, int] = {}
+    for net in nets:
+        instances: set[str] = set()
+        for ref in net.pins:
+            if ":" in ref:
+                instances.add(ref.split(":", 1)[0])
+        result[net.id] = len(instances)
+    return result
 
 
 def count_shared_nets(

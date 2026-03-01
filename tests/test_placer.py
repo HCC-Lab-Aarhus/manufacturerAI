@@ -39,7 +39,7 @@ from src.pipeline.placer import (
     aabb_gap,
     rect_inside_polygon,
 )
-from src.pipeline.placer.nets import build_net_graph, count_shared_nets, build_placement_groups, component_degree
+from src.pipeline.placer.nets import build_net_graph, count_shared_nets, build_placement_groups, component_degree, net_fanout_map
 from src.pipeline.placer.geometry import footprint_area
 from src.pipeline.placer.models import ROUTING_CHANNEL_MM, MIN_PIN_CLEARANCE_MM
 from tests.flashlight_fixture import make_flashlight_design
@@ -492,6 +492,105 @@ class TestPinSideAwareness(unittest.TestCase):
             f"Resistor is on the wrong side of the button "
             f"(dot={dot:.1f}) — pin-side awareness should pull it "
             f"toward the connecting pin",
+        )
+
+
+class TestNetFanout(unittest.TestCase):
+    """Tests for net fanout detection and high-fanout proximity boost."""
+
+    def test_fanout_map_flashlight(self):
+        """Flashlight nets all have fanout 2."""
+        design = make_flashlight_design()
+        fmap = net_fanout_map(design.nets)
+        for net_id, fanout in fmap.items():
+            self.assertEqual(fanout, 2, f"Net {net_id} has fanout {fanout}")
+
+    def test_fanout_map_high_fanout_net(self):
+        """A net spanning 4 instances should have fanout 4."""
+        nets = [
+            Net(id="GND", pins=["a:gnd", "b:gnd", "c:gnd", "d:gnd"]),
+            Net(id="SIG", pins=["a:out", "b:in"]),
+        ]
+        fmap = net_fanout_map(nets)
+        self.assertEqual(fmap["GND"], 4)
+        self.assertEqual(fmap["SIG"], 2)
+
+    def test_net_edge_carries_fanout(self):
+        """NetEdge.fanout should reflect the net's instance count."""
+        nets = [
+            Net(id="GND", pins=["a:gnd", "b:gnd", "c:gnd"]),
+        ]
+        graph = build_net_graph(nets)
+        # Every edge on the GND net should have fanout=3
+        for iid in ("a", "b", "c"):
+            for edge in graph[iid]:
+                self.assertEqual(
+                    edge.fanout, 3,
+                    f"Edge {iid}->{edge.other_iid} has fanout "
+                    f"{edge.fanout}, expected 3",
+                )
+
+    def test_high_fanout_components_cluster(self):
+        """Components sharing a high-fanout net should be placed
+        closer together than an equivalent set of 2-pin nets would.
+
+        This test creates a 5-component circuit on a large board.
+        Three components share a 3-pin GND net.  We verify that the
+        average distance among those three is smaller than the
+        average distance to the non-GND components.
+        """
+        design = DesignSpec(
+            components=[
+                ComponentInstance(catalog_id="resistor_axial", instance_id="r_1"),
+                ComponentInstance(catalog_id="resistor_axial", instance_id="r_2"),
+                ComponentInstance(catalog_id="resistor_axial", instance_id="r_3"),
+                ComponentInstance(catalog_id="resistor_axial", instance_id="r_4"),
+                ComponentInstance(catalog_id="resistor_axial", instance_id="r_5"),
+            ],
+            nets=[
+                # 3-pin GND net
+                Net(id="GND", pins=["r_1:1", "r_2:1", "r_3:1"]),
+                # r_4 and r_5 have only pairwise connections
+                Net(id="SIG_A", pins=["r_1:2", "r_4:1"]),
+                Net(id="SIG_B", pins=["r_2:2", "r_5:1"]),
+            ],
+            outline=Outline(points=[
+                OutlineVertex(x=0, y=0),
+                OutlineVertex(x=80, y=0),
+                OutlineVertex(x=80, y=80),
+                OutlineVertex(x=0, y=80),
+            ]),
+            ui_placements=[],
+        )
+        from src.catalog.loader import load_catalog
+        catalog = load_catalog()
+        result = place_components(design, catalog)
+        by_id = {c.instance_id: c for c in result.components}
+
+        import math
+        # Average distance among the GND cluster (r_1, r_2, r_3)
+        gnd_ids = ["r_1", "r_2", "r_3"]
+        gnd_dists = []
+        for i in range(len(gnd_ids)):
+            for j in range(i + 1, len(gnd_ids)):
+                a, b = by_id[gnd_ids[i]], by_id[gnd_ids[j]]
+                gnd_dists.append(math.hypot(a.x_mm - b.x_mm, a.y_mm - b.y_mm))
+        avg_gnd = sum(gnd_dists) / len(gnd_dists)
+
+        # Average distance from GND cluster to non-GND (r_4, r_5)
+        other_ids = ["r_4", "r_5"]
+        cross_dists = []
+        for g in gnd_ids:
+            for o in other_ids:
+                a, b = by_id[g], by_id[o]
+                cross_dists.append(math.hypot(a.x_mm - b.x_mm, a.y_mm - b.y_mm))
+        avg_cross = sum(cross_dists) / len(cross_dists)
+
+        self.assertLess(
+            avg_gnd, avg_cross,
+            f"GND cluster avg distance ({avg_gnd:.1f}mm) should be "
+            f"less than cross-cluster ({avg_cross:.1f}mm) — "
+            f"high-fanout nets should pull components together",
         )
 
 

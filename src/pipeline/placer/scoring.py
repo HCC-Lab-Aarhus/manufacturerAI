@@ -139,6 +139,11 @@ def score_candidate(
     score = 0.0
 
     # ── 1. Net proximity (MAIN driver) ──────────────────────────────
+    #
+    # High-fanout nets (3+ instances, e.g. GND, VCC) get a boosted
+    # proximity weight so their components cluster tighter.  The
+    # boost is log-based to avoid over-dominating with very large
+    # nets: fanout 2 → 1×, fanout 3 → ~1.6×, fanout 6 → ~2.6×.
     for edge in net_graph.get(instance_id, []):
         other = next((p for p in placed if p.instance_id == edge.other_iid), None)
         if other is None:
@@ -158,7 +163,8 @@ def score_candidate(
                     best_dist = d
 
         if best_dist < float("inf"):
-            score -= best_dist * W_NET_PROXIMITY
+            fanout_boost = 1.0 + math.log2(max(edge.fanout, 2)) - 1.0
+            score -= best_dist * W_NET_PROXIMITY * fanout_boost
 
     # ── 2. Edge clearance ───────────────────────────────────────────
     edge_dist = rect_edge_clearance(cx, cy, hw, hh, outline_verts)
