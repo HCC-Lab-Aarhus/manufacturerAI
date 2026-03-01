@@ -8,12 +8,13 @@ This fixture exercises the full pipeline without needing an LLM.
 
 Components:
   - bat_1:  2xAAA battery holder (bottom mount, auto-placed)
-  - btn_1:  tactile button       (top mount, UI-placed at (17.5, 70))
+  - btn_1:  tactile button       (top mount, UI-placed at (22.5, 70))
   - r_1:    50Ω resistor         (internal, auto-placed)
-  - led_1:  red LED              (top mount, UI-placed at (17.5, 100))
+  - led_1:  red LED              (top mount, UI-placed at (22.5, 100))
 
-Outline: 35 × 120 mm rectangle.  The battery holder (25×48mm) needs
-ample vertical space below the button, hence 120mm length.
+Outline: 45 × 120 mm rectangle.  Wide enough that VCC and GND can
+route on opposite sides of the 25×48mm battery holder with the default
+trace clearance (3 mm) and edge clearance (2 mm).
 """
 
 from __future__ import annotations
@@ -55,12 +56,12 @@ def make_flashlight_design() -> DesignSpec:
         ],
         outline=Outline(points=[
             OutlineVertex(x=0,  y=0),
-            OutlineVertex(x=35, y=0),
-            OutlineVertex(x=35, y=120),
+            OutlineVertex(x=45, y=0),
+            OutlineVertex(x=45, y=120),
             OutlineVertex(x=0,  y=120),
         ]),
         ui_placements=[
-            UIPlacement(instance_id="btn_1", x_mm=17.5, y_mm=70),
-            UIPlacement(instance_id="led_1", x_mm=17.5, y_mm=100),
+            UIPlacement(instance_id="btn_1", x_mm=22.5, y_mm=70),
+            UIPlacement(instance_id="led_1", x_mm=22.5, y_mm=100),
         ],
     )

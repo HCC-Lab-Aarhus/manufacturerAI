@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from src.pipeline.config import TRACE_RULES
+
 
 # ── Output dataclasses ─────────────────────────────────────────────
 
@@ -31,19 +33,26 @@ class RoutingResult:
 
 # ── Router configuration ──────────────────────────────────────────
 #
-# All magic numbers live here.  Import the module-level constants
-# for backward-compat, or pass a RouterConfig to route_traces().
+# Physical trace rules come from the shared pipeline config
+# (src.pipeline.config.TRACE_RULES).  Router-only knobs live here.
 
 
 @dataclass
 class RouterConfig:
-    """All tuneable router parameters in one place."""
+    """All tuneable router parameters in one place.
 
-    grid_resolution_mm: float = 0.5      # grid cell size in mm
-    trace_width_mm: float = 1.0          # conductive ink trace width
-    trace_clearance_mm: float = 2.0      # minimum gap between traces
-    edge_clearance_mm: float = 1.5       # min distance from traces to outline edge
+    Physical dimensions (trace width, clearances, grid resolution)
+    are read from ``TRACE_RULES`` so they stay in sync with the placer.
+    """
 
+    # ── Physical rules (from shared config) ─────────────────────
+    grid_resolution_mm: float = TRACE_RULES.grid_resolution_mm
+    trace_width_mm: float = TRACE_RULES.trace_width_mm
+    trace_clearance_mm: float = TRACE_RULES.trace_clearance_mm
+    pin_clearance_mm: float = TRACE_RULES.pin_clearance_mm
+    edge_clearance_mm: float = TRACE_RULES.edge_clearance_mm
+
+    # ── Router-only knobs ──────────────────────────────────────
     turn_penalty: int = 5                # A* cost penalty for changing direction
     crossing_penalty: int = 500          # A* cost for crossing an occupied cell (rip-up)
 

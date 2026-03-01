@@ -42,25 +42,16 @@ class PlacementError(Exception):
 
 # ── Configuration ──────────────────────────────────────────────────
 
+from src.pipeline.config import TRACE_RULES
+
 GRID_STEP_MM = 1.0          # grid scan resolution (mm)
 VALID_ROTATIONS = (0, 90, 180, 270)
 
-# Hard minimum distance (mm) from the component body edge to the
-# outline polygon.  Positions with less clearance are rejected.
-MIN_EDGE_CLEARANCE_MM = 1.5
-
-# Routing-channel sizing — the gap between two components must
-# leave room for all traces that need to pass between them.
-# Each trace channel needs trace_width + clearance on each side.
-# These match the router defaults (TRACE_WIDTH_MM=1.0,
-# TRACE_CLEARANCE_MM=2.0).
-ROUTING_CHANNEL_MM = 3.0     # width needed per trace channel (mm)
-
-# Minimum centre-to-centre distance between pin holes of different
-# components.  Prevents pad overlaps and ensures the router can
-# address each pad independently.  Set to the largest common hole
-# diameter (1.2 mm) plus one trace clearance (2.0 mm).
-MIN_PIN_CLEARANCE_MM = 3.2
+# ── Derived from shared TraceRules (src.pipeline.config) ───────────
+# Changing TRACE_RULES automatically updates these.
+MIN_EDGE_CLEARANCE_MM = TRACE_RULES.min_edge_clearance_mm
+ROUTING_CHANNEL_MM = TRACE_RULES.routing_channel_mm
+MIN_PIN_CLEARANCE_MM = TRACE_RULES.min_pin_clearance_mm
 
 # Scoring weights — higher absolute value = more influence.
 W_NET_PROXIMITY = 5.0       # MAIN driver: connected components close

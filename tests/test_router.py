@@ -1,9 +1,9 @@
 """Tests for the trace router (Stage 4).
 
 Uses the flashlight fixture as the primary test case:
-  - 35×120mm rectangle outline
+  - 45×120mm rectangle outline
   - Battery (bottom, auto-placed), resistor (internal, auto-placed)
-  - Button at (17.5, 70), LED at (17.5, 100) — UI-placed
+  - Button at (22.5, 70), LED at (22.5, 100) — UI-placed
   - 4 two-pin nets: VCC, BTN_GND, LED_DRIVE, GND
 
 Validates:
