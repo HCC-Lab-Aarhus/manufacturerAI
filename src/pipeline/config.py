@@ -27,7 +27,7 @@ class TraceRules:
     """Minimum edge-to-edge gap between two traces (or a trace and
     another net's clearance zone)."""
 
-    pin_clearance_mm: float = 2.0
+    pin_clearance_mm: float = 1.3
     """Minimum gap from a trace edge to a foreign pin centre.
     Set to roughly half the DIP-28 pin pitch (2.54 / 2 ≈ 1.27 mm),
     rounded up for manufacturing margin."""

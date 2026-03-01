@@ -627,12 +627,15 @@ def _build_all_pin_cells(
 def _compute_foreign_pin_radius(cfg: RouterConfig) -> int:
     """Blocking radius around foreign pins during routing.
 
-    Ensures traces (with their physical width) cannot overlap with
-    pin pads they don't belong to.  Uses trace_width + a small
-    clearance margin so the conductive-ink trace edge stays clear
-    of foreign pin holes.
+    Ensures traces (with their physical width) maintain at least
+    ``pin_clearance_mm`` (1.27 mm — half the DIP-28 pin pitch)
+    between the trace edge and every foreign pin centre.  The radius
+    is measured from a pin's grid cell to the nearest trace-path cell,
+    so it must cover the trace half-width plus the desired clearance.
     """
-    return max(1, math.ceil(cfg.trace_width_mm / cfg.grid_resolution_mm))
+    return max(1, math.ceil(
+        (cfg.trace_width_mm / 2 + cfg.pin_clearance_mm) / cfg.grid_resolution_mm
+    ))
 
 
 def _block_foreign_pins(
