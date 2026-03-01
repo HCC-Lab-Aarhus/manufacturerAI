@@ -71,3 +71,6 @@ W_BOTTOM_PREFERENCE = 0.08  # bottom-mount components prefer low Y
 W_CROSSING = 50.0            # heavy penalty per inter-net crossing
 W_PIN_COLLOCATION = 40.0     # heavy penalty per near-colliding pin pair
 W_SPREAD = 0.6               # reward for spreading out when space allows
+W_LARGE_EDGE_PULL = 0.3      # pulls large components toward outline edges
+W_PIN_SIDE = 2.0             # penalty for approaching placed comp from wrong side
+W_GROUP_COHESION = 1.5       # reward for staying near group-mates

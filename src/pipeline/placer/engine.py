@@ -20,7 +20,7 @@ from .models import (
     GRID_STEP_MM, VALID_ROTATIONS, MIN_EDGE_CLEARANCE_MM,
     ROUTING_CHANNEL_MM, MIN_PIN_CLEARANCE_MM,
 )
-from .nets import build_net_graph, count_shared_nets
+from .nets import build_net_graph, count_shared_nets, build_placement_groups
 from .scoring import Placed, score_candidate, compute_placed_segments
 
 
@@ -161,16 +161,31 @@ def place_components(
         log.info("UI-placed %s at (%.1f, %.1f) rot=%d°",
                  ci.instance_id, x, y, rot)
 
-    # ── 2. Sort remaining by footprint area (largest first) ────────
+    # ── 2. Sort remaining by connectivity group, then area ─────────
 
-    to_place = [
-        ci for ci in design.components
+    to_place_ids = [
+        ci.instance_id for ci in design.components
         if ci.instance_id not in ui_ids
     ]
-    to_place.sort(
-        key=lambda ci: footprint_area(catalog_map[ci.catalog_id]),
-        reverse=True,
-    )
+    area_map = {
+        ci.instance_id: footprint_area(catalog_map[ci.catalog_id])
+        for ci in design.components
+        if ci.instance_id not in ui_ids
+    }
+    groups = build_placement_groups(to_place_ids, net_graph, area_map)
+
+    # Build a lookup: instance_id -> set of group-mates (excluding self)
+    group_mates_map: dict[str, set[str]] = {}
+    for group in groups:
+        group_set = set(group)
+        for iid in group:
+            group_mates_map[iid] = group_set - {iid}
+
+    # Flatten groups into a single ordered list, preserving group
+    # contiguity and hub-first ordering within each group.
+    ordered_ids = [iid for group in groups for iid in group]
+    ci_map = {ci.instance_id: ci for ci in design.components}
+    to_place = [ci_map[iid] for iid in ordered_ids]
 
     # ── 3. Auto-place each component via grid search ───────────────
 
@@ -284,6 +299,7 @@ def place_components(
                         existing_segments,
                         env_hw=ehw, env_hh=ehh,
                         outline_area=outline_area,
+                        group_mates=group_mates_map.get(ci.instance_id),
                     )
 
                     if score > best_score:

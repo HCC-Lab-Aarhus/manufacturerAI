@@ -39,7 +39,8 @@ from src.pipeline.placer import (
     aabb_gap,
     rect_inside_polygon,
 )
-from src.pipeline.placer.nets import build_net_graph, count_shared_nets
+from src.pipeline.placer.nets import build_net_graph, count_shared_nets, build_placement_groups, component_degree
+from src.pipeline.placer.geometry import footprint_area
 from src.pipeline.placer.models import ROUTING_CHANNEL_MM, MIN_PIN_CLEARANCE_MM
 from tests.flashlight_fixture import make_flashlight_design
 
@@ -348,6 +349,150 @@ class TestCountSharedNets(unittest.TestCase):
         self.assertEqual(count_shared_nets("bat_1", "led_1", net_graph), 1)
         # non-adjacent: btn_1 <-> led_1 — no direct net
         self.assertEqual(count_shared_nets("btn_1", "led_1", net_graph), 0)
+
+
+class TestPlacementGroups(unittest.TestCase):
+    """Tests for connectivity-based placement grouping."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.catalog = load_catalog()
+        cls.catalog_map = {c.id: c for c in cls.catalog.components}
+
+    def test_flashlight_single_group(self):
+        """All flashlight auto-placed components form one group."""
+        design = make_flashlight_design()
+        net_graph = build_net_graph(design.nets)
+        ui_ids = {up.instance_id for up in design.ui_placements}
+        auto_ids = [
+            ci.instance_id for ci in design.components
+            if ci.instance_id not in ui_ids
+        ]
+        area_map = {
+            iid: footprint_area(self.catalog_map[
+                next(ci.catalog_id for ci in design.components
+                     if ci.instance_id == iid)
+            ])
+            for iid in auto_ids
+        }
+        groups = build_placement_groups(auto_ids, net_graph, area_map)
+        # All auto-placed instances are in one connected component
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(set(groups[0]), set(auto_ids))
+
+    def test_disconnected_components_separate_groups(self):
+        """Components with no shared nets form separate groups."""
+        net_graph = build_net_graph([])  # No nets
+        groups = build_placement_groups(
+            ["a", "b", "c"], net_graph, {"a": 10, "b": 5, "c": 1}
+        )
+        # Three singletons, sorted by area descending
+        self.assertEqual(len(groups), 3)
+        self.assertEqual(groups[0], ["a"])  # largest area first
+
+    def test_component_degree(self):
+        """Degree counts unique neighbours."""
+        design = make_flashlight_design()
+        net_graph = build_net_graph(design.nets)
+        degrees = component_degree(net_graph)
+        # bat_1 connects to btn_1 (VCC) and led_1 (GND)
+        self.assertEqual(degrees["bat_1"], 2)
+        # r_1 connects to btn_1 (BTN_GND) and led_1 (LED_DRIVE)
+        self.assertEqual(degrees["r_1"], 2)
+
+    def test_hub_placed_first_in_group(self):
+        """Within a group, the highest-degree component comes first."""
+        # Create a star topology: hub connects to a, b, c directly
+        from src.pipeline.design.models import Net
+        nets = [
+            Net(id="n1", pins=["hub:p1", "a:p1"]),
+            Net(id="n2", pins=["hub:p2", "b:p1"]),
+            Net(id="n3", pins=["hub:p3", "c:p1"]),
+        ]
+        net_graph = build_net_graph(nets)
+        area_map = {"hub": 100, "a": 10, "b": 10, "c": 10}
+        groups = build_placement_groups(
+            ["a", "b", "c", "hub"], net_graph, area_map,
+        )
+        self.assertEqual(len(groups), 1)
+        # Hub (degree 3) should be first
+        self.assertEqual(groups[0][0], "hub")
+
+
+class TestBatteryNearEdge(unittest.TestCase):
+    """Battery (large component) should be placed near an outline edge."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.catalog = load_catalog()
+        cls.catalog_map = {c.id: c for c in cls.catalog.components}
+        cls.design = make_flashlight_design()
+        cls.result = place_components(cls.design, cls.catalog)
+
+    def test_battery_near_edge(self):
+        """The battery's envelope should be within 5mm of some outline edge.
+
+        Large components benefit from edge positions so traces don't
+        have to route around them.
+        """
+        from src.pipeline.placer.geometry import rect_edge_clearance
+        bat = next(c for c in self.result.components if c.instance_id == "bat_1")
+        cat = self.catalog_map[bat.catalog_id]
+        ehw, ehh = footprint_envelope_halfdims(cat, bat.rotation_deg)
+        clearance = rect_edge_clearance(
+            bat.x_mm, bat.y_mm, ehw, ehh,
+            self.design.outline.vertices,
+        )
+        self.assertLess(
+            clearance, 5.0,
+            f"Battery envelope is {clearance:.1f}mm from nearest edge — "
+            f"large components should be placed near edges",
+        )
+
+
+class TestPinSideAwareness(unittest.TestCase):
+    """Resistor should approach the button from the pin side."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.catalog = load_catalog()
+        cls.catalog_map = {c.id: c for c in cls.catalog.components}
+        cls.design = make_flashlight_design()
+        cls.result = place_components(cls.design, cls.catalog)
+
+    def test_resistor_on_button_pin_side(self):
+        """The resistor should be closer to the button's connecting pins
+        than to the opposite side.
+
+        btn_1's pin B connects to r_1.  The resistor should approach
+        from the side of the button where pin B is.
+        """
+        btn = next(c for c in self.result.components if c.instance_id == "btn_1")
+        res = next(c for c in self.result.components if c.instance_id == "r_1")
+        btn_cat = self.catalog_map[btn.catalog_id]
+
+        # Find btn_1's pin B world position
+        pin_b = next(p for p in btn_cat.pins if p.id in ("3", "4"))  # B side
+        pin_wx, pin_wy = pin_world_xy(
+            pin_b.position_mm, btn.x_mm, btn.y_mm, btn.rotation_deg,
+        )
+
+        # Vector from button centre to its pin B
+        pin_dx = pin_wx - btn.x_mm
+        pin_dy = pin_wy - btn.y_mm
+
+        # Vector from button centre to resistor
+        res_dx = res.x_mm - btn.x_mm
+        res_dy = res.y_mm - btn.y_mm
+
+        # Dot product should be positive (same side)
+        dot = pin_dx * res_dx + pin_dy * res_dy
+        self.assertGreater(
+            dot, 0,
+            f"Resistor is on the wrong side of the button "
+            f"(dot={dot:.1f}) — pin-side awareness should pull it "
+            f"toward the connecting pin",
+        )
 
 
 class TestPlacementSerialization(unittest.TestCase):

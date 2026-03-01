@@ -13,6 +13,7 @@ from .models import (
     W_CLEARANCE_UNIFORM, W_BOTTOM_PREFERENCE, W_CROSSING,
     W_PIN_COLLOCATION, MIN_PIN_CLEARANCE_MM,
     ROUTING_CHANNEL_MM, W_SPREAD,
+    W_LARGE_EDGE_PULL, W_PIN_SIDE, W_GROUP_COHESION,
 )
 from .nets import NetEdge, count_shared_nets, resolve_pin_positions
 
@@ -123,6 +124,7 @@ def score_candidate(
     env_hw: float = 0.0,
     env_hh: float = 0.0,
     outline_area: float = 0.0,
+    group_mates: set[str] | None = None,
 ) -> float:
     """Score a candidate position.  Higher = better.
 
@@ -278,5 +280,72 @@ def score_candidate(
                     if math.hypot(mpx - opx, mpy - opy) < MIN_PIN_CLEARANCE_MM:
                         near_pins += 1
         score -= near_pins * W_PIN_COLLOCATION
+
+    # ── 8. Large-component edge preference ────────────────────────
+    #
+    # Large components benefit from edge positions because routes
+    # don't have to circumnavigate them.  The pull scales with the
+    # component's share of the outline area; it only activates for
+    # components occupying > 5 % of the board.
+    if outline_area > 0:
+        comp_area = env_hw * 2 * env_hh * 2
+        area_ratio = comp_area / outline_area
+        if area_ratio > 0.05:
+            # Strength ramps linearly, capped at 3× base weight.
+            strength = min(area_ratio / 0.05, 3.0)
+            score -= edge_dist * W_LARGE_EDGE_PULL * strength
+
+    # ── 9. Pin-side awareness ─────────────────────────────────────
+    #
+    # When this candidate connects to an already-placed component,
+    # check whether the candidate approaches from the *same* side as
+    # the connecting pins.  Wrong-side approach forces the route to
+    # go around the placed component — the penalty is proportional
+    # to the placed component's size (half-perimeter).
+    for edge in net_graph.get(instance_id, []):
+        other = next((p for p in placed if p.instance_id == edge.other_iid), None)
+        if other is None:
+            continue
+        other_cat = catalog_map.get(other.catalog_id)
+        if other_cat is None:
+            continue
+        other_positions = resolve_pin_positions(edge.other_pins, other_cat)
+        if not other_positions:
+            continue
+
+        # Average pin position on the other component (local coords)
+        avg_px = sum(p[0] for p in other_positions) / len(other_positions)
+        avg_py = sum(p[1] for p in other_positions) / len(other_positions)
+        # Pin direction in world space (where the pin faces)
+        pin_wx, pin_wy = pin_world_xy(
+            (avg_px, avg_py), other.x, other.y, other.rotation,
+        )
+        pin_dx = pin_wx - other.x
+        pin_dy = pin_wy - other.y
+        pin_len = math.hypot(pin_dx, pin_dy)
+        if pin_len < 0.1:
+            continue  # pin at centre — no directional preference
+
+        # Direction from placed component to candidate
+        cand_dx = cx - other.x
+        cand_dy = cy - other.y
+        # Dot product: negative ⇒ candidate is on opposite side
+        dot = (pin_dx * cand_dx + pin_dy * cand_dy) / pin_len
+        if dot < 0:
+            other_size = other.env_hw + other.env_hh
+            score += dot / max(math.hypot(cand_dx, cand_dy), 1.0) * other_size * W_PIN_SIDE
+
+    # ── 10. Group cohesion ────────────────────────────────────────
+    #
+    # If the current component belongs to a connectivity group,
+    # reward positions near the centroid of already-placed group
+    # mates.  This keeps clusters spatially compact even when the
+    # overall centroid (term 4) drifts toward other groups.
+    if group_mates and placed:
+        mates_placed = [p for p in placed if p.instance_id in group_mates]
+        if mates_placed:
+            gx = sum(p.x for p in mates_placed) / len(mates_placed)
+            gy = sum(p.y for p in mates_placed) / len(mates_placed)
+            score -= math.hypot(cx - gx, cy - gy) * W_GROUP_COHESION
 
     return score

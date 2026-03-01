@@ -62,6 +62,124 @@ def count_shared_nets(
     return len(nets)
 
 
+def component_degree(
+    net_graph: dict[str, list[NetEdge]],
+) -> dict[str, int]:
+    """Count the number of unique component neighbors for each instance.
+
+    Higher degree means the component is a "hub" — connected to many
+    others.  Used to determine placement order: hubs are placed first
+    so their satellites can cluster around them.
+    """
+    degrees: dict[str, int] = {}
+    for iid, edges in net_graph.items():
+        degrees[iid] = len({e.other_iid for e in edges})
+    return degrees
+
+
+def build_placement_groups(
+    instance_ids: list[str],
+    net_graph: dict[str, list[NetEdge]],
+    area_map: dict[str, float],
+) -> list[list[str]]:
+    """Partition and order instances for group-aware placement.
+
+    1. Connected-component detection (union-find on the net graph).
+    2. Within each group, BFS from the highest-degree node to create
+       a placement order that keeps tightly-connected components
+       adjacent.  Ties are broken by footprint area (largest first)
+       so large components are placed before small ones.
+    3. Groups are sorted so the group containing the largest single
+       component is placed first.
+
+    Parameters
+    ----------
+    instance_ids : list[str]
+        Auto-placed instance IDs (UI-placed components excluded).
+    net_graph : dict
+        Net connectivity graph from ``build_net_graph``.
+    area_map : dict
+        ``instance_id -> footprint area`` for tie-breaking.
+
+    Returns
+    -------
+    list[list[str]]
+        Ordered groups.  Place groups sequentially; within each group,
+        place instances in the returned order.
+    """
+    if not instance_ids:
+        return []
+
+    degrees = component_degree(net_graph)
+    id_set = set(instance_ids)
+
+    # ── Connected components via full-graph BFS ─────────────────────
+    # Trace connectivity through ALL components in the net graph
+    # (including UI-placed ones), then filter each connected
+    # component down to the requested instance_ids.  This ensures
+    # that two auto-placed components linked transitively through
+    # UI-placed intermediaries end up in the same group.
+    visited_global: set[str] = set()
+    raw_groups: dict[int, list[str]] = {}
+    group_idx = 0
+
+    for seed in instance_ids:
+        if seed in visited_global:
+            continue
+        # BFS through the full net graph
+        bfs_queue = [seed]
+        reached: set[str] = {seed}
+        while bfs_queue:
+            current = bfs_queue.pop(0)
+            for edge in net_graph.get(current, []):
+                if edge.other_iid not in reached:
+                    reached.add(edge.other_iid)
+                    bfs_queue.append(edge.other_iid)
+        # Keep only the requested (auto-placed) instance IDs
+        members = [i for i in instance_ids if i in reached]
+        visited_global.update(members)
+        raw_groups[group_idx] = members
+        group_idx += 1
+
+    # ── BFS-order within each group ───────────────────────────────
+    def _bfs_order(members: list[str]) -> list[str]:
+        member_set = set(members)
+        # Start BFS from the highest-degree member (hub)
+        seed = max(members, key=lambda i: (degrees.get(i, 0), area_map.get(i, 0)))
+        visited: list[str] = []
+        queue = [seed]
+        seen = {seed}
+        while queue:
+            # Within the current frontier, prioritise high-degree
+            # components, breaking ties by area (largest first).
+            queue.sort(
+                key=lambda i: (degrees.get(i, 0), area_map.get(i, 0)),
+                reverse=True,
+            )
+            current = queue.pop(0)
+            visited.append(current)
+            for edge in net_graph.get(current, []):
+                if edge.other_iid in member_set and edge.other_iid not in seen:
+                    seen.add(edge.other_iid)
+                    queue.append(edge.other_iid)
+        # Append any members not reachable (shouldn't happen, but
+        # safety net) in descending area order.
+        for m in sorted(members, key=lambda i: area_map.get(i, 0), reverse=True):
+            if m not in seen:
+                visited.append(m)
+        return visited
+
+    ordered_groups = [_bfs_order(members) for members in raw_groups.values()]
+
+    # ── Sort groups: biggest max-component-area first ─────────────
+    ordered_groups.sort(
+        key=lambda g: max(area_map.get(i, 0) for i in g),
+        reverse=True,
+    )
+
+    return ordered_groups
+
+
 def resolve_pin_positions(
     pin_ids: list[str],
     cat: Component,
