@@ -79,11 +79,6 @@ def _validate_component(comp: Component) -> list[ValidationError]:
                     errs.append(ValidationError(cid, f"pin_groups.{group.id}",
                                                 f"References unknown pin '{pid}'"))
 
-    # Category
-    valid_cats = {"indicator", "switch", "passive", "active", "power", "mcu"}
-    if comp.category not in valid_cats:
-        errs.append(ValidationError(cid, "category", f"Unknown category '{comp.category}'"))
-
     return errs
 
 
@@ -160,7 +155,6 @@ def _parse_component(data: dict, source_file: str = "") -> Component:
         id=data["id"],
         name=data["name"],
         description=data["description"],
-        category=data["category"],
         ui_placement=data["ui_placement"],
         body=_parse_body(data["body"]),
         mounting=_parse_mounting(data["mounting"]),

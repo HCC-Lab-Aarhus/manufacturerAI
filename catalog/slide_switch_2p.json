@@ -2,7 +2,6 @@
     "id": "slide_switch_2p",
     "name": "SPDT Slide Switch",
     "description": "Single-pole double-throw slide switch. Common pin (C) connects to either position A or position B. Use as on/off power switch (wire one throw to VCC, common to load) or as a two-way selector.",
-    "category": "switch",
     "ui_placement": true,
     "body": {
         "shape": "rect",

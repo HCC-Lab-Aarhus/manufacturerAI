@@ -2,7 +2,6 @@
     "id": "usb_a_female_dip",
     "name": "USB Type A Female DIP Connector",
     "description": "Standard USB Type A female receptacle, through-hole DIP mount. Used for constant 5V power input from USB chargers/power banks. Data pins exposed but primary use is power delivery. 5V/500mA from standard USB. Shield tabs provide mechanical stability.",
-    "category": "power",
     "ui_placement": true,
     "body": {
         "shape": "rect",

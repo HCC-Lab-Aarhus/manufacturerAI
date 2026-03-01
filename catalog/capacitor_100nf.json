@@ -2,7 +2,6 @@
     "id": "capacitor_100nf",
     "name": "100nF Ceramic Capacitor",
     "description": "Bypass/decoupling capacitor. Place close to MCU VCC/GND pins to filter power supply noise. Essential for stable MCU operation. Typically one per VCC pin.",
-    "category": "passive",
     "ui_placement": false,
     "body": {
         "shape": "rect",

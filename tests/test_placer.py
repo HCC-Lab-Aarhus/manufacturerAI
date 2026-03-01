@@ -52,7 +52,7 @@ class TestPlacerGeometryHelpers(unittest.TestCase):
         """Rect body dimensions swap at 90°/270°."""
         from src.catalog.models import Component, Body, Mounting, Pin
         cat = Component(
-            id="test", name="test", description="", category="passive",
+            id="test", name="test", description="",
             ui_placement=False,
             body=Body(shape="rect", width_mm=6.0, length_mm=10.0, height_mm=3.0),
             mounting=Mounting(style="internal", allowed_styles=["internal"],
@@ -68,7 +68,7 @@ class TestPlacerGeometryHelpers(unittest.TestCase):
         """Circle body is rotation-invariant."""
         from src.catalog.models import Component, Body, Mounting
         cat = Component(
-            id="test", name="test", description="", category="indicator",
+            id="test", name="test", description="",
             ui_placement=True,
             body=Body(shape="circle", diameter_mm=8.0, height_mm=5.0),
             mounting=Mounting(style="top", allowed_styles=["top"],
@@ -111,7 +111,7 @@ class TestPlacerGeometryHelpers(unittest.TestCase):
         """Envelope includes pins that extend beyond the body."""
         from src.catalog.models import Component, Body, Mounting, Pin
         cat = Component(
-            id="test_env", name="test", description="", category="passive",
+            id="test_env", name="test", description="",
             ui_placement=False,
             body=Body(shape="rect", width_mm=6.5, length_mm=2.5, height_mm=2.5),
             mounting=Mounting(style="internal", allowed_styles=["internal"],

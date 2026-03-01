@@ -2,7 +2,7 @@
     "id": "npn_transistor_to92",
     "name": "NPN Transistor (TO-92)",
     "description": "General-purpose NPN transistor in TO-92 package. Use for switching loads that exceed MCU pin current capacity (e.g., driving IR LEDs at 100mA). Base connects to MCU digital/PWM pin through a base resistor (~1kΩ). Collector to load, emitter to ground.",
-    "category": "active",
+
     "ui_placement": false,
     "body": {
         "shape": "rect",

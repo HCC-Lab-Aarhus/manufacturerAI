@@ -2,7 +2,6 @@
     "id": "led_5mm",
     "name": "5mm LED",
     "description": "Standard 5mm through-hole LED. Wavelength/color chosen by the agent at design time. Requires a current-limiting resistor. Anode (+) connects to positive supply through resistor, cathode (-) to ground. Forward voltage varies by color: IR ~1.2V, Red ~2.0V, Orange ~2.1V, Yellow ~2.1V, Green ~2.2V, Blue ~3.2V, White ~3.3V, UV ~3.4V.",
-    "category": "indicator",
     "ui_placement": true,
     "body": {
         "shape": "circle",

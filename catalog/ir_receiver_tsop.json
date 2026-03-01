@@ -2,7 +2,6 @@
     "id": "ir_receiver_tsop",
     "name": "IR Receiver Module (TSOP-style)",
     "description": "Infrared receiver/demodulator for 38kHz remote control signals. 3-pin through-hole package. Receives modulated IR from standard remotes and outputs a demodulated digital signal to an MCU pin. Use with IRremote library. Requires 100nF bypass cap near VCC/GND pins.",
-    "category": "sensor",
     "ui_placement": true,
     "body": {
         "shape": "rect",

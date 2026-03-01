@@ -24,7 +24,6 @@ def component_to_dict(c: Component) -> dict:
         "id": c.id,
         "name": c.name,
         "description": c.description,
-        "category": c.category,
         "ui_placement": c.ui_placement,
         "body": {
             "shape": c.body.shape,

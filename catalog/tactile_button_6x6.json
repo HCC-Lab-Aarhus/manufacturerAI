@@ -2,7 +2,6 @@
     "id": "tactile_button_6x6",
     "name": "6x6mm Tactile Push Button",
     "description": "Momentary push button switch, 6x6mm body. When pressed, pin A shorts to pin B. Four physical pins: pins 1&2 are internally connected (side A), pins 3&4 are internally connected (side B). Only two unique electrical connections needed.",
-    "category": "switch",
     "ui_placement": true,
     "body": {
         "shape": "rect",

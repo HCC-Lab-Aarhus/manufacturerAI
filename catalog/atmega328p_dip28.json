@@ -2,7 +2,6 @@
     "id": "atmega328p_dip28",
     "name": "ATmega328P (DIP-28)",
     "description": "8-bit AVR microcontroller in 28-pin DIP package. 32KB flash, 2KB SRAM. Operates at 1.8-5.5V. Has 23 GPIO pins with various special functions (PWM, ADC, I2C, SPI, UART). Use for devices that need programmable logic: remote controls, sensor readers, LED patterns, etc.",
-    "category": "mcu",
     "ui_placement": false,
     "body": {
         "shape": "rect",

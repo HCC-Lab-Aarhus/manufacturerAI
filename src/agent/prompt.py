@@ -8,8 +8,8 @@ from src.catalog import CatalogResult
 def _catalog_summary(catalog: CatalogResult) -> str:
     """Build a compact table of all catalog components."""
     lines = [
-        "| ID | Category | Name | Pins | UI | Mounting | Description |",
-        "|---|---|---|---|---|---|---|",
+        "| ID | Name | Pins | UI | Mounting | Description |",
+        "|---|---|---|---|---|---|",
     ]
     for c in catalog.components:
         ui = "yes" if c.ui_placement else "no"
@@ -17,7 +17,7 @@ def _catalog_summary(catalog: CatalogResult) -> str:
         if len(desc) > 60:
             desc = desc[:57] + "..."
         lines.append(
-            f"| {c.id} | {c.category} | {c.name} | {len(c.pins)} "
+            f"| {c.id} | {c.name} | {len(c.pins)} "
             f"| {ui} | {c.mounting.style} | {desc} |"
         )
     return "\n".join(lines)

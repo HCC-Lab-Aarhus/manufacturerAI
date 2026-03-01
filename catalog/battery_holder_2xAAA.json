@@ -2,7 +2,7 @@
     "id": "battery_holder_2xAAA",
     "name": "2xAAA Battery Holder",
     "description": "Holds two AAA batteries in series, providing 3.0V nominal (2x 1.5V). Spring contacts and snap-fit lid. Requires bottom access for battery replacement. Heavy component — placer should position near bottom of device for balance.",
-    "category": "power",
+
     "ui_placement": false,
     "body": {
         "shape": "rect",

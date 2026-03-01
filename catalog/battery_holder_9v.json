@@ -2,7 +2,6 @@
     "id": "battery_holder_9v",
     "name": "9V Battery Snap Connector",
     "description": "Snap connector for standard 9V PP3 battery. Provides 9V nominal. Higher voltage allows driving more LEDs in series and supports voltage regulators. Requires bottom access for battery replacement.",
-    "category": "power",
     "ui_placement": false,
     "body": {
         "shape": "rect",

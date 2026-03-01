@@ -2,7 +2,7 @@
     "id": "speaker_8ohm",
     "name": "Miniature 8Ω Speaker",
     "description": "Small through-hole piezo/dynamic speaker, 23mm diameter. Driven directly from MCU PWM pin for tones, or through a transistor amplifier for louder output. 8Ω impedance, 0.5W max. Use analogWrite/tone() to produce sound.",
-    "category": "output",
+
     "ui_placement": true,
     "body": {
         "shape": "circle",

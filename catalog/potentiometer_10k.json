@@ -2,7 +2,7 @@
     "id": "potentiometer_10k",
     "name": "10kΩ Potentiometer",
     "description": "Single-turn rotary potentiometer, 10kΩ, through-hole. Three pins: two fixed ends and a variable wiper. Use as a voltage divider for analog input to MCU (connect ends to VCC and GND, wiper to ADC pin), or as a variable resistor. Shaft protrudes through enclosure for user adjustment.",
-    "category": "input",
+
     "ui_placement": true,
     "body": {
         "shape": "circle",

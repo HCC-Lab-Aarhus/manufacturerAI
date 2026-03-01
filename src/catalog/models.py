@@ -65,7 +65,6 @@ class Component:
     id: str
     name: str
     description: str
-    category: str                       # "indicator"|"switch"|"passive"|"active"|"power"|"mcu"
     ui_placement: bool
     body: Body
     mounting: Mounting

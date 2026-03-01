@@ -2,7 +2,6 @@
     "id": "resistor_axial",
     "name": "Axial Resistor",
     "description": "Standard through-hole axial resistor. Value is chosen by the agent at design time based on circuit needs (e.g., current limiting for LEDs: R = (Vsupply - Vled) / Iled). Body length varies with power rating but pin spacing is fixed at 10mm.",
-    "category": "passive",
     "ui_placement": false,
     "body": {
         "shape": "rect",
