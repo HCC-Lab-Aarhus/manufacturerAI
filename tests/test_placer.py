@@ -124,7 +124,7 @@ class TestImpossiblePlacement:
 
     def test_tiny_board_battery_fails(self):
         """
-        A 15×15 board can't fit even the battery compartment (25×48 mm).
+        A 15×15 board can't fit even the battery compartment (27×50 mm).
         """
         outline = _rect_outline(15, 15)
         buttons: list[dict] = []
@@ -133,7 +133,7 @@ class TestImpossiblePlacement:
 
     def test_tiny_board_no_buttons_fails(self):
         """
-        A 30×55 board: battery compartment (25×48) barely fits,
+        A 30×55 board: battery compartment (27×50) barely fits,
         but no room for the controller (10×36).
         """
         outline = _rect_outline(30, 55)
@@ -145,7 +145,7 @@ class TestImpossiblePlacement:
         """
         30×200 board with 5 buttons down the centre.
         The center column of buttons leaves no room beside them
-        for the 25mm-wide battery compartment + 10mm controller.
+        for the 27mm-wide battery compartment + 10mm controller.
         """
         outline = _rect_outline(30, 200)
         buttons = _centered_buttons(30, 200, count=5, spacing_y=30)
@@ -186,34 +186,34 @@ class TestNearImpossiblePlacement:
 
     def test_board_1mm_too_narrow_for_battery(self):
         """
-        The battery compartment is 25mm wide; with 2mm wall clearance on
-        each side, 29mm is the absolute minimum board width.  At 28mm
+        The battery compartment is 27mm wide; with 2mm wall clearance on
+        each side, 31mm is the absolute minimum board width.  At 30mm
         (1mm less) the battery cannot physically fit.
         """
-        outline = _rect_outline(28, 200)
+        outline = _rect_outline(30, 200)
         buttons: list[dict] = []
         with pytest.raises(PlacementError, match="battery"):
             place_components(outline, buttons)
 
     def test_board_1mm_too_short_for_battery(self):
         """
-        The battery compartment is 48mm tall.  A 40×51 board has only ~47mm
+        The battery compartment is 50mm tall.  A 40×53 board has only ~49mm
         usable height after wall inset — 1mm short.
         """
-        outline = _rect_outline(40, 51)
+        outline = _rect_outline(40, 53)
         buttons: list[dict] = []
         with pytest.raises(PlacementError, match="battery"):
             place_components(outline, buttons)
 
     def test_just_at_boundary_width_succeeds(self):
-        """38mm-wide board fits the battery compartment (25mm + routing clearance + margins)."""
-        outline = _rect_outline(38, 200)
+        """40mm-wide board fits the battery compartment (27mm + routing clearance + margins)."""
+        outline = _rect_outline(40, 200)
         buttons: list[dict] = []
         layout = place_components(outline, buttons)
         assert "BAT1" in _component_ids(layout)
 
     def test_just_at_boundary_height_succeeds(self):
-        """40×105 board fits battery compartment (48mm) + controller (36mm)."""
+        """40×105 board fits battery compartment (50mm) + controller (36mm)."""
         outline = _rect_outline(40, 105)
         buttons: list[dict] = []
         layout = place_components(outline, buttons)

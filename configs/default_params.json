@@ -67,7 +67,7 @@
     }
   },
   "battery": {
-    "type": "AAA",
+    "type": "AA",
     "count": 2,
     "orientation": "lengthwise",
     "clearance_mm": 0.6,

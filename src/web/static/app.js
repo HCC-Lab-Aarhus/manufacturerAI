@@ -19,6 +19,17 @@ if (themeToggle) {
   });
 }
 
+// Listen for theme changes and re-render affected views
+window.addEventListener("themechange", () => {
+  // Re-render placement view if visible
+  if (_currentLayout && stepByStepScreen && stepByStepScreen.style.display !== "none") {
+    const placementSvg = document.getElementById("placementSvg");
+    if (placementSvg) {
+      _renderPlacementView(placementSvg, _currentLayout, _guideCurrentStep, _guideSteps);
+    }
+  }
+});
+
 const chatEl      = document.getElementById("chat");
 const promptInput = document.getElementById("promptInput");
 const sendBtn     = document.getElementById("sendBtn");
@@ -1577,19 +1588,20 @@ stepByStepBtn.addEventListener("click", () => {
       sections.push({ name: "Battery", index: steps.length });
       
       const batt = batteries[0];
-      const footprint = batt.footprint || "2xAAA";
+      const footprint = batt.footprint || "2xAA";
       const batteryIndices = batteries.map(b => components.indexOf(b));
       
       steps.push({
         title: "Battery Compartment",
         subtitle: `${footprint} holder`,
         body: `<strong>Component:</strong> Battery Holder (${footprint})\n\n` +
-              `<strong>How to insert:</strong>\n` +
-              `• Locate the rectangular battery pocket\n` +
-              `• Insert the holder with contacts facing the correct direction\n` +
-              `• Ensure spring contacts align with the pin holes\n` +
-              `• Press down until fully seated\n\n` +
-              `<strong>Note:</strong> Batteries are inserted after printing is complete.`,
+              `<strong>How to insert conductor plates:</strong>\n` +
+              `• Locate the rectangular battery pocket with slit guides on each side\n` +
+              `• Slide the + double conductor plate into the slits at one end\n` +
+              `• Slide the − spring conductor plate into the slits at the other end\n` +
+              `• Plates should click into the grooves and hold in place\n\n` +
+              `<strong>Note:</strong> AA batteries are inserted after printing is complete.\n` +
+              `The spring plate goes at the − end; flat contact plate at the + end.`,
         pauseNumber: 1,
         componentIndices: batteryIndices,
         showPlacementView: true,
@@ -1760,9 +1772,13 @@ function _renderGuideStep() {
     pauseBadge = `<span class="pause-badge">Pause ${step.pauseNumber}</span>`;
   }
   
-  // Check if body contains HTML (component list)
-  const bodyContainsHtml = step.body.includes("<ul") || step.body.includes("<strong>");
-  const bodyStyle = bodyContainsHtml ? "" : 'style="white-space:pre-wrap;"';
+  // Convert newlines to <br> for proper HTML rendering
+  // Replace bullet points with proper HTML list formatting
+  let formattedBody = step.body
+    .replace(/\n\n/g, '</p><p>')  // Double newlines = new paragraph
+    .replace(/\n• /g, '<br>• ')    // Bullet points on new lines
+    .replace(/\n/g, '<br>');       // Single newlines = line break
+  formattedBody = '<p>' + formattedBody + '</p>';
   
   guideContent.innerHTML = `
     <div class="guide-header-section">
@@ -1771,7 +1787,7 @@ function _renderGuideStep() {
       ${subtitleHtml}
     </div>
     <div class="guide-body-section">
-      <div class="guide-body-text" ${bodyStyle}>${step.body}</div>
+      <div class="guide-body-text">${formattedBody}</div>
       <div class="guide-step-counter">
         Step ${window._guideIndex + 1} of ${total}
       </div>
@@ -1911,13 +1927,13 @@ function _renderPlacementView(highlightIndices, svg) {
       w = Math.max(w, 12);
       h = Math.max(h, 12);
     } else if (ctype === "diode") {
-      // 5mm LED
+      // 5mm LED with body length 8.6mm (protruding)
       w = 5;
-      h = 5;
+      h = 12;  // Taller to cover full LED body + protrusion
     } else if (ctype === "battery") {
-      // 2xAAA battery holder: ~25mm x 52mm
-      w = Math.max(w, 25);
-      h = Math.max(h, 52);
+      // 2xAA battery holder: ~27mm x 50mm
+      w = Math.max(w, 27);
+      h = Math.max(h, 50);
     }
     
     // Check if this is one of the highlighted components
@@ -1939,11 +1955,20 @@ function _renderPlacementView(highlightIndices, svg) {
     
     // Add pulsing highlight ring for current component
     if (isCurrent) {
-      const highlightW = w + 6;
-      const highlightH = h + 6;
+      let highlightW = w + 6;
+      let highlightH = h + 6;
+      let highlightCy = cy;
+      
+      // For diode, offset highlight to match the drawn position
+      if (ctype === "diode") {
+        const protrusion = 8.6 / 2 - 1;  // Match the drawing offset
+        highlightCy = cy - protrusion;
+        highlightH = 16;  // Cover full LED including dome outside shell
+      }
+      
       // Apply same rotation as component so highlight aligns properly
-      const rotationAttr = rotation !== 0 ? `transform="rotate(${rotation}, ${cx}, ${cy})"` : "";
-      svgContent += `<rect x="${cx - highlightW/2}" y="${cy - highlightH/2}" 
+      const rotationAttr = rotation !== 0 ? `transform="rotate(${rotation}, ${cx}, ${highlightCy})"` : "";
+      svgContent += `<rect x="${cx - highlightW/2}" y="${highlightCy - highlightH/2}" 
         width="${highlightW}" height="${highlightH}" 
         fill="none" stroke="#3b82f6" stroke-width="1" rx="3" 
         stroke-dasharray="4,2" opacity="0.7" ${rotationAttr}>
@@ -2081,84 +2106,103 @@ function _drawComponentSvg(ctype, cx, cy, w, h, rotation, opts) {
     svg += `</g>`;
     
   } else if (ctype === "diode") {
-    // 5mm T-1 3/4 IR LED realistic rendering - TOP DOWN VIEW
-    // The LED is viewed from above, with dome protruding upward out of the remote
-    const diameter = 5;  // 5mm LED
-    const r = diameter / 2;
-    const legLength = 5;
+    // 5mm T-1 3/4 IR LED - SIDE VIEW (vertical, dome protruding OUTSIDE shell)
+    // The LED is positioned so the dome sticks out through the shell edge
+    const bodyLength = 8.6;   // LED body length
+    const bodyDiameter = 5;   // 5mm LED diameter
+    const r = bodyDiameter / 2;
+    const legLength = 4;
     const legWidth = 0.5;
     const legSpacing = 1.27;  // 2.54mm pitch / 2
     
+    // Offset the LED drawing so dome protrudes OUTSIDE the outline (toward top)
+    // cy is the mounting point (inside); shift drawing UP so dome extends beyond
+    // In SVG after Y-flip: lower Y = higher on screen = toward edge
+    const protrusion = bodyLength / 2 - 1;  // ~3.3mm of dome sticks out
+    const drawCy = cy - protrusion;  // shift drawing UP so dome is outside edge
+    
     svg += `<g ${rotationAttr}>`;
     
-    // Define gradient for realistic clear plastic dome look
+    // Define gradient for realistic clear plastic look (vertical orientation)
     svg += `<defs>
-      <radialGradient id="irLedDome${isCurrent ? 'Active' : ''}" cx="35%" cy="35%" r="65%">
-        <stop offset="0%" stop-color="${isLight ? '#ffffff' : '#f1f5f9'}"/>
+      <linearGradient id="irLedBody${isCurrent ? 'Active' : ''}" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="${isLight ? '#f8fafc' : '#e2e8f0'}"/>
         <stop offset="30%" stop-color="${isLight ? '#e0e7ff' : '#c7d2fe'}"/>
         <stop offset="70%" stop-color="${isLight ? '#a5b4fc' : '#818cf8'}"/>
-        <stop offset="100%" stop-color="${isLight ? '#6366f1' : '#4f46e5'}"/>
-      </radialGradient>
+        <stop offset="100%" stop-color="${isLight ? '#c7d2fe' : '#a5b4fc'}"/>
+      </linearGradient>
     </defs>`;
     
-    // Shadow beneath LED
-    svg += `<ellipse cx="${cx + 0.5}" cy="${cy + 0.5}" rx="${r + 0.5}" ry="${r + 0.5}" 
-      fill="rgba(0,0,0,0.15)"/>`;
+    // Shadow beneath LED (offset down-right)
+    svg += `<ellipse cx="${cx + 0.3}" cy="${drawCy + 0.5}" rx="${r + 0.3}" ry="${bodyLength/2 + 0.5}" 
+      fill="rgba(0,0,0,0.12)"/>`;
     
-    // LED base rim (the flange you see from top)
-    svg += `<circle cx="${cx}" cy="${cy}" r="${r + 0.8}" 
-      fill="#e5e5e5" stroke="#a3a3a3" stroke-width="0.4"/>`;
+    // LED body - cylindrical part (rectangle rotated so LED is vertical)
+    // Dome at top (toward -Y in SVG = toward top edge = outside shell)
+    const bodyStartY = drawCy - bodyLength/2 + r;  // body starts after dome
+    svg += `<rect x="${cx - r}" y="${bodyStartY}" width="${bodyDiameter}" height="${bodyLength - r - r/2}" 
+      fill="url(#irLedBody${isCurrent ? 'Active' : ''})" stroke="#94a3b8" stroke-width="0.5"/>`;
     
-    // Main LED dome (circular from top view)
-    svg += `<circle cx="${cx}" cy="${cy}" r="${r}" 
-      fill="url(#irLedDome${isCurrent ? 'Active' : ''})" stroke="#94a3b8" stroke-width="0.5"/>`;
+    // LED dome - rounded end (semicircle at TOP, protruding outside shell)
+    svg += `<ellipse cx="${cx}" cy="${drawCy - bodyLength/2 + r}" rx="${r}" ry="${r}" 
+      fill="url(#irLedBody${isCurrent ? 'Active' : ''})" stroke="#94a3b8" stroke-width="0.5"/>`;
     
-    // Highlight/reflection on dome (gives 3D spherical look)
-    svg += `<ellipse cx="${cx - r*0.3}" cy="${cy - r*0.3}" rx="${r*0.4}" ry="${r*0.3}" 
-      fill="rgba(255,255,255,0.6)" transform="rotate(-30, ${cx - r*0.3}, ${cy - r*0.3})"/>`;
+    // Dome highlight (glass reflection)
+    svg += `<ellipse cx="${cx - r*0.3}" cy="${drawCy - bodyLength/2 + r - r*0.2}" rx="${r*0.3}" ry="${r*0.5}" 
+      fill="rgba(255,255,255,0.5)" transform="rotate(-15, ${cx}, ${drawCy - bodyLength/2 + r})"/>`;
     
-    // Internal LED die visible through dome (small square chip)
-    svg += `<rect x="${cx - 0.6}" y="${cy - 0.6}" width="1.2" height="1.2" 
-      fill="#a78bfa" stroke="none" rx="0.1" opacity="0.7"/>`;
+    // Flat base end (BOTTOM) - the square end with rim (inside shell)
+    const baseY = drawCy + bodyLength/2 - r/2;
+    svg += `<rect x="${cx - r - 0.3}" y="${baseY - 0.5}" width="${bodyDiameter + 0.6}" height="1.5" 
+      fill="#d4d4d4" stroke="#a3a3a3" stroke-width="0.3" rx="0.2"/>`;
     
-    // Cathode flat edge indicator (the flat side of LED rim)
-    svg += `<path d="M ${cx - r - 0.8} ${cy - r*0.6} L ${cx - r - 0.8} ${cy + r*0.6}" 
-      stroke="#64748b" stroke-width="1.2" stroke-linecap="round"/>`;
+    // Internal LED die/chip visible through clear plastic
+    svg += `<rect x="${cx - 0.8}" y="${drawCy - 1}" width="1.6" height="2" 
+      fill="#a78bfa" stroke="none" rx="0.2" opacity="0.6"/>`;
     
-    // LED legs extending downward (into the board - shown as going "into" the view)
-    // Anode (right, marked +)
-    svg += `<rect x="${cx + legSpacing - legWidth/2}" y="${cy + r + 1}" 
-      width="${legWidth}" height="${legLength}" fill="#a8a8a8" rx="0.1"/>`;
-    // Cathode (left, marked -, shorter)
-    svg += `<rect x="${cx - legSpacing - legWidth/2}" y="${cy + r + 1}" 
-      width="${legWidth}" height="${legLength * 0.7}" fill="#a8a8a8" rx="0.1"/>`;
+    // Cathode flat edge indicator line on dome (horizontal line near top)
+    svg += `<line x1="${cx - r + 0.5}" y1="${drawCy - bodyLength/2 + 0.3}" 
+      x2="${cx + r - 0.5}" y2="${drawCy - bodyLength/2 + 0.3}" 
+      stroke="#64748b" stroke-width="0.8" opacity="0.7"/>`;
     
-    // Polarity labels
-    svg += `<text x="${cx + legSpacing + 1.5}" y="${cy + r + legLength/2 + 1}" text-anchor="start" font-size="1.8" fill="${pinColor}">+</text>`;
-    svg += `<text x="${cx - legSpacing - 1.5}" y="${cy + r + legLength * 0.35 + 1}" text-anchor="end" font-size="1.8" fill="${pinColor}">−</text>`;
+    // LED legs extending downward from base (into the enclosure)
+    // Anode (longer leg, +)
+    svg += `<rect x="${cx - legSpacing - legWidth/2}" y="${baseY + 1}" 
+      width="${legWidth}" height="${legLength}" fill="#b8b8b8" rx="0.1"/>`;
+    // Cathode (shorter leg, −)
+    svg += `<rect x="${cx + legSpacing - legWidth/2}" y="${baseY + 1}" 
+      width="${legWidth}" height="${legLength * 0.7}" fill="#b8b8b8" rx="0.1"/>`;
     
-    // "IR" label
-    svg += `<text x="${cx}" y="${cy - r - 2}" text-anchor="middle" font-size="2.5" fill="${isLight ? '#4f46e5' : '#a5b4fc'}" font-weight="bold">IR</text>`;
+    // Polarity labels (beside the legs)
+    svg += `<text x="${cx - legSpacing - 1.5}" y="${baseY + legLength/2 + 2}" text-anchor="end" font-size="1.8" fill="${pinColor}">+</text>`;
+    svg += `<text x="${cx + legSpacing + 1.5}" y="${baseY + legLength * 0.35 + 2}" text-anchor="start" font-size="1.8" fill="${pinColor}">−</text>`;
     
-    // Glow effect to show it emits light (protruding from shell)
-    svg += `<circle cx="${cx}" cy="${cy}" r="${r + 2}" 
-      fill="none" stroke="${isLight ? '#a5b4fc' : '#6366f1'}" stroke-width="0.3" opacity="0.4" stroke-dasharray="1,1"/>`;
+    // "IR LED" label to the side
+    svg += `<text x="${cx + r + 3}" y="${drawCy}" text-anchor="start" font-size="2.5" fill="${isLight ? '#4f46e5' : '#a5b4fc'}" font-weight="bold">IR LED</text>`;
     
     svg += `</g>`;
     
   } else if (ctype === "battery") {
-    // Battery compartment (2xAAA)
-    // Real: 25mm x 48mm compartment
+    // Battery compartment (2xAA)
+    // Real: 27mm x 50mm compartment
     svg += `<g ${rotationAttr}>`;
     
     // Outer compartment
     svg += `<rect x="${cx - w/2}" y="${cy - h/2}" width="${w}" height="${h}" 
       fill="${fillColor}" stroke="${strokeColor}" stroke-width="${strokeWidth}" rx="2"/>`;
     
-    // Battery outline slots (2 AAA batteries side by side)
-    const battW = 10.5; // AAA diameter
-    const battH = h - 6; // length minus spring space
-    const battGap = 2;
+    // Hatch ledge lines on long sides (2.5mm shelves)
+    const ledgeW = 2.5;
+    const ledgeColor = isLight ? '#bbb' : '#666';
+    svg += `<line x1="${cx - w/2 + ledgeW}" y1="${cy - h/2}" x2="${cx - w/2 + ledgeW}" y2="${cy + h/2}" 
+      stroke="${ledgeColor}" stroke-width="0.4" stroke-dasharray="1.5,1"/>`;
+    svg += `<line x1="${cx + w/2 - ledgeW}" y1="${cy - h/2}" x2="${cx + w/2 - ledgeW}" y2="${cy + h/2}" 
+      stroke="${ledgeColor}" stroke-width="0.4" stroke-dasharray="1.5,1"/>`;
+    
+    // Battery outline slots (2 AA batteries side by side)
+    const battW = 14.5; // AA diameter
+    const battH = h - 8; // length minus conductor plate space at each end
+    const battGap = 1;
     
     svg += `<rect x="${cx - battW - battGap/2}" y="${cy - battH/2}" width="${battW}" height="${battH}" 
       fill="none" stroke="${isLight ? '#9ca3af' : '#6b7280'}" stroke-width="0.5" stroke-dasharray="2,1" rx="5"/>`;
@@ -2171,11 +2215,34 @@ function _drawComponentSvg(ctype, cx, cy, w, h, rotation, opts) {
     svg += `<text x="${cx - battW/2 - battGap/2}" y="${cy + battH/2 - 2}" text-anchor="middle" font-size="4" fill="${pinColor}" font-weight="bold">−</text>`;
     svg += `<text x="${cx + battW/2 + battGap/2}" y="${cy + battH/2 - 2}" text-anchor="middle" font-size="4" fill="${pinColor}" font-weight="bold">−</text>`;
     
-    // Spring contacts (bottom)
-    svg += `<path d="M ${cx - w/3} ${cy + h/2 - 3} Q ${cx - w/3 - 1.5} ${cy + h/2 - 1} ${cx - w/3} ${cy + h/2 + 0.5}" 
-      fill="none" stroke="${pinColor}" stroke-width="0.8"/>`;
-    svg += `<path d="M ${cx + w/3} ${cy + h/2 - 3} Q ${cx + w/3 + 1.5} ${cy + h/2 - 1} ${cx + w/3} ${cy + h/2 + 0.5}" 
-      fill="none" stroke="${pinColor}" stroke-width="0.8"/>`;
+    // Conductor plates at each narrow end (27×12mm, 0.3mm thick)
+    const plateLen = 12;
+    const plateColor = isLight ? '#b0b0b0' : '#888888';
+    
+    // + end plate (top/−Y)
+    svg += `<rect x="${cx - w/2 + 0.5}" y="${cy - h/2 + 0.5}" width="${w - 1}" height="${plateLen}" 
+      fill="${plateColor}" stroke="${isLight ? '#909090' : '#aaa'}" stroke-width="0.4" rx="0.5" opacity="0.7"/>`;
+    svg += `<text x="${cx}" y="${cy - h/2 + plateLen/2 + 1.5}" text-anchor="middle" font-size="2.5" fill="${isLight ? '#555' : '#ddd'}">+ plate</text>`;
+    
+    // − end plate (bottom/+Y)
+    svg += `<rect x="${cx - w/2 + 0.5}" y="${cy + h/2 - plateLen - 0.5}" width="${w - 1}" height="${plateLen}" 
+      fill="${plateColor}" stroke="${isLight ? '#909090' : '#aaa'}" stroke-width="0.4" rx="0.5" opacity="0.7"/>`;
+    svg += `<text x="${cx}" y="${cy + h/2 - plateLen/2 + 1}" text-anchor="middle" font-size="2.5" fill="${isLight ? '#555' : '#ddd'}">− spring</text>`;
+    
+    // Support blocks at each narrow-end corner (1×1mm, battery-facing side)
+    // These hold the conductor plate flush against the narrow wall.
+    const supSize = 1.0;
+    const supColor = isLight ? '#777' : '#999';
+    for (const endY of [cy - h/2, cy + h/2]) {
+      const inward = endY < cy ? 1 : -1;  // direction toward compartment centre
+      const sY = inward === 1 ? endY : endY - supSize;
+      // Left support
+      svg += `<rect x="${cx - w/2}" y="${sY}" width="${supSize}" height="${supSize}" 
+        fill="${supColor}" stroke="${isLight ? '#555' : '#bbb'}" stroke-width="0.3" opacity="0.85"/>`;
+      // Right support
+      svg += `<rect x="${cx + w/2 - supSize}" y="${sY}" width="${supSize}" height="${supSize}" 
+        fill="${supColor}" stroke="${isLight ? '#555' : '#bbb'}" stroke-width="0.3" opacity="0.85"/>`;
+    }
     
     svg += `</g>`;
     
