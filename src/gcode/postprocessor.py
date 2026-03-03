@@ -14,11 +14,10 @@ these markers, and inserts custom blocks at the correct Z-heights.
 Print stages (bottom to top):
   1. Print floor layers (Z = 0 → ink_z)
   2. Iron the ink layer surface (skipping trace channels)
-  3. Extrude single-width trace highlight pass (optional color change)
-  4. Pause — deposit conductive ink
-  5. Resume printing cavity walls (ink_z → component_z)
-  6. Pause — insert diode, switches, ATmega328P
-  7. Resume and print ceiling to completion
+  3. Pause — deposit conductive ink
+  4. Resume printing cavity walls (ink_z → component_z)
+  5. Pause — insert diode, switches, ATmega328P
+  6. Resume and print ceiling to completion
 
 The MK3S firmware supports ``M601`` for filament-change pause (LCD
 prompt, beep, wait for user) — we use this for pauses.
@@ -48,17 +47,7 @@ _MOVE_RE = re.compile(
 NOZZLE_DIA = 0.4           # mm
 LAYER_HEIGHT = 0.2         # mm
 FILAMENT_DIA = 1.75        # mm
-EXTRUSION_WIDTH = 0.45     # mm — single line width (≈ nozzle + small overlap)
 TRACE_BUFFER = 0.6         # mm — half-width exclusion around each trace segment
-TRACE_EXTRUDE_SPEED = 600  # mm/min — slow extrusion for the highlight pass
-TRACE_TRAVEL_SPEED = 3000  # mm/min
-
-# Cross-section area of extruded bead
-_BEAD_AREA = EXTRUSION_WIDTH * LAYER_HEIGHT          # mm²
-# Filament cross-section
-_FILAMENT_AREA = math.pi * (FILAMENT_DIA / 2) ** 2   # mm²
-# E distance per 1 mm of XY travel
-E_PER_MM = _BEAD_AREA / _FILAMENT_AREA               # ≈ 0.0374
 
 
 @dataclass
@@ -309,162 +298,6 @@ def _filter_ironing_at_ink_layer(
     return filtered, i, removed
 
 
-# ── Trace highlight extrusion pass ────────────────────────────────
-
-def _trace_highlight_block(
-    z: float,
-    trace_segs: list[tuple[float, float, float, float]],
-) -> list[str]:
-    """Generate a single-extrusion-width pass along every trace path.
-
-    This prints a thin line of filament directly over the trace
-    channels so they're visually marked.  Precede this with an M600
-    filament change (commented out by default) to use a
-    contrasting color.
-
-    Parameters
-    ----------
-    z : float
-        Print Z-height (top of floor).
-    trace_segs : list
-        Trace segments as ``(x1, y1, x2, y2)`` in mm.
-    """
-    if not trace_segs:
-        return ["; TRACE HIGHLIGHT: no trace segments"]
-
-    lines = [
-        "",
-        "; " + "=" * 50,
-        "; TRACE HIGHLIGHT PASS — single extrusion width",
-        f"; Z = {z:.2f} mm — {len(trace_segs)} segments",
-        "; Prints a thin filament line over each trace channel.",
-        "; " + "=" * 50,
-        "",
-        "; ┌──────────────────────────────────────────────────┐",
-        "; │  COLOR CHANGE — uncomment the line below to      │",
-        "; │  switch to a contrasting filament color before    │",
-        "; │  the trace highlight pass.                        │",
-        "; └──────────────────────────────────────────────────┘",
-        "; M600 ; filament change — swap to trace highlight color",
-        "",
-    ]
-
-    # Group consecutive segments that share endpoints into polylines
-    # to reduce travel moves.
-    polylines = _segments_to_polylines(trace_segs)
-
-    # NOTE: PrusaSlicer Core One uses M83 (relative E distances).
-    # Each G1 E value must be the *per-move delta*, not cumulative.
-
-    # Retraction / Z-lift constants for travel moves
-    # Must match the slicer's built-in retraction settings for the
-    # Core One HF 0.4: ~0.8mm retract, 45mm/s retract speed.
-    _RETRACT_E = 0.8       # mm — match slicer retract_length (Prusa default)
-    _RETRACT_F = 2700      # mm/min — match slicer retract_speed (45 mm/s)
-    _UNRETRACT_F = 1500    # mm/min — deretraction speed
-    _Z_HOP = 0.6           # mm — match slicer retract_lift (Prusa default)
-
-    # Retract before the first travel (nozzle is loaded from slicer)
-    lines.append(f"G1 E-{_RETRACT_E:.5f} F{_RETRACT_F} ; retract before trace highlight travel")
-    lines.append(f"G0 Z{z + _Z_HOP:.3f} F720 ; Z-hop")
-
-    for poly in polylines:
-        if len(poly) < 2:
-            continue
-
-        # Travel to start (retracted + lifted)
-        sx, sy = poly[0]
-        lines.append(f"G0 X{sx:.3f} Y{sy:.3f} F{TRACE_TRAVEL_SPEED}")
-        lines.append(f"G0 Z{z:.3f} F720 ; lower to print Z")
-        lines.append(f"G1 E{_RETRACT_E:.5f} F{_UNRETRACT_F} ; unretract")
-
-        # Extrude along path — emit per-move E delta (M83 relative)
-        prev = poly[0]
-        for pt in poly[1:]:
-            dist = math.hypot(pt[0] - prev[0], pt[1] - prev[1])
-            e_delta = dist * E_PER_MM
-            lines.append(
-                f"G1 X{pt[0]:.3f} Y{pt[1]:.3f} E{e_delta:.5f} F{TRACE_EXTRUDE_SPEED}"
-            )
-            prev = pt
-
-        # Retract + lift after this polyline before traveling to the next
-        lines.append(f"G1 E-{_RETRACT_E:.5f} F{_RETRACT_F} ; retract after polyline")
-        lines.append(f"G0 Z{z + _Z_HOP:.3f} F720 ; Z-hop")
-
-    # Already retracted from the last polyline above
-    lines.extend([
-        "",
-        "; ┌──────────────────────────────────────────────────┐",
-        "; │  Uncomment below to switch back to the main      │",
-        "; │  filament color after the trace highlight pass.   │",
-        "; └──────────────────────────────────────────────────┘",
-        "; M600 ; filament change — swap back to main color",
-        "",
-        "; retraction already applied after last polyline",
-        "",
-        "; " + "=" * 50,
-        "; END TRACE HIGHLIGHT",
-        "; " + "=" * 50,
-        "",
-    ])
-
-    return lines
-
-
-def _segments_to_polylines(
-    segs: list[tuple[float, float, float, float]],
-) -> list[list[tuple[float, float]]]:
-    """Chain connected segments into polylines to minimize travel.
-
-    Two segments are chained if one's endpoint equals another's
-    start point (within tolerance).
-    """
-    if not segs:
-        return []
-
-    TOL = 0.01  # mm
-
-    remaining = [(s[0], s[1], s[2], s[3]) for s in segs]
-    polylines: list[list[tuple[float, float]]] = []
-
-    while remaining:
-        seg = remaining.pop(0)
-        chain: list[tuple[float, float]] = [(seg[0], seg[1]), (seg[2], seg[3])]
-
-        changed = True
-        while changed:
-            changed = False
-            for j in range(len(remaining) - 1, -1, -1):
-                s = remaining[j]
-                ex, ey = chain[-1]
-                sx, sy = chain[0]
-
-                # Append: chain end == segment start
-                if abs(ex - s[0]) < TOL and abs(ey - s[1]) < TOL:
-                    chain.append((s[2], s[3]))
-                    remaining.pop(j)
-                    changed = True
-                # Append reversed: chain end == segment end
-                elif abs(ex - s[2]) < TOL and abs(ey - s[3]) < TOL:
-                    chain.append((s[0], s[1]))
-                    remaining.pop(j)
-                    changed = True
-                # Prepend: chain start == segment end
-                elif abs(sx - s[2]) < TOL and abs(sy - s[3]) < TOL:
-                    chain.insert(0, (s[0], s[1]))
-                    remaining.pop(j)
-                    changed = True
-                # Prepend reversed: chain start == segment start
-                elif abs(sx - s[0]) < TOL and abs(sy - s[1]) < TOL:
-                    chain.insert(0, (s[2], s[3]))
-                    remaining.pop(j)
-                    changed = True
-
-        polylines.append(chain)
-
-    return polylines
-
 
 def _pause_block(label: str, z: float, instructions: list[str]) -> list[str]:
     """Generate a firmware pause block (M601) with user instructions.
@@ -675,8 +508,7 @@ def postprocess_gcode(
         If *None*, only a pause is inserted (manual ink application).
     trace_segments : list or None
         Trace path segments as ``(x1, y1, x2, y2)`` in mm.  Used to
-        filter ironing moves over trace channels and to generate the
-        trace highlight extrusion pass.
+        filter ironing moves over trace channels.
     bed_offset : tuple or None
         ``(dx, dy)`` offset from model-local coords to bed coords.
         Computed from ``_compute_bed_offset(outline_polygon)``.
@@ -716,9 +548,6 @@ def postprocess_gcode(
     ironing_moves_removed = 0
     ironing_layers_stripped = 0
     ironing_lines_stripped = 0
-    highlight_z = ink_z + LAYER_HEIGHT
-    trace_highlight_pending = False  # armed at ink layer
-    trace_highlight_armed = False    # ready to inject after next ;TYPE:
     current_z = 0.0                  # track Z for ironing filtering
 
 
@@ -728,7 +557,6 @@ def postprocess_gcode(
 
     stages = []
 
-    # Track nozzle XY so we can restore position after trace highlight
     track_x, track_y = 0.0, 0.0
 
     i = 0
@@ -770,14 +598,6 @@ def postprocess_gcode(
                 if ironing_moves_removed:
                     stages.append(
                         f"Removed {ironing_moves_removed} ironing moves over trace channels"
-                    )
-
-                # Queue trace highlight for the next layer
-                if trace_segs:
-                    trace_highlight_pending = True
-                    stages.append(
-                        f"Trace highlight pass: {len(trace_segs)} segments "
-                        f"(single {EXTRUSION_WIDTH}mm width) at Z={highlight_z:.2f}"
                     )
 
                 # Insert ink pause
@@ -828,6 +648,19 @@ def postprocess_gcode(
                     ],
                 ))
                 stages.append(f"Component insertion pause at Z={component_z:.2f}")
+
+        # ── Filter ironing at the ink layer ──────────────
+        # At the ink layer, keep ironing but suppress moves that
+        # cross over trace channels (so the nozzle doesn't iron
+        # directly over where conductive ink will be deposited).
+        if line.strip() == ';TYPE:Ironing' and abs(current_z - ink_z) <= 0.05:
+            filtered, end_idx, removed = _filter_ironing_at_ink_layer(
+                raw_lines, i, trace_segs, iron_z=ink_z,
+            )
+            out.extend(filtered)
+            ironing_moves_removed += removed
+            i = end_idx
+            continue
 
         # ── Strip ironing from non-ink layers ─────────────
         # We only need ironing at the ink layer for a smooth trace
@@ -941,7 +774,7 @@ def postprocess_gcode(
                         out.append(f"G0 Z{target_z + 0.6:.3f} F720 ; Z-hop")
                         out.append(f"G0 X{target_x:.3f} Y{target_y:.3f} F21000 ; travel (ironing stripped)")
                         out.append(f"G0 Z{target_z:.3f} F720 ; lower")
-                        out.append(f"G1 E0.78 F1500 ; unretract")
+                        out.append(f"G1 E0.8 F1500 ; unretract")
                     if last_m204:
                         out.append(last_m204)
                     track_x, track_y = target_x, target_y
@@ -958,29 +791,6 @@ def postprocess_gcode(
 
         # Append the current line
         out.append(line)
-
-        # ── Deferred trace highlight injection ─────────────────
-        # Arm when we reach the Z layer above the ink surface.
-        if trace_highlight_pending and z_match:
-            z_val = float(z_match.group(1))
-            if z_val >= highlight_z - 0.001:
-                trace_highlight_armed = True
-                trace_highlight_pending = False
-
-        # Inject AFTER the first ;TYPE: of that layer so the viewer
-        # assigns the highlight to the correct layer.
-        if trace_highlight_armed and line.strip().startswith(';TYPE:'):
-            # Remember the slicer's nozzle position (set by its
-            # travel moves between ;Z: and ;TYPE:).
-            resume_x, resume_y = track_x, track_y
-            out.extend(_trace_highlight_block(highlight_z, trace_segs))
-            # Restore nozzle to slicer's expected position and
-            # unretract so E-state matches what the slicer assumes.
-            # Block ends retracted (2.0mm) with Z-hop — travel is safe.
-            out.append(f"G0 X{resume_x:.3f} Y{resume_y:.3f} F9000 ; return to layer start")
-            out.append(f"G0 Z{highlight_z:.3f} F720 ; lower back to layer Z")
-            out.append("G1 E0.80000 F1500 ; unretract to match slicer state")
-            trace_highlight_armed = False
 
         i += 1
 
@@ -1007,9 +817,6 @@ def postprocess_gcode(
             f"Stripped ironing from {ironing_layers_stripped} non-ink layers "
             f"({ironing_lines_stripped} G-code lines removed)"
         )
-    if trace_segs:
-        log.info("  Trace highlight: %d segments", len(trace_segs))
-
     return PostProcessResult(
         output_path=output_path,
         total_layers=total_layers,

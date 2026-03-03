@@ -267,17 +267,19 @@ def build_cutouts(
             # Cross-section at one narrow end (looking along Y toward wall):
             #
             #       narrow wall (shell material)
-            #       │  0.3mm plate pocket (plate sits here, flush)
+            #       │  0.3mm plate slot (open from bottom for insertion)
             #       │  │
-            #       │  ├──┐  support 1×1mm  ┌──┤
-            #       │  │  │                 │  │
-            #       │  │  │  (batteries     │  │
+            #       │  ├──┐  latch support  ┌──┤  ← cavity zone only
+            #       │  │  │   1×1mm         │  │    (holds plate once
+            #       │  │  │  (batteries     │  │     seated)
             #       │  │  │   touch plate   │  │
             #       │  │  │   in centre)    │  │
             #       │  │  │                 │  │
             #       │  ├──┘                 └──┤
-            #       │
-            #       └── toward compartment interior →
+            #       │  │                       │  ← floor zone: open
+            #       │  │  (plate slides in     │    slot, no supports
+            #       │  │   from below)         │
+            #       ───┘                       └───  shell bottom
             #
             # Geometry:
             #   a) Hatch ledge recesses on long sides (shallow shelf
@@ -285,10 +287,13 @@ def build_cutouts(
             #   b) Centre through-hole (narrower by ledge_width, through
             #      the floor so hatch can be accessed from below).
             #   c) Cavity pocket — split into 3 cuts to leave 1×1 mm
-            #      support blocks at each narrow-end corner.
-            #   d) Plate pockets — 0.3 mm recesses carved into each
-            #      narrow wall; conductor plate sits here flush with
-            #      the compartment inner surface.
+            #      latch support blocks at each narrow-end corner.
+            #   d) Plate slots — 0.3 mm channels carved into each
+            #      narrow wall, extending from the shell bottom all
+            #      the way up through the cavity.  Plates slide in
+            #      from below after printing and seat flush with the
+            #      compartment inner surface.  The latch supports
+            #      from (c) hold the plate from the battery side.
             #   e) Hatch ledge-tab dent.
             bat_w = comp.get("body_width_mm", keepout.get("width_mm", 27.0))
             bat_h = comp.get("body_height_mm", keepout.get("height_mm", 50.0))
@@ -368,19 +373,23 @@ def build_cutouts(
                     label=f"battery pocket end {cid}",
                 ))
 
-            # ── d) Plate pockets (0.3 mm recesses into narrow walls) ─
-            #    The conductor plate (27 × 12 mm, 0.3 mm thick) sits
-            #    in this recess, flush with the compartment inner wall.
-            #    The support blocks press against the plate from the
-            #    battery side, holding it in place.
+            # ── d) Plate slots (through floor for bottom insertion) ────
+            #    The conductor plate (27 × 12 mm, 0.3 mm thick) slides
+            #    up from the shell bottom into this 0.3 mm channel.
+            #    The slot runs from z = −0.5 (below shell) through the
+            #    full cavity height.  Once the plate is pushed up past
+            #    the floor zone, the 1×1 mm latch supports from (c)
+            #    press against it from the battery side and hold it
+            #    flush against the narrow wall.
+            slot_depth = CAVITY_END + 0.5   # from below shell to cavity top
             for end_sign in (-1, +1):
                 pocket_cy = (cy + end_sign * (bat_h / 2 + plate_thick / 2))
                 cuts.append(Cutout(
                     polygon=_rect(cx, pocket_cy,
                                   bat_w, plate_thick),
-                    depth=pocket_depth,
-                    z_base=CAVITY_START,
-                    label=f"battery plate pocket {cid}",
+                    depth=slot_depth,
+                    z_base=-0.5,
+                    label=f"battery plate slot {cid}",
                 ))
 
             # ── e) Dent for hatch ledge tab (back +Y end) ─────────

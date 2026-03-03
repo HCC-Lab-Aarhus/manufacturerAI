@@ -2229,19 +2229,29 @@ function _drawComponentSvg(ctype, cx, cy, w, h, rotation, opts) {
       fill="${plateColor}" stroke="${isLight ? '#909090' : '#aaa'}" stroke-width="0.4" rx="0.5" opacity="0.7"/>`;
     svg += `<text x="${cx}" y="${cy + h/2 - plateLen/2 + 1}" text-anchor="middle" font-size="2.5" fill="${isLight ? '#555' : '#ddd'}">− spring</text>`;
     
-    // Support blocks at each narrow-end corner (1×1mm, battery-facing side)
-    // These hold the conductor plate flush against the narrow wall.
+    // Support blocks / latch supports at each narrow-end corner (1×1mm)
+    // These latch the conductor plate once slid in from the bottom.
+    // Shown with upward arrow to indicate slide-in direction.
     const supSize = 1.0;
     const supColor = isLight ? '#777' : '#999';
+    const slotColor = isLight ? '#c9a040' : '#b08030';
     for (const endY of [cy - h/2, cy + h/2]) {
       const inward = endY < cy ? 1 : -1;  // direction toward compartment centre
       const sY = inward === 1 ? endY : endY - supSize;
-      // Left support
+      // Left latch support
       svg += `<rect x="${cx - w/2}" y="${sY}" width="${supSize}" height="${supSize}" 
         fill="${supColor}" stroke="${isLight ? '#555' : '#bbb'}" stroke-width="0.3" opacity="0.85"/>`;
-      // Right support
+      // Right latch support
       svg += `<rect x="${cx + w/2 - supSize}" y="${sY}" width="${supSize}" height="${supSize}" 
         fill="${supColor}" stroke="${isLight ? '#555' : '#bbb'}" stroke-width="0.3" opacity="0.85"/>`;
+      // Plate slot indicator line (0.3mm slot through floor)
+      const slotY = endY < cy ? endY - 0.15 : endY + 0.15;
+      svg += `<line x1="${cx - w/2}" y1="${slotY}" x2="${cx + w/2}" y2="${slotY}"
+        stroke="${slotColor}" stroke-width="0.6" opacity="0.7"/>`;
+      // Slide-in arrow (↑ from bottom)
+      const arrowX = endY < cy ? cx - w/2 - 2.5 : cx + w/2 + 2.5;
+      const arrowY = endY;
+      svg += `<text x="${arrowX}" y="${arrowY + 1}" text-anchor="middle" font-size="3" fill="${slotColor}" opacity="0.8">↑</text>`;
     }
     
     svg += `</g>`;

@@ -136,7 +136,7 @@ def run_gcode_pipeline(
     )
     stages.append(f"Ink G-code: {len(ink_lines)} lines for {len(routing_result.get('traces', []))} traces")
 
-    # ── 3b. Extract trace segments for ironing filter + highlight ──
+    # ── 3b. Extract trace segments for ironing filter ──
     trace_segs = extract_trace_segments(
         routing_result=routing_result,
         pcb_layout=pcb_layout,

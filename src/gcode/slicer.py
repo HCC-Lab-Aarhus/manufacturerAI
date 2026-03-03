@@ -254,34 +254,55 @@ filament_settings_id = Prusament PLA @COREONE HF0.4
 thumbnails = 16x16/PNG, 220x124/PNG
 thumbnails_format = PNG
 
+# --- Infill ---
+fill_density = 5%
+
 # --- Support ---
+# Disabled: the enclosure geometry prints cleanly without supports.
+# PrusaSlicer handles overhangs via bridging and overhang perimeters.
 support_material = 0
 
-# --- Travel / retraction improvements ---
+# --- Travel improvements ---
+# Wipe nozzle before retraction to reduce ooze blob
 wipe = 1
+# Route travel moves around already-printed perimeters
+# (prevents nozzle from scraping across printed surfaces)
 avoid_crossing_perimeters = 1
-avoid_crossing_perimeters_max_detour = 0
+# Limit detour to 3x direct distance — prevents excessively long
+# travel paths around pinholes that increase ooze time.
+avoid_crossing_perimeters_max_detour = 3
+# Align Z-seam so layer start/stop blobs form a single
+# line instead of random dots across the surface
 seam_position = aligned
+# Disable travel ramping (diagonal Z-ramp); use a clean Z-hop instead
+# so the nozzle lifts before traveling and doesn't drag across the surface
 travel_ramping_lift = 0
 filament_travel_ramping_lift = 0
-retract_lift = 0.8
-filament_retract_lift = 0.8
-retract_length = 2.0
-filament_retract_length = 2.0
-retract_speed = 60
-filament_retract_speed = 60
-retract_restart_extra = -0.02
-filament_retract_restart_extra = -0.02
+# --- Retraction ---
+# Use Prusa's factory defaults for retraction distance and speed.
+# The Core One HF 0.4 has a short melt zone with active heat-break
+# cooling (M142 S36).  The built-in profile uses ~0.8mm retraction
+# which is tuned for this geometry.  Overriding to 2.0mm caused
+# semi-molten filament to be pulled into the cold zone -> clogging.
 
 # --- Temperature ---
-temperature = 215
-first_layer_temperature = 220
-filament_first_layer_temperature = 220
-filament_temperature = 215
+# The built-in "Prusament PLA @COREONE HF0.4" profile defaults to 230 C.
+# 225 C is a compromise: low enough to reduce ooze vs 230, but high
+# enough to fully melt filament in the HF nozzle's large melt zone.
+# 215 C caused clogs — the stiffer melt couldn't re-flow after retraction.
+temperature = 225
+first_layer_temperature = 225
+filament_first_layer_temperature = 225
+filament_temperature = 225
 
 # --- Retraction refinements ---
+# Retract 70 % of the distance *before* the wipe move so the full
+# retraction completes even if the wipe path is short.  Without this,
+# short wipes leave partial retraction -> net positive E accumulation.
 retract_before_wipe = 70%
 filament_retract_before_wipe = 70%
+# Retract on short travels too — reduces stringing around pinholes.
+retract_before_travel = 0.8
 
 # --- Ironing ---
 ironing = 1
