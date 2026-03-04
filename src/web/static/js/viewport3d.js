@@ -139,7 +139,7 @@ export function create3DScene(container) {
                 const center = box.getCenter(new THREE.Vector3());
                 const size   = box.getSize(new THREE.Vector3());
                 const maxDim = Math.max(size.x, size.y, size.z);
-                const dist   = maxDim * 1.8 / Math.tan((camera.fov / 2) * Math.PI / 180);
+                const dist   = maxDim * 1.1 / Math.tan((camera.fov / 2) * Math.PI / 180);
                 // Classic 30° elevation product-CAD angle — more frontal, less top-down
                 camera.position.set(center.x + dist * 0.65, center.y + dist * 0.50, center.z + dist * 0.85);
                 camera.lookAt(center);
@@ -455,8 +455,9 @@ function _edgeProfile(z_top, eBot, eTop) {
     } else if (botType === 'fillet') {
         for (let k = 0; k <= ARC; k++) {
             const a = (k / ARC) * (Math.PI / 2);
-            // Quarter-circle: (h=0, off=botS) → (h=botS, off=0)
-            pts.push({ h: botS * Math.sin(a), off: botS * Math.cos(a) });
+            // Quarter-circle: center at (botS, botS), matches layers.py convention.
+            // (h=0, off=botS) → (h=botS, off=0), curving the same direction as topType fillet.
+            pts.push({ h: botS * (1 - Math.cos(a)), off: botS * (1 - Math.sin(a)) });
         }
     } else {
         pts.push({ h: 0, off: 0 });
