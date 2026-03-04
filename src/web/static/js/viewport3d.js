@@ -118,8 +118,10 @@ export function create3DScene(container) {
 
     // ── Scene3D public API ──────────────────────────────────────
 
+    let hasFittedCamera = false;
+
     return {
-        update(data) {
+        update(data, { resetCamera = false } = {}) {
             if (contentGroup) {
                 scene.remove(contentGroup);
                 contentGroup.traverse(obj => {
@@ -133,18 +135,21 @@ export function create3DScene(container) {
             contentGroup = buildSceneContent(data);
             scene.add(contentGroup);
 
-            // Fit camera to content bounding box
-            const box = new THREE.Box3().setFromObject(contentGroup);
-            if (!box.isEmpty()) {
-                const center = box.getCenter(new THREE.Vector3());
-                const size   = box.getSize(new THREE.Vector3());
-                const maxDim = Math.max(size.x, size.y, size.z);
-                const dist   = maxDim * 1.1 / Math.tan((camera.fov / 2) * Math.PI / 180);
-                // Classic 30° elevation product-CAD angle — more frontal, less top-down
-                camera.position.set(center.x + dist * 0.65, center.y + dist * 0.50, center.z + dist * 0.85);
-                camera.lookAt(center);
-                controls.target.copy(center);
-                controls.update();
+            // Fit camera on first update or when explicitly requested
+            if (!hasFittedCamera || resetCamera) {
+                const box = new THREE.Box3().setFromObject(contentGroup);
+                if (!box.isEmpty()) {
+                    const center = box.getCenter(new THREE.Vector3());
+                    const size   = box.getSize(new THREE.Vector3());
+                    const maxDim = Math.max(size.x, size.y, size.z);
+                    // Classic 30° elevation product-CAD angle — more frontal, less top-down
+                    const dist   = maxDim * 1.1 / Math.tan((camera.fov / 2) * Math.PI / 180);
+                    camera.position.set(center.x + dist * 0.65, center.y + dist * 0.50, center.z + dist * 0.85);
+                    camera.lookAt(center);
+                    controls.target.copy(center);
+                    controls.update();
+                    hasFittedCamera = true;
+                }
             }
         },
 

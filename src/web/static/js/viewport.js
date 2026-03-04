@@ -122,6 +122,17 @@ export function setData(step, data) {
 }
 
 /**
+ * Update the cache for a step without triggering a re-render.
+ * Use this when the viewport is already showing the correct state
+ * (e.g. after an optimistic preview) and you only need to sync the
+ * cached data to what the server persisted.
+ */
+export function cacheData(step, data) {
+    cache.set(step, data);
+    staleSteps.delete(step);
+}
+
+/**
  * Retrieve the last cached data for a step (or undefined if none).
  */
 export function getData(step) {

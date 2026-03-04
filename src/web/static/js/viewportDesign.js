@@ -15,7 +15,7 @@
  * }
  */
 
-import { registerHandler, setData as setViewportData } from './viewport.js';
+import { registerHandler, cacheData } from './viewport.js';
 import { drawComponentIcon } from './componentRenderer.js';
 import { normaliseOutline, buildOutlinePath, snapToEdge, esc, SCALE, PAD, NS, attachViewToggle } from './viewportUtils.js';
 import { state, API } from './state.js';
@@ -31,8 +31,8 @@ const _toggle = attachViewToggle(
         // Wrap to also manage the edge profile panel overlay
         let panel = null;
         return {
-            update(data) {
-                scene.update(data);
+            update(data, opts) {
+                scene.update(data, opts);
                 if (!panel) {
                     panel = _mountEdgePanel(host, data, scene);
                 } else {
@@ -460,7 +460,8 @@ function _mountEdgePanel(host, initialData, scene) {
             });
             if (res.ok) {
                 const saved = await res.json();
-                setViewportData('design', saved);
+                design = saved;
+                cacheData('design', saved);
             }
         } catch { /* non-fatal — user sees the optimistic preview regardless */ }
     }

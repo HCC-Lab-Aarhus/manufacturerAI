@@ -346,7 +346,7 @@ export function attachViewToggle(step, render2DFn, create3DFn) {
                 Promise.resolve(create3DFn(host)).then(s => {
                     scene = s;
                     loading.remove();
-                    if (lastData) scene.update(lastData);
+                    if (lastData) scene.update(lastData, { resetCamera: true });
                 }).catch(err => {
                     console.error('3D scene failed to load:', err);
                     patchViewState(step, { mode: '2d' });
@@ -354,7 +354,7 @@ export function attachViewToggle(step, render2DFn, create3DFn) {
                     setTimeout(() => _render(el, lastData), 1200);
                 });
             } else {
-                if (data) scene.update(data);
+                if (data) scene.update(data, { resetCamera: true });
             }
         } else {
             // 2D mode
