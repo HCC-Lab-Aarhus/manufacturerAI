@@ -29,7 +29,7 @@ class TraceRules:
     between trace edges, providing a safe margin for conductive-ink
     deposition tolerances and preventing crosstalk / accidental shorts."""
 
-    pin_clearance_mm: float = 1.0
+    pin_clearance_mm: float = 2.0
     """Minimum gap from a trace edge to a foreign pin centre.
     1.0 mm — keeps well clear of adjacent DIP-28 pins (2.54 mm pitch)
     without adjacent blocked zones overlapping on the 0.5 mm grid."""
