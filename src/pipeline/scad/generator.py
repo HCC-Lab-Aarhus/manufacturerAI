@@ -63,16 +63,17 @@ def run_scad_step(
 
     placement = parse_placement(placement_raw)
     routing   = parse_routing(routing_raw)
-    design    = parse_design(design_raw)  # noqa: F841 — kept for forward use
+    design    = parse_design(design_raw)
     catalog   = load_catalog()
 
     if not catalog.ok:
         for err in catalog.errors:
             log.warning("Catalog validation: %s", err)
 
-    # Prefer placement's outline/enclosure (already includes z_top per vertex)
     outline   = placement.outline
-    enclosure = placement.enclosure
+    # Enclosure from design.json is the live source of truth — the user may
+    # have edited height_mm or edge profiles after placement was generated.
+    enclosure = design.enclosure
 
     log.info(
         "SCAD step: %d components  %d nets  base_height=%.1f mm",
