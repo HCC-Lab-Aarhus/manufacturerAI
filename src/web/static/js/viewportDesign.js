@@ -15,7 +15,7 @@
  * }
  */
 
-import { registerHandler } from './viewport.js';
+import { registerHandler, setData as setViewportData } from './viewport.js';
 import { drawComponentIcon } from './componentRenderer.js';
 import { normaliseOutline, buildOutlinePath, snapToEdge, esc, SCALE, PAD, NS, attachViewToggle } from './viewportUtils.js';
 import { state, API } from './state.js';
@@ -447,17 +447,21 @@ function _mountEdgePanel(host, initialData, scene) {
     async function _apply(side, type, size_mm) {
         if (!design.enclosure) design.enclosure = { height_mm: 25 };
         design.enclosure[`edge_${side}`] = { type, size_mm };
-        scene.update(design);   // live preview
+        scene.update(design);   // optimistic preview
 
         const sid = state.session;
         if (!sid) return;
         try {
-            await fetch(`${API}/api/session/design/enclosure?session=${encodeURIComponent(sid)}`, {
+            const res = await fetch(`${API}/api/session/design/enclosure?session=${encodeURIComponent(sid)}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ [`edge_${side}`]: { type, size_mm } }),
             });
-        } catch { /* non-fatal — user sees the live preview regardless */ }
+            if (res.ok) {
+                const saved = await res.json();
+                setViewportData('design', saved);
+            }
+        } catch { /* non-fatal — user sees the optimistic preview regardless */ }
     }
 
     // Tab clicks
