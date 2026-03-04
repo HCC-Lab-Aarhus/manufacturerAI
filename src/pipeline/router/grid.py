@@ -35,9 +35,13 @@ class RoutingGrid:
         outline_poly: Polygon,
         resolution: float = GRID_RESOLUTION_MM,
         edge_clearance: float = EDGE_CLEARANCE_MM,
+        trace_width_mm: float = TRACE_WIDTH_MM,
+        trace_clearance_mm: float = TRACE_CLEARANCE_MM,
     ) -> None:
         self.resolution = resolution
         self.edge_clearance = edge_clearance
+        self.trace_width_mm = trace_width_mm
+        self.trace_clearance_mm = trace_clearance_mm
         self.outline_poly = outline_poly
 
         # Bounding box of the outline
@@ -215,7 +219,7 @@ class RoutingGrid:
             clearance_cells = max(
                 1,
                 int(math.ceil(
-                    (TRACE_WIDTH_MM / 2 + TRACE_CLEARANCE_MM) / self.resolution
+                    (self.trace_width_mm / 2 + self.trace_clearance_mm) / self.resolution
                 ))
             )
         path_set = set(path)
@@ -247,7 +251,7 @@ class RoutingGrid:
             clearance_cells = max(
                 1,
                 int(math.ceil(
-                    (TRACE_WIDTH_MM / 2 + TRACE_CLEARANCE_MM) / self.resolution
+                    (self.trace_width_mm / 2 + self.trace_clearance_mm) / self.resolution
                 ))
             )
         for gx, gy in path:
@@ -271,6 +275,8 @@ class RoutingGrid:
         g = RoutingGrid.__new__(RoutingGrid)
         g.resolution = self.resolution
         g.edge_clearance = self.edge_clearance
+        g.trace_width_mm = self.trace_width_mm
+        g.trace_clearance_mm = self.trace_clearance_mm
         g.origin_x = self.origin_x
         g.origin_y = self.origin_y
         g.width = self.width

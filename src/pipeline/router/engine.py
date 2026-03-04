@@ -153,6 +153,8 @@ def route_traces(
         outline_poly,
         resolution=config.grid_resolution_mm,
         edge_clearance=config.edge_clearance_mm,
+        trace_width_mm=config.trace_width_mm,
+        trace_clearance_mm=config.trace_clearance_mm,
     )
     pad_radius = _compute_pad_radius(config)
     _block_components(base_grid, placement, catalog_map, config.grid_resolution_mm, pad_radius)
