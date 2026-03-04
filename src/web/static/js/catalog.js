@@ -75,7 +75,6 @@ function renderCatalog(data) {
                 <span class="card-id">${c.id}</span>
             </div>
             <div class="card-badges">
-                <span class="badge badge-category">${c.category}</span>
                 <span class="badge badge-mounting">${c.mounting.style}</span>
                 ${c.ui_placement ? '<span class="badge badge-ui">UI</span>' : ''}
             </div>

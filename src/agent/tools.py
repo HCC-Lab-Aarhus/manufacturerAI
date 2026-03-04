@@ -10,7 +10,7 @@ TOOLS: list[dict[str, Any]] = [
         "name": "list_components",
         "description": (
             "List all available components in the catalog with summary info "
-            "(ID, category, name, pin count, mounting style, whether it needs "
+            "(ID, name, pin count, mounting style, whether it needs "
             "UI placement). Already shown in your system prompt — use this "
             "only if you need a refresher."
         ),

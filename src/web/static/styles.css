@@ -273,11 +273,6 @@ main {
     font-weight: 500;
 }
 
-.badge-category {
-    background: var(--accent-dim);
-    color: var(--text);
-}
-
 .badge-mounting {
     background: var(--surface2);
     color: var(--text-dim);

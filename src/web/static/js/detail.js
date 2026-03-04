@@ -27,7 +27,6 @@ function renderDetail(comp) {
         <div class="detail-desc">${comp.description}</div>
 
         <div class="card-badges" style="margin-bottom: 16px;">
-            <span class="badge badge-category">${comp.category}</span>
             <span class="badge badge-mounting">${comp.mounting.style} mount</span>
             ${comp.ui_placement ? '<span class="badge badge-ui">UI placement</span>' : ''}
             ${comp.mounting.blocks_routing ? '<span class="badge" style="background:var(--error-bg);color:var(--error);border:1px solid var(--error)">blocks routing</span>' : ''}
