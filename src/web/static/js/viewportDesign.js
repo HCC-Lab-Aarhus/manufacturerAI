@@ -445,20 +445,26 @@ function _mountEdgePanel(host, initialData, scene) {
         panel.querySelector('.ep-size-row').hidden = (type === 'none');
     }
 
-    async function _apply(side, type, size_mm) {
+    function _preview(side, type, size_mm) {
         if (!design.enclosure) design.enclosure = { height_mm: 25 };
         design.enclosure[`edge_${side}`] = { type, size_mm };
-        scene.update(design);   // optimistic preview
+        scene.update(design);
+    }
 
+    let _patchSeq = 0;
+
+    async function _persist(side, type, size_mm) {
+        _preview(side, type, size_mm);
         const sid = state.session;
         if (!sid) return;
+        const seq = ++_patchSeq;
         try {
             const res = await fetch(`${API}/api/session/design/enclosure?session=${encodeURIComponent(sid)}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ [`edge_${side}`]: { type, size_mm } }),
             });
-            if (res.ok) {
+            if (res.ok && seq === _patchSeq) {
                 const saved = await res.json();
                 design = saved;
                 cacheData('design', saved);
@@ -483,18 +489,21 @@ function _mountEdgePanel(host, initialData, scene) {
             const type = radio.value;
             const size = parseFloat(panel.querySelector('.ep-size-slider').value);
             panel.querySelector('.ep-size-row').hidden = (type === 'none');
-            _apply(activeSide, type, size);
+            _persist(activeSide, type, size);
         });
     });
 
-    // Slider changes (apply on release for performance, preview on input)
+    // Slider: optimistic 3D preview while dragging, persist on release
     const slider = panel.querySelector('.ep-size-slider');
     slider.addEventListener('input', () => {
-        panel.querySelector('.ep-size-val').textContent = parseFloat(slider.value).toFixed(1) + ' mm';
+        const size = parseFloat(slider.value);
+        panel.querySelector('.ep-size-val').textContent = size.toFixed(1) + ' mm';
+        const type = panel.querySelector('[name="ep-type"]:checked')?.value ?? 'none';
+        if (type !== 'none') _preview(activeSide, type, size);
     });
     slider.addEventListener('change', () => {
         const type = panel.querySelector('[name="ep-type"]:checked')?.value ?? 'none';
-        if (type !== 'none') _apply(activeSide, type, parseFloat(slider.value));
+        if (type !== 'none') _persist(activeSide, type, parseFloat(slider.value));
     });
 
     let _collapsed = false;

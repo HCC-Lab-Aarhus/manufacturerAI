@@ -603,6 +603,8 @@ async def api_patch_enclosure(request: Request, session: str = Query(...)):
             enc[key] = body[key]
 
     s.write_artifact("design.json", data)
+    cat = _get_catalog()
+    _enrich_components(data.get("components", []), cat)
     _enrich_design_3d(data)
     return data
 
