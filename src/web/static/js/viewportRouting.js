@@ -50,7 +50,7 @@ registerHandler('routing', {
 
 // Build a colour map for a list of net names by distributing hues
 // evenly around the HSL wheel so every net gets a maximally distinct colour.
-function buildNetColorMap(netIds) {
+export function buildNetColorMap(netIds) {
     const unique = [...new Set(netIds)];
     const n = unique.length;
     const map = {};

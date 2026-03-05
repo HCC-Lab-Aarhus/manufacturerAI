@@ -3,6 +3,7 @@
 import { API, state } from './state.js';
 import { setData as setViewportData, setStale } from './viewport.js';
 import { enableScadTab } from './scad.js';
+import { buildNetColorMap } from './viewportRouting.js';
 
 function addStaleBanner(el, msg) {
     if (!el) return;
@@ -240,6 +241,7 @@ function renderResult(data) {
 
     // Net table (merged by net_id, with pins)
     if (netOrder.length > 0) {
+        const netColors = buildNetColorMap(netOrder);
         const table = document.createElement('table');
         table.className = 'vp-table';
         table.innerHTML = `
@@ -252,12 +254,13 @@ function renderResult(data) {
             <tbody>
                 ${netOrder.map(key => {
                     const m = mergedNets[key];
+                    const color = netColors[key] || 'var(--text-muted)';
                     const pins = netPinMap[key]
                         ? [...netPinMap[key]].map(p => esc(p)).join(', ')
                         : '';
                     return `
                     <tr>
-                        <td class="vp-mono">${esc(m.net_id)}</td>
+                        <td class="vp-mono"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${color};margin-right:6px;vertical-align:middle"></span>${esc(m.net_id)}</td>
                         <td class="vp-mono" style="font-size:11px; color:var(--text-muted)">${pins}</td>
                         <td class="vp-mono">${m.segments}</td>
                         <td class="vp-mono">${m.length.toFixed(1)}</td>
