@@ -26,6 +26,7 @@ from src.agent.pipeline import run_pipeline, PipelineCancelled
 from src.scad.shell import DEFAULT_HEIGHT_MM
 from src.gcode.pipeline import run_gcode_pipeline
 from src.gcode.slicer import find_prusaslicer, find_prusaslicer_gui, PRINTERS
+from src.gcode.filaments import FILAMENTS
 
 # ── .env loader ────────────────────────────────────────────────────
 
@@ -595,10 +596,22 @@ def list_printers():
     }
 
 
+@app.get("/api/filaments")
+def list_filaments():
+    """Return the list of supported filaments for the UI dropdown."""
+    return {
+        "filaments": [
+            {"id": f.id, "label": f.label}
+            for f in FILAMENTS.values()
+        ]
+    }
+
+
 # ── G-code endpoints ──────────────────────────────────────────────
 
 class SliceRequest(BaseModel):
     printer: str | None = None
+    filament: str | None = None
 
 
 @app.post("/api/slice")
@@ -628,6 +641,7 @@ def slice_model(req: SliceRequest | None = None):
 
     global _printer_id
     printer_id = req.printer if req else None
+    filament_id = req.filament if req else None
     _printer_id = printer_id
 
     result = run_gcode_pipeline(
@@ -636,6 +650,7 @@ def slice_model(req: SliceRequest | None = None):
         pcb_layout=layout,
         routing_result=routing,
         printer=printer_id,
+        filament=filament_id,
     )
 
     if not result.success:

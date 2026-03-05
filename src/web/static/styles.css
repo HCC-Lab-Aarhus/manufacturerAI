@@ -902,6 +902,28 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-color: var(--accent);
 }
 
+.generate-gcode-btn {
+  padding: 10px 24px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, opacity 0.2s;
+}
+
+.generate-gcode-btn:hover:not(:disabled) {
+  background: var(--accent-hover, var(--accent));
+  opacity: 0.9;
+}
+
+.generate-gcode-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .geocode-status {
   font-size: 14px;
   font-weight: 600;

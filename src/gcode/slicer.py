@@ -262,6 +262,14 @@ fill_density = 5%
 # PrusaSlicer handles overhangs via bridging and overhang perimeters.
 support_material = 0
 
+# --- Brim ---
+# The battery hatch is a small thin part with sharp corners that
+# lift off the bed.  A 5 mm brim adds first-layer anchoring area
+# around every part on the plate.  Easy to peel off after printing.
+brim_width = 5
+brim_type = outer_only
+brim_separation = 0.1
+
 # --- Travel improvements ---
 # Wipe nozzle before retraction to reduce ooze blob
 wipe = 1
@@ -285,15 +293,25 @@ filament_travel_ramping_lift = 0
 # which is tuned for this geometry.  Overriding to 2.0mm caused
 # semi-molten filament to be pulled into the cold zone -> clogging.
 
-# --- Temperature ---
-# The built-in "Prusament PLA @COREONE HF0.4" profile defaults to 230 C.
-# 225 C is a compromise: low enough to reduce ooze vs 230, but high
-# enough to fully melt filament in the HF nozzle's large melt zone.
-# 215 C caused clogs — the stiffer melt couldn't re-flow after retraction.
-temperature = 225
-first_layer_temperature = 225
-filament_first_layer_temperature = 225
-filament_temperature = 225
+# --- Temperature / bed / cooling ---
+# These are now set by the filament override .ini generated at
+# slice time (see src/gcode/filaments.py).  The values below are
+# safe fallbacks in case the pipeline is run without a filament
+# selection (defaults to Overture Rock PLA settings).
+temperature = 200
+first_layer_temperature = 200
+filament_first_layer_temperature = 200
+filament_temperature = 200
+bed_temperature = 60
+first_layer_bed_temperature = 65
+first_layer_speed = 15
+disable_fan_first_layers = 3
+full_fan_speed_layer = 4
+
+# --- Flow compensation ---
+# Rock PLA is mineral-filled — needs extra flow and lower throughput.
+extrusion_multiplier = 1.05
+filament_max_volumetric_speed = 15
 
 # --- Retraction refinements ---
 # Retract 70 % of the distance *before* the wipe move so the full
@@ -335,6 +353,8 @@ def slice_stl(
     profile_path: Path | None = None,
     *,
     printer: str | None = None,
+    filament: str | None = None,
+    filament_override_path: Path | None = None,
     timeout_s: int = 300,
 ) -> tuple[bool, str, Path | None]:
     """Slice *stl_path* and write G-code.
@@ -352,6 +372,11 @@ def slice_stl(
     printer : str, optional
         Printer id (``"mk3s"``, ``"mk3s_plus"``, or ``"coreone"``).
         Determines which default profile to use when *profile_path* is None.
+    filament : str, optional
+        Filament id (e.g. ``"prusament_pla"``, ``"overture_rockpla"``).
+        Used only if *filament_override_path* is not provided.
+    filament_override_path : Path, optional
+        Pre-written filament override ``.ini``.
     timeout_s : int
         CLI timeout in seconds.
 
@@ -387,6 +412,17 @@ def slice_stl(
     # --load applies our overrides (ironing, support, binary_gcode=0, …)
     # on top of the built-in profile.
     cmd += ["--load", str(profile_path)]
+
+    # Filament overrides (temperature, bed, cooling) are loaded *after*
+    # the printer profile so they take final precedence.
+    if filament_override_path is None and filament:
+        from src.gcode.filaments import write_filament_overrides
+        filament_override_path = write_filament_overrides(
+            filament, stl_path.parent,
+        )
+    if filament_override_path and filament_override_path.exists():
+        cmd += ["--load", str(filament_override_path)]
+        log.info("Filament overrides loaded: %s", filament_override_path)
 
     # Explicitly request thumbnails — the CLI ignores the profile
     # setting unless passed on the command line.

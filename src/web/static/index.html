@@ -95,7 +95,7 @@
       <div id="geocodeOverlay" class="geocode-overlay" style="display: none;">
         <button id="geocodeBackBtn" class="geocode-back-btn">Back to design</button>
         <div class="geocode-content">
-          <div class="printer-instruction">Select a printer to generate G-code</div>
+          <div class="printer-instruction">Select printer and filament to generate G-code</div>
           <div class="printer-selector">
             <label for="printerSelect">Printer:</label>
             <select id="printerSelect" class="printer-select">
@@ -104,6 +104,15 @@
               <option value="coreone">Prusa Core One+</option>
             </select>
           </div>
+          <div class="printer-selector">
+            <label for="filamentSelect">Filament:</label>
+            <select id="filamentSelect" class="printer-select">
+              <option value="" disabled selected>Choose filament...</option>
+            </select>
+          </div>
+          <button id="generateGcodeBtn" class="generate-gcode-btn" disabled>
+            Generate G-code
+          </button>
           <div class="geocode-status" id="geocodeStatus"></div>
           <div class="geocode-actions">
             <button id="gcodePreviewBtn" class="geocode-preview-btn" disabled>

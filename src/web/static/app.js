@@ -1385,7 +1385,38 @@ downloadBtn.addEventListener("click", () => {
   } catch (_) { /* keep hardcoded fallback */ }
 })();
 
+// Populate filament dropdown from server
+(async () => {
+  try {
+    const resp = await fetch("/api/filaments");
+    if (resp.ok) {
+      const { filaments } = await resp.json();
+      const sel = document.getElementById("filamentSelect");
+      sel.innerHTML = '<option value="" disabled selected>Choose filament...</option>';
+      for (const f of filaments) {
+        const opt = document.createElement("option");
+        opt.value = f.id;
+        opt.textContent = f.label;
+        sel.appendChild(opt);
+      }
+    }
+  } catch (_) { /* keep hardcoded fallback */ }
+})();
+
 // ── Ready to Print / G-code functionality ─────────────────────────
+
+const generateGcodeBtn = document.getElementById("generateGcodeBtn");
+const filamentSelect   = document.getElementById("filamentSelect");
+const printerSelectEl  = document.getElementById("printerSelect");
+
+// Enable the Generate button only when both printer AND filament are chosen
+function _checkGenerateReady() {
+  const printerOk  = printerSelectEl && printerSelectEl.value && printerSelectEl.value !== "";
+  const filamentOk = filamentSelect && filamentSelect.value && filamentSelect.value !== "";
+  if (generateGcodeBtn) generateGcodeBtn.disabled = !(printerOk && filamentOk);
+}
+if (printerSelectEl) printerSelectEl.addEventListener("change", _checkGenerateReady);
+if (filamentSelect) filamentSelect.addEventListener("change", _checkGenerateReady);
 
 readyToPrintBtn.addEventListener("click", async () => {
   if (readyToPrintBtn.classList.contains("disabled")) return;
@@ -1395,13 +1426,16 @@ readyToPrintBtn.addEventListener("click", async () => {
   geocodeStatus.textContent = "";
   geocodeStatus.classList.remove("ready", "slicing");
   geocodeDownloadBtn.disabled = true;
+  _checkGenerateReady();
 });
 
-// Start slicing when printer is selected
-document.getElementById("printerSelect").addEventListener("change", async (e) => {
-  const printer = e.target.value;
-  if (!printer) return;
+// Start slicing when Generate G-code button is clicked
+if (generateGcodeBtn) generateGcodeBtn.addEventListener("click", async () => {
+  const printer  = printerSelectEl.value;
+  const filament = filamentSelect.value;
+  if (!printer || !filament) return;
   
+  generateGcodeBtn.disabled = true;
   geocodeStatus.textContent = "Slicing model & generating G-code ...";
   geocodeStatus.classList.remove("ready");
   geocodeStatus.classList.add("slicing");
@@ -1411,12 +1445,13 @@ document.getElementById("printerSelect").addEventListener("change", async (e) =>
     const resp = await fetch("/api/slice", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ printer }),
+      body: JSON.stringify({ printer, filament }),
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ detail: resp.statusText }));
       geocodeStatus.classList.remove("slicing");
       geocodeStatus.textContent = `G-code failed: ${err.detail || err.message || "Unknown error"}`;
+      _checkGenerateReady();
       return;
     }
     const data = await resp.json();
@@ -1429,9 +1464,11 @@ document.getElementById("printerSelect").addEventListener("change", async (e) =>
     geocodeStatus.classList.add("ready");
     geocodeDownloadBtn.disabled = false;
     _enableGcodeButtons();
+    _checkGenerateReady();
   } catch (e) {
     geocodeStatus.classList.remove("slicing");
     geocodeStatus.textContent = `G-code error: ${e.message}`;
+    _checkGenerateReady();
   }
 });
 

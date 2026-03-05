@@ -302,13 +302,29 @@ def _filter_ironing_at_ink_layer(
 def _pause_block(label: str, z: float, instructions: list[str]) -> list[str]:
     """Generate a firmware pause block (M601) with user instructions.
 
-    ``M601`` on the MK3S:
+    ``M601`` on the MK3S / Core One:
     - Retracts filament
     - Parks the head
     - Beeps and shows LCD prompt
     - Waits for user to press the knob
     - Resumes print
+
+    After the firmware resumes, we insert a **nozzle wipe** sequence
+    that moves to the front-left bed edge and wipes back and forth at
+    Z = 0.2 mm (barely touching the bed surface) to scrub off any
+    filament blob accumulated during the pause.  Then the nozzle
+    retracts, lifts, and returns to the paused Z height — the slicer's
+    own travel commands position X/Y back to the print.
     """
+    # Wipe geometry (front-left corner of the bed)
+    wipe_y = 1.0        # 1 mm from front edge
+    wipe_x_start = 5.0  # start of wipe stroke
+    wipe_x_end = 45.0   # end of wipe stroke
+    wipe_z = 0.2        # just touching the bed surface
+    wipe_speed = 3000    # mm/min (50 mm/s)
+    travel_speed = 12000 # mm/min (200 mm/s)
+    wipe_passes = 3      # back-and-forth strokes
+
     lines = [
         "",
         "; " + "=" * 50,
@@ -322,6 +338,25 @@ def _pause_block(label: str, z: float, instructions: list[str]) -> list[str]:
         "",
         "; Park head and wait for user",
         "M601 ; pause print — press knob to resume",
+        "",
+        "; ── Nozzle wipe after resume ──────────────────────",
+        "; Scrub nozzle on the front bed edge to remove any",
+        "; filament blob accumulated during the pause.",
+        "G1 E-1.4 F3600 ; retract filament",
+        f"G0 Z{max(z, 5.0):.2f} F720 ; safe Z height",
+        f"G0 X{wipe_x_start:.1f} Y{wipe_y:.1f} F{travel_speed} ; travel to wipe start",
+        f"G0 Z{wipe_z:.2f} F720 ; lower to wipe height",
+    ])
+
+    # Wipe strokes
+    for i in range(wipe_passes):
+        lines.append(f"G0 X{wipe_x_end:.1f} Y{wipe_y:.1f} F{wipe_speed} ; wipe stroke {i*2+1}")
+        lines.append(f"G0 X{wipe_x_start:.1f} Y{wipe_y:.1f} F{wipe_speed} ; wipe stroke {i*2+2}")
+
+    lines.extend([
+        f"G0 Z{max(z + 2.0, 5.0):.2f} F720 ; lift after wipe",
+        "G1 E1.3 F1200 ; unretract (slightly less to avoid blob)",
+        "; ── End nozzle wipe ───────────────────────────────",
         "",
     ])
     return lines
@@ -649,22 +684,17 @@ def postprocess_gcode(
                 ))
                 stages.append(f"Component insertion pause at Z={component_z:.2f}")
 
-        # ── Filter ironing at the ink layer ──────────────
-        # At the ink layer, keep ironing but suppress moves that
-        # cross over trace channels (so the nozzle doesn't iron
-        # directly over where conductive ink will be deposited).
-        if line.strip() == ';TYPE:Ironing' and abs(current_z - ink_z) <= 0.05:
-            filtered, end_idx, removed = _filter_ironing_at_ink_layer(
-                raw_lines, i, trace_segs, iron_z=ink_z,
-            )
-            out.extend(filtered)
-            ironing_moves_removed += removed
-            i = end_idx
-            continue
+        # ── Ink-layer ironing: keep as-is ──────────────────
+        # The entire ink-layer floor must be ironed — including the
+        # trace channel areas — so that micro-gaps from FDM printing
+        # are sealed and conductive ink cannot seep through.  We do
+        # NOT filter or suppress any ironing moves at this Z; the
+        # slicer's ironing pass is used unmodified.
 
         # ── Strip ironing from non-ink layers ─────────────
-        # We only need ironing at the ink layer for a smooth trace
-        # surface.  Ironing the outer shell / ceiling wastes time.
+        # We only need ironing at the ink layer for a smooth, sealed
+        # floor surface.  Ironing on other layers (battery compartment
+        # floor, shell ceiling, etc.) is unnecessary and wastes time.
         #
         # PrusaSlicer emits a travel preamble before each ironing
         # section (retract → G92 E0 → lift → travel → lower →

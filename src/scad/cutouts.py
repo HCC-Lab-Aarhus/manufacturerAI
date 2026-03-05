@@ -305,8 +305,9 @@ def build_cutouts(
 
             plate_cfg_loc = hw.battery.get("conductor_plate", {})
             plate_thick = plate_cfg_loc.get("thickness_mm", 0.3)
-            support_x = 1.0   # support width along narrow wall (X)
-            support_y = 1.0   # support depth into compartment (Y)
+            plate_slot_w = bat_w + 1.0  # 28 mm — 1 mm wider than compartment for easy insertion
+            support_x = 2.0   # support width along narrow wall (X) — extends into compartment centre
+            support_y = 2.0   # support depth into compartment (Y) — 2 mm gap from narrow wall
 
             # ── a) Hatch ledge recesses (long sides) ──────────────
             cuts.append(Cutout(
@@ -337,20 +338,20 @@ def build_cutouts(
 
             # ── c) Cavity pocket (split for supports) ─────────────
             #    Full pocket: (bat_w + 2m) × (bat_h + 2m).
-            #    Split into 3 rectangles to leave solid 1×1 mm support
+            #    Split into 3 rectangles to leave solid 2×2 mm support
             #    blocks at each narrow-end corner.
             #
             #    Top-down (XY) of -Y narrow end inside the pocket:
             #
-            #      cx-14.5           cx-12.5    cx+12.5           cx+14.5
+            #      cx-14.5          cx-11.5     cx+11.5          cx+14.5
             #         │  ████████████  │          │  ████████████  │
-            #   cy-26 │  █ SUPPORT █  │  cut 25mm │  █ SUPPORT █  │ cy-26
-            #         │  ████████████  │  (open)   │  ████████████  │
-            #   cy-24 ├───────────────┴────────────┴───────────────┤ cy-24
+            #   cy-27 │  █ SUPPORT █  │  cut 23mm │  █ SUPPORT █  │ cy-27
+            #         │  █  2×2mm  █  │  (open)   │  █  2×2mm  █  │
+            #   cy-25 ├───────────────┴────────────┴───────────────┤ cy-25
             #         │           central band (29mm wide)          │
             #
-            #    Only the inner 1×1 mm of each support is inside
-            #    the compartment; the rest is behind the wall.
+            #    Each support is 2 mm wide (X) × 2 mm deep (Y).
+            #    2 mm gap between narrow wall and the support.
 
             central_h = bat_h - 2 * support_y  # 48 mm
             cuts.append(Cutout(
@@ -376,17 +377,18 @@ def build_cutouts(
             # ── d) Plate slots (through floor for bottom insertion) ────
             #    The conductor plate (27 × 12 mm, 0.3 mm thick) slides
             #    up from the shell bottom into this 0.3 mm channel.
-            #    The slot runs from z = −0.5 (below shell) through the
-            #    full cavity height.  Once the plate is pushed up past
-            #    the floor zone, the 1×1 mm latch supports from (c)
-            #    press against it from the battery side and hold it
-            #    flush against the narrow wall.
+            #    The slot is 28 mm wide (1 mm wider than compartment)
+            #    for easier insertion.  It runs from z = −0.5 (below
+            #    shell) through the full cavity height.  Once the plate
+            #    is pushed up past the floor zone, the 2×2 mm latch
+            #    supports from (c) press against it from the battery
+            #    side and hold it flush against the narrow wall.
             slot_depth = CAVITY_END + 0.5   # from below shell to cavity top
             for end_sign in (-1, +1):
                 pocket_cy = (cy + end_sign * (bat_h / 2 + plate_thick / 2))
                 cuts.append(Cutout(
                     polygon=_rect(cx, pocket_cy,
-                                  bat_w, plate_thick),
+                                  plate_slot_w, plate_thick),
                     depth=slot_depth,
                     z_base=-0.5,
                     label=f"battery plate slot {cid}",
