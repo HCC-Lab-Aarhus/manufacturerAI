@@ -6,24 +6,19 @@ A 3D-printable universal TV remote control supporting 10 major brands with auto-
 
 ## Integration with manufacturerAI
 
-This firmware is automatically updated by the manufacturerAI pipeline when a PCB is routed. The `firmware_generator.py` module:
+This firmware is automatically updated by the manufacturerAI pipeline when traces are routed. The `firmware_generator.py` module:
 
-1. Takes the pin mapping from PCB routing
+1. Takes the pin mapping from trace routing
 2. Updates `UniversalIRRemote.ino` with correct pin assignments
 3. Generates a `PIN_ASSIGNMENT_REPORT.txt` showing which ATmega pins connect to which buttons
 
 ### Manual Firmware Generation
 
 ```python
-from firmware import generate_firmware, generate_pin_assignment_report
+from src.pipeline.firmware import build_pin_mapping, generate_firmware, generate_pin_assignment_report
 
-# pin_mapping comes from router_bridge.build_pin_mapping()
-pin_mapping = [
-    {"button_id": "BTN_POWER", "label": "POWER", "controller_pin": "PD2"},
-    {"button_id": "BTN_VOL_UP", "label": "VOL+", "controller_pin": "PD4"},
-    {"component_id": "IR_LED", "type": "IR diode", "controller_pin": "PD3"},
-    # ...
-]
+# Build pin_mapping from routing + design artifacts
+pin_mapping = build_pin_mapping(routing_result, design_spec)
 
 # Generate updated firmware
 generate_firmware(pin_mapping, output_path=Path("output/firmware/UniversalIRRemote.ino"))

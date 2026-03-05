@@ -34,14 +34,15 @@ from src.pipeline.design.models import Outline, Enclosure
 from src.pipeline.design.height_field import blended_height
 from src.pipeline.placer.models import PlacedComponent, FullPlacement
 from src.pipeline.router.models import RoutingResult
+from src.pipeline.config import FLOOR_MM, CAVITY_START_MM, CEILING_MM
 
 log = logging.getLogger(__name__)
 
 # ── Z layer constants ──────────────────────────────────────────────
 
-FLOOR_TOP: float = 2.0       # solid floor up to here
-CAVITY_TOP: float = 3.0      # cavity / trace zone starts here
-CEIL_THICKNESS: float = 2.0  # solid ceiling below base_height
+FLOOR_TOP: float = FLOOR_MM
+CAVITY_TOP: float = CAVITY_START_MM
+CEIL_THICKNESS: float = CEILING_MM
 SURFACE_OVERSHOOT: float = 0.5  # extra depth so surface holes cleanly exit
 
 # ── Pinhole geometry ───────────────────────────────────────────────

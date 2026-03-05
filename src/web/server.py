@@ -123,7 +123,7 @@ def _resolve_session(session_id: str | None) -> Session:
 
 
 # Pipeline ordering — each step depends on everything before it.
-_PIPELINE_ORDER = ["design", "placement", "routing", "scad", "manufacturing"]
+_PIPELINE_ORDER = ["design", "placement", "routing", "scad", "gcode", "firmware"]
 
 
 def _invalidate_downstream(session: Session, current_step: str) -> list[str]:
@@ -190,6 +190,8 @@ async def api_get_session(session: str = Query(...)):
             "placement": s.has_artifact("placement.json"),
             "routing": s.has_artifact("routing.json"),
             "scad": s.has_artifact("enclosure.scad"),
+            "gcode": s.has_artifact("enclosure_staged.gcode"),
+            "firmware": s.has_artifact("firmware.ino"),
         },
     }
 

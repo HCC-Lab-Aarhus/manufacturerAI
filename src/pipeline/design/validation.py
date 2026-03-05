@@ -176,8 +176,7 @@ def validate_design(spec: DesignSpec, catalog: CatalogResult) -> list[str]:
             errors.append(f"Vertex {i}: ease_out must be >= 0")
 
     # ── Enclosure height validation ──
-    FLOOR_MM = 2.0
-    CEILING_MM = 2.0
+    from src.pipeline.config import FLOOR_MM, CEILING_MM
     MIN_CAVITY_MM = 4.0  # bare minimum clearance even with no components
 
     # Tallest internal component determines minimum required cavity height

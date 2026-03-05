@@ -22,9 +22,7 @@ import struct
 import zlib
 from pathlib import Path
 
-import numpy as np
-
-log = logging.getLogger("manufacturerAI.gcode.bgcode")
+log = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────
 
@@ -338,8 +336,9 @@ def _render_stl_thumbnail(stl_path: Path, width: int, height: int) -> bytes | No
     """
     try:
         from PIL import Image, ImageDraw
+        import numpy as np
     except ImportError:
-        log.warning("Pillow not available — skipping thumbnail")
+        log.warning("Pillow/numpy not available — skipping thumbnail")
         return None
 
     try:

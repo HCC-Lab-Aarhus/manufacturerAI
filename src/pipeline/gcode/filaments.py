@@ -14,7 +14,7 @@ import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 
-log = logging.getLogger("manufacturerAI.gcode.filaments")
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)

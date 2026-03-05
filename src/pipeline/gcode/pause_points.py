@@ -20,7 +20,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-DEFAULT_SHELL_HEIGHT_MM = 19.5  # 15.0 shell + 3.0 floor + 1.5 ceiling
+from src.pipeline.config import FLOOR_MM, CAVITY_START_MM, CEILING_MM
+
+DEFAULT_SHELL_HEIGHT_MM = 19.0  # typical: 15.0 cavity + 2.0 floor + 2.0 ceiling
 
 
 @dataclass
@@ -70,15 +72,9 @@ def compute_pause_points(
     """
     h = shell_height or DEFAULT_SHELL_HEIGHT_MM
 
-    # Z-layer constants — must match cutouts.py
-    FLOOR = 2.0
-    CAVITY_START = 3.0
-    TOP_SOLID = 2.0
-    CAVITY_END = h - TOP_SOLID
+    CAVITY_END = h - CEILING_MM
 
-    # 1. Ink pause: top of the solid floor = CAVITY_START.
-    #    We want to iron the last floor layer, then pause for ink.
-    ink_z = _snap_to_layer(CAVITY_START, layer_height)
+    ink_z = _snap_to_layer(CAVITY_START_MM, layer_height)
 
     # 2. Component insertion: just before the ceiling closes.
     #    CAVITY_END is where the solid ceiling starts.  Components

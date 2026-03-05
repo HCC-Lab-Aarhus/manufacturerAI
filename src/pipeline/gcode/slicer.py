@@ -3,8 +3,7 @@ PrusaSlicer CLI bridge — slices STL models into G-code.
 
 Finds the ``prusa-slicer-console`` executable automatically and invokes
 it with a printer profile.  Supports multiple printers (MK3S, MK3S+, Core One+).
-All slicing parameters live in ``configs/slicer_profile*.ini``; defaults
-are generated on first use.
+Profile defaults are embedded and auto-generated to ``profiles/`` on first use.
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-log = logging.getLogger("manufacturerAI.gcode.slicer")
+log = logging.getLogger(__name__)
 
 # ── Locate PrusaSlicer ─────────────────────────────────────────────
 
@@ -68,7 +67,7 @@ class PrinterDef:
     label: str            # human-readable, e.g. "Prusa MK3S"
     bed_width: float      # mm
     bed_depth: float      # mm
-    profile_filename: str # ini in configs/
+    profile_filename: str # ini filename (auto-generated to profiles/)
     # PrusaSlicer built-in profile names (None → use --load only)
     native_printer: str | None = None
     native_print: str | None = None
@@ -295,7 +294,7 @@ filament_travel_ramping_lift = 0
 
 # --- Temperature / bed / cooling ---
 # These are now set by the filament override .ini generated at
-# slice time (see src/gcode/filaments.py).  The values below are
+# slice time (see src/pipeline/gcode/filaments.py).  The values below are
 # safe fallbacks in case the pipeline is run without a filament
 # selection (defaults to Overture Rock PLA settings).
 temperature = 200

@@ -31,7 +31,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-log = logging.getLogger("manufacturerAI.gcode.postprocessor")
+log = logging.getLogger(__name__)
 
 # Regex for PrusaSlicer layer-change Z comment
 _Z_RE = re.compile(r"^;Z:([\d.]+)")
@@ -42,11 +42,8 @@ _MOVE_RE = re.compile(
     r"(?:.*?Y(?P<y>[\d.]+))?",
 )
 
-# ── Extrusion constants ───────────────────────────────────────────
+# ── Trace constants ───────────────────────────────────────────────────────
 
-NOZZLE_DIA = 0.4           # mm
-LAYER_HEIGHT = 0.2         # mm
-FILAMENT_DIA = 1.75        # mm
 TRACE_BUFFER = 0.6         # mm — half-width exclusion around each trace segment
 
 
@@ -102,7 +99,7 @@ def _stl_bbox_center(stl_path: Path) -> tuple[float, float]:
     return ((min_x + max_x) / 2.0, (min_y + max_y) / 2.0)
 
 
-def _compute_bed_offset(
+def compute_bed_offset(
     stl_path: Path,
     bed_size: tuple[float, float],
 ) -> tuple[float, float]:
@@ -546,7 +543,7 @@ def postprocess_gcode(
         filter ironing moves over trace channels.
     bed_offset : tuple or None
         ``(dx, dy)`` offset from model-local coords to bed coords.
-        Computed from ``_compute_bed_offset(outline_polygon)``.
+        Computed from ``compute_bed_offset(stl_path, bed_size)``.
 
     Returns
     -------

@@ -1,9 +1,9 @@
-"""
-Generate G-code toolpaths for conductive ink deposition.
+"""Generate G-code toolpaths for conductive ink deposition.
 
-Converts trace routing data (grid-coordinate paths from the TS router)
-into G-code move commands that lay down conductive ink along each net.
-The ink is deposited on the freshly ironed floor surface at a fixed Z.
+Converts trace routing data (paths already in world-mm from the Python
+router) into G-code move commands that lay down conductive ink along
+each net.  The ink is deposited on the freshly ironed floor surface
+at a fixed Z.
 
 The output is a list of G-code lines that can be injected into the
 main print G-code by the post-processor.
@@ -14,14 +14,7 @@ from __future__ import annotations
 import logging
 from typing import Sequence
 
-from src.pipeline.config import TRACE_RULES
-
-def _polygon_bounds(outline: list) -> tuple[float, float, float, float]:
-    xs = [v[0] for v in outline]
-    ys = [v[1] for v in outline]
-    return min(xs), min(ys), max(xs), max(ys)
-
-log = logging.getLogger("manufacturerAI.gcode.ink_traces")
+log = logging.getLogger(__name__)
 
 # ── Ink deposition defaults ────────────────────────────────────────
 
@@ -32,7 +25,6 @@ INK_Z_HOP = 1.0            # mm — lift between traces to avoid dragging
 
 def generate_ink_gcode(
     routing_result: dict,
-    pcb_layout: dict,
     ink_z: float,
     *,
     draw_speed: float = INK_DRAW_SPEED,
@@ -44,11 +36,8 @@ def generate_ink_gcode(
     Parameters
     ----------
     routing_result : dict
-        The router output with ``traces`` list.  Each trace has
-        ``net`` (str) and ``path`` (list of ``{x, y}`` grid coords).
-    pcb_layout : dict
-        The ``pcb_layout.json`` — needed for the board outline origin
-        offset so grid coords can be converted to mm.
+        The ``routing.json`` data.  Each trace has ``net_id`` (str)
+        and ``path`` (list of ``[x_mm, y_mm]`` waypoints already in mm).
     ink_z : float
         Z-height (mm) at which to deposit ink (top of ironed floor).
     draw_speed : float
@@ -67,18 +56,6 @@ def generate_ink_gcode(
     if not traces:
         return ["; INK: no traces to deposit"]
 
-    # Grid → mm conversion (same as cutouts.py)
-    board_outline = pcb_layout.get("board", {}).get("outline_polygon", [])
-    if board_outline:
-        o_min_x, o_min_y, _, _ = _polygon_bounds(board_outline)
-    else:
-        o_min_x = o_min_y = 0.0
-
-    grid = TRACE_RULES.grid_resolution_mm
-
-    def grid_to_mm(gx: float, gy: float) -> tuple[float, float]:
-        return gx * grid + o_min_x, gy * grid + o_min_y
-
     lines: list[str] = []
     lines.append("")
     lines.append("; " + "=" * 50)
@@ -93,17 +70,16 @@ def generate_ink_gcode(
     lines.append(f"G0 Z{ink_z + z_hop:.3f} F{travel_speed}")
 
     for trace in traces:
-        net = trace.get("net", "unknown")
+        net = trace.get("net_id", "unknown")
         path = trace.get("path", [])
         if len(path) < 2:
             continue
 
-        # Simplify: only keep direction-change points
         simplified = _simplify_path(path)
         if len(simplified) < 2:
             continue
 
-        start_x, start_y = grid_to_mm(simplified[0]["x"], simplified[0]["y"])
+        start_x, start_y = simplified[0][0], simplified[0][1]
 
         lines.append(f"")
         lines.append(f"; --- trace: {net} ({len(simplified)} points) ---")
@@ -117,7 +93,7 @@ def generate_ink_gcode(
 
         # Trace the path
         for pt in simplified[1:]:
-            x, y = grid_to_mm(pt["x"], pt["y"])
+            x, y = pt[0], pt[1]
             lines.append(f"G1 X{x:.3f} Y{y:.3f} F{draw_speed}")
 
         # Lift after trace
@@ -140,7 +116,6 @@ def generate_ink_gcode(
 
 def extract_trace_segments(
     routing_result: dict,
-    pcb_layout: dict,
 ) -> list[tuple[float, float, float, float]]:
     """Return trace paths as ``(x1, y1, x2, y2)`` mm line segments.
 
@@ -154,17 +129,6 @@ def extract_trace_segments(
     if not traces:
         return []
 
-    board_outline = pcb_layout.get("board", {}).get("outline_polygon", [])
-    if board_outline:
-        o_min_x, o_min_y, _, _ = _polygon_bounds(board_outline)
-    else:
-        o_min_x = o_min_y = 0.0
-
-    grid = TRACE_RULES.grid_resolution_mm
-
-    def grid_to_mm(gx: float, gy: float) -> tuple[float, float]:
-        return gx * grid + o_min_x, gy * grid + o_min_y
-
     segments: list[tuple[float, float, float, float]] = []
     for trace in traces:
         path = trace.get("path", [])
@@ -172,8 +136,8 @@ def extract_trace_segments(
         if len(simplified) < 2:
             continue
         for j in range(len(simplified) - 1):
-            x1, y1 = grid_to_mm(simplified[j]["x"], simplified[j]["y"])
-            x2, y2 = grid_to_mm(simplified[j + 1]["x"], simplified[j + 1]["y"])
+            x1, y1 = simplified[j][0], simplified[j][1]
+            x2, y2 = simplified[j + 1][0], simplified[j + 1][1]
             segments.append((x1, y1, x2, y2))
 
     log.info("Extracted %d trace segments from %d traces", len(segments), len(traces))
@@ -182,7 +146,7 @@ def extract_trace_segments(
 
 # ── Path simplification ───────────────────────────────────────────
 
-def _simplify_path(path: list[dict]) -> list[dict]:
+def _simplify_path(path: list[Sequence[float]]) -> list[Sequence[float]]:
     """Remove collinear intermediate points, keeping corners only."""
     if len(path) <= 2:
         return list(path)
@@ -193,13 +157,11 @@ def _simplify_path(path: list[dict]) -> list[dict]:
         curr = path[i]
         nxt = path[i + 1]
 
-        # Direction from prev→curr vs curr→nxt
-        dx1 = curr["x"] - prev["x"]
-        dy1 = curr["y"] - prev["y"]
-        dx2 = nxt["x"] - curr["x"]
-        dy2 = nxt["y"] - curr["y"]
+        dx1 = curr[0] - prev[0]
+        dy1 = curr[1] - prev[1]
+        dx2 = nxt[0] - curr[0]
+        dy2 = nxt[1] - curr[1]
 
-        # Keep if direction changes
         if (dx1, dy1) != (dx2, dy2):
             result.append(curr)
 

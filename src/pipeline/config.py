@@ -75,3 +75,22 @@ class TraceRules:
 
 # Module-level singleton — importable everywhere.
 TRACE_RULES = TraceRules()
+
+
+# ── Enclosure Z-layer constants (mm) ──────────────────────────────
+#
+# The enclosure is a vertical stack of zones.  Every stage that
+# needs a Z-height (scad cutouts, pause-point computation, design
+# validation) must reference these constants so they stay in sync.
+#
+#   0 ─── build plate
+#   │  FLOOR_MM          solid printed floor
+#   │  CAVITY_START_MM   cavity / trace zone begins
+#   │  ... component pockets, traces ...
+#   │  CEIL_START         = total_height - CEILING_MM
+#   │  CEILING_MM         solid printed ceiling
+#   └── total_height
+
+FLOOR_MM: float = 2.0
+CAVITY_START_MM: float = 3.0
+CEILING_MM: float = 2.0

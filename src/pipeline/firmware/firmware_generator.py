@@ -1,8 +1,9 @@
 """
-Firmware Generator — updates UniversalIRRemote.ino with PCB routing pin assignments.
+Firmware Generator — updates UniversalIRRemote.ino with routed pin assignments.
 
-This module takes the pin mapping from the PCB router and generates an updated
-Arduino sketch with the correct pin definitions based on how the traces were routed.
+This module takes the pin mapping from the trace router and generates an
+updated Arduino sketch with the correct pin definitions based on how the
+traces were routed.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-log = logging.getLogger("manufacturerAI.firmware")
+log = logging.getLogger(__name__)
 
 # Path to the template firmware
 FIRMWARE_DIR = Path(__file__).parent
@@ -109,7 +110,7 @@ def generate_firmware(
     Parameters
     ----------
     pin_mapping : list[dict]
-        List of mappings from router_bridge.build_pin_mapping().
+        List of mappings from ``build_pin_mapping()``.
         Each dict has: button_id, label, signal_net, controller_pin (ATmega port name)
         For IR diode: component_id, type, signal_net, controller_pin
     
@@ -296,6 +297,102 @@ def _replace_pin_definitions(template: str, new_defs: str) -> str:
         return template
     
     return updated
+
+
+def build_pin_mapping(
+    routing_result: dict,
+    design_spec: dict,
+    catalog: dict[str, dict] | None = None,
+) -> list[dict]:
+    """Convert new-format routing/design data into the pin_mapping list.
+
+    The new router stores resolved MCU pin assignments in
+    ``routing_result["pin_assignments"]`` as::
+
+        {"net_id|instance:group": "instance:physical_pin", ...}
+
+    This function walks the design nets, identifies button and IR-LED
+    connections to the MCU, and produces the legacy-style ``pin_mapping``
+    list that :func:`generate_firmware` expects.
+
+    Parameters
+    ----------
+    routing_result : dict
+        The ``routing.json`` artifact.
+    design_spec : dict
+        The ``design.json`` artifact (needs ``components`` and ``nets``).
+    catalog : dict, optional
+        Loaded catalog keyed by catalog_id.  Used to detect IR LEDs via
+        the component ``name`` field.  If *None*, IR detection falls
+        back to instance_id heuristics.
+
+    Returns
+    -------
+    list[dict]
+        Pin-mapping dicts accepted by :func:`generate_firmware`.
+    """
+    pin_assigns = routing_result.get("pin_assignments", {})
+
+    resolved: dict[str, str] = {}
+    for key, value in pin_assigns.items():
+        parts = key.split("|", 1)
+        if len(parts) != 2:
+            continue
+        net_id = parts[0]
+        _, port = value.rsplit(":", 1)
+        resolved[net_id] = port.upper()
+
+    inst_to_catalog: dict[str, str] = {}
+    for comp in design_spec.get("components", []):
+        inst_to_catalog[comp["instance_id"]] = comp.get("catalog_id", "")
+
+    def _is_ir_led(instance_id: str) -> bool:
+        cat_id = inst_to_catalog.get(instance_id, "")
+        if catalog and cat_id in catalog:
+            name = catalog[cat_id].get("name", "").lower()
+            if "ir" in name and ("led" in name or "emit" in name or "diode" in name):
+                return True
+        return "ir" in instance_id.lower()
+
+    def _button_function(instance_id: str) -> str:
+        iid = instance_id.lower()
+        for func in FUNCTION_TO_FIRMWARE:
+            if func in iid:
+                return func
+        return ""
+
+    mapping: list[dict] = []
+    for net in design_spec.get("nets", []):
+        net_id = net["id"]
+        port = resolved.get(net_id)
+        if not port:
+            continue
+
+        pins = net.get("pins", [])
+        inst_ids = {p.split(":")[0] for p in pins}
+
+        for inst in inst_ids:
+            cat_id = inst_to_catalog.get(inst, "")
+            if _is_ir_led(inst):
+                mapping.append({
+                    "component_id": inst,
+                    "type": "IR diode",
+                    "signal_net": net_id,
+                    "controller_pin": port,
+                })
+            elif "btn" in inst.lower() or (
+                catalog
+                and "button" in catalog.get(cat_id, {}).get("name", "").lower()
+            ):
+                mapping.append({
+                    "button_id": inst,
+                    "label": inst,
+                    "function": _button_function(inst),
+                    "signal_net": net_id,
+                    "controller_pin": port,
+                })
+
+    return mapping
 
 
 def generate_pin_assignment_report(pin_mapping: list[dict]) -> str:

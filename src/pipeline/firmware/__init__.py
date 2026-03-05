@@ -1,8 +1,7 @@
-"""
-Firmware module — generates ATmega328 firmware from PCB routing results.
-"""
+"""Firmware module — generates ATmega328 firmware from trace routing results."""
 
 from .firmware_generator import (
+    build_pin_mapping,
     generate_firmware,
     generate_pin_assignment_report,
     atmega_port_to_arduino_pin,
@@ -13,6 +12,7 @@ from .firmware_generator import (
 )
 
 __all__ = [
+    "build_pin_mapping",
     "generate_firmware",
     "generate_pin_assignment_report",
     "atmega_port_to_arduino_pin",

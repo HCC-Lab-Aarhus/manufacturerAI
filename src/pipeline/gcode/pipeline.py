@@ -20,11 +20,11 @@ from pathlib import Path
 from src.pipeline.gcode.slicer import slice_stl, get_printer
 from src.pipeline.gcode.pause_points import compute_pause_points, PausePoints
 from src.pipeline.gcode.ink_traces import generate_ink_gcode, extract_trace_segments
-from src.pipeline.gcode.postprocessor import postprocess_gcode, PostProcessResult
+from src.pipeline.gcode.postprocessor import postprocess_gcode, PostProcessResult, compute_bed_offset
 from src.pipeline.gcode.bgcode import gcode_to_bgcode
 from src.pipeline.gcode.filaments import get_filament, write_filament_overrides
 
-log = logging.getLogger("manufacturerAI.gcode.pipeline")
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -44,7 +44,6 @@ class GcodePipelineResult:
 def run_gcode_pipeline(
     stl_path: Path,
     output_dir: Path,
-    pcb_layout: dict,
     routing_result: dict,
     *,
     shell_height: float | None = None,
@@ -61,10 +60,8 @@ def run_gcode_pipeline(
         The enclosure STL to slice (typically ``enclosure.stl``).
     output_dir : Path
         Directory for all output files.
-    pcb_layout : dict
-        The ``pcb_layout.json`` data (board outline + components).
     routing_result : dict
-        The routing result (traces with grid-coordinate paths).
+        The ``routing.json`` data (traces with ``[x_mm, y_mm]`` paths).
     shell_height : float, optional
         Total enclosure height.  If *None*, uses the default.
     layer_height : float
@@ -141,7 +138,6 @@ def run_gcode_pipeline(
     log.info("Generating ink deposition G-code...")
     ink_lines = generate_ink_gcode(
         routing_result=routing_result,
-        pcb_layout=pcb_layout,
         ink_z=pauses.ink_layer_z,
     )
     stages.append(f"Ink G-code: {len(ink_lines)} lines for {len(routing_result.get('traces', []))} traces")
@@ -149,14 +145,12 @@ def run_gcode_pipeline(
     # ── 3b. Extract trace segments for ironing filter ──
     trace_segs = extract_trace_segments(
         routing_result=routing_result,
-        pcb_layout=pcb_layout,
     )
     if trace_segs:
         stages.append(f"Trace segments: {len(trace_segs)} segments for ironing filter")
 
     # ── 3c. Compute bed offset (PrusaSlicer centres model on bed) ──
-    from src.pipeline.gcode.postprocessor import _compute_bed_offset
-    bed_offset = _compute_bed_offset(stl_path, bed_size=(pdef.bed_width, pdef.bed_depth))
+    bed_offset = compute_bed_offset(stl_path, bed_size=(pdef.bed_width, pdef.bed_depth))
     stages.append(f"Bed offset: ({bed_offset[0]:.1f}, {bed_offset[1]:.1f}) mm")
 
     # ── 4. Post-process ───────────────────────────────────────────
