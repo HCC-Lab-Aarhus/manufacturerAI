@@ -1,8 +1,0 @@
-{
-  "min_wall_mm": 1.2,
-  "min_button_diam_mm": 5.0,
-  "min_button_spacing_mm": 1.0,
-  "max_length_mm": 200,
-  "max_width_mm": 200,
-  "max_thickness_mm": 35
-}
