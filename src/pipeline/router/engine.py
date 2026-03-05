@@ -123,33 +123,51 @@ def route_traces(
             ))
         net_pad_map[net.id] = refs
 
-    # 4. Collect routable net IDs and build initial ordering
+    # 4. Collect routable net IDs and compute initial ordering
     net_ids = [
         n.id for n in placement.nets
         if len(net_pad_map.get(n.id, [])) >= 2
     ]
 
+    # Route each net in isolation to measure its path length
+    iso_pools = build_pin_pools(placement, catalog)
+    iso_lengths: dict[str, int] = {}
+    for nid in net_ids:
+        refs = net_pad_map[nid]
+        pads = _resolve_pads(
+            refs, nid, placement, catalog,
+            iso_pools, grid, {},
+        )
+        if pads is None or len(pads) < 2:
+            iso_lengths[nid] = 0
+            continue
+        paths, ok, _ = _route_single_net(
+            nid, pads, grid, pad_radius, config.turn_penalty,
+            pin_voronoi=pin_voronoi,
+        )
+        iso_lengths[nid] = sum(len(p) for p in paths) if ok and paths else 0
+
     def net_priority(nid: str) -> tuple[int, int]:
-        is_power = nid in ("VCC", "GND", "VBAT")
-        return (0 if is_power else 1, -len(net_pad_map.get(nid, [])))
+        pin_count = len(net_pad_map.get(nid, []))
+        return (-pin_count, -iso_lengths.get(nid, 0))
 
     net_ids.sort(key=net_priority)
 
-    # Split into power nets (always first, fixed order) and signal nets (shuffled on retry)
-    power_ids = [nid for nid in net_ids if nid in ("VCC", "GND", "VBAT")]
-    signal_ids = [nid for nid in net_ids if nid not in ("VCC", "GND", "VBAT")]
-
     # 5. Route with retry: try different orderings if any nets fail
+    #    Strategy: first try the isolation-based order, then on failure
+    #    promote failed nets earlier (they were blocked by nets before
+    #    them), then fall back to random shuffles.
+    baseline_order = list(net_ids)
     tried_orderings: set[tuple[str, ...]] = set()
     best: dict | None = None
     last_attempt: dict | None = None
-    ordering = power_ids + signal_ids
+    ordering = list(baseline_order)
+    prev_failed: list[str] = []
 
     for attempt in range(1 + config.max_retries):
         ordering_key = tuple(ordering)
         if ordering_key in tried_orderings:
-            random.shuffle(signal_ids)
-            ordering = power_ids + signal_ids
+            ordering = _perturb_ordering(baseline_order, prev_failed, attempt)
             continue
         tried_orderings.add(ordering_key)
 
@@ -207,8 +225,8 @@ def route_traces(
             for path in net_paths:
                 grid.free_trace(path)
 
-        random.shuffle(signal_ids)
-        ordering = power_ids + signal_ids
+        prev_failed = list(failed_nets)
+        ordering = _perturb_ordering(baseline_order, failed_nets, attempt)
 
     assert best is not None
 
@@ -242,6 +260,52 @@ def route_traces(
         failed_nets=failed_nets,
         debug_grids=debug_grids,
     )
+
+
+# ── Ordering perturbation ─────────────────────────────────────────
+
+
+def _perturb_ordering(
+    baseline: list[str],
+    failed_nets: list[str],
+    attempt: int,
+) -> list[str]:
+    """Generate a new net ordering informed by previous failures.
+
+    Early attempts promote failed nets towards the front of the
+    baseline order (they failed because earlier nets blocked them).
+    Later attempts make increasingly random perturbations.
+    """
+    ordering = list(baseline)
+    if not failed_nets:
+        random.shuffle(ordering)
+        return ordering
+
+    n = len(ordering)
+    half = max(1, (1 + len(baseline)) // 2)
+
+    if attempt < half:
+        # Promote each failed net by `attempt` positions in the baseline
+        for nid in failed_nets:
+            if nid not in ordering:
+                continue
+            idx = ordering.index(nid)
+            new_idx = max(0, idx - (attempt + 1))
+            ordering.pop(idx)
+            ordering.insert(new_idx, nid)
+    else:
+        # Random shuffle with failed nets biased towards the front
+        non_failed = [nid for nid in ordering if nid not in failed_nets]
+        random.shuffle(non_failed)
+        failed_copy = list(failed_nets)
+        random.shuffle(failed_copy)
+        # Insert failed nets into random positions in the first half
+        ordering = list(non_failed)
+        for nid in failed_copy:
+            pos = random.randint(0, max(0, n // 2))
+            ordering.insert(pos, nid)
+
+    return ordering
 
 
 # ── Component blocking ─────────────────────────────────────────────
