@@ -10,6 +10,43 @@ import { enableGuideBtn, closeGuide } from './guide.js';
 import { resetRoutingPanel, loadRoutingResult } from './routing.js';
 import { resetScadPanel, loadScadResult } from './scad.js';
 
+// ── Printer selector ──────────────────────────────────────────────
+
+let _printersLoaded = false;
+
+export async function loadPrinters() {
+    if (_printersLoaded) return;
+    const sel = document.getElementById('printer-select');
+    if (!sel) return;
+    try {
+        const res = await fetch(`${API}/api/printers`);
+        const data = await res.json();
+        sel.innerHTML = data.printers.map(p =>
+            `<option value="${p.id}">${p.label} (${p.bed_width}×${p.bed_depth}mm)</option>`
+        ).join('');
+        _printersLoaded = true;
+    } catch { /* ignore — options stay empty */ }
+}
+
+export function setPrinterFromSession(printerId) {
+    const sel = document.getElementById('printer-select');
+    if (sel && printerId) sel.value = printerId;
+}
+
+export function initPrinterSelector() {
+    const sel = document.getElementById('printer-select');
+    if (!sel) return;
+    loadPrinters();
+    sel.addEventListener('change', async () => {
+        if (!state.session) return;
+        const id = sel.value;
+        await fetch(
+            `${API}/api/session/printer?session=${encodeURIComponent(state.session)}&printer_id=${encodeURIComponent(id)}`,
+            { method: 'PUT' }
+        );
+    });
+}
+
 export function setSessionLabel(id, name) {
     const label = document.getElementById('session-label');
     if (!id) {
@@ -120,7 +157,7 @@ export async function showSessionsModal() {
             const hasDesign = s.pipeline_state?.design === 'complete';
             const isActive = s.id === state.session;
             return `
-                <div class="session-item${isActive ? ' active' : ''}" data-id="${s.id}" data-name="${escapeAttr(s.name || '')}">
+                <div class="session-item${isActive ? ' active' : ''}" data-id="${s.id}" data-name="${escapeAttr(s.name || '')}" data-printer="${s.printer_id || ''}">
                     <div class="session-info">
                         <div class="session-name">${escapeHtml(displayName)}</div>
                         <div class="session-date">${prettyDate}</div>
@@ -134,9 +171,11 @@ export async function showSessionsModal() {
             item.addEventListener('click', () => {
                 const id = item.dataset.id;
                 const name = item.dataset.name;
+                const printer = item.dataset.printer;
                 const hasDesign = item.querySelector('.badge') !== null;
                 setSessionUrl(id);
                 setSessionLabel(id, name || null);
+                if (printer) setPrinterFromSession(printer);
                 closeModal(modal);
                 state.catalog = null; // reset catalog cache
                 clearViewportData();  // reset viewport for new session

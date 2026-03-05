@@ -2,7 +2,7 @@
 
 import { API, state } from './state.js';
 import { closeModal } from './utils.js';
-import { setSessionLabel, startNewSession, showSessionsModal, setSessionUrl } from './session.js';
+import { setSessionLabel, startNewSession, showSessionsModal, setSessionUrl, initPrinterSelector, setPrinterFromSession, loadPrinters } from './session.js';
 import { loadCatalog, reloadCatalog } from './catalog.js';
 import { sendDesignPrompt, loadConversation } from './design.js';
 import { runPlacement, loadPlacementResult, enablePlacementTab } from './placement.js';
@@ -36,6 +36,7 @@ document.addEventListener('DOMContentLoaded', () => {
             })
             .then(data => {
                 if (data?.name) setSessionLabel(state.session, data.name);
+                if (data?.printer_id) setPrinterFromSession(data.printer_id);
                 // Enable placement nav if design is complete
                 if (data?.artifacts?.design) {
                     enablePlacementTab(!data?.artifacts?.placement);
@@ -69,6 +70,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initialize guide controls
     initGuide();
+
+    // Initialize printer selector
+    initPrinterSelector();
 
     // Header buttons
     document.getElementById('btn-new-session').addEventListener('click', startNewSession);

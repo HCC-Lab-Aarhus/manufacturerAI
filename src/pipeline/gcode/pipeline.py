@@ -17,7 +17,8 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from src.pipeline.gcode.slicer import slice_stl, get_printer
+from src.pipeline.config import get_printer
+from src.pipeline.gcode.slicer import slice_stl
 from src.pipeline.gcode.pause_points import compute_pause_points, PausePoints
 from src.pipeline.gcode.ink_traces import generate_ink_gcode, extract_trace_segments
 from src.pipeline.gcode.postprocessor import postprocess_gcode, PostProcessResult, compute_bed_offset

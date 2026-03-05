@@ -1,7 +1,7 @@
 """Bitmap generation — renders routed traces to a fixed-resolution text bitmap.
 
-The bitmap is a 1536×1383 text grid (one character per cell) that maps
-directly onto the build plate.  A '1' means "deposit conductive ink here",
+The bitmap is a text grid (one character per cell) that maps
+directly onto the printer bed.  A '1' means "deposit conductive ink here",
 a '0' means "no ink".  The file is a plain .txt with one row per line
 (top row = highest Y, so the bitmap is right-side-up when viewed in a
 text editor).
@@ -12,23 +12,21 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from src.pipeline.config import BUILD_PLATE, BuildPlate
+from src.pipeline.config import BITMAP_CONFIG, BitmapConfig, PrinterDef, get_printer
 from .models import RoutingResult
 
 
 def _trace_cells(
     path: list[tuple[float, float]],
     trace_width_mm: float,
-    plate: BuildPlate,
+    bed_width: float,
+    bed_depth: float,
+    bitmap: BitmapConfig,
 ) -> set[tuple[int, int]]:
-    """Rasterize a Manhattan trace path into bitmap cell coordinates.
-
-    For each segment, every bitmap cell whose centre falls within
-    half the trace width of the segment axis is marked.
-    """
-    cols, rows = plate.bitmap_cols, plate.bitmap_rows
-    cell_w = plate.cell_width_mm
-    cell_h = plate.cell_height_mm
+    """Rasterize a Manhattan trace path into bitmap cell coordinates."""
+    cols, rows = bitmap.cols, bitmap.rows
+    cell_w = bed_width / cols
+    cell_h = bed_depth / rows
     half_w = trace_width_mm / 2.0
 
     cells: set[tuple[int, int]] = set()
@@ -38,7 +36,6 @@ def _trace_cells(
         x1, y1 = path[i + 1]
 
         if abs(x1 - x0) < 1e-9:
-            # Vertical segment
             col_center = x0
             col_min = max(0, int(math.floor((col_center - half_w) / cell_w)))
             col_max = min(cols - 1, int(math.floor((col_center + half_w) / cell_w)))
@@ -51,7 +48,6 @@ def _trace_cells(
                 for c in range(col_min, col_max + 1):
                     cells.add((r, c))
         else:
-            # Horizontal segment
             row_center = y0
             row_min = max(0, int(math.floor((row_center - half_w) / cell_h)))
             row_max = min(rows - 1, int(math.floor((row_center + half_w) / cell_h)))
@@ -71,7 +67,8 @@ def generate_trace_bitmap(
     result: RoutingResult,
     trace_width_mm: float,
     *,
-    plate: BuildPlate = BUILD_PLATE,
+    printer: PrinterDef | None = None,
+    bitmap: BitmapConfig = BITMAP_CONFIG,
     origin_x: float = 0.0,
     origin_y: float = 0.0,
 ) -> list[str]:
@@ -83,27 +80,33 @@ def generate_trace_bitmap(
         The completed routing result with trace paths in world mm.
     trace_width_mm : float
         Physical width of a conductive-ink trace.
-    plate : BuildPlate
-        Build plate dimensions and bitmap resolution.
+    printer : PrinterDef, optional
+        Printer definition (bed dimensions).  Falls back to default.
+    bitmap : BitmapConfig
+        Bitmap resolution (cols × rows).
     origin_x, origin_y : float
         World-space origin of the board outline's bounding-box lower-left
         corner.  Trace coordinates are shifted by this offset so the
-        board maps onto the build plate starting at (0, 0).
+        board maps onto the printer bed starting at (0, 0).
 
     Returns
     -------
     list[str]
-        One string per row, each exactly ``plate.bitmap_cols`` characters
+        One string per row, each exactly ``bitmap.cols`` characters
         of '0' or '1'.  Index 0 is the top row (highest Y).
     """
-    cols, rows = plate.bitmap_cols, plate.bitmap_rows
+    pdef = printer or get_printer()
+    cols, rows = bitmap.cols, bitmap.rows
     ink_cells: set[tuple[int, int]] = set()
 
     for trace in result.traces:
         shifted_path = [
             (x - origin_x, y - origin_y) for x, y in trace.path
         ]
-        ink_cells |= _trace_cells(shifted_path, trace_width_mm, plate)
+        ink_cells |= _trace_cells(
+            shifted_path, trace_width_mm,
+            pdef.bed_width, pdef.bed_depth, bitmap,
+        )
 
     lines: list[str] = []
     for r in range(rows - 1, -1, -1):
@@ -120,18 +123,17 @@ def write_trace_bitmap(
     trace_width_mm: float,
     output_path: Path | str,
     *,
-    plate: BuildPlate = BUILD_PLATE,
+    printer: PrinterDef | None = None,
+    bitmap: BitmapConfig = BITMAP_CONFIG,
     origin_x: float = 0.0,
     origin_y: float = 0.0,
 ) -> Path:
-    """Generate the trace bitmap and write it to a text file.
-
-    Returns the path written to.
-    """
+    """Generate the trace bitmap and write it to a text file."""
     output_path = Path(output_path)
     lines = generate_trace_bitmap(
         result, trace_width_mm,
-        plate=plate,
+        printer=printer,
+        bitmap=bitmap,
         origin_x=origin_x,
         origin_y=origin_y,
     )

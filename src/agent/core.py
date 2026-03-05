@@ -10,6 +10,7 @@ from typing import AsyncGenerator
 import anthropic
 
 from src.catalog import CatalogResult, _component_to_dict
+from src.pipeline.config import get_printer
 from src.pipeline.design import DesignSpec, parse_design, validate_design, design_to_dict
 from src.session import Session
 
@@ -304,7 +305,7 @@ class DesignAgent:
         except (KeyError, TypeError, ValueError, IndexError) as e:
             return f"Design parsing error: {e}", False
 
-        errors = validate_design(spec, self.catalog)
+        errors = validate_design(spec, self.catalog, printer=get_printer(self.session.printer_id))
         if errors:
             error_list = "\n".join(f"  - {e}" for e in errors)
             return f"Design validation failed:\n{error_list}", False

@@ -59,6 +59,17 @@ header h1 {
     font-size: 12px;
 }
 
+#printer-select {
+    font-family: var(--font);
+    font-size: 12px;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface2);
+    color: var(--text);
+    cursor: pointer;
+}
+
 /* ── Buttons ─────────────────────────────────── */
 
 button {

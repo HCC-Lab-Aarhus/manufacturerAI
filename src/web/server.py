@@ -30,7 +30,7 @@ from src.agent import DesignAgent, TOOLS, MODEL, THINKING_BUDGET, TOKEN_BUDGET, 
 from src.pipeline.design import parse_design, validate_design
 from src.pipeline.placer import place_components, placement_to_dict, parse_placement, PlacementError
 from src.pipeline.router import route_traces, routing_to_dict, write_trace_bitmap
-from src.pipeline.config import BUILD_PLATE, TRACE_RULES
+from src.pipeline.config import TRACE_RULES, PRINTERS, get_printer
 from src.pipeline.scad import run_scad_step
 from src.web.naming import generate_session_name
 
@@ -184,6 +184,7 @@ async def api_get_session(session: str = Query(...)):
         "last_modified": s.last_modified,
         "description": s.description,
         "name": s.name,
+        "printer_id": s.printer_id,
         "pipeline_state": s.pipeline_state,
         "artifacts": {
             "catalog": s.has_artifact("catalog.json"),
@@ -195,6 +196,29 @@ async def api_get_session(session: str = Query(...)):
             "firmware": s.has_artifact("firmware.ino"),
         },
     }
+
+
+# ── Routes: Printer API ────────────────────────────────────────────
+
+@app.get("/api/printers")
+async def api_list_printers():
+    """List available printers."""
+    return {
+        "printers": [
+            {"id": p.id, "label": p.label, "bed_width": p.bed_width, "bed_depth": p.bed_depth, "max_z_mm": p.max_z_mm}
+            for p in PRINTERS.values()
+        ]
+    }
+
+
+@app.put("/api/session/printer")
+async def api_set_printer(session: str = Query(...), printer_id: str = Query(...)):
+    """Set the printer for a session."""
+    s = _resolve_session(session)
+    pdef = get_printer(printer_id)
+    s.printer_id = pdef.id
+    s.save()
+    return {"printer_id": pdef.id, "label": pdef.label}
 
 
 # ── Routes: Catalog API ───────────────────────────────────────────
@@ -254,7 +278,7 @@ async def api_run_placement(session: str = Query(...)):
     cat = _get_catalog()
     design = parse_design(design_data)
 
-    errors = validate_design(design, cat)
+    errors = validate_design(design, cat, printer=get_printer(s.printer_id))
     if errors:
         raise HTTPException(400, f"Design validation failed: {'; '.join(errors)}")
 
@@ -404,6 +428,7 @@ async def api_run_routing(session: str = Query(...)):
         result,
         TRACE_RULES.trace_width_mm,
         s.path / "trace_bitmap.txt",
+        printer=get_printer(s.printer_id),
         origin_x=origin_x,
         origin_y=origin_y,
     )

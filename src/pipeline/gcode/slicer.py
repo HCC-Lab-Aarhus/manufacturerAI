@@ -13,6 +13,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from src.pipeline.config import PrinterDef, PRINTERS, DEFAULT_PRINTER, get_printer
+
 log = logging.getLogger(__name__)
 
 # ── Locate PrusaSlicer ─────────────────────────────────────────────
@@ -53,67 +55,6 @@ def find_prusaslicer_gui() -> str | None:
         if Path(c).exists():
             return c
     return None
-
-
-# ── Printer definitions ────────────────────────────────────────────
-
-from dataclasses import dataclass
-
-
-@dataclass(frozen=True)
-class PrinterDef:
-    """Static definition of a supported 3D printer."""
-    id: str               # short key, e.g. "mk3s"
-    label: str            # human-readable, e.g. "Prusa MK3S"
-    bed_width: float      # mm
-    bed_depth: float      # mm
-    profile_filename: str # ini filename (auto-generated to profiles/)
-    # PrusaSlicer built-in profile names (None → use --load only)
-    native_printer: str | None = None
-    native_print: str | None = None
-    native_material: str | None = None
-    # Thumbnail sizes for --thumbnails CLI flag (None → no thumbnails)
-    thumbnails: str | None = None
-
-
-PRINTERS: dict[str, PrinterDef] = {
-    "mk3s": PrinterDef(
-        id="mk3s",
-        label="Prusa MK3S",
-        bed_width=250.0,
-        bed_depth=210.0,
-        profile_filename="slicer_profile.ini",
-    ),
-    "mk3s_plus": PrinterDef(
-        id="mk3s_plus",
-        label="Prusa i3 MK3S+",
-        bed_width=250.0,
-        bed_depth=210.0,
-        profile_filename="slicer_profile_mk3s_plus.ini",
-    ),
-    "coreone": PrinterDef(
-        id="coreone",
-        label="Prusa Core One+",
-        bed_width=250.0,
-        bed_depth=220.0,
-        profile_filename="slicer_profile_coreone.ini",
-        native_printer="Prusa CORE One HF0.4 nozzle",
-        native_print="0.20mm BALANCED @COREONE HF0.4",
-        native_material="Prusament PLA @COREONE HF0.4",
-        thumbnails="16x16/PNG,220x124/PNG",
-    ),
-}
-
-DEFAULT_PRINTER = "mk3s"
-
-
-def get_printer(printer_id: str | None = None) -> PrinterDef:
-    """Return the *PrinterDef* for *printer_id* (falls back to default)."""
-    pid = (printer_id or DEFAULT_PRINTER).lower().strip()
-    if pid not in PRINTERS:
-        log.warning("Unknown printer '%s' — falling back to %s", pid, DEFAULT_PRINTER)
-        pid = DEFAULT_PRINTER
-    return PRINTERS[pid]
 
 
 # ── Default slicer profiles ────────────────────────────────────────

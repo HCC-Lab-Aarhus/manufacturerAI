@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src.pipeline.config import DEFAULT_PRINTER
+
 
 ROOT = Path(__file__).resolve().parent.parent
 SESSIONS_DIR = ROOT / "outputs" / "sessions"
@@ -39,6 +41,7 @@ class Session:
     last_modified: str                   # ISO 8601
     description: str = ""
     name: str = ""                       # LLM-generated friendly name
+    printer_id: str = DEFAULT_PRINTER
     pipeline_state: dict = field(default_factory=dict)  # stage -> status
 
     def save(self) -> None:
@@ -51,6 +54,7 @@ class Session:
             "last_modified": self.last_modified,
             "description": self.description,
             "name": self.name,
+            "printer_id": self.printer_id,
             "pipeline_state": self.pipeline_state,
         }
         (self.path / "session.json").write_text(
@@ -128,6 +132,7 @@ def load_session(session_id: str) -> Session | None:
         last_modified=meta["last_modified"],
         description=meta.get("description", ""),
         name=meta.get("name", ""),
+        printer_id=meta.get("printer_id", DEFAULT_PRINTER),
         pipeline_state=meta.get("pipeline_state", {}),
     )
 
@@ -151,6 +156,7 @@ def list_sessions() -> list[dict]:
                 "last_modified": meta["last_modified"],
                 "description": meta.get("description", ""),
                 "name": meta.get("name", ""),
+                "printer_id": meta.get("printer_id", DEFAULT_PRINTER),
                 "pipeline_state": meta.get("pipeline_state", {}),
             })
         except (json.JSONDecodeError, OSError):

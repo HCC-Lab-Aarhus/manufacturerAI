@@ -10,36 +10,26 @@ Change a value here and both stages will stay in sync automatically.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class BuildPlate:
-    """Physical dimensions of the build plate (mm).
+class BitmapConfig:
+    """Resolution of the conductive-ink trace bitmap.
 
-    The build plate defines the maximum product size the machine can
-    produce.  The bitmap output is a fixed 1536×1383 cell grid that
-    stretches over the full plate.  The routing grid uses its own
-    coarser resolution (TraceRules.grid_resolution_mm) for performance;
-    the bitmap is rendered from world-mm trace coordinates independently.
+    The bitmap is a fixed-size text grid produced by the router.
+    It stretches over the printer's bed area; cell sizes are derived
+    from the printer dimensions at render time.
     """
 
-    width_mm: float = 210.0
-    height_mm: float = 210.0
-
-    bitmap_cols: int = 1536
-    bitmap_rows: int = 1383
-
-    @property
-    def cell_width_mm(self) -> float:
-        return self.width_mm / self.bitmap_cols
-
-    @property
-    def cell_height_mm(self) -> float:
-        return self.height_mm / self.bitmap_rows
+    cols: int = 1536
+    rows: int = 1383
 
 
-BUILD_PLATE = BuildPlate()
+BITMAP_CONFIG = BitmapConfig()
 
 
 @dataclass(frozen=True)
@@ -124,3 +114,63 @@ TRACE_RULES = TraceRules()
 FLOOR_MM: float = 2.0
 CAVITY_START_MM: float = 3.0
 CEILING_MM: float = 2.0
+
+
+# ── Printer definitions ────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class PrinterDef:
+    """Static definition of a supported 3D printer."""
+    id: str
+    label: str
+    bed_width: float      # mm
+    bed_depth: float      # mm
+    max_z_mm: float       # mm — maximum build height
+    profile_filename: str
+    native_printer: str | None = None
+    native_print: str | None = None
+    native_material: str | None = None
+    thumbnails: str | None = None
+
+
+PRINTERS: dict[str, PrinterDef] = {
+    "mk3s": PrinterDef(
+        id="mk3s",
+        label="Prusa MK3S",
+        bed_width=250.0,
+        bed_depth=210.0,
+        max_z_mm=210.0,
+        profile_filename="slicer_profile.ini",
+    ),
+    "mk3s_plus": PrinterDef(
+        id="mk3s_plus",
+        label="Prusa i3 MK3S+",
+        bed_width=250.0,
+        bed_depth=210.0,
+        max_z_mm=210.0,
+        profile_filename="slicer_profile_mk3s_plus.ini",
+    ),
+    "coreone": PrinterDef(
+        id="coreone",
+        label="Prusa Core One+",
+        bed_width=250.0,
+        bed_depth=220.0,
+        max_z_mm=220.0,
+        profile_filename="slicer_profile_coreone.ini",
+        native_printer="Prusa CORE One HF0.4 nozzle",
+        native_print="0.20mm BALANCED @COREONE HF0.4",
+        native_material="Prusament PLA @COREONE HF0.4",
+        thumbnails="16x16/PNG,220x124/PNG",
+    ),
+}
+
+DEFAULT_PRINTER = "coreone"
+
+
+def get_printer(printer_id: str | None = None) -> PrinterDef:
+    """Return the *PrinterDef* for *printer_id* (falls back to default)."""
+    pid = (printer_id or DEFAULT_PRINTER).lower().strip()
+    if pid not in PRINTERS:
+        log.warning("Unknown printer '%s' — falling back to %s", pid, DEFAULT_PRINTER)
+        pid = DEFAULT_PRINTER
+    return PRINTERS[pid]

@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 from src.catalog import CatalogResult
+from src.pipeline.config import PrinterDef
 from .models import DesignSpec
 
 
-def validate_design(spec: DesignSpec, catalog: CatalogResult) -> list[str]:
+def validate_design(
+    spec: DesignSpec,
+    catalog: CatalogResult,
+    printer: PrinterDef | None = None,
+) -> list[str]:
     """Validate a DesignSpec against the catalog. Returns error messages (empty = valid)."""
+    from src.pipeline.config import get_printer
+    pdef = printer or get_printer()
     errors: list[str] = []
     catalog_map = {c.id: c for c in catalog.components}
 
@@ -176,19 +183,19 @@ def validate_design(spec: DesignSpec, catalog: CatalogResult) -> list[str]:
             errors.append(f"Vertex {i}: ease_out must be >= 0")
 
     # ── Enclosure height validation ──
-    from src.pipeline.config import FLOOR_MM, CEILING_MM, BUILD_PLATE
+    from src.pipeline.config import FLOOR_MM, CEILING_MM
     MIN_CAVITY_MM = 4.0  # bare minimum clearance even with no components
 
-    # ── Outline must fit within the build plate ──
+    # ── Outline must fit within the printer bed ──
     if len(spec.outline.points) >= 3:
         xs = [pt.x for pt in spec.outline.points]
         ys = [pt.y for pt in spec.outline.points]
         outline_w = max(xs) - min(xs)
         outline_h = max(ys) - min(ys)
-        if outline_w > BUILD_PLATE.width_mm or outline_h > BUILD_PLATE.height_mm:
+        if outline_w > pdef.bed_width or outline_h > pdef.bed_depth:
             errors.append(
                 f"Outline bounding box ({outline_w:.1f}×{outline_h:.1f} mm) "
-                f"exceeds build plate ({BUILD_PLATE.width_mm:.0f}×{BUILD_PLATE.height_mm:.0f} mm)"
+                f"exceeds printer bed ({pdef.bed_width:.0f}×{pdef.bed_depth:.0f} mm)"
             )
 
     # Tallest internal component determines minimum required cavity height
@@ -216,6 +223,17 @@ def validate_design(spec: DesignSpec, catalog: CatalogResult) -> list[str]:
                 f"Vertex {i} z_top ({eff_z:.1f}mm) is too short — "
                 f"needs at least {min_required_z:.1f}mm to fit the tallest component"
             )
+        if eff_z > pdef.max_z_mm:
+            errors.append(
+                f"Vertex {i} z_top ({eff_z:.1f}mm) exceeds printer max Z "
+                f"({pdef.max_z_mm:.0f}mm)"
+            )
+
+    if spec.enclosure.height_mm > pdef.max_z_mm:
+        errors.append(
+            f"Enclosure height_mm ({spec.enclosure.height_mm:.1f}mm) exceeds "
+            f"printer max Z ({pdef.max_z_mm:.0f}mm)"
+        )
 
     # ── top_surface validation ──
     ts = spec.enclosure.top_surface
@@ -225,21 +243,33 @@ def validate_design(spec: DesignSpec, catalog: CatalogResult) -> list[str]:
                        if getattr(ts, f) is None]
             if missing:
                 errors.append(f"top_surface dome is missing required fields: {', '.join(missing)}")
-            elif ts.peak_height_mm < ts.base_height_mm:
-                errors.append(
-                    f"top_surface dome peak_height_mm ({ts.peak_height_mm}) must be >= "
-                    f"base_height_mm ({ts.base_height_mm})"
-                )
+            else:
+                if ts.peak_height_mm < ts.base_height_mm:
+                    errors.append(
+                        f"top_surface dome peak_height_mm ({ts.peak_height_mm}) must be >= "
+                        f"base_height_mm ({ts.base_height_mm})"
+                    )
+                if ts.peak_height_mm > pdef.max_z_mm:
+                    errors.append(
+                        f"top_surface dome peak_height_mm ({ts.peak_height_mm}mm) exceeds "
+                        f"printer max Z ({pdef.max_z_mm:.0f}mm)"
+                    )
         elif ts.type == "ridge":
             missing = [f for f in ("x1", "y1", "x2", "y2", "crest_height_mm", "base_height_mm", "falloff_mm")
                        if getattr(ts, f) is None]
             if missing:
                 errors.append(f"top_surface ridge is missing required fields: {', '.join(missing)}")
-            elif ts.crest_height_mm < ts.base_height_mm:
-                errors.append(
-                    f"top_surface ridge crest_height_mm ({ts.crest_height_mm}) must be >= "
-                    f"base_height_mm ({ts.base_height_mm})"
-                )
+            else:
+                if ts.crest_height_mm < ts.base_height_mm:
+                    errors.append(
+                        f"top_surface ridge crest_height_mm ({ts.crest_height_mm}) must be >= "
+                        f"base_height_mm ({ts.base_height_mm})"
+                    )
+                if ts.crest_height_mm > pdef.max_z_mm:
+                    errors.append(
+                        f"top_surface ridge crest_height_mm ({ts.crest_height_mm}mm) exceeds "
+                        f"printer max Z ({pdef.max_z_mm:.0f}mm)"
+                    )
         else:
             errors.append(f"top_surface type '{ts.type}' is unknown (expected: flat, dome, ridge)")
 
