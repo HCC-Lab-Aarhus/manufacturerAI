@@ -9,7 +9,7 @@ from .models import Trace, RoutingResult
 
 def routing_to_dict(result: RoutingResult) -> dict:
     """Serialize a RoutingResult to a JSON-safe dict."""
-    return {
+    d = {
         "traces": [
             {
                 "net_id": t.net_id,
@@ -20,6 +20,9 @@ def routing_to_dict(result: RoutingResult) -> dict:
         "pin_assignments": dict(result.pin_assignments),
         "failed_nets": list(result.failed_nets),
     }
+    if result.debug_grids:
+        d["debug_grids"] = result.debug_grids
+    return d
 
 
 def parse_routing(data: dict) -> RoutingResult:

@@ -61,6 +61,13 @@ export function buildNetColorMap(netIds) {
     return map;
 }
 
+export function toggleDebugOverlay(netId, visible) {
+    const groups = document.querySelectorAll(`g[data-debug-net="${netId}"]`);
+    for (const g of groups) {
+        g.setAttribute('display', visible ? 'inline' : 'none');
+    }
+}
+
 
 // ── Preview builder ───────────────────────────────────────────
 
@@ -158,6 +165,19 @@ function buildRoutingSVG(data) {
         drawTrace(svg, trace, ox, oy, netColorMap[trace.net_id], traceWidthMm);
     });
 
+    // ── Debug grid overlays (hidden by default) ──
+    const debugGrids = data.debug_grids || [];
+    if (debugGrids.length > 0) {
+        const debugNetColorMap = buildNetColorMap(debugGrids.map(g => g.net_id));
+        for (const snap of debugGrids) {
+            const g = document.createElementNS(NS, 'g');
+            g.setAttribute('data-debug-net', snap.net_id);
+            g.setAttribute('display', 'none');
+            drawDebugGrid(g, snap, ox, oy, debugNetColorMap[snap.net_id]);
+            svg.appendChild(g);
+        }
+    }
+
     // ── Trace legend ──
     if (traces.length > 0) {
         const legendY = h - 8;
@@ -217,7 +237,34 @@ function buildRoutingSVG(data) {
     const heading = document.createElement('h4');
     heading.textContent = 'Trace Layout';
     section.appendChild(heading);
-    section.appendChild(svg);
+
+    const svgWrap = document.createElement('div');
+    svgWrap.style.position = 'relative';
+    svgWrap.appendChild(svg);
+
+    if (debugGrids.length > 0) {
+        const debugNets = [...new Set(debugGrids.map(g => g.net_id))];
+        const sel = document.createElement('select');
+        sel.style.cssText = 'position:absolute; top:6px; left:6px; font-size:11px; padding:2px 4px; background:#161b22; color:#c9d1d9; border:1px solid #30363d; border-radius:4px; cursor:pointer; z-index:1;';
+        const none = document.createElement('option');
+        none.value = '';
+        none.textContent = 'Debug: none';
+        sel.appendChild(none);
+        for (const nid of debugNets) {
+            const opt = document.createElement('option');
+            opt.value = nid;
+            opt.textContent = `Debug: ${nid}`;
+            sel.appendChild(opt);
+        }
+        sel.addEventListener('change', () => {
+            for (const nid of debugNets) {
+                toggleDebugOverlay(nid, nid === sel.value);
+            }
+        });
+        svgWrap.appendChild(sel);
+    }
+
+    section.appendChild(svgWrap);
     return section;
 }
 
@@ -240,28 +287,77 @@ function drawTrace(svg, trace, ox, oy, color, traceWidthMm) {
     polyline.setAttribute('opacity', '0.85');
     svg.appendChild(polyline);
 
-    // Via dots at each waypoint (intermediate points)
-    for (let i = 1; i < path.length - 1; i++) {
-        const dot = document.createElementNS(NS, 'circle');
-        dot.setAttribute('cx', ox + path[i][0] * SCALE);
-        dot.setAttribute('cy', oy + path[i][1] * SCALE);
-        dot.setAttribute('r', '2');
-        dot.setAttribute('fill', color);
-        dot.setAttribute('opacity', '0.7');
-        svg.appendChild(dot);
-    }
-
     // Endpoint pads (start and end)
     for (const idx of [0, path.length - 1]) {
         const pad = document.createElementNS(NS, 'circle');
         pad.setAttribute('cx', ox + path[idx][0] * SCALE);
         pad.setAttribute('cy', oy + path[idx][1] * SCALE);
-        pad.setAttribute('r', '3.5');
+        pad.setAttribute('r', '2');
         pad.setAttribute('fill', color);
         pad.setAttribute('stroke', '#0d1117');
-        pad.setAttribute('stroke-width', '1');
+        pad.setAttribute('stroke-width', '0.5');
         svg.appendChild(pad);
     }
+}
+
+
+// ── Draw debug grid overlay as an embedded bitmap ─────────────
+
+function drawDebugGrid(group, snap, ox, oy, netColor) {
+    const { width: gw, height: gh, origin_x, origin_y, resolution, cells: b64 } = snap;
+    const raw = atob(b64);
+    const cells = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) cells[i] = raw.charCodeAt(i);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = gw;
+    canvas.height = gh;
+    const ctx = canvas.getContext('2d');
+    const img = ctx.createImageData(gw, gh);
+
+    const m = netColor.match(/hsl\((\d+)/);
+    const hue = m ? parseInt(m[1], 10) : 0;
+
+    for (let gy = 0; gy < gh; gy++) {
+        for (let gx = 0; gx < gw; gx++) {
+            const cell = cells[gy * gw + gx];
+            const pi = (gy * gw + gx) * 4;
+            if (cell === 1) {           // Trace clearance (other nets)
+                img.data[pi]     = 255;
+                img.data[pi + 1] = 160;
+                img.data[pi + 2] = 0;
+                img.data[pi + 3] = 160;
+            } else if (cell === 2) {    // Permanently blocked (bodies/edges)
+                img.data[pi]     = 100;
+                img.data[pi + 1] = 100;
+                img.data[pi + 2] = 100;
+                img.data[pi + 3] = 100;
+            } else if (cell === 3) {    // Trace path (other nets)
+                img.data[pi]     = 255;
+                img.data[pi + 1] = 50;
+                img.data[pi + 2] = 50;
+                img.data[pi + 3] = 200;
+            } else if (cell === 4) {    // Voronoi pin clearance
+                img.data[pi]     = 100;
+                img.data[pi + 1] = 140;
+                img.data[pi + 2] = 255;
+                img.data[pi + 3] = 140;
+            } else {
+                img.data[pi + 3] = 0;  // FREE — transparent
+            }
+        }
+    }
+    ctx.putImageData(img, 0, 0);
+
+    const cellPx = resolution * SCALE;
+    const imgEl = document.createElementNS(NS, 'image');
+    imgEl.setAttribute('x', ox + origin_x * SCALE);
+    imgEl.setAttribute('y', oy + origin_y * SCALE);
+    imgEl.setAttribute('width', gw * cellPx);
+    imgEl.setAttribute('height', gh * cellPx);
+    imgEl.setAttribute('image-rendering', 'pixelated');
+    imgEl.setAttributeNS('http://www.w3.org/1999/xlink', 'href', canvas.toDataURL());
+    group.appendChild(imgEl);
 }
 
 

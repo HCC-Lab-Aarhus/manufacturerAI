@@ -25,6 +25,7 @@ class RoutingResult:
     traces: list[Trace]
     pin_assignments: dict[str, str]     # "mcu_1:gpio" -> "mcu_1:PD2"
     failed_nets: list[str]
+    debug_grids: list[dict] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -54,11 +55,6 @@ class RouterConfig:
 
     # ── Router-only knobs ──────────────────────────────────────
     turn_penalty: int = 5                # A* cost penalty for changing direction
-    crossing_penalty: int = 500          # A* cost for crossing an occupied cell (rip-up)
-
-    max_rip_up_attempts: int = 200       # outer random-ordering attempts (pruning skips dead orderings)
-    inner_rip_up_limit: int = 100        # inner rip-up iterations per attempt
-    time_budget_s: float = 60.0          # maximum wall-clock time for routing
 
 
 # Module-level defaults (used when no RouterConfig is passed)
@@ -70,8 +66,3 @@ TRACE_CLEARANCE_MM = _DEFAULT_CFG.trace_clearance_mm
 EDGE_CLEARANCE_MM = _DEFAULT_CFG.edge_clearance_mm
 
 TURN_PENALTY = _DEFAULT_CFG.turn_penalty
-CROSSING_PENALTY = _DEFAULT_CFG.crossing_penalty
-
-MAX_RIP_UP_ATTEMPTS = _DEFAULT_CFG.max_rip_up_attempts
-INNER_RIP_UP_LIMIT = _DEFAULT_CFG.inner_rip_up_limit
-TIME_BUDGET_S = _DEFAULT_CFG.time_budget_s

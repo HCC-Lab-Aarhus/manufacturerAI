@@ -85,15 +85,6 @@ class TestRoutingGrid(unittest.TestCase):
         self.assertAlmostEqual(wx, wx2, delta=1.0)
         self.assertAlmostEqual(wy, wy2, delta=1.0)
 
-    def test_snapshot_restore(self):
-        """Snapshot and restore preserve cell state."""
-        gx, gy = self.grid.world_to_grid(10.0, 10.0)
-        snap = self.grid.snapshot()
-        self.grid.block_cell(gx, gy)
-        self.assertTrue(self.grid.is_blocked(gx, gy))
-        self.grid.restore(snap)
-        self.assertTrue(self.grid.is_free(gx, gy))
-
 
 class TestPathfinder(unittest.TestCase):
     """Unit tests for A* pathfinding."""

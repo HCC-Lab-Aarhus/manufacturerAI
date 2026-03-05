@@ -60,11 +60,6 @@ class RoutingGrid:
         # them so nearby pads stay reachable.
         self._protected: set[tuple[int, int]] = set()
 
-        # Soft-cost map: cell_index -> extra A* travel cost.
-        # Cells here are still FREE but strongly discouraged so the router
-        # prefers to route around component bodies when a detour exists.
-        self._cost_map: dict[int, int] = {}
-
         # Block cells outside polygon or too close to its edges
         inset_poly = outline_poly.buffer(-edge_clearance)
         for gy in range(self.height):
@@ -144,51 +139,37 @@ class RoutingGrid:
         half_w_mm: float, half_h_mm: float,
         permanent: bool = False,
     ) -> None:
-        """Block all cells whose centres fall inside a world-space rectangle."""
-        margin = 0.0
-        left = cx_mm - half_w_mm - margin
-        right = cx_mm + half_w_mm + margin
-        bottom = cy_mm - half_h_mm - margin
-        top = cy_mm + half_h_mm + margin
+        """Block all cells whose centres fall inside a world-space rectangle.
 
-        gx_min = max(0, int(math.floor((left - self.origin_x) / self.resolution)))
-        gx_max = min(self.width - 1, int(math.ceil((right - self.origin_x) / self.resolution)))
-        gy_min = max(0, int(math.floor((bottom - self.origin_y) / self.resolution)))
-        gy_max = min(self.height - 1, int(math.ceil((top - self.origin_y) / self.resolution)))
+        Uses the cell-centre test (consistent with outline polygon
+        checking) so that edge cells whose centres lie outside the
+        rectangle are not over-blocked.
+        """
+        left = cx_mm - half_w_mm
+        right = cx_mm + half_w_mm
+        bottom = cy_mm - half_h_mm
+        top = cy_mm + half_h_mm
+
+        res = self.resolution
+        ox, oy = self.origin_x, self.origin_y
+
+        gx_min = max(0, int(math.floor((left - ox) / res)))
+        gx_max = min(self.width - 1, int(math.ceil((right - ox) / res)))
+        gy_min = max(0, int(math.floor((bottom - oy) / res)))
+        gy_max = min(self.height - 1, int(math.ceil((top - oy) / res)))
 
         for gy in range(gy_min, gy_max + 1):
+            wy = oy + (gy + 0.5) * res
+            if wy < bottom or wy > top:
+                continue
             for gx in range(gx_min, gx_max + 1):
+                wx = ox + (gx + 0.5) * res
+                if wx < left or wx > right:
+                    continue
                 if permanent:
                     self.permanently_block_cell(gx, gy)
                 else:
                     self.block_cell(gx, gy)
-
-    def add_cost_zone_rect_world(
-        self,
-        cx_mm: float, cy_mm: float,
-        half_w_mm: float, half_h_mm: float,
-        extra_cost: int,
-    ) -> None:
-        """Add extra A* travel cost to all cells inside a world-space rectangle.
-
-        Cells remain FREE (routable) but the A* pathfinder will strongly
-        prefer any path that avoids this zone unless no cheaper route exists.
-        """
-        left   = cx_mm - half_w_mm
-        right  = cx_mm + half_w_mm
-        bottom = cy_mm - half_h_mm
-        top    = cy_mm + half_h_mm
-
-        gx_min = max(0, int(math.floor((left   - self.origin_x) / self.resolution)))
-        gx_max = min(self.width  - 1, int(math.ceil((right  - self.origin_x) / self.resolution)))
-        gy_min = max(0, int(math.floor((bottom - self.origin_y) / self.resolution)))
-        gy_max = min(self.height - 1, int(math.ceil((top    - self.origin_y) / self.resolution)))
-
-        W = self.width
-        for gy in range(gy_min, gy_max + 1):
-            for gx in range(gx_min, gx_max + 1):
-                idx = gy * W + gx
-                self._cost_map[idx] = self._cost_map.get(idx, 0) + extra_cost
 
     def protect_cell(self, gx: int, gy: int) -> None:
         """Mark a cell as a protected pin pad position.
@@ -263,34 +244,4 @@ class RoutingGrid:
                         if v == BLOCKED or v == TRACE_PATH:
                             self._cells[ny * self.width + nx] = FREE
 
-    # ── Snapshot / restore for rip-up ──────────────────────────────
 
-    def clone(self) -> 'RoutingGrid':
-        """Return a full (shallow) copy of this grid.
-
-        The cell array and protected set are deep-copied so mutations
-        to the clone don't affect the original.  The outline polygon
-        is shared (immutable geometry).
-        """
-        g = RoutingGrid.__new__(RoutingGrid)
-        g.resolution = self.resolution
-        g.edge_clearance = self.edge_clearance
-        g.trace_width_mm = self.trace_width_mm
-        g.trace_clearance_mm = self.trace_clearance_mm
-        g.origin_x = self.origin_x
-        g.origin_y = self.origin_y
-        g.width = self.width
-        g.height = self.height
-        g._cells = bytearray(self._cells)
-        g._protected = set(self._protected)
-        g._cost_map = dict(self._cost_map)
-        g.outline_poly = self.outline_poly
-        return g
-
-    def snapshot(self) -> bytearray:
-        """Return a copy of the cell state for later restore."""
-        return bytearray(self._cells)
-
-    def restore(self, snap: bytearray) -> None:
-        """Restore cell state from a snapshot."""
-        self._cells[:] = snap
