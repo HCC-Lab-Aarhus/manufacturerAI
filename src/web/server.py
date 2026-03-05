@@ -19,6 +19,7 @@ from pathlib import Path
 from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 # compile state: session_id -> {status, message, cancel}
@@ -67,6 +68,10 @@ app.add_middleware(
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 STATIC_DIR.mkdir(exist_ok=True)
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def _favicon():
+    return FileResponse(STATIC_DIR / "favicon.ico")
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
