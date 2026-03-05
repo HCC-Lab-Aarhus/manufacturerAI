@@ -1,20 +1,21 @@
-"""Main routing engine — single-pass greedy Manhattan trace routing.
+"""Main routing engine — greedy Manhattan trace routing with retry.
 
 Algorithm:
   1. Build routing grid, block component bodies, protect pin cells.
   2. Resolve pin positions for all nets (with dynamic MCU allocation).
-  3. Sort nets: power/ground first, then by pin count descending.
+  3. Sort nets by initial priority (power/ground first, then pin count).
   4. Route each net via A* with foreign-pin clearance enforcement.
   5. Commit each trace + clearance zone to the grid.
-
-No rip-up, no random ordering — clearances are always strictly enforced.
-If a net cannot route around existing traces, it fails cleanly.
+  6. If any nets fail, clear all traces and retry with a different
+     random net ordering.  Previously tried orderings are tracked to
+     avoid duplicates.  The best result (fewest failures) is kept.
 """
 
 from __future__ import annotations
 
 import logging
 import math
+import random
 from dataclasses import dataclass
 
 from shapely.geometry import Polygon, Point
@@ -103,8 +104,7 @@ def route_traces(
     pad_radius = _compute_pad_radius(config)
     _block_components(grid, placement, catalog_map, pad_radius)
 
-    # 2. Prepare pin pools, pin cell map, Voronoi pin proximity
-    pin_pools = build_pin_pools(placement, catalog)
+    # 2. Prepare pin cell map, Voronoi pin proximity
     all_pin_cells = _build_all_pin_cells(placement, catalog, grid)
     pin_clearance_cells = _compute_pin_clearance_cells(config)
     pin_voronoi = _build_pin_voronoi(all_pin_cells, grid, pin_clearance_cells)
@@ -123,7 +123,7 @@ def route_traces(
             ))
         net_pad_map[net.id] = refs
 
-    # 4. Sort: power/ground first, then more pins first
+    # 4. Collect routable net IDs and build initial ordering
     net_ids = [
         n.id for n in placement.nets
         if len(net_pad_map.get(n.id, [])) >= 2
@@ -135,37 +135,92 @@ def route_traces(
 
     net_ids.sort(key=net_priority)
 
-    # 5. Route each net in order
-    routed_paths: dict[str, list[list[tuple[int, int]]]] = {}
-    routed_pads: dict[str, list[NetPad]] = {}
-    pin_assignments: dict[str, str] = {}
-    failed_nets: list[str] = []
+    # Split into power nets (always first, fixed order) and signal nets (shuffled on retry)
+    power_ids = [nid for nid in net_ids if nid in ("VCC", "GND", "VBAT")]
+    signal_ids = [nid for nid in net_ids if nid not in ("VCC", "GND", "VBAT")]
 
-    for nid in net_ids:
-        refs = net_pad_map[nid]
-        pads = _resolve_pads(
-            refs, nid, placement, catalog,
-            pin_pools, grid, pin_assignments,
-        )
-        if pads is None or len(pads) < 2:
-            failed_nets.append(nid)
-            log.info("  %-20s FAIL — pad resolution", nid)
+    # 5. Route with retry: try different orderings if any nets fail
+    tried_orderings: set[tuple[str, ...]] = set()
+    best: dict | None = None
+    last_attempt: dict | None = None
+    ordering = power_ids + signal_ids
+
+    for attempt in range(1 + config.max_retries):
+        ordering_key = tuple(ordering)
+        if ordering_key in tried_orderings:
+            random.shuffle(signal_ids)
+            ordering = power_ids + signal_ids
             continue
+        tried_orderings.add(ordering_key)
 
-        paths, ok, _ = _route_single_net(
-            nid, pads, grid, pad_radius, config.turn_penalty,
-            pin_voronoi=pin_voronoi,
-        )
+        pin_pools = build_pin_pools(placement, catalog)
+        routed_paths: dict[str, list[list[tuple[int, int]]]] = {}
+        routed_pads: dict[str, list[NetPad]] = {}
+        pin_assignments: dict[str, str] = {}
+        failed_nets: list[str] = []
 
-        if ok and paths:
-            routed_paths[nid] = paths
-            routed_pads[nid] = pads
-            for path in paths:
+        for nid in ordering:
+            refs = net_pad_map[nid]
+            pads = _resolve_pads(
+                refs, nid, placement, catalog,
+                pin_pools, grid, pin_assignments,
+            )
+            if pads is None or len(pads) < 2:
+                failed_nets.append(nid)
+                log.info("  %-20s FAIL — pad resolution", nid)
+                continue
+
+            paths, ok, _ = _route_single_net(
+                nid, pads, grid, pad_radius, config.turn_penalty,
+                pin_voronoi=pin_voronoi,
+            )
+
+            if ok and paths:
+                routed_paths[nid] = paths
+                routed_pads[nid] = pads
+                for path in paths:
+                    grid.block_trace(path)
+                log.info("  %-20s OK — %d segments", nid, len(paths))
+            else:
+                failed_nets.append(nid)
+                log.info("  %-20s FAIL — no route", nid)
+
+        last_attempt = {
+            "routed_paths": routed_paths,
+            "routed_pads": routed_pads,
+            "pin_assignments": pin_assignments,
+            "failed_nets": failed_nets,
+        }
+
+        if not failed_nets:
+            log.info("Router: all nets routed on attempt %d", attempt + 1)
+            best = last_attempt
+            break
+
+        if best is None or len(failed_nets) < len(best["failed_nets"]):
+            best = last_attempt
+
+        log.info("Router attempt %d: %d failed — retrying with new ordering",
+                 attempt + 1, len(failed_nets))
+
+        for net_paths in routed_paths.values():
+            for path in net_paths:
+                grid.free_trace(path)
+
+        random.shuffle(signal_ids)
+        ordering = power_ids + signal_ids
+
+    assert best is not None
+
+    if best is not last_attempt:
+        for net_paths in best["routed_paths"].values():
+            for path in net_paths:
                 grid.block_trace(path)
-            log.info("  %-20s OK — %d segments", nid, len(paths))
-        else:
-            failed_nets.append(nid)
-            log.info("  %-20s FAIL — no route", nid)
+
+    routed_paths = best["routed_paths"]
+    routed_pads = best["routed_pads"]
+    pin_assignments = best["pin_assignments"]
+    failed_nets = best["failed_nets"]
 
     # 5b. Capture debug snapshots (self-contained, does not use the live grid)
     debug_grids = build_debug_grids(
