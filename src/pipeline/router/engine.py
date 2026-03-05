@@ -130,6 +130,7 @@ def route_traces(
     ]
 
     # Route each net in isolation to measure its path length
+    log.debug("Isolation routing: measuring path lengths for %d nets", len(net_ids))
     iso_pools = build_pin_pools(placement, catalog)
     iso_lengths: dict[str, int] = {}
     for nid in net_ids:
@@ -140,18 +141,25 @@ def route_traces(
         )
         if pads is None or len(pads) < 2:
             iso_lengths[nid] = 0
+            log.debug("  %-20s isolation: no pads", nid)
             continue
         paths, ok, _ = _route_single_net(
             nid, pads, grid, pad_radius, config.turn_penalty,
             pin_voronoi=pin_voronoi,
         )
-        iso_lengths[nid] = sum(len(p) for p in paths) if ok and paths else 0
+        length = sum(len(p) for p in paths) if ok and paths else 0
+        iso_lengths[nid] = length
+        log.debug("  %-20s isolation: %d cells, %d pins",
+                  nid, length, len(refs))
 
     def net_priority(nid: str) -> tuple[int, int]:
         pin_count = len(net_pad_map.get(nid, []))
         return (-pin_count, -iso_lengths.get(nid, 0))
 
     net_ids.sort(key=net_priority)
+    log.debug("Initial ordering: %s",
+             ", ".join(f"{nid}({len(net_pad_map[nid])}p/{iso_lengths[nid]}c)"
+                       for nid in net_ids))
 
     # 5. Route with retry: try different orderings if any nets fail
     #    Strategy: first try the isolation-based order, then on failure
@@ -168,8 +176,11 @@ def route_traces(
         ordering_key = tuple(ordering)
         if ordering_key in tried_orderings:
             ordering = _perturb_ordering(baseline_order, prev_failed, attempt)
+            log.debug("Attempt %d: skipped duplicate ordering", attempt + 1)
             continue
         tried_orderings.add(ordering_key)
+        log.debug("Attempt %d: order = [%s]",
+                  attempt + 1, ", ".join(ordering))
 
         pin_pools = build_pin_pools(placement, catalog)
         routed_paths: dict[str, list[list[tuple[int, int]]]] = {}
@@ -217,9 +228,12 @@ def route_traces(
 
         if best is None or len(failed_nets) < len(best["failed_nets"]):
             best = last_attempt
+            log.debug("Attempt %d: new best (%d failed)",
+                      attempt + 1, len(failed_nets))
 
-        log.info("Router attempt %d: %d failed — retrying with new ordering",
-                 attempt + 1, len(failed_nets))
+        log.info("Router attempt %d: %d/%d failed [%s]",
+                 attempt + 1, len(failed_nets), len(ordering),
+                 ", ".join(failed_nets))
 
         for net_paths in routed_paths.values():
             for path in net_paths:
@@ -279,6 +293,7 @@ def _perturb_ordering(
     ordering = list(baseline)
     if not failed_nets:
         random.shuffle(ordering)
+        log.debug("Perturb attempt %d: no failures, random shuffle", attempt)
         return ordering
 
     n = len(ordering)
@@ -293,6 +308,8 @@ def _perturb_ordering(
             new_idx = max(0, idx - (attempt + 1))
             ordering.pop(idx)
             ordering.insert(new_idx, nid)
+        log.debug("Perturb attempt %d: promoted %s by %d positions",
+                  attempt, failed_nets, attempt + 1)
     else:
         # Random shuffle with failed nets biased towards the front
         non_failed = [nid for nid in ordering if nid not in failed_nets]
@@ -304,6 +321,8 @@ def _perturb_ordering(
         for nid in failed_copy:
             pos = random.randint(0, max(0, n // 2))
             ordering.insert(pos, nid)
+        log.debug("Perturb attempt %d: random with %s biased to front",
+                  attempt, failed_nets)
 
     return ordering
 

@@ -55,7 +55,7 @@ class RouterConfig:
 
     # ── Router-only knobs ──────────────────────────────────────
     turn_penalty: int = 5                # A* cost penalty for changing direction
-    max_retries: int = 1000              # rip-up/reroute attempts with shuffled ordering
+    max_retries: int = 100              # rip-up/reroute attempts with shuffled ordering
 
 
 # Module-level defaults (used when no RouterConfig is passed)
