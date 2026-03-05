@@ -152,9 +152,10 @@ function buildRoutingSVG(data) {
     });
 
     // ── Traces ──
+    const traceWidthMm = data.trace_width_mm || 1.0;
     const netColorMap = buildNetColorMap(traces.map(t => t.net_id));
     traces.forEach(trace => {
-        drawTrace(svg, trace, ox, oy, netColorMap[trace.net_id]);
+        drawTrace(svg, trace, ox, oy, netColorMap[trace.net_id], traceWidthMm);
     });
 
     // ── Trace legend ──
@@ -223,12 +224,11 @@ function buildRoutingSVG(data) {
 
 // ── Draw a trace polyline ─────────────────────────────────────
 
-function drawTrace(svg, trace, ox, oy, color) {
+function drawTrace(svg, trace, ox, oy, color, traceWidthMm) {
     const path = trace.path;
     if (!path || path.length < 2) return;
 
-    // Main trace line — stroke-width matches physical trace width (1 mm × SCALE px/mm)
-    const TRACE_W_PX = 1.0 * SCALE;   // 4 px = 1 mm at current scale
+    const TRACE_W_PX = (traceWidthMm || 1.0) * SCALE;
     const points = path.map(p => `${ox + p[0] * SCALE},${oy + p[1] * SCALE}`).join(' ');
     const polyline = document.createElementNS(NS, 'polyline');
     polyline.setAttribute('points', points);

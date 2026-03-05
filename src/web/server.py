@@ -29,7 +29,8 @@ from src.session import create_session, load_session, list_sessions, Session
 from src.agent import DesignAgent, TOOLS, MODEL, THINKING_BUDGET, TOKEN_BUDGET, _build_system_prompt, _prune_messages
 from src.pipeline.design import parse_design, validate_design
 from src.pipeline.placer import place_components, placement_to_dict, parse_placement, PlacementError
-from src.pipeline.router import route_traces, routing_to_dict
+from src.pipeline.router import route_traces, routing_to_dict, write_trace_bitmap
+from src.pipeline.config import BUILD_PLATE, TRACE_RULES
 from src.pipeline.scad import run_scad_step
 from src.web.naming import generate_session_name
 
@@ -388,6 +389,7 @@ async def api_run_routing(session: str = Query(...)):
     data["components"] = placement_data.get("components", [])
     data["nets"] = placement_data.get("nets", [])
     data["enclosure"] = placement_data.get("enclosure", {"height_mm": 25})
+    data["trace_width_mm"] = TRACE_RULES.trace_width_mm
 
     # Enrich components with body + pin data for rendering
     _enrich_components(data.get("components", []), cat)
