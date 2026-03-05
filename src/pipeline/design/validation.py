@@ -176,8 +176,20 @@ def validate_design(spec: DesignSpec, catalog: CatalogResult) -> list[str]:
             errors.append(f"Vertex {i}: ease_out must be >= 0")
 
     # ── Enclosure height validation ──
-    from src.pipeline.config import FLOOR_MM, CEILING_MM
+    from src.pipeline.config import FLOOR_MM, CEILING_MM, BUILD_PLATE
     MIN_CAVITY_MM = 4.0  # bare minimum clearance even with no components
+
+    # ── Outline must fit within the build plate ──
+    if len(spec.outline.points) >= 3:
+        xs = [pt.x for pt in spec.outline.points]
+        ys = [pt.y for pt in spec.outline.points]
+        outline_w = max(xs) - min(xs)
+        outline_h = max(ys) - min(ys)
+        if outline_w > BUILD_PLATE.width_mm or outline_h > BUILD_PLATE.height_mm:
+            errors.append(
+                f"Outline bounding box ({outline_w:.1f}×{outline_h:.1f} mm) "
+                f"exceeds build plate ({BUILD_PLATE.width_mm:.0f}×{BUILD_PLATE.height_mm:.0f} mm)"
+            )
 
     # Tallest internal component determines minimum required cavity height
     tallest_mm = MIN_CAVITY_MM

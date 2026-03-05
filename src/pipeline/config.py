@@ -14,6 +14,35 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class BuildPlate:
+    """Physical dimensions of the build plate (mm).
+
+    The build plate defines the maximum product size the machine can
+    produce.  The bitmap output is a fixed 1536×1383 cell grid that
+    stretches over the full plate.  The routing grid uses its own
+    coarser resolution (TraceRules.grid_resolution_mm) for performance;
+    the bitmap is rendered from world-mm trace coordinates independently.
+    """
+
+    width_mm: float = 210.0
+    height_mm: float = 210.0
+
+    bitmap_cols: int = 1536
+    bitmap_rows: int = 1383
+
+    @property
+    def cell_width_mm(self) -> float:
+        return self.width_mm / self.bitmap_cols
+
+    @property
+    def cell_height_mm(self) -> float:
+        return self.height_mm / self.bitmap_rows
+
+
+BUILD_PLATE = BuildPlate()
+
+
+@dataclass(frozen=True)
 class TraceRules:
     """Physical design rules for conductive-ink traces.
 
@@ -38,7 +67,8 @@ class TraceRules:
     """Minimum distance from a trace to the outline edge."""
 
     grid_resolution_mm: float = 0.5
-    """Routing-grid cell size."""
+    """Routing-grid cell size (mm).  Independent of the bitmap resolution;
+    the bitmap is rendered from world-mm trace coordinates after routing."""
 
     # ── Derived helpers ────────────────────────────────────────────
 

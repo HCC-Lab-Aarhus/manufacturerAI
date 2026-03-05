@@ -7,11 +7,13 @@ Submodules:
   pins          Pin resolution and dynamic pin allocation.
   engine        Main routing algorithm (grid-search with rip-up).
   serialization JSON conversion (routing_to_dict, parse_routing).
+  bitmap        Trace bitmap generation (1536×1383 txt file).
 """
 
 from .models import Trace, RoutingResult, RouterConfig
 from .engine import route_traces
 from .serialization import routing_to_dict, parse_routing
+from .bitmap import generate_trace_bitmap, write_trace_bitmap
 
 __all__ = [
     # Models
@@ -20,4 +22,6 @@ __all__ = [
     "route_traces",
     # Serialization
     "routing_to_dict", "parse_routing",
+    # Bitmap
+    "generate_trace_bitmap", "write_trace_bitmap",
 ]

@@ -395,6 +395,19 @@ async def api_run_routing(session: str = Query(...)):
     _enrich_components(data.get("components", []), cat)
 
     s.write_artifact("routing.json", data)
+
+    # Generate trace bitmap stretched over the build plate
+    outline_verts = placement.outline.vertices
+    origin_x = min(v[0] for v in outline_verts)
+    origin_y = min(v[1] for v in outline_verts)
+    write_trace_bitmap(
+        result,
+        TRACE_RULES.trace_width_mm,
+        s.path / "trace_bitmap.txt",
+        origin_x=origin_x,
+        origin_y=origin_y,
+    )
+
     s.pipeline_state["routing"] = "complete"
     s.save()
     return data
