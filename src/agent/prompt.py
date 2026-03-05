@@ -246,6 +246,130 @@ Example with a side-mount component (IR LED on the top edge):
 ```
 Here `edge_index: 1` means the LED mounts on the edge from `outline[1]` to `outline[2]`.
 
+## Example: IR Remote Control (MCU-based device)
+This shows a device with programmable logic — an ATmega328P MCU, multiple buttons,
+an NPN transistor driving an IR LED, a power switch, bypass cap, and pull-up resistor.
+```json
+{{
+  "components": [
+    {{"catalog_id": "battery_holder_2xAAA", "instance_id": "bat_1"}},
+    {{"catalog_id": "slide_switch_2p", "instance_id": "sw_pwr"}},
+    {{"catalog_id": "atmega328p_dip28", "instance_id": "mcu_1"}},
+    {{"catalog_id": "capacitor_100nf", "instance_id": "c_bypass"}},
+    {{"catalog_id": "resistor_axial", "instance_id": "r_reset", "config": {{"resistance_ohms": 10000}}}},
+    {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_pwr"}},
+    {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_vol_up"}},
+    {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_vol_dn"}},
+    {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_ch_up"}},
+    {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_ch_dn"}},
+    {{"catalog_id": "resistor_axial", "instance_id": "r_base", "config": {{"resistance_ohms": 1000}}}},
+    {{"catalog_id": "npn_transistor_to92", "instance_id": "q_ir"}},
+    {{"catalog_id": "resistor_axial", "instance_id": "r_ir", "config": {{"resistance_ohms": 15}}}},
+    {{"catalog_id": "led_5mm", "instance_id": "led_ir", "mounting_style": "side", "config": {{"wavelength_nm": 940, "forward_voltage_v": 1.2}}}}
+  ],
+  "nets": [
+    {{"id": "VCC", "pins": ["sw_pwr:A", "mcu_1:power", "c_bypass:1", "r_reset:1"]}},
+    {{"id": "GND", "pins": ["bat_1:GND", "mcu_1:ground", "c_bypass:2", "q_ir:E", "btn_pwr:B", "btn_vol_up:B", "btn_vol_dn:B", "btn_ch_up:B", "btn_ch_dn:B"]}},
+    {{"id": "BAT_SW", "pins": ["bat_1:V+", "sw_pwr:C"]}},
+    {{"id": "RESET_PU", "pins": ["r_reset:2", "mcu_1:PC6"]}},
+    {{"id": "BTN_PWR", "pins": ["btn_pwr:A", "mcu_1:gpio"]}},
+    {{"id": "BTN_VUP", "pins": ["btn_vol_up:A", "mcu_1:gpio"]}},
+    {{"id": "BTN_VDN", "pins": ["btn_vol_dn:A", "mcu_1:gpio"]}},
+    {{"id": "BTN_CUP", "pins": ["btn_ch_up:A", "mcu_1:gpio"]}},
+    {{"id": "BTN_CDN", "pins": ["btn_ch_dn:A", "mcu_1:gpio"]}},
+    {{"id": "IR_DRIVE", "pins": ["mcu_1:pwm", "r_base:1"]}},
+    {{"id": "IR_BASE", "pins": ["r_base:2", "q_ir:B"]}},
+    {{"id": "IR_COLL", "pins": ["r_ir:1", "q_ir:C"]}},
+    {{"id": "IR_LED", "pins": ["r_ir:2", "led_ir:cathode"]}},
+    {{"id": "IR_VCC", "pins": ["sw_pwr:A", "led_ir:anode"]}}
+  ],
+  "outline": [
+    {{"x": 0, "y": 0, "ease_in": 6}},
+    {{"x": 50, "y": 0, "ease_in": 6}},
+    {{"x": 50, "y": 130, "ease_in": 10}},
+    {{"x": 0, "y": 130, "ease_in": 10}}
+  ],
+  "enclosure": {{
+    "height_mm": 18,
+    "edge_top": {{"type": "fillet", "size_mm": 2}},
+    "edge_bottom": {{"type": "chamfer", "size_mm": 1.5}}
+  }},
+  "ui_placements": [
+    {{"instance_id": "sw_pwr", "x_mm": 45, "y_mm": 10, "edge_index": 1}},
+    {{"instance_id": "btn_pwr", "x_mm": 25, "y_mm": 20}},
+    {{"instance_id": "btn_vol_up", "x_mm": 12, "y_mm": 45}},
+    {{"instance_id": "btn_vol_dn", "x_mm": 12, "y_mm": 65}},
+    {{"instance_id": "btn_ch_up", "x_mm": 38, "y_mm": 45}},
+    {{"instance_id": "btn_ch_dn", "x_mm": 38, "y_mm": 65}},
+    {{"instance_id": "led_ir", "x_mm": 25, "y_mm": 0, "edge_index": 0}}
+  ]
+}}
+```
+Key points:
+- **MCU is essential** whenever buttons must do something programmable (send IR codes, control patterns, read sensors)
+- Bypass cap (`c_bypass`) on MCU power for stable operation; 10kΩ pull-up on RESET
+- **NPN transistor** drives the IR LED at ~100mA (MCU pins can only source 20mA)
+- Buttons connect one side to `mcu_1:gpio` (dynamic allocation) and the other to GND — firmware uses internal pull-ups
+- Power switch in series between battery V+ and VCC rail
+- IR LED is **side-mounted** (`edge_index: 0`) pointing out the top edge
+
+## Example: Flickering LED Candle (MCU for visual effects)
+A decorative electronic candle: MCU generates LED effects, a button cycles through
+modes (off → flicker → steady → breathe → off), and a slide switch cuts power.
+```json
+{{
+  "components": [
+    {{"catalog_id": "battery_holder_2xAAA", "instance_id": "bat_1"}},
+    {{"catalog_id": "slide_switch_2p", "instance_id": "sw_pwr"}},
+    {{"catalog_id": "atmega328p_dip28", "instance_id": "mcu_1"}},
+    {{"catalog_id": "capacitor_100nf", "instance_id": "c_bypass"}},
+    {{"catalog_id": "resistor_axial", "instance_id": "r_reset", "config": {{"resistance_ohms": 10000}}}},
+    {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_mode"}},
+    {{"catalog_id": "resistor_axial", "instance_id": "r_led", "config": {{"resistance_ohms": 47}}}},
+    {{"catalog_id": "led_5mm", "instance_id": "led_1", "mounting_style": "top", "config": {{"wavelength_nm": 590, "forward_voltage_v": 2.1}}}}
+  ],
+  "nets": [
+    {{"id": "VCC", "pins": ["sw_pwr:A", "mcu_1:power", "c_bypass:1", "r_reset:1"]}},
+    {{"id": "GND", "pins": ["bat_1:GND", "mcu_1:ground", "c_bypass:2", "led_1:cathode", "btn_mode:B"]}},
+    {{"id": "BAT_SW", "pins": ["bat_1:V+", "sw_pwr:C"]}},
+    {{"id": "RESET_PU", "pins": ["r_reset:2", "mcu_1:PC6"]}},
+    {{"id": "MODE_BTN", "pins": ["btn_mode:A", "mcu_1:gpio"]}},
+    {{"id": "FLICKER", "pins": ["mcu_1:pwm", "r_led:1"]}},
+    {{"id": "LED_DRIVE", "pins": ["r_led:2", "led_1:anode"]}}
+  ],
+  "outline": [
+    {{"x": 0, "y": 0, "ease_in": 10}},
+    {{"x": 40, "y": 0, "ease_in": 10}},
+    {{"x": 40, "y": 55, "ease_in": 10}},
+    {{"x": 0, "y": 55, "ease_in": 10}}
+  ],
+  "enclosure": {{
+    "height_mm": 22,
+    "top_surface": {{
+      "type": "dome",
+      "peak_x_mm": 20,
+      "peak_y_mm": 18,
+      "peak_height_mm": 35,
+      "base_height_mm": 22
+    }},
+    "edge_top": {{"type": "fillet", "size_mm": 2}},
+    "edge_bottom": {{"type": "fillet", "size_mm": 2}}
+  }},
+  "ui_placements": [
+    {{"instance_id": "sw_pwr", "x_mm": 40, "y_mm": 27, "edge_index": 1}},
+    {{"instance_id": "led_1", "x_mm": 20, "y_mm": 18}},
+    {{"instance_id": "btn_mode", "x_mm": 20, "y_mm": 42}}
+  ]
+}}
+```
+Key points:
+- **Mode button** cycles LED modes (off/flicker/steady/breathe) — firmware uses internal pull-up, button wired to GND
+- Slide switch is the **master power cutoff** (saves battery when not in use)
+- Single LED draws <20mA so MCU PWM pin drives it **directly** — no transistor needed
+- 47Ω resistor limits current: (3V − 2.1V) / 47Ω ≈ 19mA
+- **Dome enclosure** (`top_surface`) gives the candle a rounded shape; LED near the dome peak
+- Button placed below the dome on the flat area for easy access — LED on top
+
 ## Process
 1. Analyze the user's request
 2. Read component details with `get_component` for each component you plan to use
