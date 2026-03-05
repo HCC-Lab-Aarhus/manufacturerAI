@@ -69,3 +69,33 @@ LIFT THE HOLES or make canals for traceing make it a bread board
 Add "accessories" which adds on the outer shell polygon. Should create simple shapes, and decide a vertice it will be attatched to, and it will use the average normal between the two connected edges. User can move it around to connect on other vertices, perhaps changing the angle too, or maybe even storing two vertices to place it in the middle of an edge, or some percentage along the edge, and with the direction being the normal of that single edge.
 
 Allow any type of device, not just remotes. A clicker could use a rf device, a dorbell should have a green LED when clicked, a radio should have a speaker, and so on. Use llm to reason about components required from a set list, and write custom code to the microcontroller from the dynamically routed tracings and device operational requirementes.
+
+# The list 
+Changes 04-03-2026
+
+ALREADY DOES IT WONT FIX- save wall edge in design.json
+- maybe normalize outline/polygon/(polyhedron) better maybe?. 
+DONE - 2mm pin clearance from mc, take a look at routing around the mc possible unclutter it.
+- download STL, to view in slicer, also implement the different slicer profiles, core one, mk3, mk3s+ 
+DONE - wall edge, pop-up, pop-down. 
+DONE - bottom fillet are inverted.
+DONE - view in the 3d viewport is starting too far away
+- pcb becomes smaller, when you add wall edges, how do we solve this????? or do we solve this?
+- generate the SCAD code with new custom 3d design and not the fixed heigh without it being too complex and taking forever to compile :)
+ - STL is shown incorrectly needs to be displayed laying flat 
+DONE - component is removed when sliding the wall edge 
+DONE - wall edge updated instantly when sliding the wall edge. 
+DONE - top and bottom wall edges inflict on each other, they are not independent?
+- battery generated top-down, should be bottom-up 
+- use resistors as bridge
+- router dont care about the constraints for pin and trace clearance?
+- config needs to know build plate, for design and ink
+
+05-03-2026
+- Bitmap 
+- Generate openScad code in modules, shell, button caps should be dynamic, internal components should be negative cutouts. 
+- 0 ohm resistors as bridges, should use the resistors we already have in the current design. 
+- traces should be under the components, so pins are placed on top of the traces. 
+
+
+
