@@ -54,7 +54,14 @@ def _load_env():
                         os.environ[k] = v
 
 _load_env()
-
+import logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(levelname)-5s %(name)s: %(message)s",
+)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("anthropic").setLevel(logging.WARNING)
 # ── App ────────────────────────────────────────────────────────────
 
 app = FastAPI(title="ManufacturerAI")
