@@ -80,7 +80,7 @@ class PlacementError(Exception):
 def place_components(
     outline: list[list[float]],
     button_positions: list[dict],
-    battery_type: str = "2xAAA",
+    battery_type: str = "2xAA",
 ) -> dict:
     """
     Place battery, controller, and diode inside *outline*, avoiding
@@ -931,7 +931,7 @@ def build_optimization_report(
 def generate_placement_candidates(
     outline: list[list[float]],
     button_positions: list[dict],
-    battery_type: str = "2xAAA",
+    battery_type: str = "2xAA",
     max_candidates: int = 8,
 ) -> list[dict]:
     """
@@ -1278,7 +1278,7 @@ def _score_layout_spacing(
 def place_components_optimal(
     outline: list[list[float]],
     button_positions: list[dict],
-    battery_type: str = "2xAAA",
+    battery_type: str = "2xAA",
 ) -> dict | None:
     """
     Find the single placement that maximizes the minimum gap between

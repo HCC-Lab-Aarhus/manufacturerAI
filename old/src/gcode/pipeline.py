@@ -22,6 +22,7 @@ from src.gcode.pause_points import compute_pause_points, PausePoints
 from src.gcode.ink_traces import generate_ink_gcode, extract_trace_segments
 from src.gcode.postprocessor import postprocess_gcode, PostProcessResult
 from src.gcode.bgcode import gcode_to_bgcode
+from src.gcode.filaments import get_filament, write_filament_overrides
 
 log = logging.getLogger("manufacturerAI.gcode.pipeline")
 
@@ -50,6 +51,7 @@ def run_gcode_pipeline(
     layer_height: float = 0.2,
     slicer_profile: Path | None = None,
     printer: str | None = None,
+    filament: str | None = None,
 ) -> GcodePipelineResult:
     """Run the full G-code pipeline: slice → inject pauses → output.
 
@@ -71,6 +73,8 @@ def run_gcode_pipeline(
         Custom PrusaSlicer ``.ini`` profile.
     printer : str, optional
         Printer id (``"mk3s"`` or ``"coreone"``).
+    filament : str, optional
+        Filament id (``"prusament_pla"`` or ``"overture_rockpla"``).
 
     Returns
     -------
@@ -82,6 +86,11 @@ def run_gcode_pipeline(
 
     pdef = get_printer(printer)
     stages.append(f"Printer: {pdef.label} (bed {pdef.bed_width:.0f}×{pdef.bed_depth:.0f} mm)")
+
+    # Resolve filament and write override .ini
+    fdef = get_filament(filament)
+    filament_ini = write_filament_overrides(filament, output_dir)
+    stages.append(f"Filament: {fdef.label}")
 
     # ── 1. Compute pause points ────────────────────────────────────
     log.info("Computing pause points...")
@@ -116,6 +125,7 @@ def run_gcode_pipeline(
         output_gcode=raw_gcode,
         profile_path=slicer_profile,
         printer=printer,
+        filament_override_path=filament_ini,
     )
     if not ok:
         log.error("Slicing failed: %s", msg)
@@ -136,7 +146,7 @@ def run_gcode_pipeline(
     )
     stages.append(f"Ink G-code: {len(ink_lines)} lines for {len(routing_result.get('traces', []))} traces")
 
-    # ── 3b. Extract trace segments for ironing filter + highlight ──
+    # ── 3b. Extract trace segments for ironing filter ──
     trace_segs = extract_trace_segments(
         routing_result=routing_result,
         pcb_layout=pcb_layout,

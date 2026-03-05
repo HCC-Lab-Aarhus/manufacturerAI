@@ -25,7 +25,7 @@ export class OutputGenerator {
     manufacturing: ManufacturingConstraints,
     traces: Trace[],
     pads: Map<string, Pad>,
-    dpi: number = 300
+    dpi: number = 300,
   ) {
     this.grid = grid
     this.board = board
@@ -140,20 +140,67 @@ export class OutputGenerator {
   }
 
   async generateRasterOutput(): Promise<RasterOutput> {
-    const pixelWidth = Math.ceil((this.board.boardWidth / 25.4) * this.dpi)
-    const pixelHeight = Math.ceil((this.board.boardHeight / 25.4) * this.dpi)
+    // Target dimensions required by ink deposition equipment
+    const targetWidth = 1536
+    const targetHeight = 1383
+
+    // Render at native DPI-based resolution (preserves original scale)
+    const nativeWidth = Math.ceil((this.board.boardWidth / 25.4) * this.dpi)
+    const nativeHeight = Math.ceil((this.board.boardHeight / 25.4) * this.dpi)
 
     const geometry = this.generateGeometry()
 
-    const positiveMask = await this.renderMask(geometry, pixelWidth, pixelHeight, false)
-    const negativeMask = await this.renderMask(geometry, pixelWidth, pixelHeight, true)
+    const positiveMask = await this.renderMaskPadded(geometry, nativeWidth, nativeHeight, targetWidth, targetHeight, false)
+    const negativeMask = await this.renderMaskPadded(geometry, nativeWidth, nativeHeight, targetWidth, targetHeight, true)
 
     return {
       positiveMask,
       negativeMask,
-      width: pixelWidth,
-      height: pixelHeight
+      width: targetWidth,
+      height: targetHeight
     }
+  }
+
+  /**
+   * Render at native resolution, then centre the result on a
+   * target-sized canvas padded with white (negative) or black (positive).
+   */
+  private async renderMaskPadded(
+    geometry: OutputGeometry,
+    nativeW: number,
+    nativeH: number,
+    targetW: number,
+    targetH: number,
+    inverted: boolean,
+  ): Promise<Buffer> {
+    // Clamp native size so it never exceeds the target
+    const renderW = Math.min(nativeW, targetW)
+    const renderH = Math.min(nativeH, targetH)
+
+    // Render the board image at native resolution
+    const nativeBuf = await this.renderMask(geometry, renderW, renderH, inverted)
+
+    if (renderW === targetW && renderH === targetH) {
+      return nativeBuf
+    }
+
+    // Pad: white for negative (inverted), black for positive
+    const padColor = inverted ? { r: 255, g: 255, b: 255 } : { r: 0, g: 0, b: 0 }
+
+    // Centre the native image on the target canvas
+    const padLeft = Math.floor((targetW - renderW) / 2)
+    const padTop = Math.floor((targetH - renderH) / 2)
+
+    return sharp(nativeBuf)
+      .extend({
+        top: padTop,
+        bottom: targetH - renderH - padTop,
+        left: padLeft,
+        right: targetW - renderW - padLeft,
+        background: padColor,
+      })
+      .png()
+      .toBuffer()
   }
 
   private async renderMask(
