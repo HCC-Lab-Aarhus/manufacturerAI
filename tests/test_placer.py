@@ -1,418 +1,662 @@
-"""
-Tests for the component placer.
+"""Tests for the component placer (Stage 3).
 
-Verifies that:
-- Components are placed correctly on boards with enough room.
-- PlacementError is raised (not a jank fallback) when the board is too small.
-- Edge cases between "just fits" and "just doesn't" are handled cleanly.
+Uses the flashlight fixture as the primary test case:
+  - 30×80mm rectangle outline
+  - Button at (15, 45), LED at (15, 70) — UI-placed
+  - Battery (25×48mm) and resistor (2.5×6.5mm) — auto-placed
 
-Run:  python -m pytest tests/test_placer.py -v
+Validates:
+  - All components are placed
+  - All placements are inside the outline
+  - No overlaps (with keepout margins)
+  - Net-connected components are reasonably close
+  - Battery (bottom-mount) ends up near the bottom
+  - Serialization round-trips correctly
 """
 
 from __future__ import annotations
 
-import pytest
+import json
+import math
+import unittest
 
-from src.pcb.placer import place_components, PlacementError
-from src.config.hardware import hw
+from shapely.geometry import Polygon, box as shapely_box
 
-
-# ── Helpers ────────────────────────────────────────────────────────
-
-
-def _rect_outline(w: float, h: float) -> list[list[float]]:
-    """Simple rectangular outline at the origin."""
-    return [[0, 0], [w, 0], [w, h], [0, h]]
-
-
-def _centered_buttons(
-    board_w: float,
-    board_h: float,
-    count: int,
-    spacing_y: float = 20.0,
-) -> list[dict]:
-    """Place *count* buttons vertically centered in the board."""
-    cx = board_w / 2
-    total = (count - 1) * spacing_y
-    start_y = (board_h - total) / 2
-    return [
-        {"id": f"SW{i+1}", "label": f"btn{i+1}", "x": cx, "y": start_y + i * spacing_y}
-        for i in range(count)
-    ]
-
-
-def _component_ids(layout: dict) -> set[str]:
-    return {c["id"] for c in layout["components"]}
+from src.catalog.loader import load_catalog
+from src.pipeline.design.models import (
+    ComponentInstance, Net, OutlineVertex, Outline, UIPlacement, DesignSpec,
+)
+from src.pipeline.placer import (
+    PlacedComponent,
+    FullPlacement,
+    PlacementError,
+    place_components,
+    placement_to_dict,
+    parse_placement,
+    footprint_halfdims,
+    footprint_envelope_halfdims,
+    pin_world_xy,
+    aabb_gap,
+    rect_inside_polygon,
+)
+from src.pipeline.placer.nets import build_net_graph, count_shared_nets, build_placement_groups, component_degree, net_fanout_map
+from src.pipeline.placer.geometry import footprint_area
+from src.pipeline.placer.models import ROUTING_CHANNEL_MM, MIN_PIN_CLEARANCE_MM
+from tests.flashlight_fixture import make_flashlight_design
 
 
-def _component_by_id(layout: dict, cid: str) -> dict:
-    return next(c for c in layout["components"] if c["id"] == cid)
+class TestPlacerGeometryHelpers(unittest.TestCase):
+    """Unit tests for low-level geometry functions."""
+
+    def testfootprint_halfdims_rect(self):
+        """Rect body dimensions swap at 90°/270°."""
+        from src.catalog.models import Component, Body, Mounting, Pin
+        cat = Component(
+            id="test", name="test", description="",
+            ui_placement=False,
+            body=Body(shape="rect", width_mm=6.0, length_mm=10.0, height_mm=3.0),
+            mounting=Mounting(style="internal", allowed_styles=["internal"],
+                              blocks_routing=False, keepout_margin_mm=1.0),
+            pins=[],
+        )
+        self.assertEqual(footprint_halfdims(cat, 0), (3.0, 5.0))
+        self.assertEqual(footprint_halfdims(cat, 90), (5.0, 3.0))
+        self.assertEqual(footprint_halfdims(cat, 180), (3.0, 5.0))
+        self.assertEqual(footprint_halfdims(cat, 270), (5.0, 3.0))
+
+    def testfootprint_halfdims_circle(self):
+        """Circle body is rotation-invariant."""
+        from src.catalog.models import Component, Body, Mounting
+        cat = Component(
+            id="test", name="test", description="",
+            ui_placement=True,
+            body=Body(shape="circle", diameter_mm=8.0, height_mm=5.0),
+            mounting=Mounting(style="top", allowed_styles=["top"],
+                              blocks_routing=False, keepout_margin_mm=1.0),
+            pins=[],
+        )
+        for rot in (0, 90, 180, 270):
+            self.assertEqual(footprint_halfdims(cat, rot), (4.0, 4.0))
+
+    def testpin_world_xy_no_rotation(self):
+        wx, wy = pin_world_xy((3.0, 4.0), 10.0, 20.0, 0)
+        self.assertAlmostEqual(wx, 13.0)
+        self.assertAlmostEqual(wy, 24.0)
+
+    def testpin_world_xy_90_rotation(self):
+        wx, wy = pin_world_xy((3.0, 0.0), 10.0, 20.0, 90)
+        self.assertAlmostEqual(wx, 10.0, places=5)
+        self.assertAlmostEqual(wy, 23.0, places=5)
+
+    def testaabb_gap_separated(self):
+        # Two 2×2 boxes, 5mm apart horizontally
+        gap = aabb_gap(0, 0, 1, 1, 6, 0, 1, 1)
+        self.assertAlmostEqual(gap, 4.0)
+
+    def testaabb_gap_touching(self):
+        gap = aabb_gap(0, 0, 1, 1, 2, 0, 1, 1)
+        self.assertAlmostEqual(gap, 0.0)
+
+    def testaabb_gap_overlapping(self):
+        gap = aabb_gap(0, 0, 2, 2, 1, 1, 2, 2)
+        self.assertLess(gap, 0)
+
+    def testrect_inside_polygon(self):
+        poly = Polygon([(0, 0), (30, 0), (30, 80), (0, 80)])
+        self.assertTrue(rect_inside_polygon(15, 40, 5, 5, poly))
+        self.assertFalse(rect_inside_polygon(1, 1, 5, 5, poly))   # extends outside
+        self.assertFalse(rect_inside_polygon(28, 40, 5, 5, poly))  # right edge out
+
+    def test_footprint_envelope_larger_than_body(self):
+        """Envelope includes pins that extend beyond the body."""
+        from src.catalog.models import Component, Body, Mounting, Pin
+        cat = Component(
+            id="test_env", name="test", description="",
+            ui_placement=False,
+            body=Body(shape="rect", width_mm=6.5, length_mm=2.5, height_mm=2.5),
+            mounting=Mounting(style="internal", allowed_styles=["internal"],
+                              blocks_routing=False, keepout_margin_mm=1.0),
+            pins=[
+                Pin(id="1", label="L1", position_mm=(-5.0, 0),
+                    direction="bidirectional", hole_diameter_mm=0.8,
+                    description=""),
+                Pin(id="2", label="L2", position_mm=(5.0, 0),
+                    direction="bidirectional", hole_diameter_mm=0.8,
+                    description=""),
+            ],
+        )
+        # Body half-dims: (3.25, 1.25)
+        body_hw, body_hh = footprint_halfdims(cat, 0)
+        self.assertAlmostEqual(body_hw, 3.25)
+        self.assertAlmostEqual(body_hh, 1.25)
+
+        # Envelope must cover pins at ±5.0 + pad radius 0.4
+        env_hw, env_hh = footprint_envelope_halfdims(cat, 0)
+        self.assertAlmostEqual(env_hw, 5.4)   # 5.0 + 0.4
+        self.assertGreaterEqual(env_hh, body_hh)
+
+        # At 90° rotation the axes swap
+        env_hw90, env_hh90 = footprint_envelope_halfdims(cat, 90)
+        self.assertAlmostEqual(env_hh90, 5.4)
+        self.assertGreaterEqual(env_hw90, body_hh)
 
 
-# ── 1. Comfortable board — everything fits easily ─────────────────
+class TestFlashlightPlacement(unittest.TestCase):
+    """Integration test using the flashlight fixture."""
 
+    @classmethod
+    def setUpClass(cls):
+        cls.catalog = load_catalog()
+        cls.design = make_flashlight_design()
+        cls.catalog_map = {c.id: c for c in cls.catalog.components}
 
-class TestComfortablePlacement:
-    """Board is generously sized; all components must place without error."""
+    def test_placement_succeeds(self):
+        """All 4 components should be placed without error."""
+        result = place_components(self.design, self.catalog)
+        self.assertIsInstance(result, FullPlacement)
+        self.assertEqual(len(result.components), 4)
 
-    def test_wide_board_3_buttons(self):
-        """70×200 board with 3 buttons — plenty of room."""
-        outline = _rect_outline(70, 200)
-        buttons = _centered_buttons(70, 200, count=3)
-        layout = place_components(outline, buttons)
+    def test_all_instance_ids_present(self):
+        """Every component from the design appears in the placement."""
+        result = place_components(self.design, self.catalog)
+        placed_ids = {c.instance_id for c in result.components}
+        design_ids = {c.instance_id for c in self.design.components}
+        self.assertEqual(placed_ids, design_ids)
 
-        placed = _component_ids(layout)
-        assert "BAT1" in placed
-        assert "U1" in placed
-        assert "D1" in placed
-        assert "SW1" in placed
-        assert "SW2" in placed
-        assert "SW3" in placed
+    def test_ui_components_at_specified_positions(self):
+        """Button and LED should be at their UI-specified positions."""
+        result = place_components(self.design, self.catalog)
+        by_id = {c.instance_id: c for c in result.components}
 
-    def test_no_overlapping_centers(self):
-        """No two components share the same center."""
-        outline = _rect_outline(70, 200)
-        buttons = _centered_buttons(70, 200, count=3)
-        layout = place_components(outline, buttons)
+        btn = by_id["btn_1"]
+        self.assertAlmostEqual(btn.x_mm, 22.5)
+        self.assertAlmostEqual(btn.y_mm, 70.0)
 
-        centers = [tuple(c["center"]) for c in layout["components"]]
-        assert len(centers) == len(set(centers)), "Duplicate component centers!"
+        led = by_id["led_1"]
+        self.assertAlmostEqual(led.x_mm, 22.5)
+        self.assertAlmostEqual(led.y_mm, 100.0)
 
-    def test_all_centers_inside_board(self):
-        """Every component center must be inside the board polygon."""
-        outline = _rect_outline(70, 200)
-        buttons = _centered_buttons(70, 200, count=3)
-        layout = place_components(outline, buttons)
+    def test_all_inside_outline(self):
+        """Every component envelope (body + pins) must lie inside the outline."""
+        result = place_components(self.design, self.catalog)
+        outline_poly = Polygon(self.design.outline.vertices)
 
-        board_poly = layout["board"]["outline_polygon"]
-        from src.geometry.polygon import point_in_polygon, ensure_ccw
-        ccw = ensure_ccw(board_poly)
-
-        for comp in layout["components"]:
-            cx, cy = comp["center"]
-            assert point_in_polygon(cx, cy, ccw), (
-                f"{comp['id']} at ({cx:.1f}, {cy:.1f}) is outside the board"
+        for pc in result.components:
+            cat = self.catalog_map[pc.catalog_id]
+            ehw, ehh = footprint_envelope_halfdims(cat, pc.rotation_deg)
+            rect = shapely_box(
+                pc.x_mm - ehw, pc.y_mm - ehh,
+                pc.x_mm + ehw, pc.y_mm + ehh,
+            )
+            self.assertTrue(
+                outline_poly.contains(rect),
+                f"{pc.instance_id} at ({pc.x_mm}, {pc.y_mm}) envelope outside outline",
             )
 
-    def test_battery_controller_not_on_buttons(self):
-        """Battery and controller must not overlap any button keepout."""
-        outline = _rect_outline(70, 200)
-        buttons = _centered_buttons(70, 200, count=4, spacing_y=25)
-        layout = place_components(outline, buttons)
-
-        bat = _component_by_id(layout, "BAT1")
-        ctrl = _component_by_id(layout, "U1")
-
-        for comp in [bat, ctrl]:
-            cx, cy = comp["center"]
-            for btn in layout["components"]:
-                if btn["type"] != "button":
-                    continue
-                bx, by = btn["center"]
-                # Min clearance: button pin extent + margin
-                dist = ((cx - bx) ** 2 + (cy - by) ** 2) ** 0.5
-                assert dist > 5.0, (
-                    f"{comp['id']} is only {dist:.1f}mm from {btn['id']}"
-                )
-
-
-# ── 2. Impossible boards — must raise PlacementError ──────────────
-
-
-class TestImpossiblePlacement:
-    """Board is way too small; PlacementError must be raised."""
-
-    def test_tiny_board_battery_fails(self):
-        """
-        A 15×15 board can't fit even the battery compartment (27×50 mm).
-        """
-        outline = _rect_outline(15, 15)
-        buttons: list[dict] = []
-        with pytest.raises(PlacementError, match="battery"):
-            place_components(outline, buttons)
-
-    def test_tiny_board_no_buttons_fails(self):
-        """
-        A 30×55 board: battery compartment (27×50) barely fits,
-        but no room for the controller (10×36).
-        """
-        outline = _rect_outline(30, 55)
-        buttons: list[dict] = []
-        with pytest.raises(PlacementError):
-            place_components(outline, buttons)
-
-    def test_narrow_board_buttons_block_everything(self):
-        """
-        30×200 board with 5 buttons down the centre.
-        The center column of buttons leaves no room beside them
-        for the 27mm-wide battery compartment + 10mm controller.
-        """
-        outline = _rect_outline(30, 200)
-        buttons = _centered_buttons(30, 200, count=5, spacing_y=30)
-        with pytest.raises(PlacementError):
-            place_components(outline, buttons)
-
-    def test_placement_error_has_useful_fields(self):
-        """The raised error contains component, dimensions, suggestion."""
-        outline = _rect_outline(15, 15)
-        with pytest.raises(PlacementError) as exc_info:
-            place_components(outline, [])
-        err = exc_info.value
-        assert err.component in ("battery", "controller")
-        assert "width_mm" in err.dimensions
-        assert "height_mm" in err.dimensions
-        assert len(err.suggestion) > 10
-
-    def test_placement_error_to_dict(self):
-        """to_dict() produces a serialisable summary."""
-        outline = _rect_outline(15, 15)
-        with pytest.raises(PlacementError) as exc_info:
-            place_components(outline, [])
-        d = exc_info.value.to_dict()
-        assert "component" in d
-        assert "dimensions" in d
-        assert "suggestion" in d
-        assert isinstance(d["occupied_count"], int)
-
-
-# ── 3. Near-impossible — just barely too small ────────────────────
-
-
-class TestNearImpossiblePlacement:
-    """
-    Boards that are just a few mm too small.
-    Must raise PlacementError (not silently overlap).
-    """
-
-    def test_board_1mm_too_narrow_for_battery(self):
-        """
-        The battery compartment is 27mm wide; with 2mm wall clearance on
-        each side, 31mm is the absolute minimum board width.  At 30mm
-        (1mm less) the battery cannot physically fit.
-        """
-        outline = _rect_outline(30, 200)
-        buttons: list[dict] = []
-        with pytest.raises(PlacementError, match="battery"):
-            place_components(outline, buttons)
-
-    def test_board_1mm_too_short_for_battery(self):
-        """
-        The battery compartment is 50mm tall.  A 40×53 board has only ~49mm
-        usable height after wall inset — 1mm short.
-        """
-        outline = _rect_outline(40, 53)
-        buttons: list[dict] = []
-        with pytest.raises(PlacementError, match="battery"):
-            place_components(outline, buttons)
-
-    def test_just_at_boundary_width_succeeds(self):
-        """40mm-wide board fits the battery compartment (27mm + routing clearance + margins)."""
-        outline = _rect_outline(40, 200)
-        buttons: list[dict] = []
-        layout = place_components(outline, buttons)
-        assert "BAT1" in _component_ids(layout)
-
-    def test_just_at_boundary_height_succeeds(self):
-        """40×105 board fits battery compartment (50mm) + controller (36mm)."""
-        outline = _rect_outline(40, 105)
-        buttons: list[dict] = []
-        layout = place_components(outline, buttons)
-        assert "BAT1" in _component_ids(layout)
-
-
-# ── 4. Barely fits — should succeed, no error ─────────────────────
-
-
-class TestBarelyFitsPlacement:
-    """
-    Boards that are just large enough.  These must NOT raise PlacementError.
-    """
-
-    def test_wide_enough_for_side_by_side(self):
-        """
-        With a 65mm-wide board and buttons centered, the battery and
-        controller can sit to the left of the buttons.
-        """
-        outline = _rect_outline(65, 200)
-        buttons = _centered_buttons(65, 200, count=3, spacing_y=25)
-        layout = place_components(outline, buttons)
-        assert "BAT1" in _component_ids(layout)
-        assert "U1" in _component_ids(layout)
-
-    def test_long_board_stacks_vertically(self):
-        """
-        Buttons clustered at the top of a long, narrow board;
-        battery and controller fit below them.
-        """
-        outline = _rect_outline(50, 250)
-        buttons = [
-            {"id": "SW1", "label": "A", "x": 25, "y": 200},
-            {"id": "SW2", "label": "B", "x": 25, "y": 220},
-        ]
-        layout = place_components(outline, buttons)
-        placed = _component_ids(layout)
-        assert "BAT1" in placed
-        assert "U1" in placed
-
-        # Battery and controller should be below the buttons
-        bat = _component_by_id(layout, "BAT1")
-        ctrl = _component_by_id(layout, "U1")
-        assert bat["center"][1] < 180, "Battery should be below the buttons"
-
-    def test_5_buttons_wide_board(self):
-        """5 buttons on a 70×200 board — should work."""
-        outline = _rect_outline(70, 200)
-        buttons = _centered_buttons(70, 200, count=5, spacing_y=20)
-        layout = place_components(outline, buttons)
-        assert len(layout["components"]) == 5 + 3  # 5 buttons + bat + ctrl + diode
-
-
-# ── 5. Regression: old fallback bug ───────────────────────────────
-
-
-class TestNoFallbackRegression:
-    """
-    The old code fell back to placing the controller at the board center
-    when the grid scan failed, causing it to land on top of a button.
-    Verify this can never happen again.
-    """
-
-    def test_controller_never_on_button(self):
-        """
-        80mm board with centered buttons — the exact scenario that
-        used to produce an overlap.
-        """
-        outline = _rect_outline(80, 200)
-        buttons = [
-            {"id": "btn_1", "label": "P", "x": 40, "y": 80},
-            {"id": "btn_2", "label": "V", "x": 40, "y": 120},
-            {"id": "btn_3", "label": "D", "x": 40, "y": 160},
-        ]
-        layout = place_components(outline, buttons)
-
-        ctrl = _component_by_id(layout, "U1")
-        for btn in layout["components"]:
-            if btn["type"] != "button":
-                continue
-            assert tuple(ctrl["center"]) != tuple(btn["center"]), (
-                f"Controller placed on top of {btn['id']}!"
-            )
-
-
-# ── 6. Concave / irregular outlines ─────────────────────────────
-
-
-class TestConcaveOutlines:
-    """
-    Irregular/non-rectangular outlines must not allow components to
-    extend through concavities or overlap each other's SCAD pockets.
-    """
-
-    @staticmethod
-    def _no_scad_overlap(layout: dict, skip_buttons: bool = True) -> None:
-        """Assert no pair of placed components has overlapping SCAD pockets.
-
-        When *skip_buttons* is True, any pair involving a button is
-        skipped—button positions are user-defined and not under the
-        placer's control.
-        """
-        from src.pcb.placer import _cutout_rect, _rects_overlap
-        margin = hw.component_margin
-        comps = layout["components"]
+    def test_no_overlaps(self):
+        """No two component envelopes should overlap (respecting keepout)."""
+        result = place_components(self.design, self.catalog)
+        comps = result.components
         for i in range(len(comps)):
-            ri = _cutout_rect(comps[i], margin)
+            ci = comps[i]
+            cat_i = self.catalog_map[ci.catalog_id]
+            ehw_i, ehh_i = footprint_envelope_halfdims(cat_i, ci.rotation_deg)
+            ko_i = cat_i.mounting.keepout_margin_mm
             for j in range(i + 1, len(comps)):
-                if skip_buttons and (
-                    comps[i]["type"] == "button" or comps[j]["type"] == "button"
-                ):
-                    continue
-                rj = _cutout_rect(comps[j], margin)
-                assert not _rects_overlap(ri, rj), (
-                    f"SCAD pockets overlap: {comps[i]['id']} vs {comps[j]['id']}"
+                cj = comps[j]
+                cat_j = self.catalog_map[cj.catalog_id]
+                ehw_j, ehh_j = footprint_envelope_halfdims(cat_j, cj.rotation_deg)
+                ko_j = cat_j.mounting.keepout_margin_mm
+                gap = aabb_gap(
+                    ci.x_mm, ci.y_mm, ehw_i, ehh_i,
+                    cj.x_mm, cj.y_mm, ehw_j, ehh_j,
+                )
+                required = max(ko_i, ko_j)
+                self.assertGreaterEqual(
+                    gap, required - 0.01,
+                    f"{ci.instance_id} and {cj.instance_id} envelopes overlap: "
+                    f"gap={gap:.2f}mm < required={required:.2f}mm",
                 )
 
-    def test_hourglass_no_overlap(self):
-        """Hourglass shape with narrow waist — components must not
-        extend through the concavity.
+    def test_battery_near_bottom(self):
+        """Battery (bottom-mount) should be placed in the lower half."""
+        result = place_components(self.design, self.catalog)
+        bat = next(c for c in result.components if c.instance_id == "bat_1")
+        # The outline is 0-120mm tall; battery should be in the lower third
+        self.assertLess(
+            bat.y_mm, 50.0,
+            f"Battery at y={bat.y_mm:.1f}mm — expected near bottom (< 50mm)",
+        )
+
+    def test_valid_rotations(self):
+        """All rotations must be 0, 90, 180, or 270."""
+        result = place_components(self.design, self.catalog)
+        for c in result.components:
+            self.assertIn(c.rotation_deg, (0, 90, 180, 270),
+                          f"{c.instance_id} has invalid rotation {c.rotation_deg}")
+
+    def test_outline_and_nets_passed_through(self):
+        """FullPlacement should pass through outline and nets unchanged."""
+        result = place_components(self.design, self.catalog)
+        self.assertEqual(result.outline, self.design.outline)
+        self.assertEqual(result.nets, self.design.nets)
+
+    def test_no_pin_collocation(self):
+        """No pin from one component should be too close to another's pin."""
+        result = place_components(self.design, self.catalog)
+        comps = result.components
+        for i in range(len(comps)):
+            ci = comps[i]
+            cat_i = self.catalog_map[ci.catalog_id]
+            pins_i = [
+                pin_world_xy(p.position_mm, ci.x_mm, ci.y_mm, ci.rotation_deg)
+                for p in cat_i.pins
+            ]
+            for j in range(i + 1, len(comps)):
+                cj = comps[j]
+                cat_j = self.catalog_map[cj.catalog_id]
+                pins_j = [
+                    pin_world_xy(p.position_mm, cj.x_mm, cj.y_mm, cj.rotation_deg)
+                    for p in cat_j.pins
+                ]
+                for pi_idx, (px, py) in enumerate(pins_i):
+                    for pj_idx, (qx, qy) in enumerate(pins_j):
+                        dist = math.hypot(px - qx, py - qy)
+                        self.assertGreaterEqual(
+                            dist, MIN_PIN_CLEARANCE_MM - 0.01,
+                            f"{ci.instance_id}.{cat_i.pins[pi_idx].id} and "
+                            f"{cj.instance_id}.{cat_j.pins[pj_idx].id} "
+                            f"are only {dist:.2f}mm apart "
+                            f"(min {MIN_PIN_CLEARANCE_MM}mm)",
+                        )
+
+    def test_routing_channel_gaps(self):
+        """Connected components must have enough gap for trace channels."""
+        result = place_components(self.design, self.catalog)
+        net_graph = build_net_graph(self.design.nets)
+        comps = result.components
+        for i in range(len(comps)):
+            ci = comps[i]
+            cat_i = self.catalog_map[ci.catalog_id]
+            ehw_i, ehh_i = footprint_envelope_halfdims(cat_i, ci.rotation_deg)
+            for j in range(i + 1, len(comps)):
+                cj = comps[j]
+                cat_j = self.catalog_map[cj.catalog_id]
+                ehw_j, ehh_j = footprint_envelope_halfdims(cat_j, cj.rotation_deg)
+                n_ch = count_shared_nets(
+                    ci.instance_id, cj.instance_id, net_graph,
+                )
+                if n_ch == 0:
+                    continue
+                gap = aabb_gap(
+                    ci.x_mm, ci.y_mm, ehw_i, ehh_i,
+                    cj.x_mm, cj.y_mm, ehw_j, ehh_j,
+                )
+                required = n_ch * ROUTING_CHANNEL_MM
+                self.assertGreaterEqual(
+                    gap, required - 0.01,
+                    f"{ci.instance_id}-{cj.instance_id} need {n_ch} "
+                    f"channel(s) ({required:.1f}mm) but gap={gap:.2f}mm",
+                )
+
+    def test_spread_uses_available_space(self):
+        """Auto-placed components should spread out when ample space exists.
+
+        The flashlight outline is 45×120mm = 5400mm².  Components use
+        roughly 25% of that.  The minimum gap between any two auto-placed
+        components should be well above the bare keepout minimum (2mm).
         """
-        outline = [
-            [0, 0], [60, 0], [60, 40], [40, 65], [60, 90],
-            [60, 130], [0, 130], [0, 90], [20, 65], [0, 40],
-        ]
-        buttons = [
-            {"id": "btn_1", "label": "A", "x": 30, "y": 100},
-            {"id": "btn_2", "label": "B", "x": 30, "y": 115},
-        ]
-        layout = place_components(outline, buttons)
-        bat = _component_by_id(layout, "BAT1")
-        ctrl = _component_by_id(layout, "U1")
+        result = place_components(self.design, self.catalog)
+        auto_ids = {"bat_1", "r_1"}
+        auto_comps = [c for c in result.components if c.instance_id in auto_ids]
+        self.assertEqual(len(auto_comps), 2)
 
-        # Both must be inside the board polygon
-        from src.geometry.polygon import point_in_polygon, ensure_ccw
-        ccw = ensure_ccw(layout["board"]["outline_polygon"])
-        for comp in [bat, ctrl]:
-            cx, cy = comp["center"]
-            assert point_in_polygon(cx, cy, ccw), (
-                f"{comp['id']} center outside polygon"
-            )
+        bat = next(c for c in auto_comps if c.instance_id == "bat_1")
+        res = next(c for c in auto_comps if c.instance_id == "r_1")
 
-        self._no_scad_overlap(layout)
+        cat_bat = self.catalog_map[bat.catalog_id]
+        cat_res = self.catalog_map[res.catalog_id]
+        ehw_b, ehh_b = footprint_envelope_halfdims(cat_bat, bat.rotation_deg)
+        ehw_r, ehh_r = footprint_envelope_halfdims(cat_res, res.rotation_deg)
 
-    def test_egg_battery_fits(self):
-        """Egg/teardrop shape — wide bottom, narrow top."""
-        outline = [
-            [5, 0], [55, 0], [65, 30], [65, 90],
-            [55, 130], [30, 150], [5, 130], [-5, 90], [-5, 30],
-        ]
-        buttons = [
-            {"id": "btn_1", "label": "A", "x": 30, "y": 95},
-            {"id": "btn_2", "label": "B", "x": 30, "y": 115},
-        ]
-        layout = place_components(outline, buttons)
-        self._no_scad_overlap(layout)
+        gap = aabb_gap(
+            bat.x_mm, bat.y_mm, ehw_b, ehh_b,
+            res.x_mm, res.y_mm, ehw_r, ehh_r,
+        )
+        # With spread preference they should not be crammed at the
+        # bare minimum; expect at least 4mm gap (> keepout of 2mm).
+        self.assertGreater(
+            gap, 4.0,
+            f"bat_1 and r_1 are too close (gap={gap:.1f}mm) — "
+            f"spread preference should have used available space",
+        )
 
-    def test_capsule_tall_no_overlap(self):
-        """Capsule/pill shape."""
-        outline = [
-            [10, 0], [40, 0], [50, 15], [50, 125], [40, 140],
-            [10, 140], [0, 125], [0, 15],
-        ]
-        buttons = [
-            {"id": "btn_1", "label": "A", "x": 25, "y": 80},
-            {"id": "btn_2", "label": "B", "x": 25, "y": 100},
-        ]
-        layout = place_components(outline, buttons)
-        self._no_scad_overlap(layout)
 
-    def test_wide_rounded_no_overlap(self):
-        """Wide rounded rectangle with tapered ends."""
-        outline = [
-            [5, 0], [65, 0], [70, 10], [70, 100], [65, 115],
-            [50, 120], [20, 120], [5, 115], [0, 100], [0, 10],
-        ]
-        buttons = [
-            {"id": "btn_1", "label": "A", "x": 35, "y": 70},
-            {"id": "btn_2", "label": "B", "x": 35, "y": 90},
-        ]
-        layout = place_components(outline, buttons)
-        self._no_scad_overlap(layout)
+class TestCountSharedNets(unittest.TestCase):
+    """Unit tests for count_shared_nets."""
 
-    def test_peanut_refuses_if_no_fit(self):
-        """Peanut shape (two lobes + narrow neck) — battery must not
-        span across the neck.
+    def test_flashlight_nets(self):
+        """In the flashlight, each adjacent pair shares exactly 1 net."""
+        design = make_flashlight_design()
+        net_graph = build_net_graph(design.nets)
+        # bat_1 <-> btn_1 via VCC
+        self.assertEqual(count_shared_nets("bat_1", "btn_1", net_graph), 1)
+        # btn_1 <-> r_1 via BTN_GND
+        self.assertEqual(count_shared_nets("btn_1", "r_1", net_graph), 1)
+        # r_1 <-> led_1 via LED_DRIVE
+        self.assertEqual(count_shared_nets("r_1", "led_1", net_graph), 1)
+        # bat_1 <-> led_1 via GND
+        self.assertEqual(count_shared_nets("bat_1", "led_1", net_graph), 1)
+        # non-adjacent: btn_1 <-> led_1 — no direct net
+        self.assertEqual(count_shared_nets("btn_1", "led_1", net_graph), 0)
+
+
+class TestPlacementGroups(unittest.TestCase):
+    """Tests for connectivity-based placement grouping."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.catalog = load_catalog()
+        cls.catalog_map = {c.id: c for c in cls.catalog.components}
+
+    def test_flashlight_single_group(self):
+        """All flashlight auto-placed components form one group."""
+        design = make_flashlight_design()
+        net_graph = build_net_graph(design.nets)
+        ui_ids = {up.instance_id for up in design.ui_placements}
+        auto_ids = [
+            ci.instance_id for ci in design.components
+            if ci.instance_id not in ui_ids
+        ]
+        area_map = {
+            iid: footprint_area(self.catalog_map[
+                next(ci.catalog_id for ci in design.components
+                     if ci.instance_id == iid)
+            ])
+            for iid in auto_ids
+        }
+        groups = build_placement_groups(auto_ids, net_graph, area_map)
+        # All auto-placed instances are in one connected component
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(set(groups[0]), set(auto_ids))
+
+    def test_disconnected_components_separate_groups(self):
+        """Components with no shared nets form separate groups."""
+        net_graph = build_net_graph([])  # No nets
+        groups = build_placement_groups(
+            ["a", "b", "c"], net_graph, {"a": 10, "b": 5, "c": 1}
+        )
+        # Three singletons, sorted by area descending
+        self.assertEqual(len(groups), 3)
+        self.assertEqual(groups[0], ["a"])  # largest area first
+
+    def test_component_degree(self):
+        """Degree counts unique neighbours."""
+        design = make_flashlight_design()
+        net_graph = build_net_graph(design.nets)
+        degrees = component_degree(net_graph)
+        # bat_1 connects to btn_1 (VCC) and led_1 (GND)
+        self.assertEqual(degrees["bat_1"], 2)
+        # r_1 connects to btn_1 (BTN_GND) and led_1 (LED_DRIVE)
+        self.assertEqual(degrees["r_1"], 2)
+
+    def test_hub_placed_first_in_group(self):
+        """Within a group, the highest-degree component comes first."""
+        # Create a star topology: hub connects to a, b, c directly
+        from src.pipeline.design.models import Net
+        nets = [
+            Net(id="n1", pins=["hub:p1", "a:p1"]),
+            Net(id="n2", pins=["hub:p2", "b:p1"]),
+            Net(id="n3", pins=["hub:p3", "c:p1"]),
+        ]
+        net_graph = build_net_graph(nets)
+        area_map = {"hub": 100, "a": 10, "b": 10, "c": 10}
+        groups = build_placement_groups(
+            ["a", "b", "c", "hub"], net_graph, area_map,
+        )
+        self.assertEqual(len(groups), 1)
+        # Hub (degree 3) should be first
+        self.assertEqual(groups[0][0], "hub")
+
+
+class TestBatteryNearEdge(unittest.TestCase):
+    """Battery (large component) should be placed near an outline edge."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.catalog = load_catalog()
+        cls.catalog_map = {c.id: c for c in cls.catalog.components}
+        cls.design = make_flashlight_design()
+        cls.result = place_components(cls.design, cls.catalog)
+
+    def test_battery_near_edge(self):
+        """The battery's envelope should be within 6mm of some outline edge.
+
+        Large components benefit from edge positions so traces don't
+        have to route around them.
         """
-        outline = [
-            [10, 0], [50, 0], [55, 15], [50, 35], [42, 50],
-            [50, 65], [55, 85], [50, 110], [10, 110],
-            [5, 85], [10, 65], [18, 50], [10, 35], [5, 15],
+        from src.pipeline.placer.geometry import rect_edge_clearance
+        bat = next(c for c in self.result.components if c.instance_id == "bat_1")
+        cat = self.catalog_map[bat.catalog_id]
+        ehw, ehh = footprint_envelope_halfdims(cat, bat.rotation_deg)
+        clearance = rect_edge_clearance(
+            bat.x_mm, bat.y_mm, ehw, ehh,
+            self.design.outline.vertices,
+        )
+        self.assertLessEqual(
+            clearance, 6.0,
+            f"Battery envelope is {clearance:.1f}mm from nearest edge — "
+            f"large components should be placed near edges",
+        )
+
+
+class TestPinSideAwareness(unittest.TestCase):
+    """Resistor should approach the button from the pin side."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.catalog = load_catalog()
+        cls.catalog_map = {c.id: c for c in cls.catalog.components}
+        cls.design = make_flashlight_design()
+        cls.result = place_components(cls.design, cls.catalog)
+
+    def test_resistor_on_button_pin_side(self):
+        """The resistor should be closer to the button's connecting pins
+        than to the opposite side.
+
+        btn_1's pin B connects to r_1.  The resistor should approach
+        from the side of the button where pin B is.
+        """
+        btn = next(c for c in self.result.components if c.instance_id == "btn_1")
+        res = next(c for c in self.result.components if c.instance_id == "r_1")
+        btn_cat = self.catalog_map[btn.catalog_id]
+
+        # Find btn_1's pin B world position
+        pin_b = next(p for p in btn_cat.pins if p.id in ("3", "4"))  # B side
+        pin_wx, pin_wy = pin_world_xy(
+            pin_b.position_mm, btn.x_mm, btn.y_mm, btn.rotation_deg,
+        )
+
+        # Vector from button centre to its pin B
+        pin_dx = pin_wx - btn.x_mm
+        pin_dy = pin_wy - btn.y_mm
+
+        # Vector from button centre to resistor
+        res_dx = res.x_mm - btn.x_mm
+        res_dy = res.y_mm - btn.y_mm
+
+        # Dot product should be positive (same side)
+        dot = pin_dx * res_dx + pin_dy * res_dy
+        self.assertGreater(
+            dot, 0,
+            f"Resistor is on the wrong side of the button "
+            f"(dot={dot:.1f}) — pin-side awareness should pull it "
+            f"toward the connecting pin",
+        )
+
+
+class TestNetFanout(unittest.TestCase):
+    """Tests for net fanout detection and high-fanout proximity boost."""
+
+    def test_fanout_map_flashlight(self):
+        """Flashlight nets all have fanout 2."""
+        design = make_flashlight_design()
+        fmap = net_fanout_map(design.nets)
+        for net_id, fanout in fmap.items():
+            self.assertEqual(fanout, 2, f"Net {net_id} has fanout {fanout}")
+
+    def test_fanout_map_high_fanout_net(self):
+        """A net spanning 4 instances should have fanout 4."""
+        nets = [
+            Net(id="GND", pins=["a:gnd", "b:gnd", "c:gnd", "d:gnd"]),
+            Net(id="SIG", pins=["a:out", "b:in"]),
         ]
-        buttons = [
-            {"id": "btn_1", "label": "A", "x": 30, "y": 80},
-            {"id": "btn_2", "label": "B", "x": 30, "y": 95},
+        fmap = net_fanout_map(nets)
+        self.assertEqual(fmap["GND"], 4)
+        self.assertEqual(fmap["SIG"], 2)
+
+    def test_net_edge_carries_fanout(self):
+        """NetEdge.fanout should reflect the net's instance count."""
+        nets = [
+            Net(id="GND", pins=["a:gnd", "b:gnd", "c:gnd"]),
         ]
-        # Either succeeds without overlap, or raises PlacementError
-        try:
-            layout = place_components(outline, buttons)
-            self._no_scad_overlap(layout)
-        except PlacementError:
-            pass  # Expected — battery can't fit in either lobe
+        graph = build_net_graph(nets)
+        # Every edge on the GND net should have fanout=3
+        for iid in ("a", "b", "c"):
+            for edge in graph[iid]:
+                self.assertEqual(
+                    edge.fanout, 3,
+                    f"Edge {iid}->{edge.other_iid} has fanout "
+                    f"{edge.fanout}, expected 3",
+                )
+
+    def test_high_fanout_components_cluster(self):
+        """Components sharing a high-fanout net should be placed
+        closer together than an equivalent set of 2-pin nets would.
+
+        This test creates a 5-component circuit on a large board.
+        Three components share a 3-pin GND net.  We verify that the
+        average distance among those three is smaller than the
+        average distance to the non-GND components.
+        """
+        design = DesignSpec(
+            components=[
+                ComponentInstance(catalog_id="resistor_axial", instance_id="r_1"),
+                ComponentInstance(catalog_id="resistor_axial", instance_id="r_2"),
+                ComponentInstance(catalog_id="resistor_axial", instance_id="r_3"),
+                ComponentInstance(catalog_id="resistor_axial", instance_id="r_4"),
+                ComponentInstance(catalog_id="resistor_axial", instance_id="r_5"),
+            ],
+            nets=[
+                # 3-pin GND net
+                Net(id="GND", pins=["r_1:1", "r_2:1", "r_3:1"]),
+                # r_4 and r_5 have only pairwise connections
+                Net(id="SIG_A", pins=["r_1:2", "r_4:1"]),
+                Net(id="SIG_B", pins=["r_2:2", "r_5:1"]),
+            ],
+            outline=Outline(points=[
+                OutlineVertex(x=0, y=0),
+                OutlineVertex(x=80, y=0),
+                OutlineVertex(x=80, y=80),
+                OutlineVertex(x=0, y=80),
+            ]),
+            ui_placements=[],
+        )
+        from src.catalog.loader import load_catalog
+        catalog = load_catalog()
+        result = place_components(design, catalog)
+        by_id = {c.instance_id: c for c in result.components}
+
+        import math
+        # Average distance among the GND cluster (r_1, r_2, r_3)
+        gnd_ids = ["r_1", "r_2", "r_3"]
+        gnd_dists = []
+        for i in range(len(gnd_ids)):
+            for j in range(i + 1, len(gnd_ids)):
+                a, b = by_id[gnd_ids[i]], by_id[gnd_ids[j]]
+                gnd_dists.append(math.hypot(a.x_mm - b.x_mm, a.y_mm - b.y_mm))
+        avg_gnd = sum(gnd_dists) / len(gnd_dists)
+
+        # Average distance from GND cluster to non-GND (r_4, r_5)
+        other_ids = ["r_4", "r_5"]
+        cross_dists = []
+        for g in gnd_ids:
+            for o in other_ids:
+                a, b = by_id[g], by_id[o]
+                cross_dists.append(math.hypot(a.x_mm - b.x_mm, a.y_mm - b.y_mm))
+        avg_cross = sum(cross_dists) / len(cross_dists)
+
+        self.assertLess(
+            avg_gnd, avg_cross,
+            f"GND cluster avg distance ({avg_gnd:.1f}mm) should be "
+            f"less than cross-cluster ({avg_cross:.1f}mm) — "
+            f"high-fanout nets should pull components together",
+        )
+
+
+class TestPlacementSerialization(unittest.TestCase):
+    """Test placement serialization round-trip."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.catalog = load_catalog()
+        cls.design = make_flashlight_design()
+        cls.placement = place_components(cls.design, cls.catalog)
+
+    def test_to_dict(self):
+        """placement_to_dict produces a valid JSON-serializable dict."""
+        d = placement_to_dict(self.placement)
+        # Should be JSON-serializable
+        json_str = json.dumps(d)
+        self.assertIsInstance(json_str, str)
+        # Check structure
+        self.assertIn("components", d)
+        self.assertIn("outline", d)
+        self.assertIn("nets", d)
+        self.assertEqual(len(d["components"]), 4)
+
+    def test_round_trip(self):
+        """placement_to_dict -> parse_placement should preserve data."""
+        d = placement_to_dict(self.placement)
+        restored = parse_placement(d)
+        self.assertEqual(len(restored.components), len(self.placement.components))
+        for orig, rest in zip(self.placement.components, restored.components):
+            self.assertEqual(orig.instance_id, rest.instance_id)
+            self.assertEqual(orig.catalog_id, rest.catalog_id)
+            self.assertAlmostEqual(orig.x_mm, rest.x_mm, places=2)
+            self.assertAlmostEqual(orig.y_mm, rest.y_mm, places=2)
+            self.assertEqual(orig.rotation_deg, rest.rotation_deg)
+
+
+class TestPlacementErrors(unittest.TestCase):
+    """Test error handling for impossible placements."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.catalog = load_catalog()
+
+    def test_component_too_large_for_outline(self):
+        """A component bigger than the outline should raise PlacementError."""
+        tiny_outline = DesignSpec(
+            components=[
+                ComponentInstance(
+                    catalog_id="battery_holder_2xAAA",
+                    instance_id="bat_1",
+                ),
+            ],
+            nets=[],
+            outline=Outline(points=[
+                OutlineVertex(x=0, y=0),
+                OutlineVertex(x=10, y=0),   # only 10mm wide
+                OutlineVertex(x=10, y=10),  # only 10mm tall
+                OutlineVertex(x=0, y=10),
+            ]),
+            ui_placements=[],
+        )
+        with self.assertRaises(PlacementError) as ctx:
+            place_components(tiny_outline, self.catalog)
+        self.assertIn("bat_1", str(ctx.exception))
+
+
+if __name__ == "__main__":
+    unittest.main()

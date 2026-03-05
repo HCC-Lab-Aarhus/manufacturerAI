@@ -1,369 +1,310 @@
-"""
-Tool implementations for the designer agent.
-
-Each tool is a plain Python function. The agent loop calls these based on
-the Gemini function-calling response.  Every tool returns a dict that gets
-sent back to the LLM as the function response.
-"""
+"""Tool definitions for the Anthropic API (list_components, get_component, submit_design)."""
 
 from __future__ import annotations
 
-import json
-import time
-from pathlib import Path
-from typing import Any, Callable
-
-from src.config.hardware import hw
-from src.geometry.polygon import validate_outline as _validate, ensure_ccw, polygon_bounds
-from src.pcb.placer import place_components as _place, build_optimization_report, PlacementError
-from src.pcb.router_bridge import route_traces as _route, RouterError
-from src.scad.shell import generate_enclosure_scad, generate_battery_hatch_scad, generate_print_plate_scad
-from src.scad.cutouts import build_cutouts
-from src.scad.compiler import compile_scad, check_scad
+from typing import Any
 
 
-# ── Event callback type ────────────────────────────────────────────
-# The web layer injects an `emit` callback so tools can stream
-# intermediates.  Signature:  emit(event_type: str, data: dict)
-EmitFn = Callable[[str, dict], None]
-
-# Module-level state set by the agent loop before tool dispatch
-_emit: EmitFn = lambda t, d: None
-_output_dir: Path = Path("outputs/agent")
-_run_id: str = ""
-
-
-def configure(emit: EmitFn, output_dir: Path, run_id: str) -> None:
-    global _emit, _output_dir, _run_id
-    _emit = emit
-    _output_dir = Path(output_dir)
-    _run_id = run_id
-    _output_dir.mkdir(parents=True, exist_ok=True)
-
-
-# Function → display label mapping
-_FUNC_LABELS = {
-    "power": "Power",
-    "vol_up": "Vol +",
-    "vol_down": "Vol −",
-    "ch1": "Ch 1",
-    "ch2": "Ch 2",
-    "ch3": "Ch 3",
-    "ch4": "Ch 4",
-    "ch5": "Ch 5",
-    "brand": "Brand",
-}
-
-
-def _button_label(b: dict, i: int) -> str:
-    """Get display label: explicit label > function name > fallback."""
-    if b.get("label"):
-        return b["label"]
-    func = b.get("function", "")
-    if func and func in _FUNC_LABELS:
-        return _FUNC_LABELS[func]
-    return b.get("id", f"Button {i + 1}")
-
-
-# ═══════════════════════════════════════════════════════════════════
-# TOOL FUNCTIONS
-# ═══════════════════════════════════════════════════════════════════
-
-
-def think(reasoning: str) -> dict:
-    """
-    Internal scratchpad — use this to reason about the next step.
-    The user does NOT see this. Write freely.
-    """
-    _emit("thinking", {"text": reasoning})
-    return {"status": "ok", "note": "Your reasoning has been noted. Continue."}
-
-
-def send_message(message: str) -> dict:
-    """
-    Send a chat message to the user. Use this to communicate
-    progress, ask clarifying questions, or summarize results.
-    """
-    _emit("chat", {"role": "assistant", "text": message})
-    return {"status": "sent"}
-
-
-def send_outline_preview(
-    outline: list[list[float]],
-    button_positions: list[dict],
-    label: str = "outline",
-) -> dict:
-    """
-    Send a 2D outline preview to the user's browser.
-    outline: list of [x, y] vertices in mm.
-    button_positions: list of {id, label, x, y}.
-    label: a short description shown in the UI.
-    """
-    # Derive labels from function field if not explicitly set
-    buttons_with_labels = [
-        {
-            **b,
-            "label": _button_label(b, i),
-        }
-        for i, b in enumerate(button_positions)
-    ]
-    _emit("outline_preview", {
-        "outline": outline,
-        "buttons": buttons_with_labels,
-        "label": label,
-    })
-    return {"status": "preview_sent", "label": label}
-
-
-def validate_outline(
-    outline: list[list[float]],
-    button_positions: list[dict],
-) -> dict:
-    """
-    Validate a 2D polygon outline and button positions.
-    Returns a list of errors (empty if valid).
-    outline: list of [x, y] vertices in mm.
-    button_positions: list of {id, label, x, y}.
-    """
-    bpos = [{"x": b["x"], "y": b["y"]} for b in button_positions]
-    bounds = polygon_bounds(outline)
-    width = bounds[2] - bounds[0]
-    length = bounds[3] - bounds[1]
-    errors = _validate(
-        outline,
-        width=width,
-        length=length,
-        button_positions=bpos,
-        edge_clearance=hw.button["cap_diameter_mm"] / 2 + 2,
-    )
-    return {
-        "valid": len(errors) == 0,
-        "errors": errors,
-        "bounds": {"min_x": bounds[0], "min_y": bounds[1],
-                   "max_x": bounds[2], "max_y": bounds[3]},
-        "width_mm": round(width, 2),
-        "height_mm": round(length, 2),
-    }
-
-
-def place_components(
-    outline: list[list[float]],
-    button_positions: list[dict],
-) -> dict:
-    """
-    Auto-place battery, controller, and IR diode inside the outline.
-    Buttons are placed at the given positions.
-    Returns the full PCB layout.
-    """
-    btn_list = [{"id": b["id"], "x": b["x"], "y": b["y"]} for b in button_positions]
-
-    try:
-        layout = _place(outline, btn_list)
-    except PlacementError as e:
-        return {
-            "status": "error",
-            "message": str(e),
-            "details": e.to_dict(),
-            "suggestion": e.suggestion,
-        }
-
-    # Save & emit
-    path = _output_dir / "pcb_layout.json"
-    path.write_text(json.dumps(layout, indent=2), encoding="utf-8")
-    _emit("pcb_layout", layout)
-
-    # Build a summary for the LLM
-    summary = []
-    for c in layout["components"]:
-        summary.append(f"  {c['id']} ({c['type']}): ({c['center'][0]:.1f}, {c['center'][1]:.1f})")
-
-    return {
-        "status": "ok",
-        "component_count": len(layout["components"]),
-        "components_summary": "\n".join(summary),
-        "pcb_layout_saved": str(path),
-    }
-
-
-def route_traces(
-    outline: list[list[float]],
-    button_positions: list[dict],
-) -> dict:
-    """
-    Run the A* trace router on the current PCB layout.
-    Reads pcb_layout.json from the output directory.
-    Returns routing results.
-    """
-    layout_path = _output_dir / "pcb_layout.json"
-    if not layout_path.exists():
-        return {"status": "error", "message": "No pcb_layout.json — run place_components first."}
-
-    layout = json.loads(layout_path.read_text(encoding="utf-8"))
-
-    try:
-        result = _route(layout, _output_dir)
-    except RouterError as e:
-        return {"status": "error", "message": str(e)}
-
-    # Save routing result
-    (path := _output_dir / "routing_result.json").write_text(
-        json.dumps(result, indent=2), encoding="utf-8"
-    )
-
-    # Emit debug image if the router generated one
-    pcb_debug = _output_dir / "pcb_debug.png"
-    if pcb_debug.exists():
-        _emit("debug_image", {"path": str(pcb_debug), "label": pcb_debug.stem})
-
-    _emit("routing_result", result)
-
-    # Build optimization report
-    report = build_optimization_report(layout, result, outline)
-    (rpath := _output_dir / "optimization_report.json").write_text(
-        json.dumps(report, indent=2), encoding="utf-8"
-    )
-
-    if not result.get("success", False):
-        failed = result.get("failed_nets", [])
-        return {
-            "status": "routing_failed",
-            "routed_count": len(result.get("traces", [])),
-            "failed_nets": [f.get("netName", str(f)) if isinstance(f, dict) else str(f) for f in failed],
-            "problems": report["problems"],
-            "suggestion": "Try widening the outline or adjusting button positions.",
-        }
-
-    return {
-        "status": "ok",
-        "routed_count": len(result.get("traces", [])),
-        "failed_nets": [],
-    }
-
-
-def generate_enclosure(
-    outline: list[list[float]],
-    button_positions: list[dict],
-    *,
-    top_curve_length: float = 0.0,
-    top_curve_height: float = 0.0,
-    bottom_curve_length: float = 0.0,
-    bottom_curve_height: float = 0.0,
-) -> dict:
-    """
-    Generate the full OpenSCAD enclosure from outline + PCB layout + routing.
-    Produces bottom shell, top shell, battery hatch, and print plate.
-    """
-    layout_path = _output_dir / "pcb_layout.json"
-    routing_path = _output_dir / "routing_result.json"
-
-    if not layout_path.exists():
-        return {"status": "error", "message": "No pcb_layout.json — run place_components first."}
-
-    layout = json.loads(layout_path.read_text(encoding="utf-8"))
-    routing = None
-    if routing_path.exists():
-        routing = json.loads(routing_path.read_text(encoding="utf-8"))
-
-    btn_pos = [{"id": b["id"], "x": b["x"], "y": b["y"]} for b in button_positions]
-
-    try:
-        # Build polygon cutouts from layout + routing, then generate SCAD
-        cutouts = build_cutouts(layout, routing)
-        enclosure_scad = generate_enclosure_scad(
-            outline=outline,
-            cutouts=cutouts,
-            top_curve_length=top_curve_length,
-            top_curve_height=top_curve_height,
-            bottom_curve_length=bottom_curve_length,
-            bottom_curve_height=bottom_curve_height,
-        )
-        (p1 := _output_dir / "enclosure.scad").write_text(enclosure_scad, encoding="utf-8")
-
-        # Battery hatch
-        hatch_scad = generate_battery_hatch_scad()
-        (p2 := _output_dir / "battery_hatch.scad").write_text(hatch_scad, encoding="utf-8")
-
-        # Print plate
-        plate_scad = generate_print_plate_scad()
-        (p3 := _output_dir / "print_plate.scad").write_text(plate_scad, encoding="utf-8")
-
-    except Exception as e:
-        return {"status": "error", "message": f"SCAD generation failed: {e}"}
-
-    scad_files = {
-        "enclosure": str(p1),
-        "battery_hatch": str(p2),
-        "print_plate": str(p3),
-    }
-
-    _emit("scad_generated", scad_files)
-
-    return {
-        "status": "ok",
-        "files": scad_files,
-    }
-
-
-def compile_models() -> dict:
-    """
-    Compile all SCAD files in the output directory to STL.
-    """
-    scad_files = list(_output_dir.glob("*.scad"))
-    if not scad_files:
-        return {"status": "error", "message": "No SCAD files found. Run generate_enclosure first."}
-
-    results = {}
-    stl_files = {}
-    all_ok = True
-
-    for scad_path in scad_files:
-        stl_path = scad_path.with_suffix(".stl")
-        ok, msg, out = compile_scad(scad_path, stl_path)
-        results[scad_path.stem] = {"ok": ok, "message": msg}
-        if ok and out:
-            stl_files[scad_path.stem] = out
-            _emit("model", {"name": scad_path.stem, "path": out})
-        else:
-            all_ok = False
-
-    return {
-        "status": "ok" if all_ok else "partial_failure",
-        "results": results,
-        "stl_files": stl_files,
-    }
-
-
-def finalize(summary: str) -> dict:
-    """
-    Finalize the design session. Provide a summary of what was built.
-    """
-    # Save design manifest
-    manifest = {
-        "run_id": _run_id,
-        "summary": summary,
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "output_dir": str(_output_dir),
-    }
-    (p := _output_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2), encoding="utf-8"
-    )
-
-    _emit("complete", manifest)
-    return {"status": "complete"}
-
-
-# ═══════════════════════════════════════════════════════════════════
-# TOOL REGISTRY — used by the agent loop for dispatch
-# ═══════════════════════════════════════════════════════════════════
-
-TOOLS: dict[str, Callable[..., dict]] = {
-    "think": think,
-    "send_message": send_message,
-    "send_outline_preview": send_outline_preview,
-    "validate_outline": validate_outline,
-    "place_components": place_components,
-    "route_traces": route_traces,
-    "generate_enclosure": generate_enclosure,
-    "compile_models": compile_models,
-    "finalize": finalize,
-}
+TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "list_components",
+        "description": (
+            "List all available components in the catalog with summary info "
+            "(ID, name, pin count, mounting style, whether it needs "
+            "UI placement). Already shown in your system prompt — use this "
+            "only if you need a refresher."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "get_component",
+        "description": (
+            "Get full details for a specific component: all pins with "
+            "positions/directions/voltage/current, mounting details, "
+            "internal_nets, pin_groups, and configurable fields. "
+            "Always read component details before using it in a design."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "component_id": {
+                    "type": "string",
+                    "description": "Component ID from the catalog (e.g. 'led_5mm')",
+                },
+            },
+            "required": ["component_id"],
+        },
+    },
+    {
+        "name": "submit_design",
+        "description": (
+            "Submit a complete device design for validation. If validation "
+            "fails, you'll receive error details — fix and resubmit."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "components": {
+                    "type": "array",
+                    "description": "Component instances to use.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "catalog_id": {
+                                "type": "string",
+                                "description": "Component ID from the catalog",
+                            },
+                            "instance_id": {
+                                "type": "string",
+                                "description": "Unique instance name (e.g. 'led_1', 'r_1')",
+                            },
+                            "config": {
+                                "type": "object",
+                                "description": "Config overrides for configurable components",
+                            },
+                            "mounting_style": {
+                                "type": "string",
+                                "description": "Override from allowed_styles",
+                            },
+                        },
+                        "required": ["catalog_id", "instance_id"],
+                    },
+                },
+                "nets": {
+                    "type": "array",
+                    "description": "Electrical nets connecting component pins.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {
+                                "type": "string",
+                                "description": "Net name (e.g. 'VCC', 'GND')",
+                            },
+                            "pins": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": (
+                                    "Pin references as 'instance_id:pin_id'. "
+                                    "Use 'instance_id:group_id' for MCU dynamic "
+                                    "pin allocation."
+                                ),
+                            },
+                        },
+                        "required": ["id", "pins"],
+                    },
+                },
+                "outline": {
+                    "type": "array",
+                    "description": (
+                        "Device outline as a list of vertex objects (clockwise winding). "
+                        "Coordinate system: screen convention — x increases rightward, "
+                        "y increases downward (y=0 is the top of the device). "
+                        "Each vertex has x, y (mm), optional ease_in / ease_out "
+                        "(mm) for corner rounding, and optional z_top (mm) for "
+                        "per-vertex ceiling height. Omit z_top to inherit from "
+                        "the enclosure height_mm."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x": {
+                                "type": "number",
+                                "description": "X coordinate in mm",
+                            },
+                            "y": {
+                                "type": "number",
+                                "description": "Y coordinate in mm",
+                            },
+                            "ease_in": {
+                                "type": "number",
+                                "description": (
+                                    "Distance in mm along the incoming edge "
+                                    "(from previous vertex) where the curve "
+                                    "begins. If omitted, defaults to ease_out "
+                                    "when ease_out is set, otherwise 0."
+                                ),
+                            },
+                            "ease_out": {
+                                "type": "number",
+                                "description": (
+                                    "Distance in mm along the outgoing edge "
+                                    "(toward next vertex) where the curve "
+                                    "ends. If omitted, defaults to ease_in "
+                                    "when ease_in is set, otherwise 0."
+                                ),
+                            },
+                            "z_top": {
+                                "type": "number",
+                                "description": (
+                                    "Ceiling height (mm) at this vertex. "
+                                    "Omit to inherit from enclosure.height_mm. "
+                                    "Must be >= floor(2mm) + tallest component + ceiling(2mm)."
+                                ),
+                            },
+                        },
+                        "required": ["x", "y"],
+                    },
+                },
+                "enclosure": {
+                    "type": "object",
+                    "description": (
+                        "3D enclosure shape descriptor. The floor is always flat. "
+                        "height_mm sets the default ceiling height for vertices without "
+                        "z_top, and is the minimum height everywhere. "
+                        "top_surface adds an optional smooth bump over the vertex heights."
+                    ),
+                    "properties": {
+                        "height_mm": {
+                            "type": "number",
+                            "description": (
+                                "Default ceiling height (mm) and minimum height. "
+                                "Must be >= 2 (floor) + tallest_component + 2 (ceiling). "
+                                "Example: battery_holder_9v is ~30mm tall so height_mm >= 34."
+                            ),
+                        },
+                        "top_surface": {
+                            "type": "object",
+                            "description": "Optional smooth bump added over the per-vertex interpolation.",
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "description": "Shape type: 'flat' (default), 'dome', or 'ridge'.",
+                                },
+                                "peak_x_mm": {"type": "number", "description": "Dome: X of peak"},
+                                "peak_y_mm": {"type": "number", "description": "Dome: Y of peak"},
+                                "peak_height_mm": {"type": "number", "description": "Dome: absolute Z at peak"},
+                                "base_height_mm": {"type": "number", "description": "Dome/ridge: Z level the bump rises from"},
+                                "x1": {"type": "number", "description": "Ridge: crest line start X"},
+                                "y1": {"type": "number", "description": "Ridge: crest line start Y"},
+                                "x2": {"type": "number", "description": "Ridge: crest line end X"},
+                                "y2": {"type": "number", "description": "Ridge: crest line end Y"},
+                                "crest_height_mm": {"type": "number", "description": "Ridge: absolute Z at the crest"},
+                                "falloff_mm": {"type": "number", "description": "Ridge: distance from crest where surface reaches base_height_mm"},
+                            },
+                            "required": ["type"],
+                        },
+                    },
+                },
+                "ui_placements": {
+                    "type": "array",
+                    "description": (
+                        "Positions for UI-facing components (buttons, LEDs, "
+                        "switches). Only for ui_placement=true components. "
+                        "Side-mount components must include edge_index."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "instance_id": {"type": "string"},
+                            "x_mm": {
+                                "type": "number",
+                                "description": (
+                                    "X position in mm. For side-mount: "
+                                    "approximate position along the edge."
+                                ),
+                            },
+                            "y_mm": {
+                                "type": "number",
+                                "description": (
+                                    "Y position in mm. For side-mount: "
+                                    "approximate position along the edge."
+                                ),
+                            },
+                            "edge_index": {
+                                "type": "integer",
+                                "description": (
+                                    "Required for side-mount components. "
+                                    "Which outline edge (0-based) to mount on. "
+                                    "Edge i goes from vertices[i] to "
+                                    "vertices[(i+1) % n]. The component "
+                                    "protrudes through this wall."
+                                ),
+                            },
+                            "conform_to_surface": {
+                                "type": "boolean",
+                                "description": (
+                                    "Whether to angle the component cutout to "
+                                    "follow the local surface curvature (default: true). "
+                                    "Set to false for a vertical hole regardless of "
+                                    "the ceiling angle."
+                                ),
+                            },
+                        },
+                        "required": ["instance_id", "x_mm", "y_mm"],
+                    },
+                },
+            },
+            "required": ["components", "nets", "outline", "ui_placements"],
+        },
+    },
+    {
+        "name": "check_placement_feasibility",
+        "description": (
+            "Run a fast pre-submit feasibility check to verify that every "
+            "auto-placed component (MCU, battery, passives) has at least one "
+            "valid position inside the outline given the proposed ui_placements. "
+            "Returns a per-component report: OK with candidate cell count, or "
+            "FAIL with the specific UI components that are blocking it and a "
+            "concrete fix suggestion. "
+            "Call this BEFORE submit_design whenever you include a large "
+            "auto-placed component (battery, MCU) so you can fix layout "
+            "conflicts without wasting a full pipeline run."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "components": {
+                    "type": "array",
+                    "description": "Same component list as submit_design.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "catalog_id": {"type": "string"},
+                            "instance_id": {"type": "string"},
+                            "config": {"type": "object"},
+                            "mounting_style": {"type": "string"},
+                        },
+                        "required": ["catalog_id", "instance_id"],
+                    },
+                },
+                "outline": {
+                    "type": "array",
+                    "description": "Same outline vertex list as submit_design.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x": {"type": "number"},
+                            "y": {"type": "number"},
+                        },
+                        "required": ["x", "y"],
+                    },
+                },
+                "ui_placements": {
+                    "type": "array",
+                    "description": "Same ui_placements list as submit_design.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "instance_id": {"type": "string"},
+                            "x_mm": {"type": "number"},
+                            "y_mm": {"type": "number"},
+                        },
+                        "required": ["instance_id", "x_mm", "y_mm"],
+                    },
+                },
+                "enclosure": {
+                    "type": "object",
+                    "description": (
+                        "Same enclosure object as submit_design. "
+                        "Required when edge_bottom is a fillet or chamfer so the "
+                        "feasibility scan accounts for the reduced floor space."
+                    ),
+                },
+            },
+            "required": ["components", "outline", "ui_placements"],
+        },
+    },
+]

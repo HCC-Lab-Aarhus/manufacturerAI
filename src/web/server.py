@@ -1,32 +1,39 @@
 """
-FastAPI web server — streaming endpoint that drives multi-turn agent.
+Web server — lightweight FastAPI app that dispatches pipeline stages
+and serves a UI for inspecting each step.
+
+Run:  python -m uvicorn src.web.server:app --reload --port 8000
+  or: python -m src.web.server
+
+Every request carries ?session=<id> to identify the working session.
+The server dynamically loads/generates content for each pipeline step.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
-import subprocess
 import threading
-import traceback
-from datetime import datetime
 from pathlib import Path
-from queue import Queue, Empty
-from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 
-from src.agent.loop import run_turn
-from src.agent.pipeline import run_pipeline, PipelineCancelled
-from src.scad.shell import DEFAULT_HEIGHT_MM
-from src.gcode.pipeline import run_gcode_pipeline
-from src.gcode.slicer import find_prusaslicer, find_prusaslicer_gui, PRINTERS
-from src.gcode.filaments import FILAMENTS
+# compile state: session_id -> {status, message, cancel}
+_stl_compile: dict[str, dict] = {}
+
+from src.catalog import load_catalog, catalog_to_dict, CatalogResult
+from src.session import create_session, load_session, list_sessions, Session
+from src.agent import DesignAgent, TOOLS, MODEL, THINKING_BUDGET, TOKEN_BUDGET, _build_system_prompt, _prune_messages
+from src.pipeline.design import parse_design, validate_design
+from src.pipeline.placer import place_components, placement_to_dict, parse_placement, PlacementError
+from src.pipeline.router import route_traces, routing_to_dict
+from src.pipeline.scad import run_scad_step
+from src.web.naming import generate_session_name
+
+import anthropic
 
 # ── .env loader ────────────────────────────────────────────────────
 
@@ -57,773 +64,635 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-ROOT = Path(__file__).resolve().parents[2]
-OUTPUTS_DIR = ROOT / "outputs" / "web"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+STATIC_DIR.mkdir(exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.middleware("http")
 async def _no_cache_static(request, call_next):
-    """Prevent browser from caching JS / CSS during development."""
     response = await call_next(request)
     if request.url.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return response
 
-# ── Session state (persists across requests) ───────────────────────
 
-_conversation_history: list = []      # Gemini Content proto objects
-_run_dir: Path | None = None          # Output directory for this session
-_printer_id: str | None = None        # Last-used printer id ("mk3s" / "coreone")
+# ── Catalog (auto-reloads when any catalog/*.json changes on disk) ──
 
-
-# ── Build manager ──────────────────────────────────────────────────
-
-import logging as _logging
-_bm_log = _logging.getLogger("manufacturerAI.build")
+_catalog_result: CatalogResult | None = None
+_catalog_mtime: float = 0.0
 
 
-class BuildManager:
-    """Manages pipeline execution — cancellation, background threading, status.
+def _catalog_dir_mtime() -> float:
+    """Return the newest mtime among all catalog/*.json files."""
+    from src.catalog.loader import CATALOG_DIR
+    try:
+        return max((p.stat().st_mtime for p in CATALOG_DIR.glob("*.json")), default=0.0)
+    except OSError:
+        return 0.0
 
-    * For the LLM flow, the pipeline runs in the agent thread.  Call
-      :meth:`prepare_for_agent` to get a cancel event the emit wrapper
-      can check.
-    * For realign / curve-edit, call :meth:`start_background`.
-    * Only *one* build runs at a time — starting a new one cancels
-      the previous.
+
+def _get_catalog() -> CatalogResult:
+    global _catalog_result, _catalog_mtime
+    mtime = _catalog_dir_mtime()
+    if _catalog_result is None or mtime > _catalog_mtime:
+        _catalog_result = load_catalog()
+        _catalog_mtime = mtime
+    return _catalog_result
+
+
+def _reload_catalog() -> CatalogResult:
+    global _catalog_result, _catalog_mtime
+    _catalog_result = load_catalog()
+    _catalog_mtime = _catalog_dir_mtime()
+    return _catalog_result
+
+
+# ── Session helpers ────────────────────────────────────────────────
+
+def _resolve_session(session_id: str | None) -> Session:
+    """Get or create a session from the query param."""
+    if session_id:
+        s = load_session(session_id)
+        if s is None:
+            raise HTTPException(404, f"Session '{session_id}' not found")
+        return s
+    # No session specified — create a new one
+    return create_session()
+
+
+# Pipeline ordering — each step depends on everything before it.
+_PIPELINE_ORDER = ["design", "placement", "routing", "scad", "manufacturing"]
+
+
+def _invalidate_downstream(session: Session, current_step: str) -> list[str]:
+    """Delete artifacts and pipeline_state for steps after *current_step*.
+
+    Returns the list of step names that were invalidated.
     """
+    idx = _PIPELINE_ORDER.index(current_step) if current_step in _PIPELINE_ORDER else -1
+    invalidated: list[str] = []
+    for later in _PIPELINE_ORDER[idx + 1:]:
+        artifact = f"{later}.json"
+        if session.has_artifact(artifact):
+            session.delete_artifact(artifact)
+        if later in session.pipeline_state:
+            del session.pipeline_state[later]
+            invalidated.append(later)
+    return invalidated
 
-    def __init__(self):
-        self._cancel = threading.Event()
-        self._bg_thread: threading.Thread | None = None
-        self._status = "idle"  # idle | running | done | error
-        self._error: str | None = None
-        self._progress: str = ""
-        self._run_dir: Path | None = None
 
-    # ── lifecycle ──────────────────────────────────────────────────
+# ── Routes: Pages ──────────────────────────────────────────────────
 
-    def prepare_for_agent(self, run_dir: Path) -> threading.Event:
-        """Prepare for an LLM pipeline run.
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    """Serve the main HTML page."""
+    html_path = STATIC_DIR / "index.html"
+    if not html_path.exists():
+        return HTMLResponse("<h1>ManufacturerAI</h1><p>Static files not found.</p>")
+    return FileResponse(html_path)
 
-        Cancels any background build, resets state, and returns a
-        *fresh* cancel event that the SSE emit wrapper should check.
-        """
-        self.cancel()
-        self._cancel = threading.Event()
-        self._status = "running"
-        self._error = None
-        self._progress = ""
-        self._run_dir = run_dir
-        return self._cancel
 
-    def agent_done(self, success: bool, error: str | None = None):
-        """Called when the agent pipeline finishes."""
-        self._status = "done" if success else "error"
-        self._error = error
+# ── Routes: Session API ───────────────────────────────────────────
 
-    def start_background(self, run_dir: Path, *, start_from: str, stop_after: str | None = None):
-        """Cancel any current build and start a new pipeline in a background thread."""
-        self.cancel()
-        self._cancel = threading.Event()
-        self._status = "running"
-        self._error = None
-        self._progress = ""
-        self._run_dir = run_dir
+@app.get("/api/sessions")
+async def api_list_sessions():
+    """List all available sessions."""
+    return {"sessions": list_sessions()}
 
-        cancel = self._cancel
 
-        def _emit(event_type: str, data: dict):
-            if cancel.is_set():
-                raise PipelineCancelled()
-            if event_type == "progress":
-                self._progress = data.get("stage", "")
+@app.post("/api/sessions")
+async def api_create_session(description: str = ""):
+    """Create a new session. Saves catalog snapshot."""
+    session = create_session(description=description)
+    cat = _get_catalog()
+    session.write_artifact("catalog.json", catalog_to_dict(cat))
+    session.pipeline_state["catalog"] = "loaded"
+    session.save()
+    return {"session_id": session.id, "created": session.created}
 
-        def _run():
-            try:
-                result = run_pipeline(
-                    run_dir, _emit, cancel,
-                    start_from=start_from, stop_after=stop_after,
-                )
-                if result.get("status") == "error":
-                    self._status = "error"
-                    self._error = result.get("message", "Unknown error")
-                else:
-                    self._status = "done"
-            except PipelineCancelled:
-                self._status = "idle"
-            except Exception as exc:
-                self._status = "error"
-                self._error = str(exc)
-                _bm_log.exception("Background pipeline failed")
 
-        self._bg_thread = threading.Thread(target=_run, daemon=True)
-        self._bg_thread.start()
+@app.get("/api/session")
+async def api_get_session(session: str = Query(...)):
+    """Get session metadata + pipeline state."""
+    s = _resolve_session(session)
+    return {
+        "id": s.id,
+        "created": s.created,
+        "last_modified": s.last_modified,
+        "description": s.description,
+        "name": s.name,
+        "pipeline_state": s.pipeline_state,
+        "artifacts": {
+            "catalog": s.has_artifact("catalog.json"),
+            "design": s.has_artifact("design.json"),
+            "placement": s.has_artifact("placement.json"),
+            "routing": s.has_artifact("routing.json"),
+            "scad": s.has_artifact("enclosure.scad"),
+        },
+    }
 
-    def cancel(self):
-        """Cancel whatever is running."""
-        self._cancel.set()
-        if self._bg_thread and self._bg_thread.is_alive():
-            self._bg_thread.join(timeout=10)
-        self._bg_thread = None
 
-    def reset(self):
-        """Full reset for new session."""
-        self.cancel()
-        self._cancel = threading.Event()
-        self._status = "idle"
-        self._error = None
-        self._progress = ""
-        self._run_dir = None
+# ── Routes: Catalog API ───────────────────────────────────────────
 
-    # ── status ────────────────────────────────────────────────────
+@app.get("/api/catalog")
+async def api_catalog():
+    """Return the full loaded catalog with validation results."""
+    cat = _get_catalog()
+    return catalog_to_dict(cat)
 
-    @property
-    def status(self) -> dict:
-        model = None
-        if self._run_dir:
-            for name in ("print_plate", "enclosure"):
-                if (self._run_dir / f"{name}.stl").exists():
-                    model = name
-                    break
-        return {
-            "status": self._status,
-            "progress": self._progress,
-            "model_name": model,
-            "error": self._error,
+
+@app.post("/api/catalog/reload")
+async def api_catalog_reload():
+    """Force-reload the catalog from disk."""
+    cat = _reload_catalog()
+    return catalog_to_dict(cat)
+
+
+@app.get("/api/catalog/{component_id}")
+async def api_catalog_component(component_id: str):
+    """Get a single component by ID."""
+    cat = _get_catalog()
+    for c in cat.components:
+        if c.id == component_id:
+            from src.catalog import component_to_dict
+            return component_to_dict(c)
+    raise HTTPException(404, f"Component '{component_id}' not found")
+
+
+# ── Routes: Session-scoped catalog ─────────────────────────────────
+
+@app.get("/api/session/catalog")
+async def api_session_catalog(session: str = Query(...)):
+    """Get the catalog snapshot for a session."""
+    s = _resolve_session(session)
+    data = s.read_artifact("catalog.json")
+    if data is None:
+        # Generate it on the fly
+        cat = _get_catalog()
+        data = catalog_to_dict(cat)
+        s.write_artifact("catalog.json", data)
+        s.pipeline_state["catalog"] = "loaded"
+        s.save()
+    return data
+
+
+# ── Routes: Placer API ────────────────────────────────────────────
+
+@app.post("/api/session/placement")
+async def api_run_placement(session: str = Query(...)):
+    """Run the placer on the session's design. Saves placement.json."""
+    s = _resolve_session(session)
+    design_data = s.read_artifact("design.json")
+    if design_data is None:
+        raise HTTPException(400, "No design.json — run the design agent first")
+
+    cat = _get_catalog()
+    design = parse_design(design_data)
+
+    errors = validate_design(design, cat)
+    if errors:
+        raise HTTPException(400, f"Design validation failed: {'; '.join(errors)}")
+
+    try:
+        result = place_components(design, cat)
+    except PlacementError as e:
+        raise HTTPException(
+            422,
+            detail={
+                "error": "placement_failed",
+                "instance_id": e.instance_id,
+                "catalog_id": e.catalog_id,
+                "reason": e.reason,
+            },
+        )
+
+    data = placement_to_dict(result)
+    s.write_artifact("placement.json", data)
+    s.pipeline_state["placement"] = "complete"
+    # Invalidate downstream: routing depends on placement
+    _invalidate_downstream(s, "placement")
+    s.save()
+    return _enrich_placement(data, cat)
+
+
+@app.get("/api/session/placement/result")
+async def api_placement_result(session: str = Query(...)):
+    """Return the saved placement for a session, if any."""
+    s = _resolve_session(session)
+    data = s.read_artifact("placement.json")
+    if data is None:
+        raise HTTPException(404, "No placement yet")
+    cat = _get_catalog()
+    return _enrich_placement(data, cat)
+
+
+def _enrich_components(components: list, cat) -> None:
+    """Add body dimensions (including height) and pin positions from the catalog."""
+    cat_map = {c.id: c for c in cat.components}
+    for comp in components:
+        c = cat_map.get(comp.get("catalog_id"))
+        if not c:
+            continue
+        comp["body"] = {
+            "shape": c.body.shape,
+            "width_mm": c.body.width_mm,
+            "length_mm": c.body.length_mm,
+            "diameter_mm": c.body.diameter_mm,
+            "height_mm": c.body.height_mm,   # needed for 3D viewport component boxes
+        }
+        comp["pins"] = [
+            {"id": p.id, "position_mm": list(p.position_mm)}
+            for p in c.pins
+        ]
+        comp["ui_placement"] = c.ui_placement
+        if c.mounting and c.mounting.cap:
+            comp["cap_diameter_mm"] = c.mounting.cap.diameter_mm
+            comp["cap_clearance_mm"] = c.mounting.cap.hole_clearance_mm
+
+
+def _enrich_design_3d(data: dict) -> None:
+    """Compute and attach height_grid + per-placement surface_normal to a design dict.
+
+    Mutates *data* in place.  Safe to call multiple times (idempotent).
+    The frontend reads these precomputed values directly — no geometry math in JS.
+    """
+    from src.pipeline.design.parsing import _parse_outline, _parse_enclosure
+    from src.pipeline.design.height_field import (
+        sample_height_grid, surface_normal_at, blended_height,
+    )
+
+    outline_data = data.get("outline", [])
+    enclosure_data = data.get("enclosure", {})
+    if not outline_data:
+        return
+
+    try:
+        outline = _parse_outline(outline_data)
+        enclosure = _parse_enclosure(enclosure_data)
+    except Exception:
+        return
+
+    # Sample the height field on a 2mm grid
+    grid = sample_height_grid(outline, enclosure, resolution_mm=1.0)
+    data["height_grid"] = grid
+
+    # Add surface_normal and z_at_position to each UI placement
+    for up in data.get("ui_placements", []):
+        x, y = up.get("x_mm", 0), up.get("y_mm", 0)
+        try:
+            z = blended_height(x, y, outline, enclosure)
+            normal = surface_normal_at(x, y, grid)
+            up["z_at_position"] = round(z, 3)
+            up["surface_normal"] = [round(n, 4) for n in normal]
+        except Exception:
+            pass
+
+
+def _enrich_placement(data: dict, cat) -> dict:
+    """Add body dimensions and pin positions to each placed component."""
+    _enrich_components(data.get("components", []), cat)
+    return data
+
+
+# ── Routes: Router API ────────────────────────────────────────────
+
+@app.post("/api/session/routing")
+async def api_run_routing(session: str = Query(...)):
+    """Run the router on the session's placement. Saves routing.json."""
+    s = _resolve_session(session)
+    placement_data = s.read_artifact("placement.json")
+    if placement_data is None:
+        raise HTTPException(400, "No placement.json — run the placer first")
+
+    cat = _get_catalog()
+    placement = parse_placement(placement_data)
+
+    try:
+        result = route_traces(placement, cat)
+    except Exception as e:
+        raise HTTPException(
+            422,
+            detail={
+                "error": "routing_failed",
+                "reason": str(e),
+            },
+        )
+
+    data = routing_to_dict(result)
+    # Attach outline + components + nets for the viewport renderer
+    data["outline"] = placement_data.get("outline", [])
+    data["components"] = placement_data.get("components", [])
+    data["nets"] = placement_data.get("nets", [])
+    data["enclosure"] = placement_data.get("enclosure", {"height_mm": 25})
+
+    # Enrich components with body + pin data for rendering
+    _enrich_components(data.get("components", []), cat)
+
+    s.write_artifact("routing.json", data)
+    s.pipeline_state["routing"] = "complete"
+    s.save()
+    return data
+
+
+@app.get("/api/session/routing/result")
+async def api_routing_result(session: str = Query(...)):
+    """Return the saved routing for a session, if any."""
+    s = _resolve_session(session)
+    data = s.read_artifact("routing.json")
+    if data is None:
+        raise HTTPException(404, "No routing yet")
+    # Re-enrich components with body + pin data if missing
+    cat = _get_catalog()
+    for comp in data.get("components", []):
+        if "body" not in comp or "pins" not in comp:
+            _enrich_components([comp], cat)
+    return data
+
+
+# ── Routes: SCAD API ─────────────────────────────────────────────
+
+@app.post("/api/session/scad")
+async def api_run_scad(session: str = Query(...)):
+    """Generate enclosure.scad from placement + routing.  Saves to session folder."""
+    s = _resolve_session(session)
+    if s.read_artifact("placement.json") is None:
+        raise HTTPException(400, "No placement.json — run the placer first")
+    if s.read_artifact("routing.json") is None:
+        raise HTTPException(400, "No routing.json — run the router first")
+
+    try:
+        scad_path = run_scad_step(s)
+    except Exception as exc:
+        raise HTTPException(
+            422,
+            detail={"error": "scad_failed", "reason": str(exc)},
+        )
+
+    scad_text = scad_path.read_text(encoding="utf-8")
+    return {
+        "status": "done",
+        "scad_lines": scad_text.count("\n"),
+        "scad_bytes": len(scad_text),
+    }
+
+
+@app.get("/api/session/scad/result")
+async def api_scad_result(session: str = Query(...)):
+    """Return the generated enclosure.scad text, if available."""
+    s = _resolve_session(session)
+    scad_path = s.path / "enclosure.scad"
+    if not scad_path.exists():
+        raise HTTPException(404, "No enclosure.scad yet -- run /api/session/scad first")
+    scad_text = scad_path.read_text(encoding="utf-8")
+    return {
+        "status": "done",
+        "scad": scad_text,
+        "scad_lines": scad_text.count("\n"),
+        "scad_bytes": len(scad_text),
+    }
+
+
+@app.post("/api/session/scad/compile")
+async def api_compile_stl(session: str = Query(...), force: bool = Query(False)):
+    """Start background STL compilation for the session's enclosure.scad.
+
+    Pass ``force=true`` to restart compilation even if a previous attempt
+    finished with an error (or succeeded).
+    """
+    s = _resolve_session(session)
+    scad_path = s.path / "enclosure.scad"
+    if not scad_path.exists():
+        raise HTTPException(400, "No enclosure.scad yet -- run /api/session/scad first")
+
+    stl_path = s.path / "enclosure.stl"
+
+    # Already done (and not forcing a redo)
+    if not force and stl_path.exists() and session not in _stl_compile:
+        return {"status": "done", "stl_bytes": stl_path.stat().st_size}
+
+    # Already compiling
+    cur = _stl_compile.get(session)
+    if cur and cur["status"] == "compiling" and not force:
+        return {"status": "compiling"}
+
+    # Return cached status if done/error (and not forcing)
+    if not force and cur and cur["status"] in ("done", "error"):
+        return {"status": cur["status"], "message": cur.get("message", ""),
+                "stl_bytes": stl_path.stat().st_size if stl_path.exists() else 0}
+
+    # Cancel any in-flight compile when forcing
+    if force and cur and cur.get("cancel"):
+        cur["cancel"].set()
+
+    # Start a new compile
+    cancel = threading.Event()
+    _stl_compile[session] = {"status": "compiling", "cancel": cancel, "message": ""}
+
+    def _do_compile():
+        from src.pipeline.scad.compiler import compile_scad
+        ok, msg, out = compile_scad(scad_path, stl_path, cancel=cancel, timeout=600)
+        _stl_compile[session] = {
+            "status": "done" if ok else "error",
+            "message": msg,
+            "cancel": cancel,
         }
 
-
-_build = BuildManager()
-
-
-# ── Models ─────────────────────────────────────────────────────────
-
-class GenerateRequest(BaseModel):
-    message: str
+    threading.Thread(target=_do_compile, daemon=True).start()
+    return {"status": "compiling"}
 
 
-class CurveUpdateRequest(BaseModel):
-    top_curve_length: float = 0.0
-    top_curve_height: float = 0.0
-    bottom_curve_length: float = 0.0
-    bottom_curve_height: float = 0.0
+@app.get("/api/session/scad/compile")
+async def api_compile_stl_status(session: str = Query(...)):
+    """Poll the STL compilation status for the session."""
+    s = _resolve_session(session)
+    stl_path = s.path / "enclosure.stl"
+    state = _stl_compile.get(session)
+    if state:
+        out = {"status": state["status"], "message": state.get("message", "")}
+        if state["status"] == "done" and stl_path.exists():
+            out["stl_bytes"] = stl_path.stat().st_size
+        return out
+    # Not in state dict — check if file exists on disk
+    if stl_path.exists():
+        return {"status": "done", "stl_bytes": stl_path.stat().st_size}
+    return {"status": "pending"}
 
 
-class LayoutPositionUpdate(BaseModel):
-    id: str
-    center: list[float]
-    rotation_deg: int | None = None
-
-
-class LayoutUpdateRequest(BaseModel):
-    positions: list[LayoutPositionUpdate]
-
-
-# ── Routes ─────────────────────────────────────────────────────────
-
-@app.get("/")
-def index():
+@app.get("/api/session/scad/stl")
+async def api_serve_stl(session: str = Query(...)):
+    """Serve the compiled enclosure.stl as a binary download."""
+    s = _resolve_session(session)
+    stl_path = s.path / "enclosure.stl"
+    if not stl_path.exists():
+        raise HTTPException(404, "No enclosure.stl yet -- compile first")
     return FileResponse(
-        STATIC_DIR / "index.html",
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        stl_path,
+        media_type="application/octet-stream",
+        filename="enclosure.stl",
     )
 
 
-@app.post("/api/reset")
-def reset_session():
-    """Reset conversation history and start a fresh session."""
-    global _conversation_history, _run_dir, _printer_id
-    _conversation_history = []
-    _run_dir = None
-    _printer_id = None
-    _build.reset()
-    return {"status": "ok"}
+# ── Routes: Design Agent API ──────────────────────────────────────
 
+@app.get("/api/session/tokens")
+def api_session_tokens(session: str = Query(...)):
+    """Return the current input token count for the session's conversation."""
+    s = _resolve_session(session)
+    conversation = s.read_artifact("conversation.json")
+    if not conversation or not isinstance(conversation, list):
+        return {"input_tokens": 0, "budget": TOKEN_BUDGET}
 
-@app.get("/api/shell_height")
-def get_shell_height():
-    """Return the default shell height so the UI knows the max."""
-    return {"height_mm": DEFAULT_HEIGHT_MM}
-
-
-@app.post("/api/update_curve")
-def update_curve(req: CurveUpdateRequest):
-    """Write new curve params and rebuild SCAD + STL in background.
-
-    The frontend's client-side Three.js preview is updated instantly;
-    this endpoint just keeps the on-disk STL in sync.
-    """
-    if _run_dir is None:
-        raise HTTPException(400, "No run yet — generate a design first.")
-    if not (_run_dir / "pcb_layout.json").exists():
-        raise HTTPException(400, "No layout data — generate a design first.")
-
-    # Write curve params to disk
-    (_run_dir / "curve_params.json").write_text(json.dumps({
-        "top_curve_length": req.top_curve_length,
-        "top_curve_height": req.top_curve_height,
-        "bottom_curve_length": req.bottom_curve_length,
-        "bottom_curve_height": req.bottom_curve_height,
-    }, indent=2), encoding="utf-8")
-
-    # Rebuild SCAD + STL in background (pipeline "build" step only)
-    _build.start_background(_run_dir, start_from="build", stop_after="build")
-
-    return {"status": "ok", "stl_rebuilding": True}
-
-
-@app.post("/api/update_layout")
-def update_layout(req: LayoutUpdateRequest):
-    """Move components, re-route traces, and rebuild STLs.
-
-    Called from the Realign mode.  Steps:
-    1. Patch component positions in pcb_layout.json (synchronous)
-    2. Re-route traces (synchronous — takes seconds)
-    3. Start SCAD + STL rebuild in background (takes minutes)
-    """
-    from src.pcb.router_bridge import route_traces as _route_traces, RouterError
-
-    if _run_dir is None:
-        raise HTTPException(400, "No run yet — generate a design first.")
-
-    layout_path = _run_dir / "pcb_layout.json"
-    if not layout_path.exists():
-        raise HTTPException(400, "No layout data — generate a design first.")
-
-    layout = json.loads(layout_path.read_text(encoding="utf-8"))
-
-    # Cancel any running pipeline (LLM or previous realign)
-    _build.cancel()
-
-    # ── Patch component positions ──────────────────────────────────
-    pos_map = {p.id: p.center for p in req.positions}
-    rot_map = {p.id: p.rotation_deg for p in req.positions if p.rotation_deg is not None}
-    for comp in layout.get("components", []):
-        if comp["id"] in pos_map:
-            comp["center"] = pos_map[comp["id"]]
-        if comp["id"] in rot_map:
-            old_rot = comp.get("rotation_deg", 0)
-            new_rot = rot_map[comp["id"]]
-            if old_rot != new_rot:
-                comp["rotation_deg"] = new_rot
-                ko = comp.get("keepout", {})
-                if ko.get("type") == "rectangle":
-                    ko["width_mm"], ko["height_mm"] = ko["height_mm"], ko["width_mm"]
-                if "body_width_mm" in comp and "body_height_mm" in comp:
-                    comp["body_width_mm"], comp["body_height_mm"] = comp["body_height_mm"], comp["body_width_mm"]
-
-    # Save updated layout
-    layout_path.write_text(json.dumps(layout, indent=2), encoding="utf-8")
-
-    # Write lock so a subsequent LLM turn doesn't re-submit the design
-    (_run_dir / ".layout_lock").write_text("realigned", encoding="utf-8")
-
-    # ── Re-route traces (synchronous — fast) ───────────────────────
-    routing = {}
-    routing_ok = False
+    cat = _get_catalog()
+    system = _build_system_prompt(cat)
+    pruned = _prune_messages(conversation)
+    client = anthropic.Anthropic()
     try:
-        routing = _route_traces(layout, _run_dir)
-        (_run_dir / "routing_result.json").write_text(
-            json.dumps(routing, indent=2), encoding="utf-8"
+        result = client.messages.count_tokens(
+            model=MODEL,
+            messages=pruned,
+            system=system,
+            tools=TOOLS,
+            thinking={"type": "enabled", "budget_tokens": THINKING_BUDGET},
         )
-        routing_ok = routing.get("success", False)
-    except (RouterError, Exception) as exc:
-        _bm_log.warning("Re-route after realign failed: %s", exc, exc_info=True)
-
-    has_debug_image = (_run_dir / "pcb_debug.png").exists()
-
-    # ── Build shell preview data for frontend ──────────────────────
-    curve_path = _run_dir / "curve_params.json"
-    curves = (
-        json.loads(curve_path.read_text(encoding="utf-8"))
-        if curve_path.exists()
-        else {}
-    )
-    outline = layout.get("board", {}).get("outline_polygon", [])
-    from src.scad.shell import DEFAULT_HEIGHT_MM as _DHM
-    from src.config.hardware import hw as _hw
-    shell_preview = {
-        "outline": outline,
-        "height_mm": _DHM,
-        "wall_mm": _hw.wall_thickness,
-        "top_curve_length": curves.get("top_curve_length", 0),
-        "top_curve_height": curves.get("top_curve_height", 0),
-        "bottom_curve_length": curves.get("bottom_curve_length", 0),
-        "bottom_curve_height": curves.get("bottom_curve_height", 0),
-        "components": [
-            {
-                "type": c.get("type"),
-                "center": c["center"],
-                "body_width_mm": c.get("body_width_mm", 0),
-                "body_height_mm": c.get("body_height_mm", 0),
-                **({
-                    "shape_outline": c["shape_outline"]
-                } if c.get("shape_outline") else {}),
-            }
-            for c in layout.get("components", [])
-        ],
-    }
-
-    # ── Only rebuild STL if routing succeeded ──────────────────────
-    failed_nets = []
-    if routing_ok:
-        _build.start_background(_run_dir, start_from="build", stop_after="build")
-    else:
-        failed_nets = [
-            f.get("netName", str(f)) if isinstance(f, dict) else str(f)
-            for f in routing.get("failed_nets", [])
-        ]
-        _bm_log.warning("Skipping STL build — routing failed (%d failed nets)", len(failed_nets))
-
-    model_name = (
-        "print_plate" if (_run_dir / "print_plate.stl").exists()
-        else "enclosure" if (_run_dir / "enclosure.stl").exists()
-        else None
-    )
-    return {
-        "status": "ok",
-        "layout": layout,
-        "model_name": model_name,
-        "has_debug_image": has_debug_image,
-        "stl_rebuilding": routing_ok,
-        "routing_ok": routing_ok,
-        "failed_nets": failed_nets,
-        "shell_preview": shell_preview,
-    }
+        return {"input_tokens": result.input_tokens, "budget": TOKEN_BUDGET}
+    except Exception:
+        return {"input_tokens": 0, "budget": TOKEN_BUDGET}
 
 
-@app.post("/api/realign/pause")
-def realign_pause():
-    """User entered realign mode — cancel the running pipeline."""
-    _build.cancel()
-    return {"status": "paused"}
+@app.get("/api/session/conversation")
+async def api_conversation(session: str = Query(...)):
+    """Return the saved conversation history for a session."""
+    s = _resolve_session(session)
+    data = s.read_artifact("conversation.json")
+    return data if isinstance(data, list) else []
 
 
-@app.post("/api/realign/resume")
-def realign_resume():
-    """Resume after cancelling realign — restart STL build if interrupted."""
-    if _run_dir is None:
-        return {"status": "resumed", "stl_rebuilding": False}
-
-    # Check if the build was interrupted (SCAD exists but STL doesn't)
-    has_scad = (_run_dir / "enclosure.scad").exists()
-    has_stl = any((_run_dir / f"{n}.stl").exists() for n in ("print_plate", "enclosure"))
-
-    if has_scad and not has_stl:
-        _bm_log.info("Realign cancelled without changes — restarting STL build")
-        _build.start_background(_run_dir, start_from="build", stop_after="build")
-        return {"status": "resumed", "stl_rebuilding": True}
-
-    return {"status": "resumed", "stl_rebuilding": False}
+@app.get("/api/session/design/result")
+async def api_design_result(session: str = Query(...)):
+    """Return the saved design spec for a session, if any."""
+    s = _resolve_session(session)
+    data = s.read_artifact("design.json")
+    if data is None:
+        raise HTTPException(404, "No design yet")
+    # Enrich components with body + pin data for rendering
+    cat = _get_catalog()
+    _enrich_components(data.get("components", []), cat)
+    _enrich_design_3d(data)
+    return data
 
 
-@app.get("/api/stl_status")
-def stl_status():
-    """Poll endpoint for background build progress."""
-    s = _build.status
-    return {
-        "rebuilding": s["status"] == "running",
-        "model_name": s["model_name"],
-        "error": s["error"],
-        "progress": s.get("progress", ""),
-    }
+@app.patch("/api/session/design/enclosure")
+async def api_patch_enclosure(request: Request, session: str = Query(...)):
+    """Patch enclosure fields (edge_top, edge_bottom, height_mm, top_surface).
 
-
-@app.post("/api/generate/stream")
-async def generate_stream(req: GenerateRequest):
-    """Streaming endpoint.  Runs one agent turn in a background thread,
-    pushes SSE events to the client via a Queue.
+    Accepts a partial enclosure JSON object.  Only keys present in the body
+    are merged; all others are left unchanged.  Returns the full enriched
+    design dict so the frontend can re-render immediately.
     """
-    global _conversation_history, _run_dir
+    body = await request.json()
+    s = _resolve_session(session)
+    data = s.read_artifact("design.json")
+    if data is None:
+        raise HTTPException(404, "No design yet")
 
-    if not req.message.strip():
-        raise HTTPException(400, "Empty prompt.")
+    enc = data.setdefault("enclosure", {})
+    for key in ("height_mm", "top_surface", "edge_top", "edge_bottom"):
+        if key in body:
+            enc[key] = body[key]
 
-    # Create / reuse run dir for this session
-    if _run_dir is None:
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        _run_dir = OUTPUTS_DIR / f"run_{stamp}"
-        _run_dir.mkdir(parents=True, exist_ok=True)
+    s.write_artifact("design.json", data)
+    cat = _get_catalog()
+    _enrich_components(data.get("components", []), cat)
+    _enrich_design_3d(data)
+    return data
 
-    # Prepare build manager — cancels any background build, gives us a cancel event
-    cancel = _build.prepare_for_agent(_run_dir)
 
-    queue: Queue[dict | None] = Queue()
+@app.post("/api/session/design")
+async def api_design(request: Request, session: str = Query(None)):
+    """
+    Run the design agent. Returns an SSE stream.
 
-    def emit(event_type: str, data: dict):
-        if cancel.is_set():
-            raise PipelineCancelled()
-        queue.put({"type": event_type, **data})
+    If no session is provided, a new session is created automatically
+    and its ID is sent as the first SSE event.
 
-    def run_in_thread():
-        global _conversation_history
+    Body: {"prompt": "Design a flashlight with..."}
+
+    SSE event types:
+      session_created — new session was auto-created (data: {"session_id": "..."})
+      thinking_start  — new thinking block
+      thinking_delta  — incremental thinking text (data: {"text": "..."})
+      message_start   — new text block
+      message_delta   — incremental text (data: {"text": "..."})
+      block_stop      — current content block finished
+      tool_call       — tool invocation
+      tool_result     — tool call result
+      design          — validated design spec
+      error           — error message
+      done            — agent finished
+    """
+    body = await request.json()
+    prompt = body.get("prompt", "")
+    if not prompt:
+        raise HTTPException(400, "Missing 'prompt' in request body")
+
+    # Auto-create session if none specified
+    created_new = False
+    if session:
+        sess = _resolve_session(session)
+    else:
+        sess = create_session()
+        cat = _get_catalog()
+        sess.write_artifact("catalog.json", catalog_to_dict(cat))
+        sess.pipeline_state["catalog"] = "loaded"
+        sess.save()
+        created_new = True
+
+    cat = _get_catalog()
+
+    async def event_stream():
         try:
-            _conversation_history = run_turn(
-                user_message=req.message.strip(),
-                history=_conversation_history,
-                emit=emit,
-                output_dir=_run_dir,
-                cancel=cancel,
-            )
-            _build.agent_done(True)
-        except PipelineCancelled:
-            pass  # Silently exit — realign took over
+            # Notify the client of the new session ID
+            if created_new:
+                data = json.dumps({"session_id": sess.id})
+                yield f"event: session_created\ndata: {data}\n\n"
+
+            agent = DesignAgent(cat, sess)
+            async for event in agent.run(prompt):
+                # Enrich design components with body + pin data
+                if event.type == "design" and event.data:
+                    design = event.data.get("design")
+                    if design:
+                        _enrich_components(
+                            design.get("components", []), cat,
+                        )
+                        _enrich_design_3d(design)
+                data = json.dumps(event.data) if event.data else "{}"
+                yield f"event: {event.type}\ndata: {data}\n\n"
+
+                # After a successful design submission, generate a session name
+                if event.type == "design":
+                    name = generate_session_name(sess)
+                    if name:
+                        yield f"event: session_named\ndata: {json.dumps({'name': name})}\n\n"
         except Exception as e:
-            _build.agent_done(False, str(e))
-            queue.put({
-                "type": "error",
-                "message": str(e),
-                "traceback": traceback.format_exc(),
-            })
-        finally:
-            queue.put(None)  # sentinel
-
-    thread = threading.Thread(target=run_in_thread, daemon=True)
-    thread.start()
-
-    async def event_generator():
-        import time as _time
-        _last_data = _time.monotonic()
-        while True:
-            try:
-                item = queue.get(timeout=0.05)
-            except Empty:
-                # Send keepalive comment every 15 s to prevent connection drop
-                if _time.monotonic() - _last_data > 15:
-                    yield ": keepalive\n\n"
-                    _last_data = _time.monotonic()
-                await asyncio.sleep(0.05)
-                continue
-
-            if item is None:
-                break
-
-            yield f"data: {json.dumps(item)}\n\n"
-            _last_data = _time.monotonic()
-
-            if item.get("type") == "error":
-                break
+            data = json.dumps({"message": str(e)})
+            yield f"event: error\ndata: {data}\n\n"
 
     return StreamingResponse(
-        event_generator(),
+        event_stream(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
     )
 
 
-# ── File serving ───────────────────────────────────────────────────
-
-@app.get("/api/model/{name}")
-def get_model(name: str):
-    """Serve an STL file from the current session run."""
-    if _run_dir is None:
-        raise HTTPException(404, "No run yet.")
-    stl = _run_dir / f"{name}.stl"
-    if not stl.exists():
-        raise HTTPException(404, f"{name}.stl not found.")
-    return Response(
-        content=stl.read_bytes(),
-        media_type="model/stl",
-        headers={
-            "Content-Disposition": f"inline; filename={name}.stl",
-            "Cache-Control": "no-cache",
-        },
-    )
-
-
-@app.get("/api/model/download/{name}")
-def download_model(name: str):
-    if _run_dir is None:
-        raise HTTPException(404, "No run yet.")
-    stl = _run_dir / f"{name}.stl"
-    if not stl.exists():
-        raise HTTPException(404, f"{name}.stl not found.")
-    return Response(
-        content=stl.read_bytes(),
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f"attachment; filename={name}.stl"},
-    )
-
-
-@app.get("/api/images/{name}")
-def get_image(name: str):
-    """Serve a PNG image from the current run directory.
-
-    Files are always flat in the run dir (e.g. pcb_debug.png,
-    pcb_negative.png).  The client must request the exact stem.
-    """
-    if _run_dir is None:
-        raise HTTPException(404, "No run yet.")
-
-    img = _run_dir / f"{name}.png"
-    if not img.exists():
-        raise HTTPException(404, f"Image {name}.png not found.")
-
-    return FileResponse(
-        img,
-        media_type="image/png",
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-    )
-
-
-@app.get("/api/outputs/{run_id}/{path:path}")
-def get_output_file(run_id: str, path: str):
-    """Serve any file from a specific run."""
-    full = OUTPUTS_DIR / run_id / path
-    if not full.exists():
-        raise HTTPException(404)
-    return FileResponse(full)
-
-
-# ── Printer info ─────────────────────────────────────────────────
-
-@app.get("/api/printers")
-def list_printers():
-    """Return the list of supported printers for the UI dropdown."""
-    return {
-        "printers": [
-            {"id": p.id, "label": p.label, "bed": f"{p.bed_width:.0f}×{p.bed_depth:.0f} mm"}
-            for p in PRINTERS.values()
-        ]
-    }
-
-
-@app.get("/api/filaments")
-def list_filaments():
-    """Return the list of supported filaments for the UI dropdown."""
-    return {
-        "filaments": [
-            {"id": f.id, "label": f.label}
-            for f in FILAMENTS.values()
-        ]
-    }
-
-
-# ── G-code endpoints ──────────────────────────────────────────────
-
-class SliceRequest(BaseModel):
-    printer: str | None = None
-    filament: str | None = None
-
-
-@app.post("/api/slice")
-def slice_model(req: SliceRequest | None = None):
-    """Slice the enclosure STL and generate staged G-code with pauses.
-
-    Uses the cached pcb_layout and routing_result from the current
-    session's run directory.  Returns metadata about the generated
-    G-code including pause points and layer numbers.
-    """
-    if _run_dir is None:
-        raise HTTPException(400, "No run yet — generate a design first.")
-
-    stl_path = _run_dir / "enclosure.stl"
-    if not stl_path.exists():
-        raise HTTPException(400, "No enclosure STL — compile a design first.")
-
-    layout_path = _run_dir / "pcb_layout.json"
-    routing_path = _run_dir / "routing_result.json"
-    if not layout_path.exists():
-        raise HTTPException(400, "No layout data.")
-
-    layout = json.loads(layout_path.read_text(encoding="utf-8"))
-    routing = {}
-    if routing_path.exists():
-        routing = json.loads(routing_path.read_text(encoding="utf-8"))
-
-    global _printer_id
-    printer_id = req.printer if req else None
-    filament_id = req.filament if req else None
-    _printer_id = printer_id
-
-    result = run_gcode_pipeline(
-        stl_path=stl_path,
-        output_dir=_run_dir,
-        pcb_layout=layout,
-        routing_result=routing,
-        printer=printer_id,
-        filament=filament_id,
-    )
-
-    if not result.success:
-        raise HTTPException(500, result.message)
-
-    # Extract components for step-by-step guide
-    components = layout.get("components", [])
-
-    return {
-        "status": "ok",
-        "staged_gcode": result.staged_gcode_path.name if result.staged_gcode_path else None,
-        "raw_gcode": result.raw_gcode_path.name if result.raw_gcode_path else None,
-        "pause_points": {
-            "ink_layer_z": result.pause_points.ink_layer_z,
-            "component_insert_z": result.pause_points.component_insert_z,
-            "ink_layer_number": result.pause_points.ink_layer_number,
-            "component_layer_number": result.pause_points.component_layer_number,
-            "total_height": result.pause_points.total_height,
-            "layer_height": result.pause_points.layer_height,
-        } if result.pause_points else None,
-        "postprocess": {
-            "total_layers": result.postprocess.total_layers,
-            "ink_layer": result.postprocess.ink_layer,
-            "component_layer": result.postprocess.component_layer,
-            "stages": result.postprocess.stages,
-        } if result.postprocess else None,
-        "stages": result.stages,
-        "components": components,
-    }
-
-
-# NOTE: Static /api/gcode/ routes MUST be defined before the
-# catch-all /api/gcode/{name} route, otherwise FastAPI matches the
-# path parameter first.
-
-@app.get("/api/gcode/download-bgcode")
-def download_bgcode():
-    """Download the binary G-code (.bgcode) for the current session."""
-    if _run_dir is None:
-        raise HTTPException(404, "No run yet.")
-    bgcode = _run_dir / "enclosure_staged.bgcode"
-    if not bgcode.exists():
-        raise HTTPException(404, "enclosure_staged.bgcode not found.")
-    return Response(
-        content=bgcode.read_bytes(),
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": "attachment; filename=enclosure_staged.bgcode"},
-    )
-
-
-@app.get("/api/gcode/download/{name}")
-def download_gcode(name: str):
-    """Download a G-code file from the current session."""
-    if _run_dir is None:
-        raise HTTPException(404, "No run yet.")
-    gcode = _run_dir / f"{name}.gcode"
-    if not gcode.exists():
-        raise HTTPException(404, f"{name}.gcode not found.")
-    return Response(
-        content=gcode.read_bytes(),
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f"attachment; filename={name}.gcode"},
-    )
-
-
-@app.get("/api/gcode/{name}")
-def get_gcode(name: str):
-    """Serve a G-code file from the current session run."""
-    if _run_dir is None:
-        raise HTTPException(404, "No run yet.")
-    gcode = _run_dir / f"{name}.gcode"
-    if not gcode.exists():
-        raise HTTPException(404, f"{name}.gcode not found.")
-    return Response(
-        content=gcode.read_bytes(),
-        media_type="text/plain",
-        headers={
-            "Content-Disposition": f"inline; filename={name}.gcode",
-            "Cache-Control": "no-cache",
-        },
-    )
-
-
-# ── G-code preview / viewer ───────────────────────────────────────
-
-class OpenViewerRequest(BaseModel):
-    format: str = "bgcode"   # "gcode" or "bgcode"
-
-
-@app.post("/api/gcode/open-viewer")
-def open_gcode_viewer(req: OpenViewerRequest | None = None):
-    """Launch PrusaSlicer's G-code viewer.
-
-    Accepts ``{"format": "gcode"}`` or ``{"format": "bgcode"}``.
-    """
-    if _run_dir is None:
-        raise HTTPException(400, "No run yet.")
-
-    fmt = (req.format if req else "bgcode").lower()
-    if fmt == "bgcode":
-        target = _run_dir / "enclosure_staged.bgcode"
-    else:
-        target = _run_dir / "enclosure_staged.gcode"
-
-    if not target.exists():
-        raise HTTPException(400, f"{target.name} not found — slice first.")
-
-    exe = find_prusaslicer_gui()
-    if not exe:
-        raise HTTPException(500, "PrusaSlicer (GUI) not found on this system.")
-
-    try:
-        cmd: list[str] = [exe, "--gcodeviewer", str(target)]
-        # Tell PrusaSlicer which printer to use so the correct bed is
-        # shown (e.g. "Prusa CORE One HF0.4 nozzle").
-        if _printer_id and _printer_id in PRINTERS:
-            native = PRINTERS[_printer_id].native_printer
-            if native:
-                cmd.extend(["--printer-profile", native])
-        subprocess.Popen(cmd)
-    except Exception as e:
-        raise HTTPException(500, f"Failed to launch viewer: {e}")
-
-    return {"status": "ok", "message": f"G-code viewer launched ({target.name})."}
-
-
-@app.get("/api/gcode/preview/{name}")
-def preview_gcode(name: str):
-    """Return G-code metadata for the web preview: layers, pauses, line count."""
-    if _run_dir is None:
-        raise HTTPException(404, "No run yet.")
-    gcode = _run_dir / f"{name}.gcode"
-    if not gcode.exists():
-        raise HTTPException(404, f"{name}.gcode not found.")
-
-    lines = gcode.read_text(encoding="utf-8").splitlines()
-    layers: list[dict] = []
-    pauses: list[dict] = []
-    current_z = 0.0
-    layer_idx = 0
-
-    for i, line in enumerate(lines):
-        if line.startswith(";Z:"):
-            try:
-                current_z = float(line[3:])
-            except ValueError:
-                pass
-            layer_idx += 1
-            layers.append({"line": i + 1, "z": current_z, "layer": layer_idx})
-        elif "M601" in line:
-            # Find the pause label (look backwards for ; PAUSE: ...)
-            label = "Pause"
-            for j in range(max(0, i - 8), i):
-                if lines[j].strip().startswith("; PAUSE:"):
-                    label = lines[j].strip().replace("; PAUSE: ", "")
-                    break
-            pauses.append({"line": i + 1, "z": current_z, "layer": layer_idx, "label": label})
-
-    return {
-        "name": name,
-        "total_lines": len(lines),
-        "total_layers": layer_idx,
-        "layers": layers,
-        "pauses": pauses,
-    }
-
-
 # ── Entry point ────────────────────────────────────────────────────
 
-def main(host: str = "127.0.0.1", port: int = 8000):
-    import uvicorn
-    uvicorn.run("src.web.server:app", host=host, port=port, reload=False)
-
-
 if __name__ == "__main__":
-    main()
+    import uvicorn
+    print("Starting ManufacturerAI server on http://localhost:8000")
+    uvicorn.run("src.web.server:app", host="127.0.0.1", port=8000, reload=True)

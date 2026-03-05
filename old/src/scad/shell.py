@@ -540,13 +540,17 @@ def generate_button_cap_scad(
     grip_clr = 0.05  # per-side clearance — snug fit on head_bottom
     seat_inner = head_top + 2 * seat_clr   # 1.80 mm
     grip_inner = head_bot + 2 * grip_clr   # 1.30 mm
-    socket_outer = seat_inner + 2 * wall_t  # 3.40 mm
-    socket_h = head_top_h + head_bot_h      # 2.00 mm
+    socket_outer = seat_inner + 2 * wall_t  # 5.70 mm with new head
+    socket_h = head_top_h + head_bot_h      # 3.00 mm
     slot_w  = 0.3   # diagonal corner flex-slot width
     chamfer_h = 0.4  # entry chamfer height
 
-    # Effective retention per wall: (seat_inner - grip_inner)/2 = 0.25 mm
-    # Deflection for assembly: (head_top - grip_inner)/2 = 0.10 mm per wall
+    # Widen stem so it fully supports the socket (printed upside-down,
+    # the socket sits on top of the stem — no air gap / unsupported overhang).
+    stem_w = max(stem_w, socket_outer)
+
+    # Effective retention per wall: (seat_inner - grip_inner)/2 = 0.40 mm
+    # Deflection for assembly: (head_top - grip_inner)/2 = 0.25 mm per wall
 
     # Format polygon for OpenSCAD
     pts = ", ".join(f"[{x:.3f}, {y:.3f}]" for x, y in shape_outline)
@@ -592,38 +596,64 @@ module stem() {{
 }}
 
 module snap_socket() {{
-    // 4-wall snap-fit socket with stepped cavity + entry chamfer.
-    // Corner flex-slots let walls deflect during snap-on assembly.
+    // 2-wall snap-fit clasp (left + right) with stepped cavity.
+    // Front and back are open — replaced by stabiliser legs on the
+    // outside of the socket footprint.
     base_z  = cap_thickness + stem_height;
     total_h = socket_h + chamfer_h;
 
+    // ── Left & Right clasp walls ──
+    // Start with full outer block, subtract cavities, then remove
+    // front/back walls (+ corners) to leave only left/right clasps.
     difference() {{
-        // ── Outer block ──
+        // Outer block
         translate([-socket_outer/2, -socket_outer/2, base_z])
             cube([socket_outer, socket_outer, total_h]);
 
-        // ── Seat cavity (wider, for head_top) ──
+        // Seat cavity (wider, for head_top)
         translate([-seat_inner/2, -seat_inner/2, base_z - 0.01])
             cube([seat_inner, seat_inner, head_top_h + 0.01]);
 
-        // ── Grip cavity (narrower, retains head_top) ──
+        // Grip cavity (narrower, retains head_top)
         translate([-grip_inner/2, -grip_inner/2, base_z + head_top_h])
             cube([grip_inner, grip_inner, head_bot_h]);
 
-        // ── Entry chamfer — tapers from grip_inner to seat_inner ──
+        // Entry chamfer — tapers from grip_inner to seat_inner
         translate([0, 0, base_z + socket_h])
             linear_extrude(height = chamfer_h + 0.01,
                            scale  = seat_inner / grip_inner)
                 square([grip_inner, grip_inner], center = true);
 
-        // ── Corner flex-slots (4 diagonal cuts at 45°) ──
-        // Each slot lets one wall segment flex independently
-        // during assembly, reducing the snap-on insertion force.
-        for (a = [45, 135, 225, 315])
-            rotate([0, 0, a])
-                translate([-slot_w/2, 0, base_z - 0.01])
-                    cube([slot_w, socket_outer, total_h + 0.02]);
+        // Remove front wall + internal grip ledge — clear from grip
+        // cavity face all the way out so there's nothing protruding.
+        translate([-socket_outer/2 - 0.01, grip_inner/2, base_z - 0.02])
+            cube([socket_outer + 0.02,
+                  socket_outer/2 - grip_inner/2 + 0.02,
+                  total_h + 0.04]);
+
+        // Remove back wall + internal grip ledge
+        translate([-socket_outer/2 - 0.01, -socket_outer/2 - 0.01, base_z - 0.02])
+            cube([socket_outer + 0.02,
+                  socket_outer/2 - grip_inner/2 + 0.02,
+                  total_h + 0.04]);
     }}
+
+    // ── Front & Back stabiliser legs ──
+    // Posts on the outside of the socket footprint.
+    // They extend 2 mm down into the stem so they're solidly bonded,
+    // not just touching at a single edge.
+    leg_w      = seat_inner;       // same X-span as the clasp walls
+    leg_t      = wall_thickness;
+    leg_embed  = 2.0;              // how far down into the stem
+    leg_full_h = total_h + leg_embed;
+
+    // Front leg — embedded into stem
+    translate([-leg_w/2, socket_outer/2, base_z - leg_embed])
+        cube([leg_w, leg_t, leg_full_h]);
+
+    // Back leg — embedded into stem
+    translate([-leg_w/2, -socket_outer/2 - leg_t, base_z - leg_embed])
+        cube([leg_w, leg_t, leg_full_h]);
 }}
 
 module button_cap() {{

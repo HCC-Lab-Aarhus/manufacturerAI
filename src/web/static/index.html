@@ -1,317 +1,207 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ManufacturerAI</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ManufacturerAI</title>
+    <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-  <div class="app">
-    <!-- Left panel: chat -->
-    <aside class="panel left">
-      <header class="brand">
-        <div class="logo">M</div>
-        <div>
-          <h1>ManufacturerAI</h1>
-          <p>Design printable remote controls with AI.</p>
+    <header>
+        <h1>ManufacturerAI</h1>
+        <div id="session-bar">
+            <span id="session-label">New session</span>
+            <button id="btn-new-session" title="Start a new design session">+ New</button>
         </div>
-      </header>
+    </header>
 
-      <section class="chat" id="chat"></section>
+    <nav id="pipeline-nav">
+        <button class="step active" data-step="design">1. Design</button>
+        <button class="step" data-step="placement" disabled>2. Placement</button>
+        <button class="step" data-step="routing" disabled>3. Routing</button>
+        <button class="step" data-step="scad" disabled>4. SCAD</button>
+        <button class="step" data-step="manufacturing" disabled>5. Manufacturing</button>
+        <div class="nav-spacer"></div>
+        <button class="step" id="btn-guide" disabled>Guide</button>
+        <button class="step" id="btn-catalog">Catalog</button>
+        <button class="step" id="btn-list-sessions">Sessions</button>
+    </nav>
 
-      <!-- DEBUG: Debug log section - TO BE REMOVED -->
-      <section class="debug-log" id="debugLog" style="display:none;max-height:120px;overflow-y:auto;font-size:11px;font-family:monospace;color:#9ca3af;background:#0b1120;border:1px solid #1f2937;border-radius:8px;padding:6px 8px;white-space:pre-wrap;word-break:break-all;"></section>
+    <main id="content">
+        <!-- Left: step panels -->
+        <div id="step-panels">
+            <!-- Design step — chat interface (default view) -->
+            <section id="step-design" class="step-panel">
+                <div id="design-chat" class="chat-container">
+                    <div id="chat-messages" class="chat-messages"></div>
+                    <div class="chat-input-row">
+                        <textarea id="chat-input" placeholder="Describe the device you want to design..." rows="2"></textarea>
+                        <div class="chat-input-right">
+                            <div id="token-meter" class="token-meter" hidden>
+                                <svg viewBox="0 0 36 36" class="token-pie">
+                                    <circle class="token-pie-bg" cx="18" cy="18" r="15.9155" />
+                                    <circle class="token-pie-fill" cx="18" cy="18" r="15.9155"
+                                        stroke-dasharray="0 100" />
+                                </svg>
+                                <span class="token-label" id="token-label">0k / 50k</span>
+                            </div>
+                            <button id="btn-send-design" title="Send">Send</button>
+                        </div>
+                    </div>
+                    <span id="design-status" class="design-status-inline"></span>
+                </div>
+            </section>
 
-      <section class="progress-section" id="progressSection" style="display: none;">
-        <div class="progress-label" id="progressLabel">Starting...</div>
-        <div class="progress-bar-container">
-          <div class="progress-bar-fill" id="progressFill"></div>
-        </div>
-      </section>
+            <!-- Catalog (reference view) -->
+            <section id="step-catalog" class="step-panel" hidden>
+                <div class="step-header">
+                    <h2>Component Catalog</h2>
+                    <div class="step-actions">
+                        <button id="btn-reload-catalog">↻ Reload</button>
+                        <span id="catalog-status"></span>
+                    </div>
+                </div>
+                <div id="catalog-errors" class="errors-panel" hidden></div>
+                <div id="catalog-grid" class="component-grid"></div>
+            </section>
 
-      <section class="composer">
-        <div class="textarea-wrapper">
-          <textarea id="promptInput" placeholder="Describe the remote you want..."></textarea>
-          <button id="micBtn" class="mic-btn" title="Click to dictate">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-              <line x1="12" y1="19" x2="12" y2="23"/>
-              <line x1="8" y1="23" x2="16" y2="23"/>
-            </svg>
-          </button>
-        </div>
-        <div class="composer-actions">
-          <button id="resetBtn" class="reset-btn" title="New conversation">Reset</button>
-          <!-- DEBUG: Toggle switch - TO BE REMOVED -->
-          <label class="debug-toggle" title="Toggle debug log">
-            <input type="checkbox" id="debugToggleBtn">
-            <span class="debug-toggle-slider"></span>
-            <span class="debug-toggle-label">Debug</span>
-          </label>
-          <button id="sendBtn">Send</button>
-        </div>
-      </section>
-    </aside>
-
-    <div class="resizer" id="resizer"></div>
-
-    <!-- Right panel: viewers -->
-    <main class="panel right">
-      <div class="viewer-header">
-        <div class="view-tabs">
-          <button class="tab-btn active" data-view="outline">Outline</button>
-          <button class="tab-btn" data-view="debug">PCB Debug</button>
-          <button class="tab-btn" data-view="3d">3D Model</button>
-        </div>
-        <div class="header-buttons">
-          <button id="themeToggle" class="theme-toggle" title="Toggle light/dark mode">
-            <svg class="theme-icon sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="5"/>
-              <line x1="12" y1="1" x2="12" y2="3"/>
-              <line x1="12" y1="21" x2="12" y2="23"/>
-              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
-              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-              <line x1="1" y1="12" x2="3" y2="12"/>
-              <line x1="21" y1="12" x2="23" y2="12"/>
-              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
-              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-            </svg>
-            <svg class="theme-icon moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-            </svg>
-          </button>
-          <button id="readyToPrintBtn" class="ready-to-print-btn" title="Ready to print">
-            Ready to print
-          </button>
-          <button id="downloadBtn" class="download-btn disabled" title="No STL yet">
-            Download STL
-          </button>
-        </div>
-      </div>
-
-      <!-- Geocode overlay screen -->
-      <div id="geocodeOverlay" class="geocode-overlay" style="display: none;">
-        <button id="geocodeBackBtn" class="geocode-back-btn">Back to design</button>
-        <div class="geocode-content">
-          <div class="printer-instruction">Select printer and filament to generate G-code</div>
-          <div class="printer-selector">
-            <label for="printerSelect">Printer:</label>
-            <select id="printerSelect" class="printer-select">
-              <option value="" disabled selected>Choose printer...</option>
-              <option value="mk3s">Prusa MK3S</option>
-              <option value="coreone">Prusa Core One+</option>
-            </select>
-          </div>
-          <div class="printer-selector">
-            <label for="filamentSelect">Filament:</label>
-            <select id="filamentSelect" class="printer-select">
-              <option value="" disabled selected>Choose filament...</option>
-            </select>
-          </div>
-          <button id="generateGcodeBtn" class="generate-gcode-btn" disabled>
-            Generate G-code
-          </button>
-          <div class="geocode-status" id="geocodeStatus"></div>
-          <div class="geocode-actions">
-            <button id="gcodePreviewBtn" class="geocode-preview-btn" disabled>
-              Preview G-code
-            </button>
-            <button id="geocodeDownloadBtn" class="geocode-download-btn" disabled>
-              Download G-code
-            </button>
-            <button id="viewGcodeBtn" class="geocode-viewer-btn" disabled>
-              View in PrusaSlicer
-            </button>
-          </div>
-        </div>
-        <button id="stepByStepBtn" class="step-by-step-btn">
-          Go to step by step guide
-        </button>
-      </div>
-
-      <!-- G-code preview screen -->
-      <div id="gcodePreviewScreen" class="gcode-preview-screen" style="display: none;">
-        <div class="gcode-preview-header">
-          <button id="gcodePreviewBackBtn" class="back-to-design-btn">Back</button>
-          <div class="gcode-preview-tabs">
-            <button class="gcode-tab active" data-gcode-view="layers">Layer Diagram</button>
-            <button class="gcode-tab" data-gcode-view="code">G-code</button>
-          </div>
+            <!-- Placement step -->
+            <section id="step-placement" class="step-panel" hidden>
+                <div id="placement-hero" class="placement-hero">
+                    <div class="placement-hero-icon">⚡</div>
+                    <p>Automatically position every component inside the device outline</p>
+                    <button id="btn-run-placement" class="placement-cta">Run Placer</button>
+                    <span id="placement-status" class="design-status-inline"></span>
+                </div>
+                <div id="placement-scroll" class="placement-scroll" hidden>
+                    <div id="placement-info" class="placement-info"></div>
+                </div>
+            </section>
+            <section id="step-routing" class="step-panel" hidden>
+                <div id="routing-hero" class="placement-hero">
+                    <div class="placement-hero-icon">🔌</div>
+                    <p>Route conductive traces between component pads</p>
+                    <button id="btn-run-routing" class="placement-cta">Run Router</button>
+                    <span id="routing-status" class="design-status-inline"></span>
+                </div>
+                <div id="routing-scroll" class="placement-scroll" hidden>
+                    <div id="routing-info" class="placement-info"></div>
+                </div>
+            </section>
+            <section id="step-scad" class="step-panel" hidden>
+                <div id="scad-hero" class="placement-hero">
+                    <div class="placement-hero-icon">📦</div>
+                    <p>Generate a 3D printable OpenSCAD enclosure from the PCB layout</p>
+                    <button id="btn-run-scad" class="placement-cta">Generate SCAD</button>
+                    <span id="scad-status" class="design-status-inline"></span>
+                </div>
+                <div id="scad-scroll" class="placement-scroll" hidden>
+                    <div id="scad-info" class="placement-info"></div>
+                </div>
+            </section>
+            <section id="step-manufacturing" class="step-panel" hidden>
+                <h2>Manufacturing</h2>
+                <p class="placeholder">Coming in Stage 6</p>
+            </section>
         </div>
 
-        <!-- Layer diagram view -->
-        <div id="gcodeLayerView" class="gcode-panel active">
-          <svg id="layerDiagramSvg" class="layer-diagram-svg" viewBox="0 0 600 400" preserveAspectRatio="xMidYMid meet"></svg>
-        </div>
+        <!-- Right: step-dependent viewport -->
+        <div id="viewport-resize-handle"></div>
+        <aside id="viewport">
+            <div id="viewport-toolbar"></div>
+            <div id="viewport-content">
+                <p class="viewport-empty">No preview available</p>
+            </div>
+        </aside>
+    </main>
 
-        <!-- G-code text view -->
-        <div id="gcodeCodeView" class="gcode-panel">
-          <div class="gcode-code-header">
-            <span id="gcodeLineCount">0 lines</span>
-            <span id="gcodeLayerCount">0 layers</span>
-            <div class="gcode-pause-jumps" id="gcodePauseJumps"></div>
-          </div>
-          <pre class="gcode-code-area" id="gcodeCodeArea"></pre>
-        </div>
-      </div>
-
-      <!-- Step by step guide screen -->
-      <div id="stepByStepScreen" class="step-by-step-screen" style="display: none;">
+    <!-- Step-by-step Guide screen (full-screen overlay) -->
+    <div id="guide-screen" class="guide-screen" hidden>
         <!-- Manual sliding sidebar overlay -->
         <div id="manualSidebarOverlay" class="manual-sidebar-overlay"></div>
-        
+
         <!-- Manual sliding sidebar -->
         <aside id="manualSidebar" class="manual-sidebar">
-          <div class="manual-sidebar-header">
-            <h3>Manual</h3>
-          </div>
-          <div class="manual-sidebar-content" id="manualSidebarContent">
-            <!-- Section nav will be populated dynamically -->
-          </div>
+            <div class="manual-sidebar-header"><h3>Manual</h3></div>
+            <div class="manual-sidebar-content" id="manualSidebarContent"></div>
         </aside>
-        
+
         <div class="guide-header">
-          <button id="manualSidebarToggle" class="manual-toggle-btn" title="Open manual navigation">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-            </svg>
-            Manual
-          </button>
-          <button id="backToDesignBtn" class="back-to-design-btn">
-            Back to designing
-          </button>
-          <button id="backToGcodeBtn" class="back-to-gcode-btn">
-            Back to G-code
-          </button>
-          <button id="toggleQuestionWindowBtn" class="toggle-question-btn">
-            Question window: Off
-          </button>
+            <button id="manualSidebarToggle" class="manual-toggle-btn" title="Open manual navigation">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                </svg>
+                Manual
+            </button>
+            <button id="guideBackBtn" class="guide-back-btn">← Back</button>
+            <button id="toggleQuestionWindowBtn" class="toggle-question-btn">Question window: Off</button>
         </div>
-        
+
         <div class="guide-layout">
-          <!-- Question/Prompt sidebar -->
-          <aside id="questionSidebar" class="question-sidebar" style="display: none;">
-            <h3>Ask a Question</h3>
-            <textarea id="guidePromptInput" placeholder="Ask about this step..."></textarea>
-            <button id="guideAskBtn" class="guide-ask-btn">Ask</button>
-            <div id="guideResponse" class="guide-response"></div>
-          </aside>
-          
-          <div class="guide-main">
-            <div class="guide-content">
-              <h2>Step by Step Guide</h2>
-              <p>Your printing guide will appear here.</p>
+            <!-- Question/Prompt sidebar -->
+            <aside id="questionSidebar" class="question-sidebar" style="display: none;">
+                <h3>Ask a Question</h3>
+                <textarea id="guidePromptInput" placeholder="Ask about this step..."></textarea>
+                <button id="guideAskBtn" class="guide-ask-btn">Ask</button>
+                <div id="guideResponse" class="guide-response"></div>
+            </aside>
+
+            <div class="guide-main">
+                <div class="guide-content" id="guideContent">
+                    <h2>Step by Step Guide</h2>
+                    <p>Your assembly guide will appear here.</p>
+                </div>
+                <div class="guide-navigation">
+                    <button id="guidePrevBtn" class="guide-nav-btn">Previous</button>
+                    <button id="guideNextBtn" class="guide-nav-btn">Next</button>
+                </div>
             </div>
-            <div class="guide-navigation">
-              <button id="guidePrevBtn" class="guide-nav-btn">Previous</button>
-              <button id="guideNextBtn" class="guide-nav-btn">Next</button>
+
+            <!-- Component placement view panel -->
+            <div id="guidePlacementView" class="guide-placement-view" style="display: none;">
+                <div class="placement-view-header"><h3>Component Placement</h3></div>
+                <div class="placement-view-content">
+                    <svg id="guidePlacementSvg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet"></svg>
+                </div>
+                <div class="placement-view-legend">
+                    <span class="legend-item"><span class="legend-dot current"></span> Current component</span>
+                    <span class="legend-item"><span class="legend-dot other"></span> Other components</span>
+                </div>
             </div>
-          </div>
-          
-          <!-- Component placement view panel -->
-          <div id="guidePlacementView" class="guide-placement-view" style="display: none;">
-            <div class="placement-view-header">
-              <h3>Component Placement</h3>
-            </div>
-            <div class="placement-view-content">
-              <svg id="placementSvg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet"></svg>
-            </div>
-            <div class="placement-view-legend" id="placementLegend">
-              <span class="legend-item"><span class="legend-dot current"></span> Current component</span>
-              <span class="legend-item"><span class="legend-dot other"></span> Other components</span>
-            </div>
-          </div>
         </div>
-      </div>
+    </div>
 
-      <div class="view-container">
-        <!-- Outline preview (SVG) -->
-        <div id="outlineView" class="view-panel active">
-          <div class="view-controls">
-            <button class="reset-view-btn" id="resetOutlineView">Reset view</button>
-            <button class="realign-btn" id="realignBtn" title="Drag components to reposition them">Realign</button>
-            <div class="zoom-controls">
-              <button class="zoom-btn" data-view="outline" data-action="in">+</button>
-              <button class="zoom-btn" data-view="outline" data-action="out">−</button>
+    <!-- Sessions modal (outside main so position:fixed works) -->
+    <div id="sessions-modal" class="modal" hidden>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Sessions</h2>
+                <button class="modal-close" type="button">&times;</button>
             </div>
-          </div>
-          <!-- Realign mode apply/cancel bar -->
-          <div class="realign-bar" id="realignBar" style="display:none;">
-            <span class="realign-bar-label">Drag components to reposition</span>
-            <button class="realign-apply-btn" id="realignApplyBtn">Apply</button>
-            <button class="realign-cancel-btn" id="realignCancelBtn">Cancel</button>
-          </div>
-          <svg id="outlineSvg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet"></svg>
-          <div class="view-label" id="outlineLabel">No outline yet</div>
+            <div id="sessions-list"></div>
         </div>
+    </div>
 
-        <!-- PCB debug images -->
-        <div id="debugView" class="view-panel">
-          <select id="debugImageSelect" class="debug-image-select">
-            <option value="debug">Debug Image</option>
-            <option value="negative">PCB Negative</option>
-          </select>
-          <div class="view-controls">
-            <button class="reset-view-btn" id="resetDebugView">Reset view</button>
-            <div class="zoom-controls">
-              <button class="zoom-btn" data-view="debug" data-action="in">+</button>
-              <button class="zoom-btn" data-view="debug" data-action="out">−</button>
+    <!-- Component detail modal -->
+    <div id="component-modal" class="modal" hidden>
+        <div class="modal-content modal-wide">
+            <div class="modal-header">
+                <h2 id="component-modal-title"></h2>
+                <button class="modal-close" type="button">&times;</button>
             </div>
-          </div>
-          <img id="debugImage" alt="PCB Debug" style="display: none;" />
-          <img id="negativeImage" alt="PCB Negative" style="display: none;" />
-          <div class="view-label" id="debugLabel">No PCB layout yet</div>
+            <div id="component-detail"></div>
         </div>
+    </div>
 
-        <!-- 3D model viewer -->
-        <div id="viewer" class="view-panel">
-          <div class="view-controls">
-            <button class="reset-view-btn" id="reset3DView">Reset view</button>
-            <div class="zoom-controls">
-              <button id="zoomIn">+</button>
-              <button id="zoomOut">−</button>
-            </div>
-          </div>
-
-          <!-- Recompile overlay -->
-          <div class="recompile-overlay" id="recompileOverlay">
-            <div class="recompile-inner">
-              <div class="recompile-spinner"></div>
-              <span>Recompiling model…</span>
-            </div>
-          </div>
-
-          <!-- Curve editor widget -->
-          <div class="curve-editor" id="curveEditor" style="display:none;">
-            <div class="curve-editor-header">
-              <span class="curve-editor-title">Edge Profile</span>
-              <button class="curve-editor-toggle" id="curveEditorToggle" title="Collapse">▾</button>
-            </div>
-            <div class="curve-editor-body" id="curveEditorBody">
-              <div class="curve-editor-tabs">
-                <button class="curve-tab active" data-curve="top">Top</button>
-                <button class="curve-tab" data-curve="bottom">Bottom</button>
-              </div>
-              <canvas id="curveCanvas" width="160" height="140"></canvas>
-              <div class="curve-editor-values">
-                <span id="curveLengthLabel">Length: 0.0 mm</span>
-                <span id="curveHeightLabel">Height: 0.0 mm</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="view-label" id="modelLabel">No 3D model yet</div>
-        </div>
-      </div>
-    </main>
-  </div>
-
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
-  <script src="/static/app.js"></script>
+    <script type="importmap">
+    {
+        "imports": {
+            "three":                      "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+            "three/addons/":              "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+        }
+    }
+    </script>
+    <script type="module" src="/static/js/main.js"></script>
 </body>
 </html>

@@ -26,6 +26,22 @@ from src.geometry.polygon import polygon_bounds, ensure_ccw, point_in_polygon
 from src.pcb.router_bridge import _controller_pins, _DIP28_PIN_ORDER, _pin_world_positions
 
 
+def _effective_edge_clearance() -> float:
+    """Edge-clearance that matches the TS router's grid blocking.
+
+    The router blocks ``max(blockedRadius, edgeClearanceCells)`` cells
+    from the polygon edge.  We must use the **same** metric so the
+    pre-routing scorer doesn't overestimate available space.
+    """
+    blocked_radius_mm = (
+        math.ceil(
+            (hw.trace_width / 2 + hw.trace_clearance) / hw.grid_resolution
+        )
+        * hw.grid_resolution
+    )
+    return max(hw.edge_clearance, blocked_radius_mm)
+
+
 # ── Public types ────────────────────────────────────────────────────
 
 class Bottleneck(NamedTuple):
@@ -70,36 +86,122 @@ def _polygon_width_at_y(polygon: list[list[float]], y: float) -> float:
 def _body_width_at_y(
     components: list[dict], y: float
 ) -> float:
-    """Total horizontal body extent that blocks traces at scanline *y*."""
+    """Total horizontal body extent that blocks traces at scanline *y*.
+
+    Uses the same blocked-radius as the TS router: ceil((traceWidth/2 +
+    traceClearance) / gridResolution) * gridResolution.
+    """
+    import math as _math
+    blocked_radius_mm = (
+        _math.ceil(
+            (hw.trace_width / 2 + hw.trace_clearance) / hw.grid_resolution
+        )
+        * hw.grid_resolution
+    )
+
     total = 0.0
     for comp in components:
         ctype = comp.get("type")
         cx, cy = comp["center"]
 
         if ctype == "battery":
-            bw = comp.get("body_width_mm", 0)
-            bh = comp.get("body_height_mm", 0)
+            ko = comp.get("keepout", {})
+            bw = ko.get("width_mm", comp.get("body_width_mm", 0))
+            bh = ko.get("height_mm", comp.get("body_height_mm", 0))
             if bw > 0 and bh > 0:
-                # Body keepout ≈ MC pin pitch so traces stay one pitch away
-                pin_pitch = hw.controller["pin_spacing_mm"]
-                keepout = (
-                    round(pin_pitch / hw.grid_resolution)
-                ) * hw.grid_resolution
-                if abs(y - cy) <= bh / 2 + keepout:
-                    total += bw + 2 * keepout
+                if abs(y - cy) <= bh / 2 + blocked_radius_mm:
+                    total += bw + 2 * blocked_radius_mm
 
         elif ctype == "controller":
-            ctrl = hw.controller
-            cw = ctrl["body_width_mm"]
-            ch = ctrl["body_height_mm"]
-            pin_pitch = ctrl["pin_spacing_mm"]
-            keepout = (
-                round(pin_pitch / hw.grid_resolution)
-            ) * hw.grid_resolution
-            if abs(y - cy) <= ch / 2 + keepout:
-                total += cw + 2 * keepout
+            ko = comp.get("keepout", {})
+            cw = ko.get("width_mm", hw.controller["body_width_mm"])
+            ch = ko.get("height_mm", hw.controller["body_height_mm"])
+            if cw > 0 and ch > 0:
+                if abs(y - cy) <= ch / 2 + blocked_radius_mm:
+                    total += cw + 2 * blocked_radius_mm
 
     return total
+
+
+def _best_channel_at_y(
+    components: list[dict],
+    outline: list[list[float]],
+    y: float,
+    edge_clearance: float,
+) -> float:
+    """Maximum usable routing-channel width on one side at scanline *y*.
+
+    On a single-layer board all traces can share one wide corridor, so
+    we compute the **best** (widest) channel rather than splitting space
+    evenly.
+    """
+    import math as _math
+    blocked_radius_mm = (
+        _math.ceil(
+            (hw.trace_width / 2 + hw.trace_clearance) / hw.grid_resolution
+        )
+        * hw.grid_resolution
+    )
+
+    # Find polygon extents at y
+    xs: list[float] = []
+    n = len(outline)
+    for i in range(n):
+        x1, y1 = outline[i]
+        x2, y2 = outline[(i + 1) % n]
+        if y1 == y2:
+            continue
+        if min(y1, y2) <= y <= max(y1, y2):
+            t = (y - y1) / (y2 - y1)
+            xs.append(x1 + t * (x2 - x1))
+    if len(xs) < 2:
+        return 0.0
+    board_left = min(xs) + edge_clearance
+    board_right = max(xs) - edge_clearance
+
+    # Build list of blocked X intervals at this y
+    intervals: list[tuple[float, float]] = []
+    for comp in components:
+        ctype = comp.get("type")
+        if ctype not in ("battery", "controller"):
+            continue
+        ccx, ccy = comp["center"]
+        ko = comp.get("keepout", {})
+        if ctype == "battery":
+            bw = ko.get("width_mm", comp.get("body_width_mm", 0))
+            bh = ko.get("height_mm", comp.get("body_height_mm", 0))
+        else:  # controller
+            bw = ko.get("width_mm", hw.controller["body_width_mm"])
+            bh = ko.get("height_mm", hw.controller["body_height_mm"])
+        if bw <= 0 or bh <= 0:
+            continue
+        if abs(y - ccy) <= bh / 2 + blocked_radius_mm:
+            half_block = bw / 2 + blocked_radius_mm
+            intervals.append((ccx - half_block, ccx + half_block))
+
+    if not intervals:
+        return board_right - board_left
+
+    # Merge overlapping intervals and find the widest gap
+    intervals.sort()
+    merged: list[tuple[float, float]] = [intervals[0]]
+    for lo, hi in intervals[1:]:
+        if lo <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+        else:
+            merged.append((lo, hi))
+
+    # Compute widest channel between board edge and blocked intervals
+    best = merged[0][0] - board_left  # left of first blocked zone
+    for i in range(len(merged) - 1):
+        gap = merged[i + 1][0] - merged[i][1]
+        if gap > best:
+            best = gap
+    right_gap = board_right - merged[-1][1]  # right of last blocked zone
+    if right_gap > best:
+        best = right_gap
+
+    return max(best, 0.0)
 
 
 def _extract_pads(layout: dict) -> list[PadInfo]:
@@ -119,6 +221,10 @@ def _extract_pads(layout: dict) -> list[PadInfo]:
     diodes = [c for c in components if c.get("type") == "diode"]
     ctrl_comps = [c for c in components if c.get("type") == "controller"]
 
+    # Collect all signal-bearing components for the unified _controller_pins
+    _INTERNAL_TYPES = {"controller", "battery"}
+    signal_comps = [c for c in components if c.get("type") not in _INTERNAL_TYPES]
+
     # ── Build pin map using the same logic as router_bridge ─────────
     # The controller's position matters for proximity-based assignment.
     outline = layout.get("board", {}).get("outline_polygon", [])
@@ -136,7 +242,7 @@ def _extract_pads(layout: dict) -> list[PadInfo]:
         cx_ctrl, cy_ctrl, ctrl_rot = 0.0, 0.0, 0
 
     pin_map = _controller_pins(
-        buttons, diodes,
+        signal_comps,
         ctrl_x=cx_ctrl, ctrl_y=cy_ctrl,
         ctrl_rotation=ctrl_rot,
         comp_offset=(0.0, 0.0),  # layout coords are already absolute
@@ -191,6 +297,42 @@ def _extract_pads(layout: dict) -> list[PadInfo]:
             hs = hw.diode["pad_spacing_mm"] / 2
             pads.append(PadInfo(cx - hs, cy, f"{cid}_SIG", cid, "A"))
             pads.append(PadInfo(cx + hs, cy, "GND", cid, "K"))
+
+        else:
+            # Generic component — try catalog footprint, fall back to 2-pad inline_x
+            try:
+                from src.config.component_catalog import catalog as _rcat
+                comp_type_id = comp.get("component_type", "")
+                cat_comp = _rcat.get(comp_type_id) if comp_type_id else None
+            except ImportError:
+                cat_comp = None
+
+            if cat_comp and cat_comp.footprint:
+                fp = cat_comp.footprint
+                n = fp.get("pad_count", 2)
+                sp_x = fp.get("pin_spacing_x_mm", 5.0)
+                sp_y = fp.get("pin_spacing_y_mm", 0.0)
+                layout_type = fp.get("pad_layout", "inline_x")
+                if layout_type == "inline_x" and n >= 2:
+                    total = (n - 1) * sp_x
+                    for i in range(n):
+                        px = cx - total / 2 + i * sp_x
+                        net = f"{cid}_SIG" if i == 0 else "GND"
+                        pads.append(PadInfo(px, cy, net, cid, f"P{i+1}"))
+                elif layout_type == "inline_y" and n >= 2:
+                    total = (n - 1) * sp_y
+                    for i in range(n):
+                        py = cy - total / 2 + i * sp_y
+                        net = f"{cid}_SIG" if i == 0 else "GND"
+                        pads.append(PadInfo(cx, py, net, cid, f"P{i+1}"))
+                else:
+                    # Fallback: simple 2-pad
+                    pads.append(PadInfo(cx - 2.5, cy, f"{cid}_SIG", cid, "P1"))
+                    pads.append(PadInfo(cx + 2.5, cy, "GND", cid, "P2"))
+            elif ctype not in _INTERNAL_TYPES:
+                # Unknown component — assume 2 pads 5mm apart
+                pads.append(PadInfo(cx - 2.5, cy, f"{cid}_SIG", cid, "P1"))
+                pads.append(PadInfo(cx + 2.5, cy, "GND", cid, "P2"))
 
     return pads
 
@@ -342,8 +484,8 @@ def score_placement(
     net_groups = _group_by_net(pads)
     components = layout.get("components", [])
 
-    edge_clearance = hw.edge_clearance
-    trace_corridor = hw.trace_width + hw.trace_clearance  # 3.5 mm per trace
+    edge_clearance = _effective_edge_clearance()
+    trace_corridor = hw.trace_width + hw.trace_clearance  # mm per trace
 
     band_step = 2.0  # mm between scan lines
     bottlenecks: list[Bottleneck] = []
@@ -360,9 +502,11 @@ def score_placement(
     min_margin = float("inf")
     y = min_y + band_step
     while y < max_y - band_step:
-        board_w = _polygon_width_at_y(ccw, y)
+        # Position-aware: compute the widest single routing channel
+        # at this Y level, accounting for actual component positions.
+        best_channel = _best_channel_at_y(components, ccw, y, edge_clearance)
         body_w = _body_width_at_y(components, y)
-        available = board_w - 2 * edge_clearance - body_w
+        board_w = _polygon_width_at_y(ccw, y)
 
         # Count nets that need to cross this Y band
         crossing: list[str] = []
@@ -375,7 +519,7 @@ def score_placement(
             continue
 
         required = len(crossing) * trace_corridor
-        margin = available - required
+        margin = best_channel - required
         if margin < min_margin:
             min_margin = margin
 
@@ -384,7 +528,7 @@ def score_placement(
                 y_mm=round(y, 1),
                 board_width_mm=round(board_w, 1),
                 body_width_mm=round(body_w, 1),
-                available_mm=round(available, 1),
+                available_mm=round(best_channel, 1),
                 required_mm=round(required, 1),
                 crossing_nets=crossing,
                 shortfall_mm=round(margin, 1),
