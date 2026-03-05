@@ -28,7 +28,7 @@
             "label": "Positive (9V)",
             "position_mm": [
                 6.0,
-                20.0
+                27.0
             ],
             "direction": "out",
             "voltage_v": 9.0,
@@ -41,7 +41,7 @@
             "label": "Ground (-)",
             "position_mm": [
                 -6.0,
-                20.0
+                27.0
             ],
             "direction": "out",
             "voltage_v": 0,
