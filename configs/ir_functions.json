@@ -1,0 +1,71 @@
+{
+  "$comment": "Available IR button functions for remote control design. Each button must be assigned one of these functions.",
+  
+  "functions": {
+    "power": {
+      "description": "Power on/off toggle",
+      "firmware_var": "POWER_BTN",
+      "long_press": "Activates auto-scan mode (cycles through TV brands)",
+      "ir_command": "brand-specific power code"
+    },
+    "vol_up": {
+      "description": "Volume up",
+      "firmware_var": "VOL_UP_BTN",
+      "ir_command": "brand-specific volume up code"
+    },
+    "vol_down": {
+      "description": "Volume down",
+      "firmware_var": "VOL_DOWN_BTN",
+      "ir_command": "brand-specific volume down code"
+    },
+    "ch1": {
+      "description": "Channel 1 / Preset 1",
+      "firmware_var": "CH1_BTN",
+      "ir_command": "brand-specific channel 1 code"
+    },
+    "ch2": {
+      "description": "Channel 2 / Preset 2",
+      "firmware_var": "CH2_BTN",
+      "ir_command": "brand-specific channel 2 code"
+    },
+    "ch3": {
+      "description": "Channel 3 / Preset 3",
+      "firmware_var": "CH3_BTN",
+      "ir_command": "brand-specific channel 3 code"
+    },
+    "ch4": {
+      "description": "Channel 4 / Preset 4",
+      "firmware_var": "CH4_BTN",
+      "ir_command": "brand-specific channel 4 code"
+    },
+    "ch5": {
+      "description": "Channel 5 / Preset 5",
+      "firmware_var": "CH5_BTN",
+      "ir_command": "brand-specific channel 5 code"
+    },
+    "brand": {
+      "description": "Cycle through TV brands",
+      "firmware_var": "BRAND_BTN",
+      "note": "Cycles: Samsung → LG → Sony → Panasonic → Philips → Toshiba → Sharp → Vizio → TCL → Hisense"
+    }
+  },
+  
+  "supported_brands": [
+    "Samsung",
+    "LG", 
+    "Sony",
+    "Panasonic",
+    "Philips",
+    "Toshiba",
+    "Sharp",
+    "Vizio",
+    "TCL",
+    "Hisense"
+  ],
+  
+  "usage_notes": {
+    "minimum_buttons": "At least a 'power' button is recommended for basic TV control",
+    "auto_scan": "Hold the power button for 5+ seconds to enter auto-scan mode",
+    "brand_memory": "Selected brand is saved to EEPROM and persists across power cycles"
+  }
+}

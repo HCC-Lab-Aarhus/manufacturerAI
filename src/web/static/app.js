@@ -1,5 +1,35 @@
 /* ── ManufacturerAI — app.js ────────────────────────────────────── */
 
+// ── Theme Toggle (runs immediately) ───────────────────────────────
+(function initTheme() {
+  const savedTheme = localStorage.getItem("manufacturerAI-theme");
+  if (savedTheme === "light") {
+    document.documentElement.classList.add("light");
+  }
+})();
+
+const themeToggle = document.getElementById("themeToggle");
+if (themeToggle) {
+  themeToggle.addEventListener("click", () => {
+    document.documentElement.classList.toggle("light");
+    const isLight = document.documentElement.classList.contains("light");
+    localStorage.setItem("manufacturerAI-theme", isLight ? "light" : "dark");
+    // Dispatch custom event for theme change
+    window.dispatchEvent(new CustomEvent("themechange", { detail: { isLight } }));
+  });
+}
+
+// Listen for theme changes and re-render affected views
+window.addEventListener("themechange", () => {
+  // Re-render placement view if visible
+  if (_currentLayout && stepByStepScreen && stepByStepScreen.style.display !== "none") {
+    const placementSvg = document.getElementById("placementSvg");
+    if (placementSvg) {
+      _renderPlacementView(placementSvg, _currentLayout, _guideCurrentStep, _guideSteps);
+    }
+  }
+});
+
 const chatEl      = document.getElementById("chat");
 const promptInput = document.getElementById("promptInput");
 const sendBtn     = document.getElementById("sendBtn");
@@ -43,6 +73,17 @@ const progressSection = document.getElementById("progressSection");
 const progressLabel = document.getElementById("progressLabel");
 const progressFill = document.getElementById("progressFill");
 let currentView = "outline";
+
+// Realign mode
+const realignBtn       = document.getElementById("realignBtn");
+const realignBar       = document.getElementById("realignBar");
+const realignApplyBtn  = document.getElementById("realignApplyBtn");
+const realignCancelBtn = document.getElementById("realignCancelBtn");
+let   realignActive    = false;
+let   _currentLayout   = null;   // last layout from server
+let   _editedLayout    = null;   // deep-copy being edited in realign mode
+let   _realignApplied  = false;  // true after apply — blocks SSE overwrites
+let   _suppressModelTabSwitch = false; // true during realign apply — don't auto-switch to 3D
 
 // ── Progress bar helpers ──────────────────────────────────────────
 
@@ -329,10 +370,435 @@ function renderOutlineWithComponents(layout) {
   switchTab("outline");
 }
 
+// ── Realign mode (drag components in outline view) ────────────────
+
+function enterRealignMode() {
+  if (!_currentLayout) return;
+  realignActive = true;
+  _editedLayout = JSON.parse(JSON.stringify(_currentLayout));
+  realignBtn.classList.add("active");
+  realignBar.style.display = "flex";
+  outlineView.classList.add("realign-active");
+  // Pause the pipeline while dragging
+  fetch("/api/realign/pause", { method: "POST" }).catch(() => {});
+  renderDraggableOutline(_editedLayout);
+}
+
+function exitRealignMode(apply) {
+  realignActive = false;
+  realignBtn.classList.remove("active");
+  realignBar.style.display = "none";
+  outlineView.classList.remove("realign-active");
+
+  if (apply && _editedLayout) {
+    // POST updated positions — this aborts the old pipeline,
+    // re-routes traces, and starts a background STL rebuild.
+    applyRealignedLayout(_editedLayout);
+  } else {
+    // Cancel — resume the paused pipeline so it can finish
+    fetch("/api/realign/resume", { method: "POST" }).catch(() => {});
+    renderOutlineWithComponents(_currentLayout);
+  }
+}
+
+realignBtn.addEventListener("click", () => {
+  if (realignActive) exitRealignMode(false);
+  else enterRealignMode();
+});
+realignApplyBtn.addEventListener("click",  () => exitRealignMode(true));
+realignCancelBtn.addEventListener("click", () => exitRealignMode(false));
+
+// ── Edge-proximity helpers ──────────────────────────────────────
+function _ptSegDist(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 === 0 ? 0 : ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const nx = ax + t * dx, ny = ay + t * dy;
+  return Math.hypot(px - nx, py - ny);
+}
+function _pointInPolygon(px, py, poly) {
+  // Ray-casting algorithm — returns true if (px,py) is inside the polygon.
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i][0], yi = poly[i][1];
+    const xj = poly[j][0], yj = poly[j][1];
+    if ((yi > py) !== (yj > py) &&
+        px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+function _compEdgeClearance(comp, outline) {
+  // Returns the minimum distance from any critical point to the outline edge.
+  // Returns 0 if any point is outside the outline.
+  const ko = comp.keepout || {};
+  const [cx, cy] = comp.center;
+  let probePoints;
+  if (ko.type === "rectangle") {
+    const hw = ko.width_mm / 2, hh = ko.height_mm / 2;
+    probePoints = [[cx-hw,cy-hh],[cx+hw,cy-hh],[cx+hw,cy+hh],[cx-hw,cy+hh]];
+  } else if (ko.type === "circle") {
+    const r = ko.radius_mm || 0;
+    probePoints = [[cx,cy-r],[cx+r,cy],[cx,cy+r],[cx-r,cy]];
+  } else {
+    probePoints = [[cx, cy]];
+  }
+
+  // For the battery, also probe the pin positions (pads sit above the body, toward center).
+  // Router places pads at y = center_y + bodyH/2 + ~2.5mm (keepout + 5 cells * 0.5mm)
+  if (comp.type === "battery") {
+    const bodyH = comp.body_height_mm || (ko.type === "rectangle" ? ko.height_mm : 0);
+    const padOffset = bodyH / 2 + 5;  // body half-height + pad clearance (~5mm)
+    const padSpacing = 3;             // half of 6mm pad spacing
+    probePoints.push(
+      [cx - padSpacing, cy + padOffset],  // VCC pad (above body)
+      [cx + padSpacing, cy + padOffset],  // GND pad (above body)
+    );
+  }
+
+  let minD = Infinity;
+  for (const [px, py] of probePoints) {
+    // If point is outside the polygon, clearance is 0
+    if (!_pointInPolygon(px, py, outline)) return 0;
+    for (let i = 0; i < outline.length; i++) {
+      const j = (i + 1) % outline.length;
+      const d = _ptSegDist(px, py, outline[i][0], outline[i][1], outline[j][0], outline[j][1]);
+      if (d < minD) minD = d;
+    }
+  }
+  return minD;
+}
+// Minimum edge clearance per component type.
+const _EDGE_WARN_MM = 5;           // wall 2mm + trace edge 3mm
+function _edgeThreshold(comp) {
+  return _EDGE_WARN_MM;
+}
+
+function _updateApplyBtnState(layout, outline) {
+  // Disable apply button if any component is too close to the edge
+  const anyBad = (layout.components || []).some(c =>
+    c.type !== "diode" && _compEdgeClearance(c, outline) < _edgeThreshold(c)
+  );
+  realignApplyBtn.disabled = anyBad;
+  realignApplyBtn.title = anyBad
+    ? "Move highlighted components away from the edge first"
+    : "Apply new layout";
+}
+
+function renderDraggableOutline(layout) {
+  const outline = layout.board && layout.board.outline_polygon;
+  const components = layout.components || [];
+  if (!outline || outline.length < 3) return;
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [x, y] of outline) {
+    if (x < minX) minX = x; if (y < minY) minY = y;
+    if (x > maxX) maxX = x; if (y > maxY) maxY = y;
+  }
+  const pad = 10;
+  const vw = maxX - minX + pad * 2;
+  const vh = maxY - minY + pad * 2;
+  outlineSvg.setAttribute("viewBox", `${minX - pad} ${minY - pad} ${vw} ${vh}`);
+  outlineSvg.innerHTML = "";
+  const flipY = y => (maxY + minY) - y;
+
+  // Board polygon
+  const pts = outline.map(([x, y]) => `${x},${flipY(y)}`).join(" ");
+  const poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+  poly.setAttribute("points", pts);
+  poly.setAttribute("fill", "rgba(59,130,246,0.10)");
+  poly.setAttribute("stroke", "#3b82f6");
+  poly.setAttribute("stroke-width", String(Math.max(0.5, vw / 200)));
+  outlineSvg.appendChild(poly);
+
+  const fontSize = Math.max(2, vw / 60);
+  const sw = Math.max(0.3, vw / 300);
+
+  // Helper: convert client coordinates to SVG coords
+  function clientToSvg(clientX, clientY) {
+    const pt = outlineSvg.createSVGPoint();
+    pt.x = clientX; pt.y = clientY;
+    return pt.matrixTransform(outlineSvg.getScreenCTM().inverse());
+  }
+
+  for (let i = 0; i < components.length; i++) {
+    const comp = components[i];
+    const [cx, rawCy] = comp.center;
+    const cy = flipY(rawCy);
+    const colors = COMP_COLORS[comp.type] || DEFAULT_COMP_COLOR;
+    const ko = comp.keepout || {};
+
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.classList.add("comp-draggable");
+    g.dataset.compIdx = i;
+
+    // Edge-proximity check (only in realign mode; skip diode — it must sit at the edge)
+    const isDiode = comp.type === "diode";
+    const edgeDist = (realignActive && !isDiode) ? _compEdgeClearance(comp, outline) : Infinity;
+    const warnThreshold = _edgeThreshold(comp);
+    const tooClose = edgeDist < warnThreshold;
+    if (tooClose) g.classList.add("comp-warn");
+
+    // Shape
+    if (ko.type === "rectangle") {
+      const w = ko.width_mm, h = ko.height_mm;
+      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      rect.setAttribute("x", cx - w / 2); rect.setAttribute("y", cy - h / 2);
+      rect.setAttribute("width", w); rect.setAttribute("height", h);
+      rect.setAttribute("rx", Math.min(1, w / 10));
+      rect.setAttribute("fill", tooClose ? "rgba(239,68,68,0.25)" : colors.fill);
+      rect.setAttribute("stroke", tooClose ? "#ef4444" : colors.stroke);
+      rect.setAttribute("stroke-width", tooClose ? sw * 2 : sw);
+      g.appendChild(rect);
+    } else if (ko.type === "circle") {
+      const r = ko.radius_mm;
+      const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      circle.setAttribute("cx", cx); circle.setAttribute("cy", cy);
+      circle.setAttribute("r", r);
+      circle.setAttribute("fill", tooClose ? "rgba(239,68,68,0.25)" : colors.fill);
+      circle.setAttribute("stroke", tooClose ? "#ef4444" : colors.stroke);
+      circle.setAttribute("stroke-width", tooClose ? sw * 2 : sw);
+      g.appendChild(circle);
+    }
+
+    // Warning label
+    if (tooClose) {
+      const wt = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      const warnY = cy - (ko.type === "rectangle" ? ko.height_mm / 2 : (ko.radius_mm || 0)) - fontSize * 0.6;
+      wt.setAttribute("x", cx); wt.setAttribute("y", warnY);
+      wt.setAttribute("text-anchor", "middle"); wt.setAttribute("fill", "#ef4444");
+      wt.setAttribute("font-size", fontSize * 0.85); wt.setAttribute("font-weight", "700");
+      wt.textContent = edgeDist === 0
+        ? "Outside outline!"
+        : `Too close (${edgeDist.toFixed(1)}mm, need ${warnThreshold}mm)`;
+      g.appendChild(wt);
+    }
+
+    // Label
+    const label = comp.ref || comp.id;
+    const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    t.setAttribute("x", cx); t.setAttribute("y", cy + fontSize * 0.35);
+    t.setAttribute("text-anchor", "middle"); t.setAttribute("fill", colors.stroke);
+    t.setAttribute("font-size", fontSize); t.setAttribute("font-weight", "600");
+    t.textContent = label;
+    g.appendChild(t);
+
+    outlineSvg.appendChild(g);
+
+    // ── Right-click to rotate (controller only) ───────────
+    if (comp.type === "controller") {
+      g.addEventListener("contextmenu", (e) => {
+        if (!realignActive) return;
+        e.preventDefault(); e.stopPropagation();
+        // Toggle 0° ↔ 90°
+        const oldRot = comp.rotation_deg || 0;
+        comp.rotation_deg = oldRot === 0 ? 90 : 0;
+        // Swap keepout dimensions
+        const ko = comp.keepout || {};
+        if (ko.type === "rectangle") {
+          [ko.width_mm, ko.height_mm] = [ko.height_mm, ko.width_mm];
+        }
+        if (comp.body_width_mm != null && comp.body_height_mm != null) {
+          [comp.body_width_mm, comp.body_height_mm] = [comp.body_height_mm, comp.body_width_mm];
+        }
+        renderDraggableOutline(layout);
+        _updateApplyBtnState(layout, outline);
+      });
+      // Visual rotate hint (shown only in realign mode)
+      if (realignActive) {
+        const w = (ko.type === "rectangle") ? ko.width_mm : (ko.radius_mm * 2);
+        const h = (ko.type === "rectangle") ? ko.height_mm : (ko.radius_mm * 2);
+        const iconSz = Math.min(w, h) * 0.28;
+        const ix = cx + w / 2 - iconSz * 0.7;
+        const iy = cy - h / 2 + iconSz * 0.7;
+        const rotIcon = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        rotIcon.setAttribute("x", ix); rotIcon.setAttribute("y", iy);
+        rotIcon.setAttribute("text-anchor", "middle");
+        rotIcon.setAttribute("font-size", iconSz);
+        rotIcon.setAttribute("fill", "#60a5facc");
+        rotIcon.setAttribute("pointer-events", "none");
+        rotIcon.textContent = "\u21BB";  // ↻ clockwise arrow
+        g.appendChild(rotIcon);
+      }
+    }
+
+    // ── Drag handling (diode is fixed — not user-movable) ─────────
+    if (isDiode) { g.style.cursor = "default"; }
+    let dragging = false;
+    let dragStartSvg = null;
+    let origCx = cx, origCy = cy;
+
+    g.addEventListener("mousedown", (e) => {
+      if (!realignActive || isDiode) return;
+      e.preventDefault(); e.stopPropagation();
+      dragging = true;
+      dragStartSvg = clientToSvg(e.clientX, e.clientY);
+      origCx = cx; origCy = cy;
+      g.classList.add("comp-dragging");
+    });
+
+    const onMove = (e) => {
+      if (!dragging) return;
+      e.preventDefault();
+      const cur = clientToSvg(e.clientX, e.clientY);
+      const dx = cur.x - dragStartSvg.x;
+      const dy = cur.y - dragStartSvg.y;
+      g.setAttribute("transform", `translate(${dx}, ${dy})`);
+    };
+
+    const onUp = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      g.classList.remove("comp-dragging");
+      const cur = clientToSvg(e.clientX, e.clientY);
+      const dx = cur.x - dragStartSvg.x;
+      const dy = cur.y - dragStartSvg.y;
+
+      // Update the data (flip dy back to data Y-up coords)
+      const newCx = comp.center[0] + dx;
+      const newCy = comp.center[1] - dy;  // invert Y back
+      comp.center = [newCx, newCy];
+
+      // Re-render so elements are at correct positions (no lingering transform)
+      renderDraggableOutline(layout);
+
+      // Update Apply button state — disable if any component is too close
+      _updateApplyBtnState(layout, outline);
+    };
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
+  outlineLabel.style.display = "none";
+
+  // Initial check — disable Apply if something already too close
+  if (realignActive) _updateApplyBtnState(layout, outline);
+}
+
+async function applyRealignedLayout(layout) {
+  // Show a loading state
+  realignBar.style.display = "flex";
+  const origLabel = document.querySelector(".realign-bar-label");
+  origLabel.textContent = "Applying new layout...";
+  realignApplyBtn.disabled = true;
+  realignCancelBtn.disabled = true;
+
+  // Reset progress bar for the realign flow
+  _lastProgressPct = 0;
+  updateProgress("Routing traces...");
+  setStatus("Realigning…", "working");
+
+  try {
+    // Extract updated component positions (+ rotation for controller)
+    const positions = layout.components.map(c => ({
+      id: c.id,
+      center: c.center,
+      rotation_deg: c.rotation_deg ?? null,
+    }));
+
+    const resp = await fetch("/api/update_layout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ positions }),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(err.detail || "Server error");
+    }
+
+    const result = await resp.json();
+    _currentLayout = result.layout;
+    _realignApplied = true;   // block SSE from overwriting
+    renderOutlineWithComponents(_currentLayout);
+
+    // Build shell preview + show curve editor from response data
+    if (result.shell_preview) {
+      buildShellPreview(result.shell_preview);
+      _fetchShellHeight().then(() => {
+        showCurveEditor(
+          result.shell_preview.top_curve_length || 0,
+          result.shell_preview.top_curve_height || 0,
+          result.shell_preview.bottom_curve_length || 0,
+          result.shell_preview.bottom_curve_height || 0,
+        );
+      });
+    }
+
+    // Routing done — advance progress
+    updateProgress("Generating enclosure...");
+
+    // Load updated debug image and switch to debug tab so user sees it
+    if (result.has_debug_image) {
+      debugImage.src = `/api/images/pcb_debug?t=${Date.now()}`;
+      negativeImage.src = `/api/images/pcb_negative?t=${Date.now()}`;
+      debugImage.style.display = "block";
+      if (debugLabel) debugLabel.style.display = "none";
+      debugImageSelect.value = "debug";
+      switchTab("debug");
+    }
+
+    // STL is recompiling in background — poll for the updated model
+    if (result.stl_rebuilding) {
+      if (result.model_name) latestModelName = result.model_name;
+      updateProgress("Compiling STL models...");
+      if (modelLabel) {
+        modelLabel.textContent = "Recompiling 3D model…";
+        modelLabel.style.display = "";
+      }
+      _pollForUpdatedModel(result.model_name || "print_plate");
+    } else if (result.routing_ok === false) {
+      // Routing failed — tell the user, don't build STL
+      const nets = (result.failed_nets || []).join(", ");
+      const msg = nets
+        ? `Routing failed — could not route: ${nets}. Try moving components further apart.`
+        : "Routing failed — traces could not be connected. Try moving components further apart.";
+      updateProgress("Routing failed");
+      setStatus("Error", "error");
+      if (modelLabel) {
+        modelLabel.textContent = msg;
+        modelLabel.style.display = "";
+      }
+      addMessage("system", msg);
+      setTimeout(hideProgress, 3000);
+    } else {
+      // No STL rebuild needed — we're done
+      updateProgress("Pipeline complete!");
+      setStatus("Ready", "");
+      setTimeout(hideProgress, 2000);
+    }
+
+    // Old pipeline is aborted — no need to resume it.
+    // Background STL rebuild is running independently.
+
+  } catch (e) {
+    addMessage("system", `Realign failed: ${e.message}`);
+    setStatus("Error", "error");
+    hideProgress();
+    // Revert to original layout
+    renderOutlineWithComponents(_currentLayout);
+  } finally {
+    realignBar.style.display = "none";
+    origLabel.textContent = "Drag components to reposition";
+    realignApplyBtn.disabled = false;
+    realignCancelBtn.disabled = false;
+  }
+}
+
 // ── Three.js setup ────────────────────────────────────────────────
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0b1120);
+function updateSceneBackground() {
+  const isLight = document.documentElement.classList.contains("light");
+  scene.background = new THREE.Color(isLight ? 0xf3f4f6 : 0x0b1120);
+}
+updateSceneBackground();
+
+// Listen for theme changes
+window.addEventListener("themechange", updateSceneBackground);
 
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 2000);
 camera.position.set(0, -140, 120);
@@ -633,13 +1099,77 @@ function loadModel(url) {
 
     downloadBtn.classList.remove("disabled");
     readyToPrintBtn.classList.remove("disabled");
-    switchTab("3d");
+    if (!_suppressModelTabSwitch) switchTab("3d");
+    _suppressModelTabSwitch = false;
   },
   undefined,
   (err) => {
     console.error("STL load error:", err);
     if (modelLabel) { modelLabel.textContent = "Failed to load 3D model"; modelLabel.style.display = ""; }
   });
+}
+
+/**
+ * Poll for an updated STL after background SCAD recompile (realign).
+ * Checks /api/stl_status every 5s; loads model when rebuild finishes.
+ */
+let _stlPollGeneration = 0;
+function _pollForUpdatedModel(modelName, attempt = 0) {
+  const MAX_ATTEMPTS = 60;  // 60 × 5s = 5 min
+  const myGen = ++_stlPollGeneration;
+  function tick(n) {
+    if (n >= MAX_ATTEMPTS || myGen !== _stlPollGeneration) {
+      if (n >= MAX_ATTEMPTS) {
+        if (modelLabel) {
+          modelLabel.textContent = "Model recompile timed out";
+          modelLabel.style.display = "";
+        }
+        setStatus("Error", "error");
+        hideProgress();
+      }
+      return;
+    }
+    setTimeout(async () => {
+      if (myGen !== _stlPollGeneration) return;
+      try {
+        const resp = await fetch("/api/stl_status");
+        if (resp.ok) {
+          const status = await resp.json();
+          if (!status.rebuilding) {
+            if (status.error) {
+              // Build failed — show error, don't try to load model
+              if (modelLabel) {
+                modelLabel.textContent = `STL build failed: ${status.error}`;
+                modelLabel.style.display = "";
+              }
+              setStatus("Error", "error");
+              hideProgress();
+              return;
+            }
+            if (!status.model_name) {
+              // No model produced yet — keep waiting
+              tick(n + 1);
+              return;
+            }
+            // Rebuild finished — load the new model
+            const name = status.model_name;
+            _suppressModelTabSwitch = true;
+            loadModel(`/api/model/${name}?t=${Date.now()}`);
+            downloadBtn.classList.remove("disabled");
+            downloadBtn.title = "Download STL";
+            latestModelName = name;
+            if (modelLabel) modelLabel.style.display = "none";
+            updateProgress("Pipeline complete!");
+            setStatus("Ready", "");
+            setTimeout(hideProgress, 2000);
+            return;
+          }
+        }
+      } catch { /* ignore */ }
+      tick(n + 1);
+    }, 5000);
+  }
+  tick(attempt);
 }
 
 (function animate() {
@@ -685,7 +1215,7 @@ const imageDragStates = {
 };
 
 function applyImageTransform(img, zoom, dragState) {
-  img.style.transform = `scaleX(${zoom}) scaleY(${-zoom}) translate(${dragState.translateX / zoom}px, ${dragState.translateY / zoom}px)`;
+  img.style.transform = `scale(${zoom}) translate(${dragState.translateX / zoom}px, ${dragState.translateY / zoom}px)`;
   img.style.transformOrigin = "center center";
 }
 
@@ -786,6 +1316,8 @@ function setupImageDrag(element, stateKey, getZoom, applyFn) {
   let startY = 0;
   
   element.addEventListener("mousedown", (e) => {
+    // Don't pan the outline SVG when realign mode is active
+    if (realignActive && element === outlineSvg) return;
     e.preventDefault();
     isDragging = true;
     startX = e.clientX - state.translateX;
@@ -853,7 +1385,38 @@ downloadBtn.addEventListener("click", () => {
   } catch (_) { /* keep hardcoded fallback */ }
 })();
 
+// Populate filament dropdown from server
+(async () => {
+  try {
+    const resp = await fetch("/api/filaments");
+    if (resp.ok) {
+      const { filaments } = await resp.json();
+      const sel = document.getElementById("filamentSelect");
+      sel.innerHTML = '<option value="" disabled selected>Choose filament...</option>';
+      for (const f of filaments) {
+        const opt = document.createElement("option");
+        opt.value = f.id;
+        opt.textContent = f.label;
+        sel.appendChild(opt);
+      }
+    }
+  } catch (_) { /* keep hardcoded fallback */ }
+})();
+
 // ── Ready to Print / G-code functionality ─────────────────────────
+
+const generateGcodeBtn = document.getElementById("generateGcodeBtn");
+const filamentSelect   = document.getElementById("filamentSelect");
+const printerSelectEl  = document.getElementById("printerSelect");
+
+// Enable the Generate button only when both printer AND filament are chosen
+function _checkGenerateReady() {
+  const printerOk  = printerSelectEl && printerSelectEl.value && printerSelectEl.value !== "";
+  const filamentOk = filamentSelect && filamentSelect.value && filamentSelect.value !== "";
+  if (generateGcodeBtn) generateGcodeBtn.disabled = !(printerOk && filamentOk);
+}
+if (printerSelectEl) printerSelectEl.addEventListener("change", _checkGenerateReady);
+if (filamentSelect) filamentSelect.addEventListener("change", _checkGenerateReady);
 
 readyToPrintBtn.addEventListener("click", async () => {
   if (readyToPrintBtn.classList.contains("disabled")) return;
@@ -863,13 +1426,16 @@ readyToPrintBtn.addEventListener("click", async () => {
   geocodeStatus.textContent = "";
   geocodeStatus.classList.remove("ready", "slicing");
   geocodeDownloadBtn.disabled = true;
+  _checkGenerateReady();
 });
 
-// Start slicing when printer is selected
-document.getElementById("printerSelect").addEventListener("change", async (e) => {
-  const printer = e.target.value;
-  if (!printer) return;
+// Start slicing when Generate G-code button is clicked
+if (generateGcodeBtn) generateGcodeBtn.addEventListener("click", async () => {
+  const printer  = printerSelectEl.value;
+  const filament = filamentSelect.value;
+  if (!printer || !filament) return;
   
+  generateGcodeBtn.disabled = true;
   geocodeStatus.textContent = "Slicing model & generating G-code ...";
   geocodeStatus.classList.remove("ready");
   geocodeStatus.classList.add("slicing");
@@ -879,12 +1445,13 @@ document.getElementById("printerSelect").addEventListener("change", async (e) =>
     const resp = await fetch("/api/slice", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ printer }),
+      body: JSON.stringify({ printer, filament }),
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ detail: resp.statusText }));
       geocodeStatus.classList.remove("slicing");
       geocodeStatus.textContent = `G-code failed: ${err.detail || err.message || "Unknown error"}`;
+      _checkGenerateReady();
       return;
     }
     const data = await resp.json();
@@ -897,9 +1464,11 @@ document.getElementById("printerSelect").addEventListener("change", async (e) =>
     geocodeStatus.classList.add("ready");
     geocodeDownloadBtn.disabled = false;
     _enableGcodeButtons();
+    _checkGenerateReady();
   } catch (e) {
     geocodeStatus.classList.remove("slicing");
     geocodeStatus.textContent = `G-code error: ${e.message}`;
+    _checkGenerateReady();
   }
 });
 
@@ -921,126 +1490,205 @@ stepByStepBtn.addEventListener("click", () => {
   const data = window._gcodeResult;
   
   const steps = [];
+  const sections = []; // Track section start indices for navigation
+  
   if (data && data.pause_points) {
     const pp = data.pause_points;
     const components = data.components || [];
     
-    // ── PAUSE 1: Ink Deposition ──────────────────────────────────
-    steps.push({
-      title: "Pause 1: Ink Deposition",
-      subtitle: "Overview",
-      body: `The printer will pause at layer ${pp.ink_layer_number} (Z = ${pp.ink_layer_z.toFixed(1)} mm).\n\n` +
-            `At this pause you need to apply conductive ink to create the circuit traces.`,
-      isPauseHeader: true,
-      pauseNumber: 1,
-    });
-    steps.push({
-      title: "Apply Conductive Ink",
-      subtitle: "Pause 1 — Step 1",
-      body: `Apply conductive ink along the trace channels carved into the floor surface.\n\n` +
-            `Important:\n` +
-            `• Follow the channel grooves carefully\n` +
-            `• Ensure continuous lines without gaps\n` +
-            `• Let the ink settle into the channels\n` +
-            `• The ink connects all component pin holes\n\n` +
-            `When done, press the knob on the printer to resume.`,
-      pauseNumber: 1,
-    });
+    // Store components globally for placement view
+    window._guideComponents = components;
     
-    // ── PAUSE 2: Component Insertion ─────────────────────────────
-    steps.push({
-      title: "Pause 2: Component Insertion",
-      subtitle: "Overview",
-      body: `The printer will pause at layer ${pp.component_layer_number} (Z = ${pp.component_insert_z.toFixed(1)} mm).\n\n` +
-            `At this pause you need to insert all electronic components into their pockets.`,
-      isPauseHeader: true,
-      pauseNumber: 2,
-    });
-    
-    // Add each component as a separate step
-    let componentStep = 1;
-    const totalComponents = components.length;
-    
+    // ── Group components by type ─────────────────────────────────
+    const grouped = {};
     for (const comp of components) {
-      const ctype = comp.type || "";
-      const cid = comp.id || comp.ref || ctype;
-      const rotation = comp.rotation_deg || 0;
-      const center = comp.center || [0, 0];
-      
-      let title = "";
-      let body = "";
-      
-      if (ctype === "button") {
-        title = `Insert Button: ${cid}`;
-        body = `Component: Tactile Push Button (12×12mm)\n` +
-               `Location: ${_describePosition(center)}\n\n` +
-               `Instructions:\n` +
-               `• Find the square pocket for this button\n` +
-               `• Orient the button so the pins align with the holes\n` +
-               `• Press firmly until the button sits flush\n` +
-               `• The button cap should protrude through the top hole`;
-      } else if (ctype === "battery") {
-        title = `Insert Battery Holder: ${cid}`;
-        body = `Component: Battery Compartment (${comp.footprint || "2xAAA"})\n` +
-               `Location: ${_describePosition(center)}\n\n` +
-               `Instructions:\n` +
-               `• Find the rectangular battery pocket\n` +
-               `• Insert the battery holder with contacts facing the correct direction\n` +
-               `• Ensure the spring contacts align with the pin holes\n` +
-               `• Note: Batteries are inserted after printing is complete`;
-      } else if (ctype === "controller") {
-        title = `Insert Microcontroller: ${cid}`;
-        const footprint = comp.footprint || "ATmega328P";
-        body = `Component: ${footprint} (DIP package)\n` +
-               `Location: ${_describePosition(center)}\n` +
-               `Rotation: ${rotation}°\n\n` +
-               `Instructions:\n` +
-               `• Find the rectangular DIP pocket with pin holes\n` +
-               `• IMPORTANT: Locate pin 1 marker (notch or dot on chip)\n` +
-               `• Pin 1 should be at the ${_pinOneDirection(rotation)} of the pocket\n` +
-               `• Align all pins with the holes before pressing down\n` +
-               `• Press gently and evenly to seat all pins`;
-      } else if (ctype === "diode") {
-        title = `Insert IR Diode: ${cid}`;
-        body = `Component: Infrared LED\n` +
-               `Location: ${_describePosition(center)} (near edge for IR transmission)\n\n` +
-               `Instructions:\n` +
-               `• Find the round pocket near the board edge\n` +
-               `• IMPORTANT: The longer leg (anode, +) goes in the marked hole\n` +
-               `• The shorter leg (cathode, -) goes in the other hole\n` +
-               `• The LED should point outward through the wall slot`;
-      } else {
-        title = `Insert Component: ${cid}`;
-        body = `Component type: ${ctype}\n` +
-               `Location: ${_describePosition(center)}\n\n` +
-               `Insert this component into its designated pocket.\n` +
-               `Ensure all pins align with the holes before pressing down.`;
-      }
-      
-      steps.push({
-        title,
-        subtitle: `Pause 2 — Component ${componentStep} of ${totalComponents}`,
-        body,
-        pauseNumber: 2,
-        componentIndex: componentStep,
-        totalComponents,
-      });
-      componentStep++;
+      const ctype = comp.type || "other";
+      if (!grouped[ctype]) grouped[ctype] = [];
+      grouped[ctype].push(comp);
     }
     
-    // Final step for pause 2
+    // ── Welcome / Introduction Step ──────────────────────────────
+    sections.push({ name: "Introduction", index: steps.length });
+    steps.push({
+      title: "Ready to Start Printing",
+      subtitle: "Introduction",
+      body: `Your custom enclosure is ready to print.\n\n` +
+            `During the print process, the printer will pause once ` +
+            `so you can insert the electronic components.\n\n` +
+            `Use the section buttons above to jump to specific component types.`,
+      showPlacementView: false,
+      section: "Introduction",
+    });
+    
+    // ── Component Checklist (Grouped) ────────────────────────────
+    // Build component list HTML with counts
+    let componentListHTML = "";
+    const typeLabels = {
+      button: "Tactile Push Button (12×12mm)",
+      battery: "Battery Holder",
+      controller: "ATmega328P Microcontroller",
+      diode: "Infrared LED",
+    };
+    
+    for (const [ctype, comps] of Object.entries(grouped)) {
+      const count = comps.length;
+      let label = typeLabels[ctype] || ctype;
+      
+      // For battery, include footprint info
+      if (ctype === "battery" && comps[0].footprint) {
+        label = `Battery Holder (${comps[0].footprint})`;
+      }
+      
+      // Pluralize if needed
+      if (count > 1 && ctype === "button") {
+        label = "Tactile Push Buttons (12×12mm)";
+      } else if (count > 1 && ctype === "diode") {
+        label = "Infrared LEDs";
+      }
+      
+      const countText = count > 1 ? `× ${count}` : "";
+      componentListHTML += `<li><span class="component-name">${label}</span>${countText ? `<span class="component-count">${countText}</span>` : ""}</li>`;
+    }
+    
+    sections.push({ name: "Checklist", index: steps.length });
+    steps.push({
+      title: "Component Checklist",
+      subtitle: "Materials Needed",
+      body: `Gather these components before the printer pauses:\n\n` +
+            `<ul class="component-list">${componentListHTML}</ul>\n\n` +
+            `Make sure you have everything ready before starting the print.`,
+      isPauseHeader: true,
+      pauseNumber: 1,
+      showPlacementView: false,
+      section: "Checklist",
+    });
+    
+    // ── Section: Buttons ─────────────────────────────────────────
+    const buttons = grouped.button || [];
+    if (buttons.length > 0) {
+      sections.push({ name: "Buttons", index: steps.length });
+      
+      const buttonCount = buttons.length;
+      const buttonWord = buttonCount === 1 ? "Button" : "Buttons";
+      
+      // Get all button positions for the placement view
+      const buttonIndices = buttons.map(b => components.indexOf(b));
+      
+      steps.push({
+        title: `${buttonWord} Placement`,
+        subtitle: buttonCount > 1 ? `${buttonCount} buttons to insert` : "1 button to insert",
+        body: `<strong>Component:</strong> Tactile Push Button (12×12mm)\n\n` +
+              `<strong>How to insert:</strong>\n` +
+              `• Locate the square pocket(s) on the enclosure\n` +
+              `• Orient each button so the pins align with the holes\n` +
+              `• Press firmly until the button sits flush\n` +
+              `• The button cap should protrude through the top hole\n\n` +
+              `${buttonCount > 1 ? `Repeat for all ${buttonCount} buttons shown in the placement view.` : "See the placement view for the exact location."}`,
+        pauseNumber: 1,
+        componentIndices: buttonIndices,
+        showPlacementView: true,
+        section: "Buttons",
+      });
+    }
+    
+    // ── Section: Microcontroller ─────────────────────────────────
+    const controllers = grouped.controller || [];
+    if (controllers.length > 0) {
+      sections.push({ name: "Microcontroller", index: steps.length });
+      
+      const ctrl = controllers[0];
+      const footprint = ctrl.footprint || "ATmega328P";
+      const rotation = ctrl.rotation_deg || 0;
+      const controllerIndices = controllers.map(c => components.indexOf(c));
+      
+      steps.push({
+        title: "Microcontroller Placement",
+        subtitle: `${footprint} chip`,
+        body: `<strong>Component:</strong> ${footprint} (DIP package)\n\n` +
+              `<strong>How to insert:</strong>\n` +
+              `• Locate the rectangular DIP pocket with pin holes\n` +
+              `• Find the pin 1 marker on the chip (notch or dot)\n` +
+              `• Pin 1 should be at the ${_pinOneDirection(rotation)} of the pocket\n` +
+              `• Carefully align ALL pins with the holes\n` +
+              `• Press gently and evenly — do not force!\n\n` +
+              `<strong>⚠ Important:</strong> Incorrect orientation will damage the chip.`,
+        pauseNumber: 1,
+        componentIndices: controllerIndices,
+        showPlacementView: true,
+        section: "Microcontroller",
+      });
+    }
+    
+    // ── Section: Battery ─────────────────────────────────────────
+    const batteries = grouped.battery || [];
+    if (batteries.length > 0) {
+      sections.push({ name: "Battery", index: steps.length });
+      
+      const batt = batteries[0];
+      const footprint = batt.footprint || "2xAA";
+      const batteryIndices = batteries.map(b => components.indexOf(b));
+      
+      steps.push({
+        title: "Battery Compartment",
+        subtitle: `${footprint} holder`,
+        body: `<strong>Component:</strong> Battery Holder (${footprint})\n\n` +
+              `<strong>How to insert conductor plates:</strong>\n` +
+              `• Locate the rectangular battery pocket with slit guides on each side\n` +
+              `• Slide the + double conductor plate into the slits at one end\n` +
+              `• Slide the − spring conductor plate into the slits at the other end\n` +
+              `• Plates should click into the grooves and hold in place\n\n` +
+              `<strong>Note:</strong> AA batteries are inserted after printing is complete.\n` +
+              `The spring plate goes at the − end; flat contact plate at the + end.`,
+        pauseNumber: 1,
+        componentIndices: batteryIndices,
+        showPlacementView: true,
+        section: "Battery",
+      });
+    }
+    
+    // ── Section: IR LED ──────────────────────────────────────────
+    const diodes = grouped.diode || [];
+    if (diodes.length > 0) {
+      sections.push({ name: "IR LED", index: steps.length });
+      
+      const diodeCount = diodes.length;
+      const diodeWord = diodeCount === 1 ? "LED" : "LEDs";
+      const diodeIndices = diodes.map(d => components.indexOf(d));
+      
+      steps.push({
+        title: `IR ${diodeWord} Placement`,
+        subtitle: diodeCount > 1 ? `${diodeCount} infrared LEDs` : "Infrared LED",
+        body: `<strong>Component:</strong> Infrared LED\n\n` +
+              `<strong>How to insert:</strong>\n` +
+              `• Locate the round pocket near the board edge\n` +
+              `• The LED has two legs of different lengths\n` +
+              `• Longer leg (anode, +) → marked hole\n` +
+              `• Shorter leg (cathode, −) → other hole\n` +
+              `• LED should point outward through the wall slot\n\n` +
+              `<strong>⚠ Important:</strong> Wrong polarity = LED won't work!`,
+        pauseNumber: 1,
+        componentIndices: diodeIndices,
+        showPlacementView: true,
+        section: "IR LED",
+      });
+    }
+    
+    // ── Final Step ───────────────────────────────────────────────
+    sections.push({ name: "Resume", index: steps.length });
     steps.push({
       title: "Resume Printing",
-      subtitle: "Pause 2 — Final Step",
+      subtitle: "Final Check",
       body: `All components have been inserted.\n\n` +
-            `Checklist before resuming:\n` +
+            `<strong>Checklist before resuming:</strong>\n` +
             `• All buttons are seated flush\n` +
             `• Microcontroller pin 1 is correctly oriented\n` +
-            `• IR diode polarity is correct (long leg = +)\n` +
-            `• All pins are fully inserted into their holes\n\n` +
+            `• IR LED polarity is correct (long leg = +)\n` +
+            `• All pins are fully inserted into holes\n\n` +
             `Press the knob on the printer to resume.\n` +
             `The printer will complete the ceiling to seal the enclosure.`,
-      pauseNumber: 2,
+      pauseNumber: 1,
+      showPlacementView: false,
+      section: "Resume",
     });
     
   } else {
@@ -1048,14 +1696,86 @@ stepByStepBtn.addEventListener("click", () => {
       title: "No G-code data",
       subtitle: "",
       body: "Generate G-code first by clicking 'Ready to print'.",
+      showPlacementView: false,
     });
   }
   
-  // Store steps and current index for navigation
+  // Store steps, sections, and current index for navigation
   window._guideSteps = steps;
+  window._guideSections = sections;
   window._guideIndex = 0;
+  _renderSectionNav();
   _renderGuideStep();
 });
+
+function _renderSectionNav() {
+  const sidebarContent = document.getElementById("manualSidebarContent");
+  const sections = window._guideSections || [];
+  
+  if (!sidebarContent || sections.length <= 1) {
+    return;
+  }
+  
+  sidebarContent.innerHTML = "";
+  
+  for (const section of sections) {
+    const btn = document.createElement("button");
+    btn.className = "manual-nav-item";
+    btn.innerHTML = `
+      <span class="manual-nav-icon">${_getSectionIcon(section.name)}</span>
+      <span class="manual-nav-label">${section.name}</span>
+    `;
+    btn.dataset.index = section.index;
+    btn.addEventListener("click", () => {
+      window._guideIndex = section.index;
+      _renderGuideStep();
+      _updateSectionNavActive();
+      // Close sidebar on mobile or after selection
+      const sidebar = document.getElementById("manualSidebar");
+      const overlay = document.getElementById("manualSidebarOverlay");
+      const toggle = document.getElementById("manualSidebarToggle");
+      if (window.innerWidth < 1024) {
+        sidebar?.classList.remove("open");
+        overlay?.classList.remove("visible");
+        toggle?.classList.remove("active");
+      }
+    });
+    sidebarContent.appendChild(btn);
+  }
+  
+  _updateSectionNavActive();
+}
+
+function _getSectionIcon(sectionName) {
+  const icons = {
+    "Buttons": `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/><circle cx="12" cy="12" r="3"/></svg>`,
+    "Microcontroller": `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="1"/><line x1="9" y1="4" x2="9" y2="1"/><line x1="15" y1="4" x2="15" y2="1"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/></svg>`,
+    "Battery": `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="6" width="18" height="12" rx="2"/><line x1="23" y1="10" x2="23" y2="14"/></svg>`,
+    "IR LED": `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="7"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m19.07 4.93-1.41 1.41"/><path d="m6.34 17.66-1.41 1.41"/></svg>`,
+    "Resume": `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>`,
+    "Print": `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>`,
+  };
+  return icons[sectionName] || `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>`;
+}
+
+function _updateSectionNavActive() {
+  const btns = document.querySelectorAll(".manual-nav-item");
+  const sections = window._guideSections || [];
+  const currentIndex = window._guideIndex;
+  
+  // Find which section the current step belongs to
+  let currentSectionIndex = 0;
+  for (let i = sections.length - 1; i >= 0; i--) {
+    if (currentIndex >= sections[i].index) {
+      currentSectionIndex = i;
+      break;
+    }
+  }
+  
+  btns.forEach((btn, i) => {
+    btn.classList.toggle("active", i === currentSectionIndex);
+  });
+}
 
 function _describePosition(center) {
   const [x, y] = center;
@@ -1076,6 +1796,9 @@ function _pinOneDirection(rotation) {
 
 function _renderGuideStep() {
   const guideContent = document.querySelector(".guide-content");
+  const placementView = document.getElementById("guidePlacementView");
+  const placementSvg = document.getElementById("placementSvg");
+  
   if (!window._guideSteps || !guideContent) return;
   const step = window._guideSteps[window._guideIndex];
   const total = window._guideSteps.length;
@@ -1086,6 +1809,14 @@ function _renderGuideStep() {
     pauseBadge = `<span class="pause-badge">Pause ${step.pauseNumber}</span>`;
   }
   
+  // Convert newlines to <br> for proper HTML rendering
+  // Replace bullet points with proper HTML list formatting
+  let formattedBody = step.body
+    .replace(/\n\n/g, '</p><p>')  // Double newlines = new paragraph
+    .replace(/\n• /g, '<br>• ')    // Bullet points on new lines
+    .replace(/\n/g, '<br>');       // Single newlines = line break
+  formattedBody = '<p>' + formattedBody + '</p>';
+  
   guideContent.innerHTML = `
     <div class="guide-header-section">
       ${pauseBadge}
@@ -1093,12 +1824,538 @@ function _renderGuideStep() {
       ${subtitleHtml}
     </div>
     <div class="guide-body-section">
-      <p style="white-space:pre-wrap;">${step.body}</p>
+      <div class="guide-body-text">${formattedBody}</div>
       <div class="guide-step-counter">
         Step ${window._guideIndex + 1} of ${total}
       </div>
     </div>
   `;
+  
+  // Handle placement view visibility
+  if (step.showPlacementView && placementView && placementSvg) {
+    placementView.style.display = "flex";
+    // Support both single componentIndex (legacy) and componentIndices (array)
+    const indices = step.componentIndices || (step.componentIndex !== undefined ? [step.componentIndex] : []);
+    _renderPlacementView(indices, placementSvg);
+  } else if (placementView) {
+    placementView.style.display = "none";
+  }
+  
+  // Update section nav active state
+  _updateSectionNavActive();
+}
+
+function _renderPlacementView(highlightIndices, svg) {
+  const components = window._guideComponents || [];
+  const data = window._gcodeResult;
+  const layout = _currentLayout;  // Use actual layout for outline
+  
+  // Convert single number to array for backwards compatibility
+  const highlightSet = new Set(Array.isArray(highlightIndices) ? highlightIndices : [highlightIndices]);
+  
+  if (!components.length || !data) {
+    svg.innerHTML = "";
+    return;
+  }
+  
+  // Get actual outline polygon from layout
+  const outline = layout?.board?.outline_polygon || null;
+  
+  // Calculate bounds from outline if available
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  
+  if (outline && outline.length >= 3) {
+    // Use actual outline bounds
+    for (const [x, y] of outline) {
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+  } else {
+    // Fallback: calculate from components
+    for (const comp of components) {
+      const [cx, cy] = comp.center || [0, 0];
+      const ctype = comp.type || "";
+      
+      let w, h;
+      if (ctype === "controller") {
+        w = 7.5 + 7;
+        h = 35;
+      } else if (ctype === "button") {
+        w = Math.max(comp.body_width_mm || 12, 12);
+        h = Math.max(comp.body_height_mm || 12, 12);
+      } else if (ctype === "diode") {
+        w = 6;
+        h = 8.5 + 8;
+      } else if (ctype === "battery") {
+        w = Math.max(comp.body_width_mm || 25, 25);
+        h = Math.max(comp.body_height_mm || 52, 52);
+      } else {
+        w = comp.body_width_mm || 15;
+        h = comp.body_height_mm || 15;
+      }
+      
+      minX = Math.min(minX, cx - w/2 - 5);
+      minY = Math.min(minY, cy - h/2 - 5);
+      maxX = Math.max(maxX, cx + w/2 + 5);
+      maxY = Math.max(maxY, cy + h/2 + 5);
+    }
+  }
+  
+  // Store original bounds before padding (for Y-flip calculation)
+  const origMinY = minY;
+  const origMaxY = maxY;
+  
+  // Add padding
+  const padding = 10;
+  minX -= padding;
+  minY -= padding;
+  maxX += padding;
+  maxY += padding;
+  
+  const width = maxX - minX;
+  const height = maxY - minY;
+  
+  // Update viewBox
+  svg.setAttribute("viewBox", `${minX} ${minY} ${width} ${height}`);
+  
+  let svgContent = "";
+  
+  // Theme-aware colors
+  const isLight = document.documentElement.classList.contains("light");
+  const boardFill = isLight ? "#e5e7eb" : "#1f2937";
+  const boardStroke = isLight ? "#9ca3af" : "#4b5563";
+  
+  // Flip Y so outline appears right-side up (SVG Y-down, data Y-up)
+  const flipY = y => (origMaxY + origMinY) - y;
+  
+  // Draw actual outline polygon if available, otherwise fallback to rectangle
+  if (outline && outline.length >= 3) {
+    const pts = outline.map(([x, y]) => `${x},${flipY(y)}`).join(" ");
+    svgContent += `<polygon points="${pts}" 
+      fill="${boardFill}" stroke="${boardStroke}" stroke-width="1.5"/>`;
+  } else {
+    svgContent += `<rect x="${minX + padding/2}" y="${minY + padding/2}" 
+      width="${width - padding}" height="${height - padding}" 
+      fill="${boardFill}" stroke="${boardStroke}" stroke-width="1" rx="3"/>`;
+  }
+  
+  // Draw each component (with Y-flip to match outline)
+  for (let i = 0; i < components.length; i++) {
+    const comp = components[i];
+    const [cx, rawCy] = comp.center || [0, 0];
+    const cy = flipY(rawCy);  // Flip Y to match outline orientation
+    const ctype = comp.type || "";
+    const cid = comp.id || comp.ref || ctype;
+    const rotation = comp.rotation_deg || 0;
+    
+    // Determine component dimensions - use realistic sizes
+    let w = comp.body_width_mm || 12;
+    let h = comp.body_height_mm || 12;
+    
+    // Override with realistic component dimensions
+    if (ctype === "controller") {
+      // ATmega328P-PU DIP-28: 35mm long x 7.5mm body (9.5mm with pins)
+      w = 7.5;   // body width (pins extend beyond)
+      h = 35;    // body length
+    } else if (ctype === "button") {
+      // Tactile switch: typically 6x6mm or 12x12mm
+      w = Math.max(w, 12);
+      h = Math.max(h, 12);
+    } else if (ctype === "diode") {
+      // 5mm LED with body length 8.6mm (protruding)
+      w = 5;
+      h = 12;  // Taller to cover full LED body + protrusion
+    } else if (ctype === "battery") {
+      // 2xAA battery holder: ~27mm x 50mm
+      w = Math.max(w, 27);
+      h = Math.max(h, 50);
+    }
+    
+    // Check if this is one of the highlighted components
+    const isCurrent = highlightSet.has(i);
+    // No fill highlight - only the animated outline shows which is current
+    const fillColor = isLight ? "rgba(107, 114, 128, 0.15)" : "rgba(75, 85, 99, 0.25)";
+    const strokeColor = isLight ? "#9ca3af" : "#6b7280";
+    const strokeWidth = "1";
+    const pinColor = isLight ? "#4b5563" : "#9ca3af";
+    const bodyColor = isLight ? "#374151" : "#4b5563";
+    
+    // Wrap in clickable group
+    svgContent += `<g class="placement-component" data-component-index="${i}" style="cursor:pointer;">`;
+    
+    // Draw component based on type with realistic proportions
+    svgContent += _drawComponentSvg(ctype, cx, cy, w, h, rotation, {
+      fillColor, strokeColor, strokeWidth, pinColor, bodyColor, isCurrent, isLight
+    });
+    
+    // Add pulsing highlight ring for current component
+    if (isCurrent) {
+      let highlightW = w + 6;
+      let highlightH = h + 6;
+      let highlightCy = cy;
+      
+      // For diode, offset highlight to match the drawn position
+      if (ctype === "diode") {
+        const protrusion = 8.6 / 2 - 1;  // Match the drawing offset
+        highlightCy = cy - protrusion;
+        highlightH = 16;  // Cover full LED including dome outside shell
+      }
+      
+      // Apply same rotation as component so highlight aligns properly
+      const rotationAttr = rotation !== 0 ? `transform="rotate(${rotation}, ${cx}, ${highlightCy})"` : "";
+      svgContent += `<rect x="${cx - highlightW/2}" y="${highlightCy - highlightH/2}" 
+        width="${highlightW}" height="${highlightH}" 
+        fill="none" stroke="#3b82f6" stroke-width="1" rx="3" 
+        stroke-dasharray="4,2" opacity="0.7" ${rotationAttr}>
+        <animate attributeName="stroke-dashoffset" from="0" to="12" dur="1s" repeatCount="indefinite"/>
+      </rect>`;
+    }
+    
+    svgContent += `</g>`;
+  }
+  
+  svg.innerHTML = svgContent;
+  
+  // Add click handlers to placement components
+  svg.querySelectorAll(".placement-component").forEach(g => {
+    g.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const compIdx = parseInt(g.dataset.componentIndex, 10);
+      _navigateToComponentStep(compIdx);
+    });
+  });
+}
+
+/**
+ * Draw a realistic component SVG based on type
+ */
+function _drawComponentSvg(ctype, cx, cy, w, h, rotation, opts) {
+  const { fillColor, strokeColor, strokeWidth, pinColor, bodyColor, isCurrent, isLight } = opts;
+  let svg = "";
+  
+  // Apply rotation transform
+  const rotationAttr = rotation !== 0 ? `transform="rotate(${rotation}, ${cx}, ${cy})"` : "";
+  
+  if (ctype === "controller") {
+    // ATmega328P-PU DIP-28 realistic IC rendering
+    // DIP-28: rectangular black plastic body with pins on two sides
+    const bodyW = w;      // width (narrow side ~7.6mm)
+    const bodyH = h;      // height (long side ~35mm)
+    const pinCount = 14;  // pins per side
+    const pinSpacing = (bodyH - 4) / (pinCount - 1);  // space pins with margin
+    const pinLength = 3.5;
+    const pinWidth = 0.65;
+    
+    svg += `<g ${rotationAttr}>`;
+    
+    // Shadow/3D effect
+    svg += `<rect x="${cx - bodyW/2 + 0.5}" y="${cy - bodyH/2 + 0.5}" width="${bodyW}" height="${bodyH}" 
+      fill="rgba(0,0,0,0.3)" rx="1"/>`;
+    
+    // IC body - black plastic rectangle
+    svg += `<rect x="${cx - bodyW/2}" y="${cy - bodyH/2}" width="${bodyW}" height="${bodyH}" 
+      fill="#1a1a1a" stroke="${isCurrent ? '#3b82f6' : '#333'}" stroke-width="${strokeWidth}" rx="1"/>`;
+    
+    // Subtle body highlight (plastic sheen)
+    svg += `<rect x="${cx - bodyW/2 + 0.8}" y="${cy - bodyH/2 + 0.8}" width="${bodyW - 1.6}" height="${bodyH * 0.15}" 
+      fill="rgba(255,255,255,0.08)" rx="0.5"/>`;
+    
+    // Pin 1 notch - semicircular indent at top center (standard DIP marking)
+    const notchR = Math.min(2.5, bodyW * 0.15);
+    svg += `<circle cx="${cx}" cy="${cy - bodyH/2}" r="${notchR}" fill="#0a0a0a"/>`;
+    svg += `<path d="M ${cx - notchR} ${cy - bodyH/2} A ${notchR} ${notchR} 0 0 1 ${cx + notchR} ${cy - bodyH/2}" 
+      fill="#1a1a1a" stroke="none"/>`;
+    
+    // Pin 1 dot indicator (embossed circle near corner)
+    svg += `<circle cx="${cx - bodyW/2 + 2.2}" cy="${cy - bodyH/2 + 3}" r="1.2" 
+      fill="none" stroke="${isCurrent ? '#3b82f6' : '#444'}" stroke-width="0.4"/>`;
+    
+    // Metal pins - left side (pins 1-14 from top to bottom)
+    const pinsStartY = cy - bodyH/2 + 2;
+    for (let p = 0; p < pinCount; p++) {
+      const pinY = pinsStartY + p * pinSpacing;
+      // Pin leg
+      svg += `<rect x="${cx - bodyW/2 - pinLength}" y="${pinY - pinWidth/2}" 
+        width="${pinLength}" height="${pinWidth}" fill="#b8b8b8"/>`;
+      // Pin connection to body
+      svg += `<rect x="${cx - bodyW/2 - 0.3}" y="${pinY - pinWidth/2 - 0.1}" 
+        width="${0.5}" height="${pinWidth + 0.2}" fill="#888"/>`;
+    }
+    
+    // Metal pins - right side (pins 28-15 from top to bottom)
+    for (let p = 0; p < pinCount; p++) {
+      const pinY = pinsStartY + p * pinSpacing;
+      // Pin leg
+      svg += `<rect x="${cx + bodyW/2}" y="${pinY - pinWidth/2}" 
+        width="${pinLength}" height="${pinWidth}" fill="#b8b8b8"/>`;
+      // Pin connection to body
+      svg += `<rect x="${cx + bodyW/2 - 0.2}" y="${pinY - pinWidth/2 - 0.1}" 
+        width="${0.5}" height="${pinWidth + 0.2}" fill="#888"/>`;
+    }
+    
+    // Laser-etched label text
+    svg += `<text x="${cx}" y="${cy - 4}" text-anchor="middle" font-size="2.8" fill="#666" font-family="Arial, sans-serif" font-weight="bold">ATMEL</text>`;
+    svg += `<text x="${cx}" y="${cy}" text-anchor="middle" font-size="2.5" fill="#555" font-family="Arial, sans-serif">MEGA328P</text>`;
+    svg += `<text x="${cx}" y="${cy + 3.5}" text-anchor="middle" font-size="2" fill="#444" font-family="Arial, sans-serif">PU</text>`;
+    
+    svg += `</g>`;
+    
+  } else if (ctype === "button") {
+    // Tactile push button realistic rendering
+    // Real: 12x12mm body, 6x6mm tactile switch with round cap
+    const bodySize = Math.max(w, h);
+    const capDiameter = bodySize * 0.6;
+    const pinSpacingX = 6.25; // half of 12.5mm spacing
+    const pinSpacingY = 2.5;  // half of 5mm spacing
+    const pinLength = 2;
+    const pinWidth = 0.8;
+    
+    svg += `<g ${rotationAttr}>`;
+    
+    // Button body (square)
+    svg += `<rect x="${cx - bodySize/2}" y="${cy - bodySize/2}" width="${bodySize}" height="${bodySize}" 
+      fill="${isLight ? '#374151' : '#1f2937'}" stroke="${strokeColor}" stroke-width="${strokeWidth}" rx="1"/>`;
+    
+    // Inner tactile switch area
+    svg += `<rect x="${cx - bodySize/3}" y="${cy - bodySize/3}" width="${bodySize * 2/3}" height="${bodySize * 2/3}" 
+      fill="${isLight ? '#4b5563' : '#374151'}" stroke="none" rx="1"/>`;
+    
+    // Button cap (raised circle)
+    svg += `<circle cx="${cx}" cy="${cy}" r="${capDiameter/2}" 
+      fill="${fillColor}" stroke="${strokeColor}" stroke-width="${strokeWidth}"/>`;
+    svg += `<circle cx="${cx}" cy="${cy}" r="${capDiameter/2 - 1.5}" 
+      fill="none" stroke="${isLight ? '#9ca3af' : '#6b7280'}" stroke-width="0.5"/>`;
+    
+    // Four corner pins
+    const pinPositions = [
+      [-pinSpacingX, -pinSpacingY],
+      [pinSpacingX, -pinSpacingY],
+      [-pinSpacingX, pinSpacingY],
+      [pinSpacingX, pinSpacingY],
+    ];
+    for (const [px, py] of pinPositions) {
+      svg += `<rect x="${cx + px - pinWidth/2}" y="${cy + py - pinLength/2}" width="${pinWidth}" height="${pinLength}" 
+        fill="${pinColor}" rx="0.2"/>`;
+    }
+    
+    svg += `</g>`;
+    
+  } else if (ctype === "diode") {
+    // 5mm T-1 3/4 IR LED - SIDE VIEW (vertical, dome protruding OUTSIDE shell)
+    // The LED is positioned so the dome sticks out through the shell edge
+    const bodyLength = 8.6;   // LED body length
+    const bodyDiameter = 5;   // 5mm LED diameter
+    const r = bodyDiameter / 2;
+    const legLength = 4;
+    const legWidth = 0.5;
+    const legSpacing = 1.27;  // 2.54mm pitch / 2
+    
+    // Offset the LED drawing so dome protrudes OUTSIDE the outline (toward top)
+    // cy is the mounting point (inside); shift drawing UP so dome extends beyond
+    // In SVG after Y-flip: lower Y = higher on screen = toward edge
+    const protrusion = bodyLength / 2 - 1;  // ~3.3mm of dome sticks out
+    const drawCy = cy - protrusion;  // shift drawing UP so dome is outside edge
+    
+    svg += `<g ${rotationAttr}>`;
+    
+    // Define gradient for realistic clear plastic look (vertical orientation)
+    svg += `<defs>
+      <linearGradient id="irLedBody${isCurrent ? 'Active' : ''}" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="${isLight ? '#f8fafc' : '#e2e8f0'}"/>
+        <stop offset="30%" stop-color="${isLight ? '#e0e7ff' : '#c7d2fe'}"/>
+        <stop offset="70%" stop-color="${isLight ? '#a5b4fc' : '#818cf8'}"/>
+        <stop offset="100%" stop-color="${isLight ? '#c7d2fe' : '#a5b4fc'}"/>
+      </linearGradient>
+    </defs>`;
+    
+    // Shadow beneath LED (offset down-right)
+    svg += `<ellipse cx="${cx + 0.3}" cy="${drawCy + 0.5}" rx="${r + 0.3}" ry="${bodyLength/2 + 0.5}" 
+      fill="rgba(0,0,0,0.12)"/>`;
+    
+    // LED body - cylindrical part (rectangle rotated so LED is vertical)
+    // Dome at top (toward -Y in SVG = toward top edge = outside shell)
+    const bodyStartY = drawCy - bodyLength/2 + r;  // body starts after dome
+    svg += `<rect x="${cx - r}" y="${bodyStartY}" width="${bodyDiameter}" height="${bodyLength - r - r/2}" 
+      fill="url(#irLedBody${isCurrent ? 'Active' : ''})" stroke="#94a3b8" stroke-width="0.5"/>`;
+    
+    // LED dome - rounded end (semicircle at TOP, protruding outside shell)
+    svg += `<ellipse cx="${cx}" cy="${drawCy - bodyLength/2 + r}" rx="${r}" ry="${r}" 
+      fill="url(#irLedBody${isCurrent ? 'Active' : ''})" stroke="#94a3b8" stroke-width="0.5"/>`;
+    
+    // Dome highlight (glass reflection)
+    svg += `<ellipse cx="${cx - r*0.3}" cy="${drawCy - bodyLength/2 + r - r*0.2}" rx="${r*0.3}" ry="${r*0.5}" 
+      fill="rgba(255,255,255,0.5)" transform="rotate(-15, ${cx}, ${drawCy - bodyLength/2 + r})"/>`;
+    
+    // Flat base end (BOTTOM) - the square end with rim (inside shell)
+    const baseY = drawCy + bodyLength/2 - r/2;
+    svg += `<rect x="${cx - r - 0.3}" y="${baseY - 0.5}" width="${bodyDiameter + 0.6}" height="1.5" 
+      fill="#d4d4d4" stroke="#a3a3a3" stroke-width="0.3" rx="0.2"/>`;
+    
+    // Internal LED die/chip visible through clear plastic
+    svg += `<rect x="${cx - 0.8}" y="${drawCy - 1}" width="1.6" height="2" 
+      fill="#a78bfa" stroke="none" rx="0.2" opacity="0.6"/>`;
+    
+    // Cathode flat edge indicator line on dome (horizontal line near top)
+    svg += `<line x1="${cx - r + 0.5}" y1="${drawCy - bodyLength/2 + 0.3}" 
+      x2="${cx + r - 0.5}" y2="${drawCy - bodyLength/2 + 0.3}" 
+      stroke="#64748b" stroke-width="0.8" opacity="0.7"/>`;
+    
+    // LED legs extending downward from base (into the enclosure)
+    // Anode (longer leg, +)
+    svg += `<rect x="${cx - legSpacing - legWidth/2}" y="${baseY + 1}" 
+      width="${legWidth}" height="${legLength}" fill="#b8b8b8" rx="0.1"/>`;
+    // Cathode (shorter leg, −)
+    svg += `<rect x="${cx + legSpacing - legWidth/2}" y="${baseY + 1}" 
+      width="${legWidth}" height="${legLength * 0.7}" fill="#b8b8b8" rx="0.1"/>`;
+    
+    // Polarity labels (beside the legs)
+    svg += `<text x="${cx - legSpacing - 1.5}" y="${baseY + legLength/2 + 2}" text-anchor="end" font-size="1.8" fill="${pinColor}">+</text>`;
+    svg += `<text x="${cx + legSpacing + 1.5}" y="${baseY + legLength * 0.35 + 2}" text-anchor="start" font-size="1.8" fill="${pinColor}">−</text>`;
+    
+    // "IR LED" label to the side
+    svg += `<text x="${cx + r + 3}" y="${drawCy}" text-anchor="start" font-size="2.5" fill="${isLight ? '#4f46e5' : '#a5b4fc'}" font-weight="bold">IR LED</text>`;
+    
+    svg += `</g>`;
+    
+  } else if (ctype === "battery") {
+    // Battery compartment (2xAA)
+    // Real: 27mm x 50mm compartment
+    svg += `<g ${rotationAttr}>`;
+    
+    // Outer compartment
+    svg += `<rect x="${cx - w/2}" y="${cy - h/2}" width="${w}" height="${h}" 
+      fill="${fillColor}" stroke="${strokeColor}" stroke-width="${strokeWidth}" rx="2"/>`;
+    
+    // Hatch ledge lines on long sides (2.5mm shelves)
+    const ledgeW = 2.5;
+    const ledgeColor = isLight ? '#bbb' : '#666';
+    svg += `<line x1="${cx - w/2 + ledgeW}" y1="${cy - h/2}" x2="${cx - w/2 + ledgeW}" y2="${cy + h/2}" 
+      stroke="${ledgeColor}" stroke-width="0.4" stroke-dasharray="1.5,1"/>`;
+    svg += `<line x1="${cx + w/2 - ledgeW}" y1="${cy - h/2}" x2="${cx + w/2 - ledgeW}" y2="${cy + h/2}" 
+      stroke="${ledgeColor}" stroke-width="0.4" stroke-dasharray="1.5,1"/>`;
+    
+    // Battery outline slots (2 AA batteries side by side)
+    const battW = 14.5; // AA diameter
+    const battH = h - 8; // length minus conductor plate space at each end
+    const battGap = 1;
+    
+    svg += `<rect x="${cx - battW - battGap/2}" y="${cy - battH/2}" width="${battW}" height="${battH}" 
+      fill="none" stroke="${isLight ? '#9ca3af' : '#6b7280'}" stroke-width="0.5" stroke-dasharray="2,1" rx="5"/>`;
+    svg += `<rect x="${cx + battGap/2}" y="${cy - battH/2}" width="${battW}" height="${battH}" 
+      fill="none" stroke="${isLight ? '#9ca3af' : '#6b7280'}" stroke-width="0.5" stroke-dasharray="2,1" rx="5"/>`;
+    
+    // Polarity indicators
+    svg += `<text x="${cx - battW/2 - battGap/2}" y="${cy - battH/2 + 4}" text-anchor="middle" font-size="4" fill="${pinColor}" font-weight="bold">+</text>`;
+    svg += `<text x="${cx + battW/2 + battGap/2}" y="${cy - battH/2 + 4}" text-anchor="middle" font-size="4" fill="${pinColor}" font-weight="bold">+</text>`;
+    svg += `<text x="${cx - battW/2 - battGap/2}" y="${cy + battH/2 - 2}" text-anchor="middle" font-size="4" fill="${pinColor}" font-weight="bold">−</text>`;
+    svg += `<text x="${cx + battW/2 + battGap/2}" y="${cy + battH/2 - 2}" text-anchor="middle" font-size="4" fill="${pinColor}" font-weight="bold">−</text>`;
+    
+    // Conductor plates at each narrow end (27×12mm, 0.3mm thick)
+    const plateLen = 12;
+    const plateColor = isLight ? '#b0b0b0' : '#888888';
+    
+    // + end plate (top/−Y)
+    svg += `<rect x="${cx - w/2 + 0.5}" y="${cy - h/2 + 0.5}" width="${w - 1}" height="${plateLen}" 
+      fill="${plateColor}" stroke="${isLight ? '#909090' : '#aaa'}" stroke-width="0.4" rx="0.5" opacity="0.7"/>`;
+    svg += `<text x="${cx}" y="${cy - h/2 + plateLen/2 + 1.5}" text-anchor="middle" font-size="2.5" fill="${isLight ? '#555' : '#ddd'}">+ plate</text>`;
+    
+    // − end plate (bottom/+Y)
+    svg += `<rect x="${cx - w/2 + 0.5}" y="${cy + h/2 - plateLen - 0.5}" width="${w - 1}" height="${plateLen}" 
+      fill="${plateColor}" stroke="${isLight ? '#909090' : '#aaa'}" stroke-width="0.4" rx="0.5" opacity="0.7"/>`;
+    svg += `<text x="${cx}" y="${cy + h/2 - plateLen/2 + 1}" text-anchor="middle" font-size="2.5" fill="${isLight ? '#555' : '#ddd'}">− spring</text>`;
+    
+    // Support blocks / latch supports at each narrow-end corner (1×1mm)
+    // These latch the conductor plate once slid in from the bottom.
+    // Shown with upward arrow to indicate slide-in direction.
+    const supSize = 1.0;
+    const supColor = isLight ? '#777' : '#999';
+    const slotColor = isLight ? '#c9a040' : '#b08030';
+    for (const endY of [cy - h/2, cy + h/2]) {
+      const inward = endY < cy ? 1 : -1;  // direction toward compartment centre
+      const sY = inward === 1 ? endY : endY - supSize;
+      // Left latch support
+      svg += `<rect x="${cx - w/2}" y="${sY}" width="${supSize}" height="${supSize}" 
+        fill="${supColor}" stroke="${isLight ? '#555' : '#bbb'}" stroke-width="0.3" opacity="0.85"/>`;
+      // Right latch support
+      svg += `<rect x="${cx + w/2 - supSize}" y="${sY}" width="${supSize}" height="${supSize}" 
+        fill="${supColor}" stroke="${isLight ? '#555' : '#bbb'}" stroke-width="0.3" opacity="0.85"/>`;
+      // Plate slot indicator line (0.3mm slot through floor)
+      const slotY = endY < cy ? endY - 0.15 : endY + 0.15;
+      svg += `<line x1="${cx - w/2}" y1="${slotY}" x2="${cx + w/2}" y2="${slotY}"
+        stroke="${slotColor}" stroke-width="0.6" opacity="0.7"/>`;
+      // Slide-in arrow (↑ from bottom)
+      const arrowX = endY < cy ? cx - w/2 - 2.5 : cx + w/2 + 2.5;
+      const arrowY = endY;
+      svg += `<text x="${arrowX}" y="${arrowY + 1}" text-anchor="middle" font-size="3" fill="${slotColor}" opacity="0.8">↑</text>`;
+    }
+    
+    svg += `</g>`;
+    
+  } else {
+    // Generic component fallback
+    svg += `<rect x="${cx - w/2}" y="${cy - h/2}" width="${w}" height="${h}" 
+      fill="${fillColor}" stroke="${strokeColor}" stroke-width="${strokeWidth}" rx="1" ${rotationAttr}/>`;
+  }
+  
+  return svg;
+}
+
+/**
+ * Navigate to the guide step that shows the specified component
+ */
+function _navigateToComponentStep(componentIndex) {
+  const steps = window._guideSteps || [];
+  
+  // Find a step that highlights this component
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    const indices = step.componentIndices || (step.componentIndex !== undefined ? [step.componentIndex] : []);
+    if (indices.includes(componentIndex)) {
+      window._guideIndex = i;
+      _renderGuideStep();
+      _updateSectionNavActive();
+      return;
+    }
+  }
+}
+
+// Manual sidebar toggle
+function toggleManualSidebar() {
+  const sidebar = document.getElementById("manualSidebar");
+  const overlay = document.getElementById("manualSidebarOverlay");
+  const toggle = document.getElementById("manualSidebarToggle");
+  
+  if (!sidebar) return;
+  
+  const isOpen = sidebar.classList.contains("open");
+  
+  if (isOpen) {
+    sidebar.classList.remove("open");
+    overlay?.classList.remove("visible");
+    toggle?.classList.remove("active");
+  } else {
+    sidebar.classList.add("open");
+    overlay?.classList.add("visible");
+    toggle?.classList.add("active");
+  }
+}
+
+const manualSidebarToggle = document.getElementById("manualSidebarToggle");
+const manualSidebarOverlay = document.getElementById("manualSidebarOverlay");
+
+if (manualSidebarToggle) {
+  manualSidebarToggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleManualSidebar();
+  });
+}
+
+if (manualSidebarOverlay) {
+  manualSidebarOverlay.addEventListener("click", () => {
+    toggleManualSidebar();
+  });
 }
 
 backToDesignBtn.addEventListener("click", () => {
@@ -1433,6 +2690,7 @@ function _enableGcodeButtons() {
 if (resetBtn) {
   resetBtn.addEventListener("click", async () => {
     await fetch("/api/reset", { method: "POST" });
+    _realignApplied = false;
     chatEl.innerHTML = "";
     setStatus("Ready", "");
     outlineSvg.innerHTML = "";
@@ -1825,7 +3083,7 @@ async function _sendCurveUpdate() {
   }
 
   // Also fire a background server update so the STL stays in sync
-  // for download / slicing.  We don't wait for it or block the UI.
+  // for download / slicing.  Poll for the recompiled STL.
   fetch("/api/update_curve", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1835,6 +3093,15 @@ async function _sendCurveUpdate() {
       bottom_curve_length: _bottomCurveLength,
       bottom_curve_height: _bottomCurveHeight,
     }),
+  }).then(resp => {
+    if (resp.ok) {
+      updateProgress("Compiling STL models...");
+      if (modelLabel) {
+        modelLabel.textContent = "Recompiling 3D model…";
+        modelLabel.style.display = "";
+      }
+      _pollForUpdatedModel(latestModelName || "print_plate");
+    }
   }).catch(err => console.warn("Background curve STL update:", err));
 }
 
@@ -1847,6 +3114,10 @@ promptInput.addEventListener("keydown", (e) => {
 sendBtn.addEventListener("click", async () => {
   const msg = promptInput.value.trim();
   if (!msg) return;
+
+  // Cancel active dragging but preserve _realignApplied so SSE
+  // events from a new pipeline run don't overwrite the user's layout.
+  if (realignActive) exitRealignMode(false);
 
   addMessage("user", msg);
   promptInput.value = "";
@@ -1918,14 +3189,28 @@ sendBtn.addEventListener("click", async () => {
             break;
 
           case "outline_preview":
+            if (realignActive || _realignApplied) {
+              logDebug("Ignoring outline_preview event (realign active/applied)");
+              break;
+            }
             renderOutline(ev.outline, ev.buttons, ev.label);
             break;
 
           case "pcb_layout":
+            // Don't let the pipeline overwrite a realigned layout
+            if (realignActive || _realignApplied) {
+              logDebug("Ignoring pcb_layout event (realign active/applied)");
+              break;
+            }
+            _currentLayout = JSON.parse(JSON.stringify(ev));  // deep-copy
             renderOutlineWithComponents(ev);
             break;
 
           case "shell_preview":
+            if (realignActive || _realignApplied) {
+              logDebug("Ignoring shell_preview event (realign active/applied)");
+              break;
+            }
             buildShellPreview(ev);
             _fetchShellHeight().then(() => {
               showCurveEditor(
@@ -1936,8 +3221,13 @@ sendBtn.addEventListener("click", async () => {
             break;
 
           case "debug_image":
+            // Don't let the pipeline overwrite realigned debug images
+            if (realignActive || _realignApplied) {
+              logDebug("Ignoring debug_image event (realign active/applied)");
+              break;
+            }
             debugImage.src = `/api/images/${ev.label}?t=${Date.now()}`;
-            negativeImage.src = `/api/images/negative?t=${Date.now()}`;
+            negativeImage.src = `/api/images/pcb_negative?t=${Date.now()}`;
             // Show debug image, hide label
             debugImage.style.display = "";
             if (debugLabel) debugLabel.style.display = "none";
@@ -1946,6 +3236,10 @@ sendBtn.addEventListener("click", async () => {
             break;
 
           case "model":
+            if (realignActive || _realignApplied) {
+              logDebug("Ignoring model event (realign active/applied)");
+              break;
+            }
             latestModelName = ev.name;
             loadModel(`/api/model/${ev.name}?t=${Date.now()}`);
             // Show curve editor when model loads; use model's curve params if available

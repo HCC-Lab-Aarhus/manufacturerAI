@@ -19,31 +19,41 @@
 15. [SCAD Shell Generation (`src/scad/shell.py`)](#scad-shell-generation)
 16. [Cutout Generation (`src/scad/cutouts.py`)](#cutout-generation)
 17. [OpenSCAD Compiler (`src/scad/compiler.py`)](#openscad-compiler)
-18. [Polygon Geometry (`src/geometry/polygon.py`)](#polygon-geometry)
-19. [Hardware Configuration (`src/config/hardware.py`)](#hardware-configuration)
-20. [Configuration Files](#configuration-files)
-21. [Frontend (`src/web/static/`)](#frontend)
-22. [Cross-Section Geometry](#cross-section-geometry)
-23. [Coordinate System](#coordinate-system)
-24. [User-Controllable Parameters](#user-controllable-parameters)
-25. [Why Parametric Design](#why-parametric-design)
+18. [G-code Pipeline (`src/gcode/`)](#g-code-pipeline)
+19. [PrusaSlicer Bridge (`src/gcode/slicer.py`)](#prusaslicer-bridge)
+20. [G-code Post-Processor (`src/gcode/postprocessor.py`)](#g-code-post-processor)
+21. [Pause Points (`src/gcode/pause_points.py`)](#pause-points)
+22. [Conductive Ink Toolpaths (`src/gcode/ink_traces.py`)](#conductive-ink-toolpaths)
+23. [Binary G-code Converter (`src/gcode/bgcode.py`)](#binary-g-code-converter)
+24. [Firmware Generator (`firmware/`)](#firmware-generator)
+25. [Polygon Geometry (`src/geometry/polygon.py`)](#polygon-geometry)
+26. [Hardware Configuration (`src/config/hardware.py`)](#hardware-configuration)
+27. [Configuration Files](#configuration-files)
+28. [Frontend (`src/web/static/`)](#frontend)
+29. [Cross-Section Geometry](#cross-section-geometry)
+30. [Coordinate System](#coordinate-system)
+31. [User-Controllable Parameters](#user-controllable-parameters)
+32. [Multi-Stage Print Process](#multi-stage-print-process)
+33. [Why Parametric Design](#why-parametric-design)
 
 ---
 
 ## Overview
 
-ManufacturerAI is an AI-powered design-to-manufacturing system for custom 3D-printable remote controls. A user describes what they want in natural language via a chat interface, and an LLM agent (Google Gemini 2.5 Pro) designs the remote control, then an automated pipeline places electronic components, routes PCB traces, generates 3D enclosure geometry as OpenSCAD files, and compiles them to printable STL models — all in one continuous flow.
+ManufacturerAI is an AI-powered design-to-manufacturing system for custom 3D-printable remote controls. A user describes what they want in natural language via a chat interface, and an LLM agent (Google Gemini 2.5 Pro) designs the remote control, then an automated pipeline places electronic components, routes PCB traces, generates 3D enclosure geometry as OpenSCAD files, compiles them to printable STL models, slices the STL into G-code with embedded print pauses for mid-print component insertion and conductive ink deposition, generates customized Arduino firmware, and optionally converts to Prusa Binary G-code — all in one continuous flow.
 
-The core idea is that the user only specifies the **shape** (a polygon outline) and **button positions**. Everything else — battery compartment placement, microcontroller placement, IR diode placement, electrical net assignment, trace routing, enclosure shell generation, battery hatch, and STL compilation — is fully automated.
+The core idea is that the user only specifies the **shape** (a polygon outline) and **button positions**. Everything else — battery compartment placement, microcontroller placement, IR diode placement, electrical net assignment, trace routing, enclosure shell generation, battery hatch, STL compilation, G-code slicing with multi-stage print pauses, conductive ink toolpath generation, and firmware generation — is fully automated.
 
 **Key technologies:**
-- **Python 3.13** — Backend language for all server, agent, geometry, and SCAD generation code
+- **Python 3.13** — Backend language for all server, agent, geometry, SCAD generation, G-code processing, and firmware generation code
 - **Google Gemini 2.5 Pro** — LLM powering the conversational designer agent
 - **FastAPI + uvicorn** — Web server with SSE streaming
 - **OpenSCAD** — Programmatic 3D CAD for enclosure geometry → STL compilation
+- **PrusaSlicer** — CLI-driven STL → G-code slicing with multi-printer support (MK3S, MK3S+, Core One)
 - **Shapely ≥ 2.0** — Polygon inset computation (pre-computed fillet layers)
 - **TypeScript (Node.js)** — A* trace router for single-layer PCB routing
 - **Three.js** — Browser-based 3D STL viewer
+- **Arduino / ATmega328P** — Target platform for the generated IR remote firmware
 
 ---
 
@@ -78,8 +88,10 @@ The core idea is that the user only specifies the **shape** (a polygon outline) 
 │  │  2. Send outline preview to UI                         │   │
 │  │  3. Place components (battery, controller, diode)      │   │
 │  │  4. Route PCB traces (TypeScript A* router)            │   │
-│  │  5. Generate OpenSCAD files                            │   │
+│  │  5. Generate OpenSCAD files + instant 3D preview       │   │
 │  │  6. Compile SCAD → STL + merge print plate             │   │
+│  │  7. Slice STL → G-code + inject pauses + ink paths     │   │
+│  │  8. Generate Arduino firmware with routed pins          │   │
 │  └────────────────────────────────────────────────────────┘   │
 └───────────────────────────────────────────────────────────────┘
 ```
@@ -92,7 +104,9 @@ The core idea is that the user only specifies the **shape** (a polygon outline) 
 - Python 3.11+
 - Node.js (for the TypeScript trace router)
 - OpenSCAD installed at `C:\Program Files\OpenSCAD\openscad.exe` (or on PATH)
+- PrusaSlicer installed at `C:\Program Files\Prusa3D\PrusaSlicer\prusa-slicer-console.exe` (or on PATH) — required for G-code generation
 - A Google Gemini API key
+- NumPy + Pillow (optional, for binary G-code thumbnail rendering)
 
 ### Setup
 
@@ -133,19 +147,37 @@ manufacturerAI/
 │   ├── base_remote.json          # Single source of truth for all hardware constants
 │   ├── default_params.json       # Legacy default parameters (not actively used)
 │   ├── printer_limits.json       # Max print dimensions (200×200mm)
-│   └── materials.json            # Material definitions
+│   ├── materials.json            # Material definitions
+│   ├── slicer_profile.ini        # PrusaSlicer profile for MK3S
+│   ├── slicer_profile_mk3s_plus.ini  # PrusaSlicer profile for MK3S+
+│   └── slicer_profile_coreone.ini    # PrusaSlicer profile for Core One+
+├── firmware/
+│   ├── __init__.py
+│   ├── firmware_generator.py     # Generates Arduino .ino with routed pin assignments
+│   ├── UniversalIRRemote.ino     # Template Arduino sketch for IR remote
+│   ├── README.md
+│   ├── STANDALONE_GUIDE.md
+│   └── WIRING_GUIDE.md
 ├── src/
 │   ├── __init__.py
 │   ├── __main__.py               # CLI entry point: `python -m src serve`
 │   ├── agent/
 │   │   ├── loop.py               # Gemini multi-turn conversation + tool dispatch
-│   │   ├── pipeline.py           # 6-step manufacturing pipeline
+│   │   ├── pipeline.py           # 8-step manufacturing pipeline
 │   │   ├── prompts.py            # System prompt builder for the LLM
 │   │   └── tools.py              # Tool function implementations + registry
 │   ├── config/
 │   │   └── hardware.py           # Typed accessor for base_remote.json (`hw` singleton)
+│   ├── gcode/
+│   │   ├── __init__.py           # Module docstring
+│   │   ├── pipeline.py           # G-code pipeline orchestrator (slice → post-process)
+│   │   ├── slicer.py             # PrusaSlicer CLI bridge (multi-printer support)
+│   │   ├── postprocessor.py      # G-code injection: pauses, ironing filter, trace highlights
+│   │   ├── pause_points.py       # Computes ink/component pause Z-heights
+│   │   ├── ink_traces.py         # Generates conductive ink deposition G-code
+│   │   └── bgcode.py             # Pure-Python ASCII → Binary G-code converter
 │   ├── geometry/
-│   │   └── polygon.py            # Pure-Python polygon utilities (area, CCW, PIP, inset)
+│   │   └── polygon.py            # Polygon utilities (area, CCW, PIP, inset, smooth, ellipse)
 │   ├── pcb/
 │   │   ├── placer.py             # Component placement engine (grid scan + scoring)
 │   │   ├── router_bridge.py      # Python↔TypeScript router bridge (subprocess)
@@ -182,7 +214,13 @@ manufacturerAI/
             ├── battery_hatch.stl
             ├── print_plate.scad
             ├── print_plate.stl   # Merged binary STL (enclosure + hatch side-by-side)
+            ├── enclosure_raw.gcode     # Raw PrusaSlicer output
+            ├── enclosure_staged.gcode  # Post-processed with pauses + ink paths
+            ├── enclosure_staged.bgcode # Binary G-code for Prusa Core One
             ├── manifest.json
+            ├── firmware/
+            │   ├── UniversalIRRemote.ino   # Generated Arduino sketch
+            │   └── PIN_ASSIGNMENT_REPORT.txt
             └── pcb/              # Router debug outputs
 ```
 
@@ -232,11 +270,38 @@ The LLM calls `submit_design()` with:
 - `battery_hatch.scad` — Battery compartment cover with spring latch
 - `print_plate.scad` — Legacy import-based plate (unused; replaced by STL merge)
 
+**Step 5b — Instant 3D Preview:** Before the slow STL compile, a `shell_preview` event is sent to the browser with the outline, height, wall thickness, curve parameters, and component positions. The browser can render an approximate 3D preview immediately while OpenSCAD compiles.
+
 **Step 6 — Compile STL + Merge:**
 - `enclosure.scad` → `enclosure.stl` (OpenSCAD CLI, 600s timeout)
 - `battery_hatch.scad` → `battery_hatch.stl`
 - Both are merged into `print_plate.stl` using binary STL merge (the hatch is translated 80mm to the right)
 - The print plate STL is emitted as the 3D model event
+
+**Step 7 — Slice & Generate Custom G-code:**
+If PrusaSlicer is available, the pipeline runs the full G-code generation sub-pipeline:
+1. Computes pause Z-heights from the enclosure geometry (ink layer at Z=3.0mm, component insertion at Z=14.5mm)
+2. Slices `print_plate.stl` (or `enclosure.stl`) via PrusaSlicer CLI with the appropriate printer profile
+3. Generates conductive ink deposition G-code from the routing data
+4. Post-processes the slicer G-code to:
+   - Strip ironing from all layers except the ink layer (saves ~40% print time)
+   - Filter ironing moves over trace channels at the ink layer
+   - Inject a trace highlight extrusion pass (single-width filament lines over trace channels)
+   - Inject `M601` firmware pause at the ink layer Z-height (for conductive ink deposition)
+   - Inject `M601` firmware pause at the component insertion Z-height
+   - Recalculate M73 progress/remaining-time commands to reflect stripped ironing
+5. Converts the staged ASCII G-code to Prusa Binary G-code (`.bgcode`) with CRC32 checksums and STL-rendered thumbnails
+- Emits a `gcode_ready` event with pause point metadata
+- Non-fatal: if PrusaSlicer is not installed, the pipeline continues without G-code
+
+**Step 8 — Generate Firmware:**
+The `firmware_generator` module takes the pin mapping from the router and generates a customized Arduino sketch:
+- Reads the `UniversalIRRemote.ino` template
+- Replaces the `PIN DEFINITIONS` block with the actual routed pin assignments
+- Maps button labels to firmware variable names (e.g., "Power" → `POWER_BTN`, "Vol+" → `VOL_UP_BTN`)
+- Converts ATmega port names (PD2, PB3) to Arduino pin numbers
+- Ensures the IR LED is assigned to a PWM-capable pin
+- Writes the generated `.ino` file and a `PIN_ASSIGNMENT_REPORT.txt` to the output directory
 
 ### 6. Results stream back to browser
 Throughout the pipeline, SSE events stream to the browser:
@@ -244,14 +309,17 @@ Throughout the pipeline, SSE events stream to the browser:
 - `outline_preview` — SVG outline rendering
 - `pcb_layout` — component placement overlay on outline
 - `debug_image` — PCB routing debug PNG
+- `shell_preview` — lightweight 3D preview data (sent before slow STL compile)
 - `model` — STL model URL → Three.js viewer loads it
+- `gcode_ready` — G-code generation complete with pause point metadata
 - `chat` — LLM text messages
+- `routing_result` — raw routing data for downstream use
 
 ### 7. LLM reports results
-After the pipeline succeeds, the LLM receives the result (including `pin_mapping`) and responds with a brief summary: shape, dimensions, button count, edge rounding parameters, and a pin-assignment table (e.g., "Power → PD2, Vol+ → PD3").
+After the pipeline succeeds, the LLM receives the result (including `pin_mapping` and `firmware_path`) and responds with a brief summary: shape, dimensions, button count, edge rounding parameters, and a pin-assignment table (e.g., "Power → PD2, Vol+ → PD3").
 
 ### 8. User can iterate
-The user can continue chatting: "make it wider", "add another button", "give it a diamond shape". The LLM maintains conversation history and can redesign. The curve editor widget allows real-time edge profile adjustment without re-running placement/routing.
+The user can continue chatting: "make it wider", "add another button", "give it a diamond shape". The LLM maintains conversation history and can redesign. The curve editor widget allows real-time edge profile adjustment without re-running placement/routing. The Realign mode in the outline view allows the user to drag components to new positions, which triggers re-routing and full SCAD/STL regeneration. The user can also re-slice the model for a different printer via the `/api/slice` endpoint.
 
 ---
 
@@ -268,8 +336,11 @@ On import, `_load_env()` reads `.env` / `.env.local` from the project root and s
 The server maintains module-level state across requests:
 - `_conversation_history: list` — List of Gemini `Content` proto objects (the full multi-turn conversation)
 - `_run_dir: Path | None` — Output directory for the current session (e.g., `outputs/web/run_20260209_185430`)
+- `_printer_id: str | None` — Last-used printer id (e.g., `"mk3s"`, `"coreone"`)
+- `_layout_gen: int` — Generation counter bumped by `update_layout`; prevents the pipeline thread from overwriting user-realigned layouts
+- `_pipeline_gate: threading.Event` — Used to pause/resume the pipeline during realign mode
 
-This means the server supports **one concurrent session**. Resetting clears both variables.
+This means the server supports **one concurrent session**. Resetting clears all variables.
 
 ### Endpoints
 
@@ -278,10 +349,20 @@ This means the server supports **one concurrent session**. Resetting clears both
 | `GET /` | Serves `index.html` |
 | `POST /api/generate/stream` | Main endpoint. Runs one agent turn in a background thread, returns SSE stream |
 | `POST /api/update_curve` | Re-generates SCAD + compiles STL with new curve params. Uses cached layout/routing — no re-placement or re-routing |
+| `POST /api/update_layout` | Moves components to new positions (realign mode), re-routes traces, rebuilds SCAD/STL |
+| `POST /api/realign/pause` | Pauses the pipeline while user is in realign mode |
+| `POST /api/realign/resume` | Resumes the pipeline after exiting realign mode |
 | `POST /api/reset` | Clears conversation history and run directory |
 | `GET /api/shell_height` | Returns `DEFAULT_HEIGHT_MM` (16.5mm) for the curve editor |
+| `GET /api/printers` | Returns list of supported printers (MK3S, MK3S+, Core One) |
+| `POST /api/slice` | Slices the enclosure STL and generates staged G-code with pauses |
 | `GET /api/model/{name}` | Serves an STL file from the current run (inline) |
 | `GET /api/model/download/{name}` | Serves an STL as attachment download |
+| `GET /api/gcode/{name}` | Serves a G-code file from the current run (inline) |
+| `GET /api/gcode/download/{name}` | Serves a G-code file as attachment download |
+| `GET /api/gcode/download-bgcode` | Downloads the binary `.bgcode` file |
+| `GET /api/gcode/preview/{name}` | Returns G-code metadata: layers, pauses, line count |
+| `POST /api/gcode/open-viewer` | Launches PrusaSlicer's G-code viewer externally |
 | `GET /api/images/{name}` | Serves debug PNG images from the current run |
 | `GET /api/outputs/{run_id}/{path}` | Generic file serving from any run |
 
@@ -290,7 +371,7 @@ This means the server supports **one concurrent session**. Resetting clears both
 2. Spawns a daemon thread that calls `run_turn()` with an `emit` callback that pushes events into the queue
 3. An async generator reads from the queue and yields SSE `data:` lines
 4. When the thread finishes, it pushes `None` (sentinel) to signal the stream is done
-5. Events are JSON objects with a `type` field: `thinking`, `chat`, `outline_preview`, `pcb_layout`, `debug_image`, `model`, `progress`, `error`, `tool_call`, `tool_error`
+5. Events are JSON objects with a `type` field: `thinking`, `chat`, `outline_preview`, `pcb_layout`, `debug_image`, `shell_preview`, `model`, `gcode_ready`, `routing_result`, `progress`, `error`, `tool_call`, `tool_error`
 
 ### Curve Update (`/api/update_curve`)
 This endpoint allows the user to adjust the edge profile (top and bottom fillet) without re-running the entire pipeline:
@@ -367,15 +448,21 @@ The history is a list of Gemini `Content` proto objects. Each turn adds the user
    - Don't repeat the first vertex (auto-closed)
    - Every button center ≥ edge_clearance mm from every polygon edge
    - Minimum button spacing: cap_diameter + keepout_padding mm center-to-center
-   - Use 8-20 vertices for organic shapes
+   - Use 8-20 vertices for organic polygon shapes
 
-5. **Edge rounding defaults:**
+5. **`outline_type` parameter** (strongly recommended for curves):
+   - `"polygon"` (default) — use the exact vertices provided. Best for rectangles, T-shapes, diamonds, hexagons.
+   - `"ellipse"` — the pipeline auto-generates a perfect smooth 32-vertex ellipse from a bounding rectangle. The LLM just provides `[[0,0],[W,0],[W,L],[0,L]]`.
+   - `"racetrack"` — a stadium shape (rectangle with semicircular ends). Same as ellipse: just provide a bounding rectangle.
+   - This eliminates the LLM's need to compute trigonometry. For oval/circular shapes, always use `outline_type="ellipse"`.   For pill/capsule shapes, always use `outline_type="racetrack"`.
+
+6. **Edge rounding defaults:**
    - Top: `curve_length=2`, `curve_height=3`
    - Bottom: `curve_length=1.5`, `curve_height=2`
 
-6. **Error handling:** On pipeline errors, fix silently using `think()` and resubmit. Only tell the user after 3+ failed attempts.
+7. **Error handling:** On pipeline errors, fix silently using `think()` and resubmit. Only tell the user after 3+ failed attempts.
 
-7. **After success:** Report shape, dimensions, button count, edge rounding params, and a pin-assignment table.
+8. **After success:** Report shape, dimensions, button count, edge rounding params, and a pin-assignment table.
 
 ---
 
@@ -409,15 +496,18 @@ These are older tools from a previous architecture where the LLM called each ste
 
 ## Manufacturing Pipeline
 
-**File:** `src/agent/pipeline.py` (~454 lines)
+**File:** `src/agent/pipeline.py` (~622 lines)
 
-The pipeline is the automated manufacturing process triggered by `submit_design()`. It executes 6 sequential steps, streaming progress events to the browser at each stage.
+The pipeline is the automated manufacturing process triggered by `submit_design()`. It executes 8 sequential steps, streaming progress events to the browser at each stage.
 
-### `run_pipeline(outline, button_positions, emit, output_dir, *, curve params) → result dict`
+### `run_pipeline(outline, button_positions, emit, output_dir, *, outline_type, curve params) → result dict`
 
 ### Step 0 — Normalize
 - Assigns default IDs/labels to buttons if missing
 - Strips duplicate closing vertex (if first == last)
+- If `outline_type` is `"ellipse"`, generates a 32-vertex ellipse inscribed in the bounding rectangle using `generate_ellipse()`
+- If `outline_type` is `"racetrack"`, generates a stadium shape using `generate_racetrack()`
+- For standard polygons, runs `smooth_polygon()` which uses Chaikin’s corner-cutting subdivision: if ≥70% of interior angles exceed 130° (i.e., the polygon looks like a coarsely-approximated curve), applies 3 iterations of subdivision (8 verts → 64 verts). Shapes with intentional sharp corners (rectangles, diamonds) are left alone.
 - Shifts outline + buttons so bottom-left is at origin (0, 0)
 
 ### Step 1 — Validate Outline
@@ -452,6 +542,7 @@ Calls `_place_and_route()`:
 - `generate_battery_hatch_scad()` → standalone hatch SCAD
 - `generate_print_plate_scad()` → legacy import-based SCAD (unused)
 - All three files written to the output directory
+- **Instant 3D preview:** Emits a `shell_preview` event with lightweight component info for client-side rendering before the slow STL compile begins
 
 ### Step 6 — Compile STL + Merge
 - Compiles `enclosure.scad` and `battery_hatch.scad` via OpenSCAD CLI (600s timeout each)
@@ -461,6 +552,23 @@ Calls `_place_and_route()`:
   - Translates the hatch 80mm to the right on the X axis
   - Writes a merged binary STL
 - Emits the print plate as the 3D model (falls back to enclosure-only if merge fails)
+
+### Step 7 — Slice & Generate Custom G-code
+If the enclosure STL was compiled successfully and PrusaSlicer is installed:
+- Calls `run_gcode_pipeline()` from `src/gcode/pipeline.py`
+- Slices `print_plate.stl` (preferring the combined model) via PrusaSlicer CLI
+- Computes ink and component insertion pause Z-heights
+- Generates conductive ink deposition G-code from routing data
+- Post-processes the slicer output to inject pauses, filter ironing, add trace highlights
+- Converts to Prusa Binary G-code (`.bgcode`) with STL-rendered thumbnails
+- Emits `gcode_ready` event with all metadata
+- **Non-fatal:** If PrusaSlicer is not installed or slicing fails, the pipeline continues and only logs a warning
+
+### Step 8 — Generate Firmware + Save Manifest
+- Builds pin mapping from the routing result via `build_pin_mapping()`
+- Generates a customized Arduino sketch via `generate_firmware(pin_mapping)` with the actual routed pin assignments
+- Saves `PIN_ASSIGNMENT_REPORT.txt` for debugging
+- Saves `manifest.json` with all output file paths and G-code metadata
 
 ### Success Response
 ```python
@@ -473,11 +581,18 @@ Calls `_place_and_route()`:
         {"button_id": "btn_1", "label": "Power", "signal_net": "btn_1_SIG", "controller_pin": "PD2"},
         ...
     ],
+    "firmware_path": "outputs/web/run_.../firmware/UniversalIRRemote.ino",
+    "gcode": {
+        "staged_gcode": "outputs/web/run_.../enclosure_staged.gcode",
+        "ink_layer_z": 3.0,
+        "component_z": 14.5,
+        "total_layers": 82,
+    },
     "top_curve_length": 2.0,
     "top_curve_height": 3.0,
     "bottom_curve_length": 1.5,
     "bottom_curve_height": 2.0,
-    "message": "Design manufactured successfully! 3 STL models generated."
+    "message": "Design manufactured successfully! 3 STL models generated. Firmware generated with PCB pin assignments. Custom G-code with print pauses generated."
 }
 ```
 
@@ -810,9 +925,261 @@ Used by the pipeline to create `print_plate.stl` (enclosure at origin + hatch tr
 
 ---
 
+## G-code Pipeline
+
+**File:** `src/gcode/pipeline.py` (~165 lines)
+
+The G-code pipeline orchestrator — the single entry point that the manufacturing pipeline and web server call for all slicing and post-processing. It runs the full **slice → post-process → convert** flow.
+
+### `run_gcode_pipeline(stl_path, output_dir, pcb_layout, routing_result, ...) → GcodePipelineResult`
+
+**Steps:**
+1. **Determine printer** — Resolves the printer id to a `PrinterDef` (MK3S, MK3S+, or Core One). Each printer has a distinct bed size, slicer profile, and native PrusaSlicer profile names.
+2. **Compute pause points** — Calls `compute_pause_points()` to determine the ink layer Z-height (top of solid floor, Z=3.0mm) and component insertion Z-height (Z=14.5mm), snapped to layer boundaries.
+3. **Prefer print_plate.stl** — If a merged `print_plate.stl` exists (enclosure + battery hatch), slices that instead of the enclosure alone.
+4. **Slice via PrusaSlicer CLI** — Invokes `prusa-slicer-console --export-gcode` with the appropriate profile. Output: `enclosure_raw.gcode`.
+5. **Generate ink deposition G-code** — Converts trace routing data to G-code move commands for conductive ink.
+6. **Extract trace segments** — Pulls trace path segments for the ironing filter and highlight pass.
+7. **Compute bed offset** — PrusaSlicer auto-centres the model on the bed; computes `(dx, dy)` offset from model-local coords to bed coords so trace/ink coordinates match the sliced model.
+8. **Post-process** — Injects pauses, filters ironing, adds trace highlights, recalculates M73 progress. Output: `enclosure_staged.gcode`.
+9. **Convert to Binary G-code** — Produces `enclosure_staged.bgcode` with CRC32 checksums and STL-rendered thumbnails.
+
+### `GcodePipelineResult`
+```python
+@dataclass
+class GcodePipelineResult:
+    success: bool
+    message: str
+    raw_gcode_path: Path | None       # PrusaSlicer output
+    staged_gcode_path: Path | None    # Post-processed with pauses
+    bgcode_path: Path | None          # Binary G-code
+    pause_points: PausePoints | None
+    postprocess: PostProcessResult | None
+    stages: list[str]                 # Human-readable log of each step
+```
+
+---
+
+## PrusaSlicer Bridge
+
+**File:** `src/gcode/slicer.py` (~395 lines)
+
+Finds and invokes PrusaSlicer's CLI (`prusa-slicer-console`) to slice STL models into G-code. Supports multiple printers with distinct profiles.
+
+### Multi-Printer Support
+
+```python
+PRINTERS = {
+    "mk3s": PrinterDef(id="mk3s", label="Prusa MK3S", bed=250×210, profile="slicer_profile.ini"),
+    "mk3s_plus": PrinterDef(id="mk3s_plus", label="Prusa i3 MK3S+", bed=250×210, profile="slicer_profile_mk3s_plus.ini"),
+    "coreone": PrinterDef(id="coreone", label="Prusa Core One+", bed=250×220, profile="slicer_profile_coreone.ini",
+                          native_printer="Prusa CORE One HF0.4 nozzle",
+                          native_print="0.20mm BALANCED @COREONE HF0.4",
+                          native_material="Prusament PLA @COREONE HF0.4"),
+}
+```
+
+For the Core One, the slicer uses PrusaSlicer's **built-in native profiles** (via `--printer-profile`, `--print-profile`, `--material-profile` flags) overlaid with a custom `.ini` file (via `--load`) that applies overrides like:
+- `binary_gcode = 0` — Forces ASCII output so the post-processor can manipulate the text (the pipeline converts to binary afterwards)
+- Ironing enabled at 15% flow, 15mm/s
+- Thumbnail generation for the Core One's LCD display
+
+For MK3S/MK3S+, complete standalone `.ini` profiles are provided (no built-in profile dependency).
+
+### `slice_stl(stl_path, output_gcode, profile_path, *, printer) → (ok, message, gcode_path)`
+
+Auto-creates default profiles on first use if they don't exist. Runs PrusaSlicer with a 300-second timeout.
+
+### `find_prusaslicer() → str | None`
+
+Searches PATH and common Windows install locations for `prusa-slicer-console.exe`.
+
+---
+
+## G-code Post-Processor
+
+**File:** `src/gcode/postprocessor.py` (~1020 lines)
+
+The core of the G-code customization. Reads slicer G-code line by line, watches for PrusaSlicer's layer-change markers (`;LAYER_CHANGE` / `;Z:3.200` / `;HEIGHT:0.2`), and injects custom blocks at the correct Z-heights.
+
+### Multi-Stage Print Sequence
+
+The post-processor implements the following print stages (bottom to top):
+
+```
+Stage 1: Print floor layers (Z = 0 → 3.0mm)
+         PrusaSlicer irons the top floor surface (ironing ON)
+         ↓ Ironing over trace channels is suppressed
+         ↓ Trace highlight pass: single-width filament lines over channels
+Stage 2: M601 PAUSE — deposit conductive ink into trace channels
+         ↓ Ink deposition G-code (generated from routing data)
+         M601 PAUSE — allow ink to cure
+Stage 3: Print cavity walls (Z = 3.0mm → 14.5mm)
+         ↓ All ironing stripped from these layers (saves ~40% time)
+Stage 4: M601 PAUSE — insert electronic components
+         ↓ User places IR diode, tactile switches, ATmega328P
+Stage 5: Print ceiling to completion (Z = 14.5mm → 16.5mm)
+         ↓ Ironing stripped here too
+```
+
+### Key Operations
+
+**Ironing filter at ink layer:**
+Instead of deleting ironing moves over traces (which would corrupt E-counter continuity), extrusion moves (G1) crossing trace channels are converted to travel moves (G0). The nozzle follows the same path without extruding, leaving trace channels un-ironed for clean ink adhesion. Uses point-to-segment distance sampling to detect proximity.
+
+**Ironing stripping from non-ink layers:**
+Ironing on the outer shell, cavity walls, and ceiling is purely cosmetic and wastes ~40% of total print time. The post-processor strips all `; TYPE:Ironing` sections from layers other than the ink layer, along with their retract/travel preambles and postambles. When another print section follows the stripped ironing, the post-processor emits clean retract/travel/unretract sequences to maintain proper nozzle positioning.
+
+**Trace highlight extrusion pass:**
+After suppressing ironing over traces, a single-extrusion-width pass is generated along every trace path. This prints a thin filament line directly over each trace channel so they're visually marked. Includes commented-out `M600` filament change commands for using a contrasting color. Uses M83 relative E distances with proper retraction between polylines.
+
+**M73 recalculation:**
+After ironing is stripped, the original M73 progress/remaining-time commands no longer reflect reality. The post-processor counts total G0/G1 moves, computes what fraction preceded each M73 command, and recalculates P (progress %) and R (remaining minutes) values. Also updates the `estimated printing time` metadata in the footer.
+
+**Bed offset correction:**
+PrusaSlicer auto-centres the model on the build plate. All trace/ink coordinates are in model-local space. The post-processor shifts all ink G-code and trace segment coordinates by `(bed_centre - model_bbox_centre)` so they align with the sliced model.
+
+**M601 pause blocks:**
+Each pause inserts a block with:
+- Descriptive comments explaining what the user should do
+- `M601` command (Prusa firmware: retracts, parks head, beeps, shows LCD prompt, waits for knob press)
+
+### `postprocess_gcode(gcode_path, output_path, ink_z, component_z, ...) → PostProcessResult`
+
+---
+
+## Pause Points
+
+**File:** `src/gcode/pause_points.py` (~90 lines)
+
+Computes the two critical Z-heights where the print must pause, based on the enclosure's Z-layer stack (must match `cutouts.py`).
+
+### `compute_pause_points(shell_height, layer_height) → PausePoints`
+
+```python
+@dataclass
+class PausePoints:
+    ink_layer_z: float          # 3.0mm (top of solid floor) — iron this, then deposit ink
+    component_insert_z: float   # 14.5mm (top of cavity) — insert components here
+    total_height: float         # 16.5mm
+    layer_height: float         # 0.2mm
+    ink_layer_number: int       # Layer 15
+    component_layer_number: int # Layer 72
+```
+
+Z-heights are snapped down to the nearest layer boundary (e.g., `floor(z / layer_h) * layer_h`).
+
+---
+
+## Conductive Ink Toolpaths
+
+**File:** `src/gcode/ink_traces.py` (~206 lines)
+
+Converts trace routing data (grid-coordinate paths from the TypeScript router) into G-code move commands for conductive ink deposition.
+
+### `generate_ink_gcode(routing_result, pcb_layout, ink_z) → list[str]`
+
+For each routed trace:
+1. Converts grid coordinates to mm using `grid_resolution` (0.5mm) and the board outline origin offset
+2. Simplifies the path to direction-change points only (removes collinear intermediates)
+3. Generates G-code:
+   - Retracts filament to prevent ooze during long travels
+   - Rapid travel (G0) to trace start position (lifted by Z-hop of 1.0mm)
+   - Lowers to ink Z
+   - Linear moves (G1) along the trace path at 300 mm/min (slow for controlled deposition)
+   - Lifts after each trace
+
+### `extract_trace_segments(routing_result, pcb_layout) → list[(x1, y1, x2, y2)]`
+
+Returns trace paths as line segments in mm, used by the post-processor for ironing filtering and trace highlight generation.
+
+### Ink Deposition Constants
+- Travel speed: 3000 mm/min (fast non-dispensing moves)
+- Draw speed: 300 mm/min (slow dispensing)
+- Z-hop: 1.0mm between traces
+
+---
+
+## Binary G-code Converter
+
+**File:** `src/gcode/bgcode.py` (~543 lines)
+
+Pure-Python implementation of the Prusa Binary G-code specification (version 1). Converts the post-processed ASCII `.gcode` into `.bgcode` so Prusa printers (especially the Core One) accept it without compatibility warnings.
+
+### Why Binary G-code?
+The Prusa Core One firmware expects `.bgcode` files. While it can read ASCII G-code, it shows compatibility warnings. The binary format also supports embedded thumbnails and structured metadata that the printer's LCD can display.
+
+### Format Structure
+```
+File header (10 bytes): magic "GCDE" + version 1 + CRC32 checksum type
+File metadata block: Producer, timestamp
+Printer metadata block: printer_model, temperatures, filament info
+Thumbnail blocks: PNG images at 220×124 and 16×16 (for LCD display)
+Print metadata block: filament usage, estimated time
+Slicer metadata block: all PrusaSlicer settings
+G-code blocks: raw G-code split into ≤640KB chunks
+```
+
+Each block has: `type(2) + compression(2) + uncompressed_size(4) + compressed_size(4) + payload + CRC32(4)`.
+
+### STL Thumbnail Rendering
+If no thumbnails exist in the source G-code (which happens when we override `binary_gcode=0`), the converter renders thumbnails from the STL model using NumPy + Pillow:
+- Parses the binary STL to extract triangle vertices and face normals
+- Applies an isometric projection (45° Z rotation + 30° X tilt)
+- Renders filled triangles with normal-based shading
+- Outputs 220×124 and 16×16 PNG thumbnails
+
+### `gcode_to_bgcode(gcode_path, bgcode_path, *, stl_path) → Path`
+
+### `_parse_ascii_gcode(text) → dict`
+Parses an ASCII G-code file into structured components:
+- File metadata (producer, version)
+- Printer metadata (model, temperatures, nozzle)
+- Print metadata (filament usage, estimated time)
+- Slicer metadata (full `prusaslicer_config` section)
+- Thumbnails (base64-decoded from embedded comment blocks)
+- G-code lines (everything else)
+
+---
+
+## Firmware Generator
+
+**File:** `firmware/firmware_generator.py` (~337 lines)
+
+Takes the pin mapping from the PCB router and generates an updated Arduino sketch with the correct pin definitions based on how the traces were actually routed.
+
+### How It Works
+
+1. **Read template:** Loads `firmware/UniversalIRRemote.ino` — a complete Arduino IR remote sketch with placeholder pin definitions
+2. **Parse pin mapping:** The router output maps each button/diode to an ATmega328P port name (e.g., `PD2`, `PB3`)
+3. **Convert ports to Arduino pins:** Uses lookup tables:
+   - Port D → Arduino 0-7 (PD0→0, PD1→1, ..., PD7→7)
+   - Port B → Arduino 8-13 (PB0→8, ..., PB5→13)
+   - Port C → Arduino 14-19 (PC0→14, ..., PC5→19)
+4. **Map button labels to firmware variables:** Normalizes labels like "Power" → `POWER_BTN`, "Vol+" → `VOL_UP_BTN`, "CH3" → `CH3_BTN`
+5. **IR LED pin validation:** Checks that the IR LED is assigned to a PWM-capable pin (3, 5, 6, 9, 10, 11) — required for the 38kHz carrier signal
+6. **Status LED pin:** Auto-assigns pin 13 (or next available) for the status LED
+7. **Replace in template:** Uses regex to find the `// PIN DEFINITIONS` block and replaces it with auto-generated `#define` statements
+8. **Write output:** Saves the generated `.ino` to the run's `firmware/` directory
+
+### `generate_firmware(pin_mapping, output_path, *, status_led_pin) → str`
+
+### `generate_pin_assignment_report(pin_mapping) → str`
+Produces a human-readable table mapping component → label → ATmega port → Arduino pin → physical DIP-28 pin number.
+
+### Template: `UniversalIRRemote.ino`
+A complete Arduino sketch for a universal IR remote control that:
+- Scans for and learns IR codes from any remote
+- Transmits learned codes on button press
+- Supports power, volume, channel buttons, and a "brand scan" mode
+- Uses the IRremote library for 38kHz IR carrier generation
+- Stores learned codes in EEPROM
+
+---
+
 ## Polygon Geometry
 
-**File:** `src/geometry/polygon.py` (~275 lines)
+**File:** `src/geometry/polygon.py` (~470 lines)
 
 Pure-Python polygon utilities. No external dependencies (except that `inset_polygon` is a simpler fallback; the main code uses Shapely).
 
@@ -827,6 +1194,19 @@ Pure-Python polygon utilities. No external dependencies (except that `inset_poly
 | `segments_intersect(a1, a2, b1, b2)` | Checks if two line segments properly intersect |
 | `validate_outline(outline, ...)` | Full outline validation (area, self-intersection, button clearance) |
 | `inset_polygon(outline, margin)` | Approximate inward polygon offset (moves each edge inward) |
+| `generate_ellipse(width, length, n=32)` | Generates an *n*-vertex ellipse inscribed in a bounding box, CCW, origin at bottom-left |
+| `generate_racetrack(width, length, n_cap=16)` | Generates a stadium-shaped polygon (straight sides + semicircular ends) |
+| `smooth_polygon(outline, *, iterations, max_vertices, angle_threshold)` | Chaikin subdivision smoothing for coarsely-approximated curves |
+
+### `smooth_polygon` — Automatic Curve Refinement
+
+Designed for LLM-generated outlines that attempt rounded/oval shapes but only produce 6–20 vertices (resulting in visible faceting). The algorithm:
+1. Computes interior angles at every vertex using `_interior_angle()`
+2. If ≥ 70% of angles exceed 130° (the polygon looks like a coarse circle/ellipse), applies Chaikin's corner-cutting subdivision
+3. Each Chaikin iteration replaces each edge with two new points at 25% and 75%, doubling the vertex count
+4. After 3 iterations: 8 vertices → 16 → 32 → 64 vertices (smooth)
+5. Polygons with intentional sharp corners (rectangles, diamonds, T-shapes) are detected by their low "smooth ratio" and left untouched
+6. Caps at `max_vertices=128` to avoid excess geometry
 
 ### `validate_outline`
 Returns a list of error strings (empty = valid):
@@ -927,6 +1307,21 @@ hw.router_manufacturing()  # TypeScript router format
 
 ### `configs/default_params.json`
 Legacy configuration from an older design system. Contains default remote dimensions, button layouts, electronics placement, and wiring parameters. Not actively used by the current pipeline — `base_remote.json` is the active config.
+
+### `configs/materials.json`
+Material database used by the slicer bridge to look up temperature and flow settings. Contains entries for PLA, PETG, TPU, etc. Each material specifies nozzle temperature, bed temperature, retraction distance, and flow multiplier.
+
+### Slicer Profile Files
+
+Three printer-specific PrusaSlicer CLI profiles live in `configs/`:
+
+| File | Printer | Key differences |
+|---|---|---|
+| `slicer_profile.ini` | MK3S (original) | Marlin G-code, 250×210 bed, `M862.3 P "MK3S"` check |
+| `slicer_profile_mk3s_plus.ini` | MK3S+ | Marlin G-code, 250×210 bed, `M862.3 P "MK3S+"` check |
+| `slicer_profile_coreone.ini` | Core One | Marlin2 G-code, 250×220 bed, `M862.3 P "CoreOne"` check, no `M221 S95` |
+
+All profiles share the same layer/speed/temperature settings (0.2mm layers, 215°C PLA, 60°C bed, 15% infill). The only differences are the printer model check in start G-code, bed dimensions, and firmware-specific commands. These profiles are selected automatically by `slicer.py` based on the printer model chosen at slice time.
 
 ---
 
@@ -1086,6 +1481,7 @@ The user communicates with the LLM in natural language. The LLM interprets the u
 | What the user says | What the LLM translates it to | `submit_design` parameter | Type | Example |
 |---|---|---|---|---|
 | Shape description ("oval", "diamond", "T-shape", "classic remote") | A polygon outline — list of [x, y] vertices in mm, CCW winding | `outline` | `[[x,y], ...]` | `[[5,0],[40,0],[45,10],[45,140],[40,150],[5,150],[0,140],[0,10]]` |
+| Shape type ("ellipse", "racetrack", "custom polygon") | Sets `outline_type` to generate mathematically smooth shapes | `outline_type` | `string` | `"ellipse"`, `"racetrack"`, `"polygon"` |
 | Overall dimensions ("50mm wide and 150mm long") | The outline vertices are scaled to match | `outline` (implicit) | — | Width mapped to X axis, length to Y axis |
 | Number of buttons ("5 buttons") | Button position objects with auto-generated IDs and labels | `button_positions` | `[{id, label, x, y}]` | `[{id:"btn_1", label:"Button 1", x:25, y:30}, ...]` |
 | Button labels ("Power, Vol+, Vol−, CH+, CH−") | The `label` field on each button object | `button_positions[].label` | `string` | `"Power"`, `"Vol+"` |
@@ -1103,6 +1499,9 @@ After a design is generated, the user has additional interactive controls:
 | **Bottom edge profile** | Curve editor widget (Bottom tab) | Adjusts `bottom_curve_length` and `bottom_curve_height` | `POST /api/update_curve` |
 | **Iterate on design** | Chat ("make it wider", "add a button", "change to diamond shape") | LLM redesigns and resubmits with new parameters | `POST /api/generate/stream` |
 | **Download STL** | Download button | Downloads the compiled print plate STL | `GET /api/model/download/{name}` |
+| **Move components** | Realign mode (drag on canvas) | Pauses pipeline, lets user reposition layout, then resumes | `POST /api/realign/pause`, `POST /api/update_layout`, `POST /api/realign/resume` |
+| **Slice & G-code** | Slice button | Generates printer-ready G-code (select printer model) | `POST /api/slice` |
+| **Download G-code** | Download G-code button | Downloads ASCII or binary G-code | `GET /api/gcode/download/{name}` |
 | **Reset** | Reset button | Clears conversation and starts fresh | `POST /api/reset` |
 
 ### Parameters the User Does NOT Control
@@ -1122,6 +1521,10 @@ These are determined entirely by the automated pipeline and hardware configurati
 | Button hole diameter | 13mm | Fixed for push-button switch cap fit |
 | Pinhole dimensions | 0.7mm shaft, 1.2mm taper | Fixed for DIP pin press-fit |
 | Trace width / clearance | 1.5mm / 2.0mm | Fixed for conductive filament reliability |
+| G-code pause heights | ink Z=3.0mm, component Z=14.5mm | Computed from floor/ceiling/cavity dimensions |
+| Slicer profile | Per-printer .ini file (MK3S / MK3S+ / Core One) | Tuned per printer model for correct hardware offsets |
+| Ironing removal | Automatic for trace/pause layers | Ironing interferes with ink deposition — auto-filtered |
+| Firmware pin assignment | Auto from routed PCB | Arduino pins assigned from routing result |
 | Material / colour | Whatever filament is loaded in the 3D printer | Not controllable via software |
 
 ### The `submit_design` Function Signature
@@ -1132,6 +1535,7 @@ This is the complete interface between the LLM and the manufacturing pipeline �
 submit_design(
     outline:              [[x, y], ...]     # REQUIRED — polygon shape (6+ vertices, CCW, mm)
     button_positions:     [{id, label, x, y}, ...]  # REQUIRED — button locations
+    outline_type:         string            # OPTIONAL — "polygon" (default), "ellipse", or "racetrack"
     top_curve_length:     float             # OPTIONAL — top edge inset (mm), default 0
     top_curve_height:     float             # OPTIONAL — top edge vertical extent (mm), default 0
     bottom_curve_length:  float             # OPTIONAL — bottom edge inset (mm), default 0
@@ -1139,7 +1543,7 @@ submit_design(
 )
 ```
 
-The LLM always provides defaults for the curve parameters (`top: 2mm/3mm`, `bottom: 1.5mm/2mm`) unless the user explicitly asks for flat edges. The user never needs to know about vertices, coordinates, or curve parameters — the LLM translates natural language ("a long thin oval with 4 buttons") into the exact geometry.
+When `outline_type` is `"ellipse"` or `"racetrack"`, the `outline` field only needs to be a simple bounding rectangle (e.g., `[[0,0],[50,0],[50,150],[0,150]]`). The pipeline generates the actual smooth shape mathematically — the LLM never needs to compute trigonometry.
 
 ### Examples of User Intent → LLM Translation
 
@@ -1160,6 +1564,84 @@ The LLM always provides defaults for the curve parameters (`top: 2mm/3mm`, `bott
 
 ---
 
+## Multi-Stage Print Process
+
+The G-code post-processor transforms a standard single-material print into a **multi-stage manufacturing process** that interleaves 3D printing with manual operations. The printer pauses at specific heights (injected as `M601` commands), and the operator performs tasks before resuming.
+
+### Print Stages (Bottom to Top)
+
+```
+Z = 0.0 mm   ┌──────────────────────────────────────────┐
+              │  STAGE 1: Print floor (3.0mm thick)      │
+              │  Standard PLA, no pauses                 │
+              │  Creates the flat base with trace         │
+              │  channels recessed into the top surface   │
+Z = 3.0 mm   ├──────────────────────────────────────────┤
+              │  ◆ PAUSE 1 — Conductive Ink Deposition   │
+              │  Printer stops (M601). Ironing removed   │
+              │  on this layer. Ink G-code deposited:     │
+              │  conductive filament traces fill the      │
+              │  channels at Z=3.0mm.                     │
+              │                                          │
+              │  Operator action: Switch to conductive    │
+              │  filament (or let auto-toolpath run),     │
+              │  then resume print.                       │
+              ├──────────────────────────────────────────┤
+              │  STAGE 2: Print cavity walls              │
+              │  (Z = 3.0 → 14.5mm)                      │
+              │  Walls rise around the component pockets. │
+              │  Traces are now encapsulated under walls. │
+Z = 14.5 mm  ├──────────────────────────────────────────┤
+              │  ◆ PAUSE 2 — Component Insertion          │
+              │  Printer stops (M601). All pockets are    │
+              │  now open from above.                     │
+              │                                          │
+              │  Operator action: Insert battery holder,  │
+              │  ATmega328P, IR diode, tactile buttons    │
+              │  into their respective pockets. Push DIP  │
+              │  pins through pinholes into trace pads.   │
+              ├──────────────────────────────────────────┤
+              │  STAGE 3: Print ceiling (1.5mm thick)     │
+              │  Bridges over components and pockets.     │
+              │  Button holes remain open. Battery hatch  │
+              │  area remains open.                       │
+Z = 16.5 mm  └──────────────────────────────────────────┘
+```
+
+### How Pauses Are Computed
+
+The `compute_pause_points()` function in [src/gcode/pause_points.py](src/gcode/pause_points.py) calculates the exact Z heights from the enclosure dimensions in `base_remote.json`:
+
+- **Ink pause:** `floor_thickness` = 3.0mm — the top of the floor where trace channels are exposed
+- **Component pause:** `floor_thickness + cavity_height - ceiling_thickness` = 3.0 + 12.0 − 0.5 = 14.5mm — just before the ceiling starts printing
+
+### What Happens at Each Pause
+
+**Pause 1 (ink, Z=3.0mm):**
+1. Printer executes `M601` (filament change / pause)
+2. Ironing moves on this layer have been pre-filtered by the post-processor (ironing would smear wet ink)
+3. Conductive ink G-code (generated by `ink_traces.py`) is spliced into this layer
+4. The ink toolpath traces follow the same paths the router computed, but at a specific Z height, extrusion width, and flow rate for conductive filament
+5. Operator resumes → print continues upward with standard PLA
+
+**Pause 2 (components, Z=14.5mm):**
+1. Printer executes `M601`
+2. All component pockets are now open cavities — walls printed, no ceiling yet
+3. Operator inserts: battery holder (25×48mm pocket), ATmega328P (DIP-28 pocket with 56 pinholes), IR LED (top center pocket), tactile switches (each in their 6×6mm pocket with 4 pinholes)
+4. DIP pins push through 0.7mm pinholes into the conductive trace pads below, creating electrical connections
+5. Operator resumes → ceiling prints over the top, encapsulating all components
+
+### Post-Processing Steps at Each Layer
+
+The post-processor doesn't just insert pauses — it also:
+
+- **Removes ironing** from the ink layer (ironing pass would drag through wet conductive traces)
+- **Highlights trace regions** by adjusting extrusion parameters over trace channel areas (visual feedback)
+- **Recalculates M73 progress** after adding/removing lines so the printer's progress bar remains accurate
+- **Applies bed offset correction** for printers that need coordinate translation
+
+---
+
 ## Why Parametric Design
 
 ### The Core Argument
@@ -1171,11 +1653,12 @@ ManufacturerAI is fundamentally a **parametric design system** — every physica
 In traditional CAD, a designer manually draws or sculpts each part. In parametric design, the geometry is **computed from parameters**. The user provides a few high-level inputs (outline shape, button positions, curve values), and the system derives everything else:
 
 ```
-User parameters (6 values + polygon + button list)
+User parameters (6 values + polygon + button list + outline_type)
     │
     ▼
 ┌─────────────────────────────────────────────┐
 │  Pipeline computes:                         │
+│  • Shape normalization (ellipse/racetrack)  │
 │  • Component positions (scoring algorithm)  │
 │  • Electrical nets (pin assignment rules)   │
 │  • Trace paths (A* pathfinding)             │
@@ -1184,10 +1667,15 @@ User parameters (6 values + polygon + button list)
 │  • Battery hatch (from config dimensions)   │
 │  • Pinholes (from component footprints)     │
 │  • Print plate (STL merge)                  │
+│  • G-code (slicing + post-processing)       │
+│  • Conductive ink toolpaths                 │
+│  • Binary G-code (for Core One)             │
+│  • Arduino firmware (pin assignments)       │
 └─────────────────────────────────────────────┘
     │
     ▼
-Complete 3D-printable STL (tens of thousands of triangles)
+Complete manufacturing package:
+  STL + G-code + firmware (.ino)
 ```
 
 A single outline polygon with 8 vertices and 4 button positions generates an enclosure with 100+ cutouts, 56+ pinholes, trace channels, a battery compartment with spring-latch hatch, and fillet profiles — all dimensionally correct and ready to print.
@@ -1221,18 +1709,24 @@ Each layer in the system is parametric — its output is fully determined by its
 
 | Layer | Input | Output |
 |---|---|---|
-| **LLM** | User's natural language | `outline`, `button_positions`, `curve_params` |
+| **LLM** | User's natural language | `outline`, `button_positions`, `outline_type`, `curve_params` |
 | **Validator** | outline, buttons | Pass/fail with error messages |
+| **Shape normalizer** | outline, outline_type | Final polygon (ellipse/racetrack/smoothed/raw) |
 | **Placer** | outline, buttons | `pcb_layout` (all component positions) |
 | **Router** | pcb_layout | `routing_result` (all trace paths) |
 | **Cutout builder** | pcb_layout, routing_result | `cutouts[]` (polygon + depth + z for each) |
 | **SCAD generator** | outline, cutouts, curve_params | OpenSCAD source code (text) |
 | **OpenSCAD** | SCAD source | STL mesh (binary) |
 | **STL merger** | enclosure.stl, hatch.stl | print_plate.stl |
+| **PrusaSlicer** | print_plate.stl, printer profile | ASCII G-code |
+| **Post-processor** | ASCII G-code, routing_result, pause heights | Modified G-code with pauses + ink paths |
+| **Binary converter** | ASCII G-code, STL (for thumbnail) | Binary .bgcode (Core One only) |
+| **Firmware generator** | routing_result (pin assignments) | Arduino .ino source file |
 
 No layer has hidden state. No layer remembers previous runs. Given the same inputs, every layer produces the same output. This means:
-- The curve editor can re-run layers 5-7 without re-running 1-4
-- A failed routing can be reported to the LLM which adjusts layers 1-2 and the pipeline re-runs from scratch
+- The curve editor can re-run the SCAD/STL layers without re-running placement/routing
+- A failed routing can be reported to the LLM which adjusts the outline/buttons and the pipeline re-runs from scratch
+- Re-slicing for a different printer only re-runs the G-code layers (PrusaSlicer → post-processor → binary converter)
 - Any future component (e.g., a speaker, an LED strip) can be added to the placer and cutout builder without changing the SCAD generator — cutouts are generic polygons
 
 ### What This Enables
@@ -1240,6 +1734,8 @@ No layer has hidden state. No layer remembers previous runs. Given the same inpu
 - **Infinite design variety** — Any polygon the LLM can imagine (within printer limits) becomes a functional remote control
 - **AI-driven iteration** — The LLM can generate, fail, adjust, and retry entirely within the parameter space, without needing to understand mesh geometry
 - **Real-time edge tuning** — The curve editor updates 2 numbers and the entire enclosure recompiles, because the shell is parametrically defined by those numbers
+- **End-to-end manufacturing** — From natural language to printer-ready G-code and compiled firmware, with zero manual CAD steps
+- **Multi-printer support** — The same STL flows through different slicer profiles to produce correct G-code for MK3S, MK3S+, or Core One
 - **Separation of concerns** — The LLM knows nothing about SCAD, OpenSCAD, pinholes, or trace routing. The SCAD generator knows nothing about the LLM. Each module is a pure function from parameters to output.
 - **Reproducibility** — Every design can be recreated from its `pcb_layout.json` + `routing_result.json` + curve parameters. The output is deterministic.
 - **Future extensibility** — Adding a new component type (e.g., a buzzer) requires: adding its footprint to `base_remote.json`, adding placement logic to `placer.py`, adding cutout logic to `cutouts.py`, and adding pad extraction to `routability.py`. No existing module changes structurally — they already operate on generic component lists and cutout lists.

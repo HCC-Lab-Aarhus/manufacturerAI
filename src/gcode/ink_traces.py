@@ -87,8 +87,6 @@ def generate_ink_gcode(
     # Retract filament first to prevent ooze during long travels
     lines.append("G1 E-0.80000 F2700 ; retract before ink travels")
     lines.append(f"G0 Z{ink_z + z_hop:.3f} F{travel_speed}")
-    lines.append("G91 ; relative positioning")
-    lines.append("G90 ; back to absolute")
 
     for trace in traces:
         net = trace.get("net", "unknown")

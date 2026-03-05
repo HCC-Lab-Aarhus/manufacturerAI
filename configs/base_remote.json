@@ -30,13 +30,24 @@
       "keepout_padding_mm": 4.0
     },
     "battery": {
-      "type": "2xAAA",
+      "type": "2xAA",
       "pad_spacing_mm": 6.0,
-      "holder_width_mm": 12.0,
-      "holder_height_mm": 45.0,
+      "holder_width_mm": 14.5,
+      "holder_height_mm": 50.5,
       "holder_padding_mm": 2.0,
-      "compartment_width_mm": 25.0,
-      "compartment_height_mm": 48.0
+      "compartment_width_mm": 27.0,
+      "compartment_height_mm": 50.0,
+      "conductor_plate": {
+        "type": "double",
+        "width_mm": 27.0,
+        "length_mm": 12.0,
+        "thickness_mm": 0.3,
+        "positive_depth_mm": 1.5,
+        "negative_spring_depth_mm": 10.5,
+        "spring_compressed_mm": 3.0,
+        "slit_clearance_mm": 0.0,
+        "slit_depth_into_wall_mm": 1.0
+      }
     },
     "diode": {
       "type": "IR_LED_5mm",
@@ -56,13 +67,27 @@
     "pinhole_taper_depth_mm": 0.5
   },
 
+  "button_cap": {
+    "cap_thickness_mm": 2.0,
+    "stem_width_mm": 3.0,
+    "stem_height_mm": 5.3,
+    "clip_thickness_mm": 0.8,
+    "clip_width_mm": 2.0,
+    "switch_head_top_mm": 1.5,
+    "switch_head_bottom_mm": 1.2,
+    "switch_head_top_height_mm": 1.0,
+    "switch_head_bottom_height_mm": 1.0,
+    "clip_clearance_mm": 0.2,
+    "hole_clearance_mm": 0.3
+  },
+
   "enclosure": {
     "wall_thickness_mm": 1.6,
     "bottom_thickness_mm": 3.0,
     "top_thickness_mm": 1.5,
     "pcb_clearance_mm": 0.3,
     "corner_radius_mm": 3.0,
-    "shell_height_mm": 12.0,
+    "shell_height_mm": 15.0,
     "battery_guard_wall_mm": 1.2,
     "battery_hatch_thickness_mm": 1.5,
     "battery_hatch_clearance_mm": 0.3,

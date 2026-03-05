@@ -61,7 +61,7 @@ def test_controller_orientation_on_narrow_rect():
         {"id": "btn_1", "label": "Button 1", "x": 17.5, "y": 80},
         {"id": "btn_2", "label": "Button 2", "x": 42.5, "y": 80},
     ]
-    layout = place_components_optimal(outline, buttons, battery_type="2xAAA")
+    layout = place_components_optimal(outline, buttons, battery_type="2xAA")
     ctrl = [c for c in layout["components"] if c["type"] == "controller"]
     assert len(ctrl) == 1, "Controller not placed"
     rot = ctrl[0].get("rotation_deg", 0)
@@ -81,7 +81,7 @@ def test_controller_placement_on_ellipse():
         {"id": "btn_1", "label": "Button 1", "x": 17.5, "y": 80},
         {"id": "btn_2", "label": "Button 2", "x": 42.5, "y": 80},
     ]
-    layout = place_components_optimal(outline, buttons, battery_type="2xAAA")
+    layout = place_components_optimal(outline, buttons, battery_type="2xAA")
     ctrl = [c for c in layout["components"] if c["type"] == "controller"]
     assert len(ctrl) == 1, "Controller not placed"
     for c in layout["components"]:

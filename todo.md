@@ -40,7 +40,7 @@ DONE I THINK Add slider for how many edges the llm should output in the edge pol
 
 ?Router should be able to auto select mc pins and button pins during rip ups. Should just report back which pins were assigned to what, which i think there already is some functionality for. Take a look in the pcb folder, which is a optimized but older version of the ts T* router in the manufacturerAI folder. Implement the optimizations from that, but apply it to our current implementation in a way that it integrates properly?
 
-The web recompiles everytime you update the top and bottom edge profiles, there should be a way to hold it from recompiling, and then do it when you are satisfied with the changes. also if you dont change anything it shouldnt recompile. 
+KINDA DONE The web recompiles everytime you update the top and bottom edge profiles, there should be a way to hold it from recompiling, and then do it when you are satisfied with the changes. also if you dont change anything it shouldnt recompile. 
 
 The ability to make your own buttons and custom button shapes, then the button holes in the shell should match the custom button shapes. 
 
@@ -55,9 +55,13 @@ Make interface that tells you where to place things in the correct direction.
 
 DONT DO THIS figure out a way to make bgcode for the coreone
 
-Make a printer profile for the Prusa i3 mk3s+ to genereate correct gcode. 
+DONE Make a printer profile for the Prusa i3 mk3s+ to genereate correct gcode. 
 
 Negative PNG has to be 1536x1383 pixels.
+
+DONE It needs to ask for certain things when you send a prompt, it needs to know how big do you want the remote, what shape, how many buttons, and where should the buttons be placed. 
+
+LIFT THE HOLES or make canals for traceing make it a bread board
 
 
 # Long term

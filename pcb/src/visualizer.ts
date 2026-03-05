@@ -582,6 +582,6 @@ export class Visualizer {
       ? await this.renderComplete(traces, pads, options, componentBodies)
       : await this.renderGrid(options)
 
-    await sharp(buffer).toFile(path)
+    await sharp(buffer).rotate(180).toFile(path)
   }
 }

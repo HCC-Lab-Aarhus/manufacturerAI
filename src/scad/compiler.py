@@ -3,10 +3,18 @@ OpenSCAD compiler wrapper — runs openscad CLI for syntax checking and STL rend
 """
 
 from __future__ import annotations
+import logging
+import os
+import signal
 import struct
 import subprocess
 import shutil
+import sys
+import threading
+import time
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 def _find_openscad() -> str | None:
@@ -52,9 +60,42 @@ def check_scad(scad_path: Path) -> tuple[bool, str]:
         return False, str(e)
 
 
-def compile_scad(scad_path: Path, stl_path: Path | None = None) -> tuple[bool, str, Path | None]:
+def _kill_proc_tree(pid: int) -> None:
+    """Kill a process and all its children (Windows-safe)."""
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(pid)],
+                capture_output=True, timeout=10,
+            )
+        except Exception:
+            pass
+    else:
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        except Exception:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+
+
+def compile_scad(
+    scad_path: Path,
+    stl_path: Path | None = None,
+    cancel: threading.Event | None = None,
+    timeout: float = 600,
+) -> tuple[bool, str, Path | None]:
     """
     Compile an OpenSCAD file to STL.
+
+    Parameters
+    ----------
+    cancel : threading.Event, optional
+        When set, the running OpenSCAD process is killed and the
+        function returns immediately with a cancellation message.
+    timeout : float
+        Maximum seconds before killing OpenSCAD (default 600).
 
     Returns (ok, message, stl_path_or_none).
     """
@@ -66,20 +107,53 @@ def compile_scad(scad_path: Path, stl_path: Path | None = None) -> tuple[bool, s
         stl_path = scad_path.with_suffix(".stl")
 
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             [exe, "-o", str(stl_path), str(scad_path)],
-            capture_output=True,
-            text=True,
-            timeout=600,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
-        stderr = result.stderr.strip()
-        if result.returncode == 0 and stl_path.exists():
-            return True, stderr or "OK", stl_path
-        return False, stderr or f"OpenSCAD exited with code {result.returncode}", None
-    except subprocess.TimeoutExpired:
-        return False, "OpenSCAD timed out (600s).", None
     except Exception as e:
         return False, str(e), None
+
+    # Drain stderr in background thread to avoid pipe deadlock
+    stderr_chunks: list[bytes] = []
+
+    def _drain():
+        try:
+            while True:
+                chunk = proc.stderr.read(4096)  # type: ignore[union-attr]
+                if not chunk:
+                    break
+                stderr_chunks.append(chunk)
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_drain, daemon=True)
+    t.start()
+
+    # Poll loop — check for cancel / timeout
+    deadline = time.monotonic() + timeout
+    try:
+        while proc.poll() is None:
+            if cancel and cancel.is_set():
+                _kill_proc_tree(proc.pid)
+                proc.wait(timeout=5)
+                return False, "Cancelled.", None
+            if time.monotonic() > deadline:
+                _kill_proc_tree(proc.pid)
+                proc.wait(timeout=5)
+                return False, f"OpenSCAD timed out ({timeout:.0f}s).", None
+            time.sleep(0.25)
+    except Exception as e:
+        _kill_proc_tree(proc.pid)
+        return False, str(e), None
+
+    t.join(timeout=5)
+    stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace").strip()
+
+    if proc.returncode == 0 and stl_path.exists():
+        return True, stderr or "OK", stl_path
+    return False, stderr or f"OpenSCAD exited with code {proc.returncode}", None
 
 
 def _is_windows() -> bool:

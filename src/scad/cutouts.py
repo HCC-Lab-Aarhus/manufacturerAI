@@ -53,6 +53,37 @@ def _circle_poly(cx: float, cy: float, r: float, n: int = 16) -> list[list[float
     ]
 
 
+def _offset_polygon(
+    shape: list[list[float]],
+    offset: float,
+    cx: float = 0.0,
+    cy: float = 0.0,
+) -> list[list[float]]:
+    """Offset a polygon outward by *offset* mm using Shapely, then translate.
+
+    *shape* is centered at origin. The result is translated to *(cx, cy)*.
+    Falls back to a simple scale if Shapely buffer produces unexpected geometry.
+    """
+    from shapely.geometry import Polygon as _SPoly
+    try:
+        poly = _SPoly(shape)
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+        buffered = poly.buffer(offset, join_style=2)  # mitre join
+        if buffered.is_empty:
+            return [[x + cx, y + cy] for x, y in shape]
+        # Take the exterior of the (possibly multi) polygon
+        exterior = (
+            buffered.exterior if hasattr(buffered, "exterior")
+            else list(buffered.geoms)[0].exterior
+        )
+        coords = list(exterior.coords)[:-1]  # drop closing duplicate
+        return [[x + cx, y + cy] for x, y in coords]
+    except Exception:
+        # Fallback: naive uniform scale from centroid
+        return [[x + cx, y + cy] for x, y in shape]
+
+
 def _simplify_path(path: list[dict]) -> list[dict]:
     """Collapse grid-step path into corners only."""
     if len(path) <= 2:
@@ -106,6 +137,28 @@ def build_cutouts(
     TOP_SOLID = 2.0          # solid ceiling
     CAVITY_END = h - TOP_SOLID
 
+    # ── Minimum height check for battery compartment ───────────────
+    #    AA batteries are ~14.5 mm diameter.  The cavity must be at
+    #    least as tall as the battery + conductor plate spring depth
+    #    to avoid the compartment punching through the shell top.
+    bat_cfg = hw.battery
+    plate_cfg = bat_cfg.get("conductor_plate", {})
+    neg_spring_depth = plate_cfg.get("negative_spring_depth_mm", 10.5)
+    # Minimum cavity = battery diameter (approximated by compartment_width / 2
+    # for 2-cell side-by-side, but really the AA diameter is 14.5 mm)
+    aa_diameter = 14.5  # AA battery diameter in mm
+    min_cavity = aa_diameter
+    min_h = CAVITY_START + min_cavity + TOP_SOLID
+    if h < min_h:
+        import warnings
+        warnings.warn(
+            f"Shell height {h:.1f} mm is below the minimum {min_h:.1f} mm "
+            f"required for the battery compartment (AA Ø{aa_diameter} mm). "
+            f"Increasing to {min_h:.1f} mm."
+        )
+        h = min_h
+        CAVITY_END = h - TOP_SOLID
+
     pin_depth = hw.pinhole_depth             # 2.5 mm (from config)
     pocket_depth = CAVITY_END - CAVITY_START  # full cavity zone
     trace_depth = hw.trace_channel_depth      # 0.4 mm (shallow channel)
@@ -134,13 +187,23 @@ def build_cutouts(
         keepout = comp.get("keepout", {})
 
         if ctype == "button":
-            # a) Circular cylinder for button cap press-fit (8.3 mm deep from top)
-            #    Extend 0.5 mm ABOVE shell top to ensure a clean boolean cut
-            #    through the rounded fillet surface.
-            cap_d = hw.button["min_hole_diameter_mm"]
+            shape_outline = comp.get("shape_outline")
             cap_depth = 8.3
             overshoot = 0.5
-            cap_poly = _circle_poly(cx, cy, cap_d / 2)
+
+            if shape_outline and len(shape_outline) >= 3:
+                # Custom shape — offset polygon by hole_clearance and translate
+                # to button center. Shape vertices are relative to (0,0).
+                clr = hw.button_cap.get("hole_clearance_mm", 0.3)
+                cap_poly = _offset_polygon(shape_outline, clr, cx, cy)
+            else:
+                # Default circular cap hole — 13mm Ø
+                cap_d = hw.button["min_hole_diameter_mm"]
+                cap_poly = _circle_poly(cx, cy, cap_d / 2)
+
+            # a) Cap hole from top (8.3 mm deep from top)
+            #    Extend 0.5 mm ABOVE shell top to ensure a clean boolean cut
+            #    through the rounded fillet surface.
             cuts.append(Cutout(
                 polygon=cap_poly,
                 depth=cap_depth + overshoot,
@@ -199,42 +262,62 @@ def build_cutouts(
             continue
 
         if ctype == "battery":
-            # Battery compartment — matches the old "standard remote" design.
+            # Battery compartment — rectangular box in the cavity zone.
             #
-            # Geometry (from z=0 upward):
-            #   1. Side ledge recesses (left + right long edges only).
-            #      Shallow shelf (hatch_thickness + 0.3 mm) where the hatch
-            #      panel rests.  NO ledge on the short edges — the hatch
-            #      slides in along Y and the spring/tab hold it.
-            #   2. Centre through-hole — full battery-compartment height,
-            #      narrower by ledge_width on each side.  Punches the
-            #      entire floor so batteries can be accessed from below.
-            #      No bridges; the spring hook catches on the floor edge
-            #      just outside the compartment at the front (−Y) end.
-            #   3. Dent for ledge tab (back +Y end) — pocket that extends
-            #      1 mm beyond the compartment into the enclosure wall so
-            #      the 8 × 2 × 1.5 mm tab on the hatch has somewhere to
-            #      hook into.
-            #   4. Cavity pocket — standard pocket above the floor.
-            bat_w = comp.get("body_width_mm", keepout.get("width_mm", 25.0))
-            bat_h = comp.get("body_height_mm", keepout.get("height_mm", 48.0))
+            # Cross-section at one narrow end (looking along Y toward wall):
+            #
+            #       narrow wall (shell material)
+            #       │  0.3mm plate slot (open from bottom for insertion)
+            #       │  │
+            #       │  ├──┐  latch support  ┌──┤  ← cavity zone only
+            #       │  │  │   1×1mm         │  │    (holds plate once
+            #       │  │  │  (batteries     │  │     seated)
+            #       │  │  │   touch plate   │  │
+            #       │  │  │   in centre)    │  │
+            #       │  │  │                 │  │
+            #       │  ├──┘                 └──┤
+            #       │  │                       │  ← floor zone: open
+            #       │  │  (plate slides in     │    slot, no supports
+            #       │  │   from below)         │
+            #       ───┘                       └───  shell bottom
+            #
+            # Geometry:
+            #   a) Hatch ledge recesses on long sides (shallow shelf
+            #      where the hatch cover rests).
+            #   b) Centre through-hole (narrower by ledge_width, through
+            #      the floor so hatch can be accessed from below).
+            #   c) Cavity pocket — split into 3 cuts to leave 1×1 mm
+            #      latch support blocks at each narrow-end corner.
+            #   d) Plate slots — 0.3 mm channels carved into each
+            #      narrow wall, extending from the shell bottom all
+            #      the way up through the cavity.  Plates slide in
+            #      from below after printing and seat flush with the
+            #      compartment inner surface.  The latch supports
+            #      from (c) hold the plate from the battery side.
+            #   e) Hatch ledge-tab dent.
+            bat_w = comp.get("body_width_mm", keepout.get("width_mm", 27.0))
+            bat_h = comp.get("body_height_mm", keepout.get("height_mm", 50.0))
             enc = hw.enclosure
             hatch_clr = enc["battery_hatch_clearance_mm"]   # 0.3
             hatch_thickness = enc["battery_hatch_thickness_mm"]   # 1.5
             ledge_width = 2.5         # ledge on each long side
             ledge_depth = hatch_thickness + 0.3  # recess depth (1.8 mm)
 
-            # a) Left ledge recess — hatch rests here
+            plate_cfg_loc = hw.battery.get("conductor_plate", {})
+            plate_thick = plate_cfg_loc.get("thickness_mm", 0.3)
+            plate_slot_w = bat_w + 1.0  # 28 mm — 1 mm wider than compartment for easy insertion
+            support_x = 2.0   # support width along narrow wall (X) — extends into compartment centre
+            support_y = 2.0   # support depth into compartment (Y) — 2 mm gap from narrow wall
+
+            # ── a) Hatch ledge recesses (long sides) ──────────────
             cuts.append(Cutout(
                 polygon=_rect(cx - bat_w / 2 + ledge_width / 2,
                               cy,
                               ledge_width, bat_h),
-                depth=ledge_depth + 1.0,   # +1 to break through bottom
+                depth=ledge_depth + 1.0,
                 z_base=-1.0,
                 label=f"battery left ledge {cid}",
             ))
-
-            # b) Right ledge recess — hatch rests here
             cuts.append(Cutout(
                 polygon=_rect(cx + bat_w / 2 - ledge_width / 2,
                               cy,
@@ -244,24 +327,77 @@ def build_cutouts(
                 label=f"battery right ledge {cid}",
             ))
 
-            # c) Centre through-hole — full height, no bridges
-            hole_w = bat_w - 2 * ledge_width
+            # ── b) Centre through-hole (floor punch) ──────────────
+            hole_w = bat_w - 2 * ledge_width   # 22 mm
             cuts.append(Cutout(
                 polygon=_rect(cx, cy, hole_w, bat_h),
-                depth=CAVITY_START + 1.0,  # through entire floor + overlap
+                depth=CAVITY_START + 1.0,      # through entire floor
                 z_base=-0.5,
                 label=f"battery through-hole {cid}",
             ))
 
-            # d) Dent for ledge tab at back (+Y) end
-            #    The hatch has an 8 × 2 × 1.5 mm tab protruding from its
-            #    top surface at the back edge, extending 1 mm beyond the
-            #    hatch body.  This dent accommodates it.
+            # ── c) Cavity pocket (split for supports) ─────────────
+            #    Full pocket: (bat_w + 2m) × (bat_h + 2m).
+            #    Split into 3 rectangles to leave solid 2×2 mm support
+            #    blocks at each narrow-end corner.
+            #
+            #    Top-down (XY) of -Y narrow end inside the pocket:
+            #
+            #      cx-14.5          cx-11.5     cx+11.5          cx+14.5
+            #         │  ████████████  │          │  ████████████  │
+            #   cy-27 │  █ SUPPORT █  │  cut 23mm │  █ SUPPORT █  │ cy-27
+            #         │  █  2×2mm  █  │  (open)   │  █  2×2mm  █  │
+            #   cy-25 ├───────────────┴────────────┴───────────────┤ cy-25
+            #         │           central band (29mm wide)          │
+            #
+            #    Each support is 2 mm wide (X) × 2 mm deep (Y).
+            #    2 mm gap between narrow wall and the support.
+
+            central_h = bat_h - 2 * support_y  # 48 mm
+            cuts.append(Cutout(
+                polygon=_rect(cx, cy,
+                              bat_w + 2 * margin, central_h),
+                depth=pocket_depth,
+                z_base=CAVITY_START,
+                label=f"battery pocket central {cid}",
+            ))
+
+            end_strip_w = bat_w - 2 * support_x   # 25 mm (between supports)
+            end_strip_h = support_y + margin       # 2 mm
+            for end_sign in (-1, +1):
+                strip_cy = cy + end_sign * (bat_h / 2 + margin - end_strip_h / 2)
+                cuts.append(Cutout(
+                    polygon=_rect(cx, strip_cy,
+                                  end_strip_w, end_strip_h),
+                    depth=pocket_depth,
+                    z_base=CAVITY_START,
+                    label=f"battery pocket end {cid}",
+                ))
+
+            # ── d) Plate slots (through floor for bottom insertion) ────
+            #    The conductor plate (27 × 12 mm, 0.3 mm thick) slides
+            #    up from the shell bottom into this 0.3 mm channel.
+            #    The slot is 28 mm wide (1 mm wider than compartment)
+            #    for easier insertion.  It runs from z = −0.5 (below
+            #    shell) through the full cavity height.  Once the plate
+            #    is pushed up past the floor zone, the 2×2 mm latch
+            #    supports from (c) press against it from the battery
+            #    side and hold it flush against the narrow wall.
+            slot_depth = CAVITY_END + 0.5   # from below shell to cavity top
+            for end_sign in (-1, +1):
+                pocket_cy = (cy + end_sign * (bat_h / 2 + plate_thick / 2))
+                cuts.append(Cutout(
+                    polygon=_rect(cx, pocket_cy,
+                                  plate_slot_w, plate_thick),
+                    depth=slot_depth,
+                    z_base=-0.5,
+                    label=f"battery plate slot {cid}",
+                ))
+
+            # ── e) Dent for hatch ledge tab (back +Y end) ─────────
             dent_w = 8.0
             dent_d = 2.0 + 0.3          # tab depth + clearance
             dent_h = 1.5 + 0.3          # tab height + clearance
-            #    Cube spans from cy+bat_h/2 − dent_d to cy+bat_h/2 + 1
-            #    (extends 1 mm into the wall beyond the compartment).
             dent_span = dent_d + 1.0    # 3.3 mm total
             dent_cy = cy + bat_h / 2 - dent_d + dent_span / 2
             cuts.append(Cutout(
@@ -271,14 +407,6 @@ def build_cutouts(
                 label=f"battery ledge dent {cid}",
             ))
 
-            # e) Cavity pocket above the floor (same as other components)
-            poly = _rect(cx, cy, bat_w + 2 * margin, bat_h + 2 * margin)
-            cuts.append(Cutout(
-                polygon=poly,
-                depth=pocket_depth,
-                z_base=CAVITY_START,
-                label=f"battery pocket {cid}",
-            ))
             continue
 
         # Non-button, non-diode, non-battery component → rectangular pocket

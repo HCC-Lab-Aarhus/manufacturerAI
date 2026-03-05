@@ -101,6 +101,11 @@ class _HW:
     def pinhole_taper_depth(self) -> float:
         return _load()["manufacturing"].get("pinhole_taper_depth_mm", 0.5)
 
+    # ── button cap ──────────────────────────────────────────────────
+    @property
+    def button_cap(self) -> dict:
+        return _load().get("button_cap", {})
+
     # ── enclosure ───────────────────────────────────────────────────
     @property
     def enclosure(self) -> dict:

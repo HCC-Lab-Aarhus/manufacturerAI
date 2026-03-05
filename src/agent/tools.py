@@ -41,6 +41,30 @@ def configure(emit: EmitFn, output_dir: Path, run_id: str) -> None:
     _output_dir.mkdir(parents=True, exist_ok=True)
 
 
+# Function → display label mapping
+_FUNC_LABELS = {
+    "power": "Power",
+    "vol_up": "Vol +",
+    "vol_down": "Vol −",
+    "ch1": "Ch 1",
+    "ch2": "Ch 2",
+    "ch3": "Ch 3",
+    "ch4": "Ch 4",
+    "ch5": "Ch 5",
+    "brand": "Brand",
+}
+
+
+def _button_label(b: dict, i: int) -> str:
+    """Get display label: explicit label > function name > fallback."""
+    if b.get("label"):
+        return b["label"]
+    func = b.get("function", "")
+    if func and func in _FUNC_LABELS:
+        return _FUNC_LABELS[func]
+    return b.get("id", f"Button {i + 1}")
+
+
 # ═══════════════════════════════════════════════════════════════════
 # TOOL FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════
@@ -75,9 +99,17 @@ def send_outline_preview(
     button_positions: list of {id, label, x, y}.
     label: a short description shown in the UI.
     """
+    # Derive labels from function field if not explicitly set
+    buttons_with_labels = [
+        {
+            **b,
+            "label": _button_label(b, i),
+        }
+        for i, b in enumerate(button_positions)
+    ]
     _emit("outline_preview", {
         "outline": outline,
-        "buttons": button_positions,
+        "buttons": buttons_with_labels,
         "label": label,
     })
     return {"status": "preview_sent", "label": label}

@@ -12,10 +12,15 @@ any part of the pipeline can append cutouts without touching SCAD logic.
 
 from __future__ import annotations
 
+import logging
 import math
+from collections import defaultdict
 from dataclasses import dataclass, field
-from shapely.geometry import Polygon as ShapelyPolygon
+from shapely.geometry import MultiPolygon, Polygon as ShapelyPolygon
+from shapely.ops import unary_union
 from src.config.hardware import hw
+
+log = logging.getLogger(__name__)
 
 # Default extrusion height (mm): floor + cavity + ceiling.
 DEFAULT_HEIGHT_MM = hw.shell_height + hw.floor_thickness + hw.ceil_thickness
@@ -304,13 +309,102 @@ def generate_enclosure_scad(
     )
     lines.append("")
 
-    for i, c in enumerate(cutouts):
-        tag = c.label or f"cutout_{i}"
-        lines.append(f"    // [{i}] {tag}")
-        lines.append(f"    translate([0, 0, {c.z_base:.3f}])")
-        lines.append(f"        linear_extrude(height = {c.depth:.3f})")
-        lines.append(f"            polygon(points = [{_fmt_poly(c.polygon)}]);")
+    # ── Merge cutouts that share the same (z_base, depth) ─────────
+    # Instead of emitting 150+ individual ``difference()`` children
+    # (which makes OpenSCAD's CGAL backend extremely slow), we group
+    # cutouts by their extrusion parameters and merge the 2-D
+    # polygons with Shapely's ``unary_union``.  This typically
+    # collapses ~160 operations down to ~5-10.
+    #
+    # After merging, cutouts are clipped to the enclosure outline to
+    # prevent component pockets from punching through the outer walls.
+    groups: dict[tuple[float, float], list[Cutout]] = defaultdict(list)
+    for c in cutouts:
+        groups[(round(c.z_base, 4), round(c.depth, 4))].append(c)
+
+    # Build outline polygon for clipping (once, outside the loop)
+    outline_clip_poly: ShapelyPolygon | None = None
+    if len(outline) >= 3:
+        try:
+            outline_clip_poly = ShapelyPolygon(outline)
+            if not outline_clip_poly.is_valid or outline_clip_poly.is_empty:
+                outline_clip_poly = None
+        except Exception:
+            outline_clip_poly = None
+
+    group_idx = 0
+    for (z_base, depth), members in groups.items():
+        labels = ", ".join(m.label for m in members if m.label)
+        count = len(members)
+
+        # Build Shapely polygons for all members in this group
+        shapely_polys = []
+        for m in members:
+            if len(m.polygon) >= 3:
+                try:
+                    sp = ShapelyPolygon(m.polygon)
+                    if sp.is_valid and not sp.is_empty:
+                        shapely_polys.append(sp)
+                except Exception:
+                    pass
+
+        if not shapely_polys:
+            continue
+
+        merged = unary_union(shapely_polys)
+
+        # Clip merged cutouts to the outline boundary to prevent
+        # component pockets from punching through enclosure walls.
+        if outline_clip_poly is not None and not merged.is_empty:
+            try:
+                merged = merged.intersection(outline_clip_poly)
+            except Exception:
+                pass  # Keep unclipped if intersection fails
+
+        # Extract polygon(s) from the merged result
+        if merged.is_empty:
+            continue
+
+        polys: list[ShapelyPolygon] = []
+        if isinstance(merged, ShapelyPolygon):
+            polys = [merged]
+        elif isinstance(merged, MultiPolygon):
+            polys = list(merged.geoms)
+        else:
+            # GeometryCollection or unexpected — skip
+            log.warning("Unexpected Shapely result type %s for group z=%.2f d=%.2f",
+                        type(merged).__name__, z_base, depth)
+            continue
+
+        # Emit ONE polygon() per group using OpenSCAD's multi-path
+        # syntax.  This collapses all cutouts in this z/depth group
+        # into a single difference() child — the key CSG speedup.
+        all_pts: list[tuple[float, float]] = []
+        paths: list[list[int]] = []
+        for poly in polys:
+            exterior = list(poly.exterior.coords)[:-1]
+            start = len(all_pts)
+            all_pts.extend(exterior)
+            paths.append(list(range(start, start + len(exterior))))
+            for hole in poly.interiors:
+                hole_coords = list(hole.coords)[:-1]
+                h_start = len(all_pts)
+                all_pts.extend(hole_coords)
+                paths.append(list(range(h_start, h_start + len(hole_coords))))
+
+        tag = f"group {group_idx}: {count} cutouts at z={z_base:.1f} d={depth:.1f}"
+        if labels:
+            tag += f" ({labels[:80]})"
+        lines.append(f"    // {tag}")
+        lines.append(f"    translate([0, 0, {z_base:.3f}])")
+        lines.append(f"        linear_extrude(height = {depth:.3f})")
+        pts_str = _fmt_poly(all_pts)
+        paths_str = ", ".join(
+            "[" + ", ".join(str(i) for i in p) + "]" for p in paths
+        )
+        lines.append(f"            polygon(points = [{pts_str}], paths = [{paths_str}]);")
         lines.append("")
+        group_idx += 1
 
     lines.append("}")
     return "\n".join(lines) + "\n"
@@ -402,14 +496,165 @@ battery_hatch();
 """
 
 
-def generate_print_plate_scad(**_kwargs) -> str:
+def generate_button_cap_scad(
+    button_id: str,
+    shape_outline: list[list[float]],
+) -> str:
+    """Generate a standalone SCAD file for a custom button cap.
+
+    The button is printed **upside-down** (flat cap face on the build plate,
+    snap socket pointing up).  It has:
+
+    * A flat cap body whose outline matches *shape_outline*.
+    * A rectangular stem connecting the cap to the snap socket.
+    * A 4-wall snap-fit socket that grips the tactile switch head.
+
+    The switch head is a two-step box (wider top, narrower bottom).
+    The socket has a **seat** section (wider, for the head top) near the
+    stem and a **grip** section (narrower) near the entry.  Diagonal
+    corner flex-slots let each wall flex independently during assembly,
+    creating a reliable snap-fit that the head top cannot escape through.
+    A short entry chamfer eases insertion.
+
+    Parameters
+    ----------
+    button_id : str
+        Component ID (e.g. ``"btn_1"``), used in SCAD comments.
+    shape_outline : list of [x, y]
+        Polygon vertices in mm, centered at (0, 0), CCW winding.
+    """
+    bc = hw.button_cap
+    cap_t   = bc.get("cap_thickness_mm", 2.0)
+    stem_w  = bc.get("stem_width_mm", 3.0)
+    stem_h  = bc.get("stem_height_mm", 5.3)
+    wall_t  = bc.get("clip_thickness_mm", 0.8)
+    head_top    = bc.get("switch_head_top_mm", 1.5)
+    head_bot    = bc.get("switch_head_bottom_mm", 1.2)
+    head_top_h  = bc.get("switch_head_top_height_mm", 1.0)
+    head_bot_h  = bc.get("switch_head_bottom_height_mm", 1.0)
+
+    # ── Snap-socket derived dimensions ────────────────────────────
+    # Seat: wider cavity where head_top rests (near stem, low Z in print)
+    seat_clr = 0.15  # per-side clearance in the seat
+    # Grip: narrow band that catches behind head_top (near entry, high Z)
+    grip_clr = 0.05  # per-side clearance — snug fit on head_bottom
+    seat_inner = head_top + 2 * seat_clr   # 1.80 mm
+    grip_inner = head_bot + 2 * grip_clr   # 1.30 mm
+    socket_outer = seat_inner + 2 * wall_t  # 3.40 mm
+    socket_h = head_top_h + head_bot_h      # 2.00 mm
+    slot_w  = 0.3   # diagonal corner flex-slot width
+    chamfer_h = 0.4  # entry chamfer height
+
+    # Effective retention per wall: (seat_inner - grip_inner)/2 = 0.25 mm
+    # Deflection for assembly: (head_top - grip_inner)/2 = 0.10 mm per wall
+
+    # Format polygon for OpenSCAD
+    pts = ", ".join(f"[{x:.3f}, {y:.3f}]" for x, y in shape_outline)
+
+    return f"""\
+// Custom Button Cap — {button_id}
+// Generated by ManufacturerAI
+// Printed upside-down: cap face on build plate, snap socket pointing UP.
+//
+// Socket layout (in print Z, bottom → top):
+//   z = base_z .. base_z + head_top_h      → SEAT  (wider, receives head top)
+//   z = base_z + head_top_h .. + socket_h  → GRIP  (narrower, retains head)
+//   z = base_z + socket_h .. + chamfer_h   → CHAMFER (flared entry)
+//
+// When assembled (flipped), the entry is the lower opening.
+// The switch head top (wider) snaps past the grip into the seat.
+
+$fn = 32;
+
+cap_thickness  = {cap_t:.3f};
+stem_width     = {stem_w:.3f};
+stem_height    = {stem_h:.3f};
+wall_thickness = {wall_t:.3f};
+socket_outer   = {socket_outer:.3f};
+seat_inner     = {seat_inner:.3f};
+grip_inner     = {grip_inner:.3f};
+head_top_h     = {head_top_h:.3f};
+head_bot_h     = {head_bot_h:.3f};
+socket_h       = {socket_h:.3f};
+slot_w         = {slot_w:.3f};
+chamfer_h      = {chamfer_h:.3f};
+
+module cap_body() {{
+    // Flat cap — the visible surface the user presses.
+    linear_extrude(height = cap_thickness)
+        polygon(points = [{pts}]);
+}}
+
+module stem() {{
+    // Rectangular stem connecting cap body to snap socket.
+    translate([-stem_width/2, -stem_width/2, cap_thickness])
+        cube([stem_width, stem_width, stem_height]);
+}}
+
+module snap_socket() {{
+    // 4-wall snap-fit socket with stepped cavity + entry chamfer.
+    // Corner flex-slots let walls deflect during snap-on assembly.
+    base_z  = cap_thickness + stem_height;
+    total_h = socket_h + chamfer_h;
+
+    difference() {{
+        // ── Outer block ──
+        translate([-socket_outer/2, -socket_outer/2, base_z])
+            cube([socket_outer, socket_outer, total_h]);
+
+        // ── Seat cavity (wider, for head_top) ──
+        translate([-seat_inner/2, -seat_inner/2, base_z - 0.01])
+            cube([seat_inner, seat_inner, head_top_h + 0.01]);
+
+        // ── Grip cavity (narrower, retains head_top) ──
+        translate([-grip_inner/2, -grip_inner/2, base_z + head_top_h])
+            cube([grip_inner, grip_inner, head_bot_h]);
+
+        // ── Entry chamfer — tapers from grip_inner to seat_inner ──
+        translate([0, 0, base_z + socket_h])
+            linear_extrude(height = chamfer_h + 0.01,
+                           scale  = seat_inner / grip_inner)
+                square([grip_inner, grip_inner], center = true);
+
+        // ── Corner flex-slots (4 diagonal cuts at 45°) ──
+        // Each slot lets one wall segment flex independently
+        // during assembly, reducing the snap-on insertion force.
+        for (a = [45, 135, 225, 315])
+            rotate([0, 0, a])
+                translate([-slot_w/2, 0, base_z - 0.01])
+                    cube([slot_w, socket_outer, total_h + 0.02]);
+    }}
+}}
+
+module button_cap() {{
+    cap_body();
+    stem();
+    snap_socket();
+}}
+
+button_cap();
+"""
+
+
+def generate_print_plate_scad(button_caps: list[str] | None = None, **_kwargs) -> str:
     """Print plate that references the enclosure and hatch STLs side-by-side.
 
-    Accepts (and ignores) any keyword arguments for forward-compat.
+    Parameters
+    ----------
+    button_caps : list of str, optional
+        Filenames of additional button cap STL files to include on the
+        plate (e.g. ``["button_btn_1.stl", "button_btn_2.stl"]``).
     """
-    return """\
-// Print plate — all parts laid out for printing
-import("enclosure.stl");
-translate([80, 0, 0]) import("battery_hatch.stl");
-"""
+    lines = [
+        "// Print plate — all parts laid out for printing",
+        'import("enclosure.stl");',
+        'translate([80, 0, 0]) import("battery_hatch.stl");',
+    ]
+    if button_caps:
+        x_offset = 120.0  # start button caps at X=120
+        for i, cap_file in enumerate(button_caps):
+            x = x_offset + i * 25.0
+            lines.append(f'translate([{x:.1f}, 0, 0]) import("{cap_file}");')
+    lines.append("")
+    return "\n".join(lines)
 

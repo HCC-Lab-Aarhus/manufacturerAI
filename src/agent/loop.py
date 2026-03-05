@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -91,10 +92,41 @@ _TOOL_DECLARATIONS = [
                             "label": genai.protos.Schema(type=genai.protos.Type.STRING),
                             "x": genai.protos.Schema(type=genai.protos.Type.NUMBER),
                             "y": genai.protos.Schema(type=genai.protos.Type.NUMBER),
+                            "function": genai.protos.Schema(
+                                type=genai.protos.Type.STRING,
+                                description=(
+                                    "The IR function this button performs. "
+                                    "Valid values: 'power', 'vol_up', 'vol_down', "
+                                    "'ch1', 'ch2', 'ch3', 'ch4', 'ch5', 'brand'."
+                                ),
+                            ),
+                            "shape_outline": genai.protos.Schema(
+                                type=genai.protos.Type.ARRAY,
+                                items=genai.protos.Schema(
+                                    type=genai.protos.Type.ARRAY,
+                                    items=genai.protos.Schema(type=genai.protos.Type.NUMBER),
+                                ),
+                                description=(
+                                    "Optional custom button shape as a polygon of "
+                                    "[x, y] vertices in mm, centered at (0,0), CCW winding. "
+                                    "The button cap and shell hole will match this shape. "
+                                    "If omitted, a standard round 9mm cap is used.\n"
+                                    "Copy-paste shapes:\n"
+                                    "Plus: [[-2,-6],[2,-6],[2,-2],[6,-2],[6,2],[2,2],[2,6],[-2,6],[-2,2],[-6,2],[-6,-2],[-2,-2]]\n"
+                                    "Minus: [[-6,-2],[6,-2],[6,2],[-6,2]]\n"
+                                    "Circle: [[5,0],[3.54,3.54],[0,5],[-3.54,3.54],[-5,0],[-3.54,-3.54],[0,-5],[3.54,-3.54]]\n"
+                                    "Square: [[-5,-5],[5,-5],[5,5],[-5,5]]\n"
+                                    "All vertices must be centered at (0,0)."
+                                ),
+                            ),
                         },
-                        required=["id", "x", "y"],
+                        required=["id", "x", "y", "function"],
                     ),
-                    description="Button positions with id, label, x (mm), y (mm).",
+                    description=(
+                        "Button positions with id, label, x (mm), y (mm), "
+                        "function (what IR command the button sends), and "
+                        "optional shape_outline for custom button shapes."
+                    ),
                 ),
                 "top_curve_length": genai.protos.Schema(
                     type=genai.protos.Type.NUMBER,
@@ -168,6 +200,7 @@ def run_turn(
     history: list,
     emit: EmitFn,
     output_dir: str | Path,
+    cancel: threading.Event | None = None,
     model_name: str = "gemini-2.5-pro",
 ) -> list:
     """
@@ -178,6 +211,7 @@ def run_turn(
         history: List of prior Content proto objects (conversation so far).
         emit: Callback(event_type, data_dict) for streaming events to UI.
         output_dir: Directory for pipeline outputs.
+        cancel: Threading event — set to cancel the pipeline.
         model_name: Gemini model to use.
 
     Returns:
@@ -220,10 +254,47 @@ def run_turn(
 
     # ── Process model responses (tool-call loop) ───────────────────
     empty_retries = 0
+    _pipeline_done = False          # True once submit_design succeeds
+    _pipeline_attempts = 0          # cap retries to avoid parallel outlines
     for _turn_idx in range(MAX_TURNS):
         is_empty = isinstance(response, _EmptyResponse)
         function_calls = _extract_function_calls(response)
         text = _extract_text(response)
+
+        # ── Check for MALFORMED_FUNCTION_CALL after retries exhausted ──
+        _malformed = False
+        for cand in getattr(response, 'candidates', []) or []:
+            fr = getattr(cand, 'finish_reason', None)
+            fr_name = getattr(fr, 'name', str(fr))
+            if fr_name == 'MALFORMED_FUNCTION_CALL':
+                _malformed = True
+                break
+        if _malformed and not function_calls:
+            # Model tried to call a tool but emitted bad JSON.
+            # Nudge it to try again with clean formatting.
+            empty_retries += 1
+            if empty_retries > 3:
+                log.warning("Repeated MALFORMED_FUNCTION_CALL, stopping.")
+                emit("error", {"message": (
+                    "The AI model produced an invalid function call. "
+                    "Please try again."
+                )})
+                break
+            log.info("MALFORMED_FUNCTION_CALL — nudging model to retry...")
+            try:
+                response = _safe_send(
+                    chat,
+                    ("Your previous function call was malformed (invalid JSON). "
+                     "Please try again — call submit_design with the same "
+                     "values, but make sure all JSON arrays and objects are "
+                     "properly closed."),
+                )
+                api_log.next_turn()
+            except Exception as e:
+                api_log.log("error", message=str(e))
+                emit("error", {"message": f"Gemini API error: {e}"})
+                break
+            continue
 
         # ── Case 1: empty response (SDK IndexError / no candidates) ──
         if is_empty and not function_calls and not text:
@@ -273,27 +344,64 @@ def run_turn(
                 result = {"status": "ok"}
 
             elif name == "submit_design":
-                emit("progress", {"stage": "Running manufacturing pipeline..."})
-                try:
-                    result = run_pipeline(
-                        outline=args.get("outline", []),
-                        button_positions=args.get("button_positions", []),
-                        emit=emit,
-                        output_dir=output_dir,
-                        outline_type=args.get("outline_type", "polygon"),
-                        top_curve_length=float(args.get("top_curve_length", 0)),
-                        top_curve_height=float(args.get("top_curve_height", 0)),
-                        bottom_curve_length=float(args.get("bottom_curve_length", 0)),
-                        bottom_curve_height=float(args.get("bottom_curve_height", 0)),
-                    )
-                except Exception as e:
-                    log.exception("Pipeline crashed")
+                _pipeline_attempts += 1
+                if (output_dir / ".layout_lock").exists():
+                    # User manually realigned — don't overwrite their layout
+                    result = {
+                        "status": "success",
+                        "message": (
+                            "The user has manually realigned the components "
+                            "and the design has already been built with the "
+                            "realigned layout.  Do NOT resubmit — just report "
+                            "the current status to the user."
+                        ),
+                    }
+                    _pipeline_done = True
+                elif _pipeline_done:
+                    # Pipeline already succeeded — don't run again
+                    result = {
+                        "status": "ok",
+                        "message": "Design already submitted and built successfully.",
+                    }
+                elif _pipeline_attempts > 2:
+                    # Cap retries to prevent multiple outlines
                     result = {
                         "status": "error",
                         "step": "pipeline",
-                        "message": str(e),
-                        "traceback": traceback.format_exc(),
+                        "message": (
+                            "Maximum pipeline attempts reached. "
+                            "Please report the final result to the user."
+                        ),
                     }
+                else:
+                    emit("progress", {"stage": "Running manufacturing pipeline..."})
+                    try:
+                        result = run_pipeline(
+                            run_dir=output_dir,
+                            emit=emit,
+                            cancel=cancel,
+                            start_from="validate",
+                            outline=args.get("outline", []),
+                            buttons=args.get("button_positions", []),
+                            outline_type=args.get("outline_type", "polygon"),
+                            curve_params={
+                                "top_curve_length": float(args.get("top_curve_length", 0)),
+                                "top_curve_height": float(args.get("top_curve_height", 0)),
+                                "bottom_curve_length": float(args.get("bottom_curve_length", 0)),
+                                "bottom_curve_height": float(args.get("bottom_curve_height", 0)),
+                            },
+                        )
+                    except Exception as e:
+                        log.exception("Pipeline crashed")
+                        result = {
+                            "status": "error",
+                            "step": "pipeline",
+                            "message": str(e),
+                            "traceback": traceback.format_exc(),
+                        }
+
+                    if result.get("status") == "success":
+                        _pipeline_done = True
 
             else:
                 result = {"status": "error", "message": f"Unknown tool: {name}"}
@@ -373,6 +481,7 @@ def _safe_send(chat, message, _max_retries: int = 3):
     """
     Wrapper around chat.send_message that:
     - catches the SDK's IndexError when the model returns empty candidates
+    - retries on MALFORMED_FUNCTION_CALL (model emitted bad JSON for a tool)
     - retries on 429 (rate-limit) errors with exponential backoff
     """
     for attempt in range(_max_retries + 1):
@@ -380,20 +489,54 @@ def _safe_send(chat, message, _max_retries: int = 3):
             resp = chat.send_message(message)
             log.debug("Model response: candidates=%d",
                       len(getattr(resp, 'candidates', []) or []))
-            return resp
+
+            # Check for MALFORMED_FUNCTION_CALL finish_reason on the
+            # candidate itself (the SDK doesn't always raise).
+            for cand in getattr(resp, 'candidates', []) or []:
+                fr = getattr(cand, 'finish_reason', None)
+                # finish_reason enum: 1=STOP, 6=MALFORMED_FUNCTION_CALL
+                fr_val = fr if isinstance(fr, int) else getattr(fr, 'value', fr)
+                fr_name = getattr(fr, 'name', str(fr))
+                if fr_name == 'MALFORMED_FUNCTION_CALL' or fr_val == 6:
+                    if attempt < _max_retries:
+                        log.warning(
+                            "MALFORMED_FUNCTION_CALL — retrying (%d/%d)...",
+                            attempt + 1, _max_retries,
+                        )
+                        time.sleep(1)
+                        break  # break inner for, continue outer
+                    else:
+                        log.warning("MALFORMED_FUNCTION_CALL — exhausted retries.")
+                        return resp  # let caller handle gracefully
+            else:
+                # No malformed finish_reason on any candidate — good.
+                return resp
+            # `break` from inner for-loop landed here; continue retry.
+            continue
+
         except IndexError:
             log.warning("Model returned empty candidates (IndexError). "
                         "Will retry with nudge.")
             return _EmptyResponse()
         except Exception as e:
             err_str = str(e)
+            # Catch MALFORMED_FUNCTION_CALL raised as an exception
+            if "MALFORMED_FUNCTION_CALL" in err_str and attempt < _max_retries:
+                log.warning(
+                    "MALFORMED_FUNCTION_CALL exception — retrying (%d/%d)...",
+                    attempt + 1, _max_retries,
+                )
+                time.sleep(1)
+                continue
             if "429" in err_str and attempt < _max_retries:
                 wait = 2 ** attempt  # 1s, 2s, 4s
                 log.warning("Rate-limited (429), retrying in %ds (attempt %d/%d)...",
                             wait, attempt + 1, _max_retries)
                 time.sleep(wait)
                 continue
-            raise  # non-429 error or exhausted retries
+            raise  # non-retryable error or exhausted retries
+    # Exhausted all retries — return empty sentinel so loop can nudge.
+    return _EmptyResponse()
 
 
 def _proto_to_dict(proto_struct) -> dict:

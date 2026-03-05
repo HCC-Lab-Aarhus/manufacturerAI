@@ -38,7 +38,20 @@ ARDUINO_TO_PHYSICAL: dict[int, int] = {
 # PWM-capable Arduino pins (required for IR LED)
 PWM_PINS = {3, 5, 6, 9, 10, 11}
 
-# Default button label → firmware variable mapping
+# Button function → firmware variable mapping (primary source)
+FUNCTION_TO_FIRMWARE: dict[str, str] = {
+    "power": "POWER_BTN",
+    "vol_up": "VOL_UP_BTN",
+    "vol_down": "VOL_DOWN_BTN",
+    "ch1": "CH1_BTN",
+    "ch2": "CH2_BTN",
+    "ch3": "CH3_BTN",
+    "ch4": "CH4_BTN",
+    "ch5": "CH5_BTN",
+    "brand": "BRAND_BTN",
+}
+
+# Default button label → firmware variable mapping (fallback for legacy data)
 BUTTON_LABELS: dict[str, str] = {
     "POWER": "POWER_BTN",
     "PWR": "POWER_BTN",
@@ -144,8 +157,20 @@ def generate_firmware(
             continue
 
         # Button assignment
-        label = mapping.get("label", mapping.get("button_id", ""))
-        fw_var = normalize_button_label(label)
+        # Priority: 1) function field, 2) label, 3) button_id patterns
+        fw_var = None
+        
+        # First, try to get function from the function field (new approach)
+        func = mapping.get("function", "")
+        if func:
+            fw_var = FUNCTION_TO_FIRMWARE.get(func.lower().strip())
+            if fw_var:
+                log.debug("Button function '%s' → %s", func, fw_var)
+        
+        # Fallback: try label-based mapping
+        if fw_var is None:
+            label = mapping.get("label", mapping.get("button_id", ""))
+            fw_var = normalize_button_label(label)
         
         if fw_var is None:
             # Try to match by button_id pattern
@@ -280,18 +305,19 @@ def generate_pin_assignment_report(pin_mapping: list[dict]) -> str:
     Useful for documentation and debugging.
     """
     lines = [
-        "=" * 60,
+        "=" * 70,
         "PCB ROUTING → FIRMWARE PIN ASSIGNMENT REPORT",
-        "=" * 60,
+        "=" * 70,
         "",
-        f"{'Component':<20} {'Label':<15} {'ATmega Port':<12} {'Arduino Pin':<12} {'Physical Pin'}",
-        "-" * 60,
+        f"{'Component':<15} {'Label':<12} {'Function':<10} {'ATmega Port':<12} {'Arduino Pin':<12} {'Physical Pin'}",
+        "-" * 70,
     ]
 
     for mapping in pin_mapping:
         comp_type = mapping.get("type", "button")
         comp_id = mapping.get("button_id", mapping.get("component_id", "?"))
         label = mapping.get("label", comp_id)
+        function = mapping.get("function", "-")
         port = mapping.get("controller_pin", "unrouted")
         
         arduino = atmega_port_to_arduino_pin(port) if port != "unrouted" else None
@@ -301,14 +327,21 @@ def generate_pin_assignment_report(pin_mapping: list[dict]) -> str:
         physical_str = str(physical) if physical is not None else "N/A"
         
         lines.append(
-            f"{comp_id:<20} {label:<15} {port:<12} {arduino_str:<12} {physical_str}"
+            f"{comp_id:<15} {label:<12} {function:<10} {port:<12} {arduino_str:<12} {physical_str}"
         )
 
     lines.extend([
         "",
-        "=" * 60,
+        "=" * 70,
         "PWM-capable pins (for IR LED): 3, 5, 6, 9, 10, 11",
-        "=" * 60,
+        "",
+        "FUNCTION KEY:",
+        "  power    → Power on/off (also auto-scan with long press)",
+        "  vol_up   → Volume up",
+        "  vol_down → Volume down",
+        "  ch1-ch5  → Channel 1-5",
+        "  brand    → Cycle TV brand",
+        "=" * 70,
     ])
 
     return "\n".join(lines)
