@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from src.catalog import CatalogResult
+from src.pipeline.config import PrinterDef
 
 
 def _catalog_summary(catalog: CatalogResult) -> str:
@@ -23,9 +24,18 @@ def _catalog_summary(catalog: CatalogResult) -> str:
     return "\n".join(lines)
 
 
-def _build_system_prompt(catalog: CatalogResult) -> str:
+def _build_system_prompt(catalog: CatalogResult, printer: PrinterDef | None = None) -> str:
     """Build the full system prompt with catalog summary and design rules."""
     summary = _catalog_summary(catalog)
+
+    if printer:
+        build_plate_section = f"""## Build Plate & Size Constraints
+Your build plate is **{printer.bed_width:.0f} × {printer.bed_depth:.0f} mm** (width × depth), with a maximum build height of **{printer.max_z_mm:.0f} mm**.
+The device outline must fit within these dimensions.
+
+Before choosing dimensions, consider that this device will be 3D-printed and physically used. Use accurate real-world measurements so the result is a correctly sized, functional object. State the dimensions you chose and why before defining the outline."""
+    else:
+        build_plate_section = ""
 
     return f"""You are a device designer. You design electronic devices that will be manufactured using a 3D printer (PLA enclosure) and a silver ink printer (conductive traces).
 
@@ -43,6 +53,8 @@ Given a user's device description, design it by:
 2. Defining electrical connections (nets) between component pins
 3. Designing the device outline (polygon shape)
 4. Placing UI components (buttons, LEDs, switches) within the outline
+
+{build_plate_section}
 
 ## Available Components
 {summary}

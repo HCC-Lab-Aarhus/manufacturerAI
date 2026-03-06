@@ -599,7 +599,7 @@ def api_session_tokens(session: str = Query(...)):
         return {"input_tokens": 0, "budget": TOKEN_BUDGET}
 
     cat = _get_catalog()
-    system = _build_system_prompt(cat)
+    system = _build_system_prompt(cat, printer=get_printer(s.printer_id))
     pruned = _prune_messages(conversation)
     client = anthropic.Anthropic()
     try:

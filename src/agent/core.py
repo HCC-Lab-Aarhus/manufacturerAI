@@ -81,7 +81,8 @@ class DesignAgent:
           error           — error message
           done            — agent finished
         """
-        system = _build_system_prompt(self.catalog)
+        printer = get_printer(self.session.printer_id)
+        system = _build_system_prompt(self.catalog, printer=printer)
         self.messages.append({"role": "user", "content": user_prompt})
         self._feasibility_attempts = 0
 
