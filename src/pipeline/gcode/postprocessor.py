@@ -296,6 +296,35 @@ def _filter_ironing_at_ink_layer(
 
 
 
+def _ink_pause_block(label: str, z: float, instructions: list[str]) -> list[str]:
+    """Generate an M0 pause for ink deposition — head stays in place.
+
+    ``M0`` (Unconditional Stop) halts the printer immediately without
+    parking or retracting, so the nozzle remains directly over the last
+    print position.  This is intentional for ink work: the operator can
+    see exactly where the traces are and the head is out of the way only
+    if the slicer positioned it there.
+
+    Unlike M601, M0 does NOT move the head to the park position, which
+    means the silver-ink channels stay visible and accessible.
+    """
+    lines = [
+        "",
+        "; " + "=" * 50,
+        f"; PAUSE: {label}",
+        f"; Z = {z:.2f} mm",
+    ]
+    for instr in instructions:
+        lines.append(f"; >> {instr}")
+    lines.extend([
+        "; " + "=" * 50,
+        "",
+        "M0 ; unconditional stop — head stays in place, press knob/LCD to resume",
+        "",
+    ])
+    return lines
+
+
 def _pause_block(label: str, z: float, instructions: list[str]) -> list[str]:
     """Generate a firmware pause block (M601) with user instructions.
 
@@ -633,7 +662,7 @@ def postprocess_gcode(
                     )
 
                 # Insert ink pause
-                out.extend(_pause_block(
+                out.extend(_ink_pause_block(
                     "DEPOSIT CONDUCTIVE INK",
                     ink_z,
                     [
@@ -648,7 +677,7 @@ def postprocess_gcode(
                     out.extend(ink_gcode_lines)
                     stages.append(f"Ink G-code injected at Z={ink_z:.2f} ({len(ink_gcode_lines)} lines)")
                     # Second pause after ink to let it dry / cure
-                    out.extend(_pause_block(
+                    out.extend(_ink_pause_block(
                         "INK CURING",
                         ink_z,
                         [
