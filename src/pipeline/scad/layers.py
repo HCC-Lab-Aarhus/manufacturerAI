@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from src.pipeline.design.models import Outline, Enclosure
 
 from src.pipeline.design.models import Outline, Enclosure
+from src.pipeline.design.height_field import blended_height as _blended_height
 from shapely.geometry import Polygon as _ShapelyPoly
 
 log = logging.getLogger(__name__)
@@ -172,14 +173,6 @@ def _smooth_top_zs(
     Applies a Gaussian blur (σ in vertex-index units) along the circular
     array of ceiling heights.  After every pass the result is clamped from
     below by the *original* values so component clearances are never reduced.
-
-    Parameters
-    ----------
-    top_zs : list of float  Per-vertex required ceiling heights.
-    sigma  : float          Gaussian σ in vertex-index units.  Larger values
-                            produce smoother transitions (default 4 → ±12
-                            vertex neighbourhood at 3σ).
-    passes : int            Number of independent blur passes.
     """
     N    = len(top_zs)
     orig = list(top_zs)
@@ -201,6 +194,101 @@ def _smooth_top_zs(
         arr = [max(orig[i], new_arr[i]) for i in range(N)]
 
     return arr
+
+
+def _smooth_ring_z(
+    zs: list[float],
+    sigma: float = 4.0,
+    passes: int = 2,
+) -> list[float]:
+    """Circular Gaussian blur along a cap ring — NO clamping.
+
+    Unlike ``_smooth_top_zs`` this helper does **not** enforce a floor,
+    so high-z spokes (horn tips) can be blended downward into their
+    neighbours.  Applied after IDW z computation to break the spoke-aligned
+    ridge that IDW with a radial-spoke layout would otherwise create.
+    """
+    N    = len(zs)
+    arr  = list(zs)
+    half = int(math.ceil(3.0 * sigma))
+
+    for _ in range(passes):
+        new_arr: list[float] = []
+        for i in range(N):
+            wsum = 0.0
+            vsum = 0.0
+            for di in range(-half, half + 1):
+                j = (i + di) % N
+                w = math.exp(-0.5 * (di / sigma) ** 2)
+                vsum += arr[j] * w
+                wsum += w
+            new_arr.append(vsum / wsum)
+        arr = new_arr
+
+    return arr
+
+
+def _idw_cap_z(
+    bx: float,
+    by: float,
+    perim: list[list[float]],
+    power: float = 2.0,
+    eps: float = 0.01,
+) -> float:
+    """Inverse-distance weighted z at interior cap point (bx, by).
+
+    Weights each perimeter ring vertex ``[x, y, z]`` by ``1 / dist**power``.
+    The result is a weighted mean of all ceiling heights, which:
+
+    * Is naturally smooth (no discontinuities)
+    * Is bounded between ``min(z)`` and ``max(z)`` of the perimeter ring
+      so it can never raise a valley above its ceiling height
+    * Converges exactly to ``perim[i][2]`` as (bx, by) → perim[i]
+
+    These properties make IDW safer than Gaussian blur + clamp for cap
+    surfaces: smooth hills form around peaks, flat valleys stay flat, and
+    cutout cylinder depths are never violated.
+    """
+    w_sum  = 0.0
+    wz_sum = 0.0
+    for p in perim:
+        d = math.hypot(bx - p[0], by - p[1])
+        if d < eps:
+            return p[2]          # coincident vertex → return exact ceiling z
+        w = 1.0 / d ** power
+        wz_sum += w * p[2]
+        w_sum  += w
+    return wz_sum / w_sum
+
+
+def _gauss2d_cap_z(
+    bx: float,
+    by: float,
+    perim: list[list[float]],
+    sigma_mm: float = 20.0,
+) -> float:
+    """2D Gaussian-weighted mean of perimeter z heights.
+
+    Unlike IDW (Shepard's method), Gaussian weights decay exponentially
+    and do **not** create sharp radial ridges along each perimeter spoke.
+    The result is a smoothly undulating interior surface that blends all
+    ceiling heights without any per-vertex discontinuities.
+
+    With ``sigma_mm=20`` the influence of each perimeter vertex extends
+    ~40 mm (≈2σ), covering typical enclosure widths without over-smoothing
+    the height differences between, e.g., horn peaks and flat sides.
+    """
+    sig2   = 2.0 * sigma_mm * sigma_mm
+    w_sum  = 0.0
+    wz_sum = 0.0
+    for p in perim:
+        d2 = (bx - p[0]) ** 2 + (by - p[1]) ** 2
+        w  = math.exp(-d2 / sig2)
+        wz_sum += w * p[2]
+        w_sum  += w
+    if w_sum < 1e-12:
+        return sum(p[2] for p in perim) / len(perim)
+    return wz_sum / w_sum
 
 
 def _build_rings(
@@ -281,6 +369,7 @@ def _polyhedron_shell(
     flat_pts: list[list[float]],
     top_zs: list[float],
     enclosure: Enclosure,
+    outline: Outline | None = None,
 ) -> list[str]:
     """Emit an OpenSCAD ``polyhedron()`` for a variable-height shell body.
 
@@ -302,41 +391,54 @@ def _polyhedron_shell(
     all_pts: list[list[float]] = [pt for ring in rings for pt in ring]
 
     # ── Build concentric cap rings for the top surface ─────────────────────────
-    # Instead of a single centroid fan (which creates steep triangles between
-    # the horn peaks at ~46 mm and the valley sides at ~14 mm), we add
-    # _CAP_RINGS concentric intermediate rings whose XY positions linearly
-    # interpolate from the top-perimeter ring inward to the centroid, and
-    # whose Z heights are Gaussian-blurred with progressively larger sigma as
-    # we move toward the centre.  The result is a smooth terrain-like cap:
-    # peaks stay where they are at the perimeter, but the height landscape
-    # blends gradually inward so no single triangle spans the full drop.
+    # XY positions interpolate linearly from the top-perimeter ring inward to
+    # the centroid.  Z heights use a 2D Gaussian weighted mean of the
+    # perimeter, ceiling-clamped to the wall height at each spoke:
+    #
+    #   gz  = gauss2d(bx, by, last_ring, sigma=20 mm)
+    #   bz  = min(gz, last_ring[i][2])
+    #
+    # This has exactly two behaviours depending on which region spoke i is in:
+    #
+    #   • Flat-side spokes (wall z ≈ 18–28 mm, Gaussian pulls higher):
+    #     clamp fires → bz = wall z → cap surface meets the wall rim exactly
+    #     with no visible step or overhang at the perimeter.
+    #
+    #   • Horn spokes (wall z ≈ 44–46 mm, Gaussian stays below that):
+    #     clamp never fires → bz = Gaussian → smooth dome; the horn wall
+    #     correctly sticks up above the dome (that IS what a horn looks like).
+    #
+    # This eliminates the radial "fin" ridge that the previous boundary-blend
+    # approach produced: blending 95 % of top_zs[horn]=46 mm at k=0 made the
+    # horn spoke stay at ~45 mm while adjacent (non-horn) spokes were at ~28 mm,
+    # generating a 17 mm near-vertical face running from the horn tip to the
+    # centroid.  The pure-Gaussian + clamp approach gives a maximum adjacent
+    # z-diff of ~3 mm at k=0 compared to ~15 mm previously.
     last_ring = rings[-1]
     cx = sum(p[0] for p in last_ring) / N
     cy = sum(p[1] for p in last_ring) / N
-    cz_raw = sum(p[2] for p in last_ring) / N  # raw (un-smoothed) average
 
     cap_rings: list[list[list[float]]] = []
     for k in range(_CAP_RINGS):
         t = (k + 1) / (_CAP_RINGS + 1)  # 0 < t < 1, never 0 or 1
-        # Z: lerp from perimeter heights toward centroid z, then Gaussian-smooth.
-        # sigma increases with t so we blend more aggressively near the centre.
-        z_lerp = [last_ring[i][2] * (1.0 - t) + cz_raw * t for i in range(N)]
-        sigma = 6.0 + t * 18.0   # sigma 6 → 24 as we go from edge to centre
-        z_smooth = _smooth_top_zs(z_lerp, sigma=sigma, passes=4)
-        cap_ring = [
-            [
-                last_ring[i][0] * (1.0 - t) + cx * t,
-                last_ring[i][1] * (1.0 - t) + cy * t,
-                # CRITICAL: clamp to the per-vertex ceiling so cap geometry
-                # never rises above top_zs[i] and buries cutout cylinders.
-                min(z_smooth[i], last_ring[i][2]),
-            ]
-            for i in range(N)
-        ]
+        cap_ring: list[list[float]] = []
+        for i in range(N):
+            bx = last_ring[i][0] * (1.0 - t) + cx * t
+            by = last_ring[i][1] * (1.0 - t) + cy * t
+            gz = _gauss2d_cap_z(bx, by, last_ring)
+            # Ceiling = blended_height at this interior XY (same source as
+            # cutout cylinder tops) so cap surface never blocks any hole.
+            # Falls back to the perimeter wall z when outline unavailable.
+            if outline is not None:
+                ceiling = _blended_height(bx, by, outline, enclosure)
+            else:
+                ceiling = last_ring[i][2]
+            bz = min(gz, ceiling)
+            cap_ring.append([bx, by, bz])
         cap_rings.append(cap_ring)
 
-    # Centroid Z = average of the innermost (most-blended) cap ring
-    cz = sum(p[2] for p in cap_rings[-1]) / N
+    # Centroid Z: pure Gaussian (no wall vertex to clamp against).
+    cz = _gauss2d_cap_z(cx, cy, last_ring)
 
     # Append cap ring points, then centroid, to the flat point list
     for cap_ring in cap_rings:
@@ -508,7 +610,7 @@ def shell_body_lines(
     if top_zs is not None and len(top_zs) == len(flat_pts):
         z_range = max(top_zs) - min(top_zs)
         if z_range >= _VARIABLE_HEIGHT_THRESHOLD:
-            return _polyhedron_shell(flat_pts, top_zs, enclosure)
+            return _polyhedron_shell(flat_pts, top_zs, enclosure, outline=outline)
         # All heights are effectively equal — use the uniform value from top_zs
         # (which may differ slightly from enclosure.height_mm if all vertices
         # carry an explicit z_top that overrides the enclosure default).

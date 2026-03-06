@@ -17,6 +17,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { registerHandler, getData } from './viewport.js';
 import { getSharedRenderer, setSharedRenderer } from './viewport.js';
 import { create3DScene } from './viewport3d.js';
@@ -119,6 +120,10 @@ function createScadScene(container) {
                 // Rotate -90° around X so the model stands upright on the grid.
                 geometry.applyMatrix4(new THREE.Matrix4().makeRotationX(-Math.PI / 2));
 
+                // Weld coincident vertices so computeVertexNormals() averages
+                // normals across triangle boundaries, giving smooth Phong
+                // shading instead of hard flat facets on every triangle.
+                geometry = mergeVertices(geometry);
                 geometry.computeVertexNormals();
                 geometry.computeBoundingBox();
 

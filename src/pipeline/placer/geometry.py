@@ -25,8 +25,8 @@ def footprint_halfdims(
     w = (cat.body.width_mm or 1.0) / 2
     h = (cat.body.length_mm or 1.0) / 2
     rad = math.radians(rotation_deg)
-    cos_r = abs(math.cos(rad))
-    sin_r = abs(math.sin(rad))
+    cos_r = round(abs(math.cos(rad)), 9)
+    sin_r = round(abs(math.sin(rad)), 9)
     return (w * cos_r + h * sin_r, w * sin_r + h * cos_r)
 
 
