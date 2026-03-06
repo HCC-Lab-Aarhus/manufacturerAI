@@ -21,8 +21,9 @@
         <button class="step active" data-step="design">1. Design</button>
         <button class="step" data-step="placement" disabled>2. Placement</button>
         <button class="step" data-step="routing" disabled>3. Routing</button>
-        <button class="step" data-step="scad" disabled>4. SCAD</button>
-        <button class="step" data-step="manufacturing" disabled>5. Manufacturing</button>
+        <button class="step" data-step="bitmap" disabled>4. Bitmap</button>
+        <button class="step" data-step="scad" disabled>5. SCAD</button>
+        <button class="step" data-step="manufacturing" disabled>6. Manufacturing</button>
         <div class="nav-spacer"></div>
         <button class="step" id="btn-guide" disabled>Guide</button>
         <button class="step" id="btn-catalog">Catalog</button>
@@ -88,6 +89,16 @@
                 </div>
                 <div id="routing-scroll" class="placement-scroll" hidden>
                     <div id="routing-info" class="placement-info"></div>
+                </div>
+            </section>
+            <section id="step-bitmap" class="step-panel" hidden>
+                <div id="bitmap-hero" class="placement-hero">
+                    <div class="placement-hero-icon">🖨️</div>
+                    <p>Verify the conductive-ink bitmap against the printer build plate</p>
+                    <span id="bitmap-status" class="design-status-inline"></span>
+                </div>
+                <div id="bitmap-scroll" class="placement-scroll" hidden>
+                    <div id="bitmap-info" class="placement-info"></div>
                 </div>
             </section>
             <section id="step-scad" class="step-panel" hidden>

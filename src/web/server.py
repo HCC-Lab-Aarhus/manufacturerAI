@@ -31,7 +31,7 @@ from src.agent import DesignAgent, TOOLS, MODEL, THINKING_BUDGET, TOKEN_BUDGET, 
 from src.pipeline.design import parse_design, validate_design
 from src.pipeline.placer import place_components, placement_to_dict, parse_placement, PlacementError
 from src.pipeline.router import route_traces, routing_to_dict, write_trace_bitmap
-from src.pipeline.config import TRACE_RULES, PRINTERS, get_printer
+from src.pipeline.config import TRACE_RULES, BITMAP_CONFIG, PRINTERS, get_printer
 from src.pipeline.scad import run_scad_step
 from src.web.naming import generate_session_name
 
@@ -463,6 +463,67 @@ async def api_routing_result(session: str = Query(...)):
         if "body" not in comp or "pins" not in comp:
             _enrich_components([comp], cat)
     return data
+
+
+# ── Routes: Bitmap API ────────────────────────────────────────────
+
+@app.get("/api/session/bitmap")
+async def api_bitmap(session: str = Query(...)):
+    """Return the trace bitmap plus printer/outline metadata for visualisation."""
+    import base64
+
+    s = _resolve_session(session)
+    bitmap_path = s.path / "trace_bitmap.txt"
+    if not bitmap_path.exists():
+        raise HTTPException(404, "No trace_bitmap.txt — run the router first")
+
+    placement_data = s.read_artifact("placement.json")
+    routing_data = s.read_artifact("routing.json")
+    pdef = get_printer(s.printer_id)
+
+    outline = placement_data.get("outline", []) if placement_data else []
+    components = placement_data.get("components", []) if placement_data else []
+    traces = routing_data.get("traces", []) if routing_data else []
+    trace_width_mm = routing_data.get("trace_width_mm", TRACE_RULES.trace_width_mm) if routing_data else TRACE_RULES.trace_width_mm
+
+    if placement_data:
+        cat = _get_catalog()
+        _enrich_components(components, cat)
+
+    outline_verts = [[p["x"], p["y"]] for p in outline] if outline else []
+    origin_x = min(v[0] for v in outline_verts) if outline_verts else 0.0
+    origin_y = min(v[1] for v in outline_verts) if outline_verts else 0.0
+
+    bitmap_cfg = BITMAP_CONFIG
+    raw = bitmap_path.read_text(encoding="utf-8")
+    rows = raw.splitlines()
+
+    # Pack bitmap into 1-bit-per-pixel binary, then base64 encode.
+    # Each row is a sequence of '0'/'1' chars → pack 8 chars per byte.
+    num_rows = len(rows)
+    cols = bitmap_cfg.cols
+    byte_cols = (cols + 7) // 8
+    packed = bytearray(num_rows * byte_cols)
+    for ri, line in enumerate(rows):
+        offset = ri * byte_cols
+        for ci in range(min(len(line), cols)):
+            if line[ci] == '1':
+                packed[offset + ci // 8] |= 1 << (7 - ci % 8)
+    bitmap_b64 = base64.b64encode(bytes(packed)).decode('ascii')
+
+    return {
+        "bitmap_cols": cols,
+        "bitmap_rows": num_rows,
+        "bitmap_b64": bitmap_b64,
+        "bed_width": pdef.bed_width,
+        "bed_depth": pdef.bed_depth,
+        "origin_x": origin_x,
+        "origin_y": origin_y,
+        "outline": outline,
+        "components": components,
+        "traces": traces,
+        "trace_width_mm": trace_width_mm,
+    }
 
 
 # ── Routes: SCAD API ─────────────────────────────────────────────

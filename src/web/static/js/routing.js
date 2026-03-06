@@ -3,6 +3,7 @@
 import { API, state } from './state.js';
 import { setData as setViewportData, setStale } from './viewport.js';
 import { enableScadTab } from './scad.js';
+import { enableBitmapTab, loadBitmapResult } from './bitmap.js';
 import { buildNetColorMap } from './viewportRouting.js';
 
 function addStaleBanner(el, msg) {
@@ -113,6 +114,8 @@ export async function runRouting() {
         renderResult(data);
         setViewportData('routing', data);
         stopTabFlash();
+        enableBitmapTab(false);
+        loadBitmapResult();
         enableScadTab(true);
     } catch (e) {
         if (rerun) {
@@ -147,6 +150,8 @@ export async function loadRoutingResult() {
         renderResult(data);
         setViewportData('routing', data);
         stopTabFlash();
+        enableBitmapTab(false);
+        loadBitmapResult();
         enableScadTab(true);
     } catch {
         // No routing available yet — that's fine
