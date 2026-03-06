@@ -12,8 +12,7 @@
     "mounting": {
         "style": "side",
         "allowed_styles": [
-            "side",
-            "top"
+            "side"
         ],
         "blocks_routing": true,
         "keepout_margin_mm": 2.0
