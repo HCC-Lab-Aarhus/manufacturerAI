@@ -347,8 +347,9 @@ def _bottom_mount(
         hatch_clr = mounting.hatch.clearance_mm
         hw2 = (body.width_mm  or 25.0) / 2 - hatch_clr
         hh2 = (body.length_mm or 48.0) / 2 - hatch_clr
-        # Extend 1 mm below shell bottom (z=-1) to guarantee a clean cut
-        hatch_depth = FLOOR_TOP + 1.5
+        # z_base=-1 → depth=(CAVITY_TOP+1) makes the top reach exactly CAVITY_TOP=3mm,
+        # flush with the body pocket bottom so no solid lip blocks battery insertion.
+        hatch_depth = CAVITY_TOP + 1.0
         hatch_poly = [
             [cx - hw2, cy - hh2],
             [cx + hw2, cy - hh2],
@@ -568,11 +569,22 @@ def _trace_channels(
             x1, y1 = float(path[i][0]),   float(path[i][1])
             x2, y2 = float(path[i + 1][0]), float(path[i + 1][1])
 
-            if math.hypot(x2 - x1, y2 - y1) < 1e-6:
+            seg_len = math.hypot(x2 - x1, y2 - y1)
+            if seg_len < 1e-6:
                 continue
 
+            # Extend both endpoints by TRACE_WIDTH/2 beyond the path nodes so
+            # the channel rectangle always overlaps the pin taper even if the
+            # router lands 0.1–0.3 mm away from the exact pin position.
+            overshoot = TRACE_WIDTH / 2
+            ux, uy = (x2 - x1) / seg_len, (y2 - y1) / seg_len
+            ex1 = x1 - ux * overshoot
+            ey1 = y1 - uy * overshoot
+            ex2 = x2 + ux * overshoot
+            ey2 = y2 + uy * overshoot
+
             cuts.append(Cutout(
-                polygon=_segment_rect(x1, y1, x2, y2, TRACE_WIDTH),
+                polygon=_segment_rect(ex1, ey1, ex2, ey2, TRACE_WIDTH),
                 depth=channel_depth,
                 z_base=CAVITY_TOP,
                 label=f"trace {trace.net_id}",
