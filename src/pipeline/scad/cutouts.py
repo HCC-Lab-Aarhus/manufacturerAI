@@ -43,7 +43,7 @@ log = logging.getLogger(__name__)
 FLOOR_TOP: float = FLOOR_MM
 CAVITY_TOP: float = CAVITY_START_MM
 CEIL_THICKNESS: float = CEILING_MM
-SURFACE_OVERSHOOT: float = 0.5  # extra depth so surface holes cleanly exit
+SURFACE_OVERSHOOT: float = 1.0  # extra depth so surface holes cleanly exit
 
 # ── Pinhole geometry ───────────────────────────────────────────────
 
