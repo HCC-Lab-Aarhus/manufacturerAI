@@ -24,7 +24,7 @@
             "label": "VBUS (+5V)",
             "position_mm": [
                 -3.5,
-                -6.5
+                6.5
             ],
             "direction": "out",
             "voltage_v": 5.0,
@@ -37,7 +37,7 @@
             "label": "Data -",
             "position_mm": [
                 -1.0,
-                -6.5
+                6.5
             ],
             "direction": "bidirectional",
             "voltage_v": null,
@@ -50,7 +50,7 @@
             "label": "Data +",
             "position_mm": [
                 1.0,
-                -6.5
+                6.5
             ],
             "direction": "bidirectional",
             "voltage_v": null,
@@ -63,7 +63,7 @@
             "label": "Ground",
             "position_mm": [
                 3.5,
-                -6.5
+                6.5
             ],
             "direction": "out",
             "voltage_v": 0,
