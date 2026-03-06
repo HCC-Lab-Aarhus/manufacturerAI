@@ -20,13 +20,18 @@ log = logging.getLogger(__name__)
 class BitmapConfig:
     """Resolution of the conductive-ink trace bitmap.
 
-    The bitmap is a fixed-size text grid produced by the router.
-    It stretches over the printer's bed area; cell sizes are derived
-    from the printer dimensions at render time.
+    The bitmap is a text grid produced by the router.  Column count is
+    fixed; row count is derived from the printer's bed aspect ratio so
+    that bitmap cells are always square.
     """
 
     cols: int = 1536
-    rows: int = 1383
+
+    def rows_for_bed(self, bed_width: float, bed_depth: float) -> int:
+        """Return the number of rows that gives square cells."""
+        if bed_width <= 0:
+            return self.cols
+        return max(1, round(self.cols * bed_depth / bed_width))
 
 
 BITMAP_CONFIG = BitmapConfig()
@@ -133,24 +138,24 @@ PRINTERS: dict[str, PrinterDef] = {
     "mk3s": PrinterDef(
         id="mk3s",
         label="Prusa MK3S",
-        bed_width=250.0,
-        bed_depth=210.0,
+        bed_width=219.0, # 250 - 31 for inkjet carriage
+        bed_depth=178.0, # 210 - 32 for inkjet carriage
         max_z_mm=210.0,
         profile_filename="slicer_profile.ini",
     ),
     "mk3s_plus": PrinterDef(
         id="mk3s_plus",
         label="Prusa i3 MK3S+",
-        bed_width=250.0,
-        bed_depth=210.0,
+        bed_width=219.0, # 250 - 31 for inkjet carriage
+        bed_depth=178.0, # 210 - 32 for inkjet carriage
         max_z_mm=210.0,
         profile_filename="slicer_profile_mk3s_plus.ini",
     ),
     "coreone": PrinterDef(
         id="coreone",
         label="Prusa Core One+",
-        bed_width=250.0,
-        bed_depth=220.0,
+        bed_width=219.0, # 250 - 31 for inkjet carriage
+        bed_depth=219.0, # 250 - 31 for inkjet carriage
         max_z_mm=220.0,
         profile_filename="slicer_profile_coreone.ini",
         native_printer="Prusa CORE One HF0.4 nozzle",

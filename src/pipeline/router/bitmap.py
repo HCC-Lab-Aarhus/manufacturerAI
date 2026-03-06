@@ -21,10 +21,10 @@ def _trace_cells(
     trace_width_mm: float,
     bed_width: float,
     bed_depth: float,
-    bitmap: BitmapConfig,
+    cols: int,
+    rows: int,
 ) -> set[tuple[int, int]]:
     """Rasterize a Manhattan trace path into bitmap cell coordinates."""
-    cols, rows = bitmap.cols, bitmap.rows
     cell_w = bed_width / cols
     cell_h = bed_depth / rows
     half_w = trace_width_mm / 2.0
@@ -96,7 +96,8 @@ def generate_trace_bitmap(
         of '0' or '1'.  Index 0 is the top row (highest Y).
     """
     pdef = printer or get_printer()
-    cols, rows = bitmap.cols, bitmap.rows
+    cols = bitmap.cols
+    rows = bitmap.rows_for_bed(pdef.bed_width, pdef.bed_depth)
     ink_cells: set[tuple[int, int]] = set()
 
     for trace in result.traces:
@@ -105,7 +106,8 @@ def generate_trace_bitmap(
         ]
         ink_cells |= _trace_cells(
             shifted_path, trace_width_mm,
-            pdef.bed_width, pdef.bed_depth, bitmap,
+            pdef.bed_width, pdef.bed_depth,
+            cols, rows,
         )
 
     lines: list[str] = []

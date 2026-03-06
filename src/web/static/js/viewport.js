@@ -100,7 +100,7 @@ export function setStep(step) {
 
     const data = cache.get(step);
     if (data !== undefined) {
-        handler.render(el, data);
+        try { handler.render(el, data); } catch (e) { console.error('viewport render:', e); }
     } else {
         handler.clear(el);
     }
@@ -116,7 +116,9 @@ export function setData(step, data) {
     staleSteps.delete(step);   // fresh data clears stale flag
     if (step === activeStep) {
         const handler = handlers.get(step);
-        if (handler) handler.render(contentEl(), data);
+        if (handler) {
+            try { handler.render(contentEl(), data); } catch (e) { console.error('viewport render:', e); }
+        }
         applyStaleClass();
     }
 }
