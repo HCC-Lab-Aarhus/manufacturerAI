@@ -47,7 +47,7 @@ function renderInfo(data) {
                 <tr><td>Bitmap resolution</td><td>${data.bitmap_cols} × ${data.bitmap_rows}</td></tr>
                 <tr><td>Build plate</td><td>${data.bed_width} × ${data.bed_depth} mm</td></tr>
                 <tr><td>Board size</td><td>${boardW} × ${boardH} mm</td></tr>
-                <tr><td>Board origin on bed</td><td>(${data.origin_x.toFixed(1)}, ${data.origin_y.toFixed(1)}) mm</td></tr>
+                <tr><td>Bed offset</td><td>(${data.bed_offset_x.toFixed(1)}, ${data.bed_offset_y.toFixed(1)}) mm</td></tr>
                 <tr><td>Cell size</td><td>${(data.bed_width / data.bitmap_cols).toFixed(3)} × ${(data.bed_depth / data.bitmap_rows).toFixed(3)} mm</td></tr>
             </tbody></table>
         </div>
@@ -62,9 +62,9 @@ export async function loadBitmapResult() {
         );
         if (!res.ok) return;
         const data = await res.json();
-        renderInfo(data);
         setViewportData('bitmap', data);
-    } catch {
-        // No bitmap yet
+        renderInfo(data);
+    } catch (e) {
+        console.error('loadBitmapResult failed:', e);
     }
 }

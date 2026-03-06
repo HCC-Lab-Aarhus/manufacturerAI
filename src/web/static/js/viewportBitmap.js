@@ -31,7 +31,7 @@ function buildBitmapView(data) {
     const {
         bitmap_cols, bitmap_rows,
         bed_width, bed_depth,
-        origin_x, origin_y,
+        bed_offset_x, bed_offset_y,
         outline, components = [], traces = [], trace_width_mm = 0.5,
         bitmap_b64,
     } = data;
@@ -99,24 +99,17 @@ function buildBitmapView(data) {
     dimV.textContent = `${bed_depth} mm`;
     svg.appendChild(dimV);
 
-    // The board origin maps to (origin_x, origin_y) on the bed.
-    // In the bitmap, the board's lower-left corner is at (0,0) on the bed
-    // because the bitmap generation shifts traces by -origin_x, -origin_y.
-    // So on the build plate SVG, the board sits at origin (0,0) in bed-space
-    // which is at SVG coords (PLATE_PAD, PLATE_PAD + bedDepth*SCALE) for the
-    // bottom-left. But SVG y increases downward, bed y increases upward, so we
-    // need to flip.
-
-    // ox, oy: SVG coordinates for bed coordinate (bx, by)
+    // bed_offset = bed_centre - model_bbox_centre (same as PrusaSlicer centering).
+    // Model coord → bed coord: bed = model + bed_offset.
+    // SVG y-axis is flipped relative to bed y.
     const bedToSvgX = (bx) => PLATE_PAD + bx * SCALE;
     const bedToSvgY = (by) => PLATE_PAD + (bed_depth - by) * SCALE;
 
     // Board outline on the build plate.
-    // Board world coords: outline verts. On the bed, they're at
-    // (vx - origin_x, vy - origin_y) because that's how the bitmap shifts them.
+    // Model coords → bed coords via + bed_offset.
     const { verts, corners } = normaliseOutline(outline);
     if (verts.length >= 3) {
-        const bedVerts = verts.map(v => [v[0] - origin_x, v[1] - origin_y]);
+        const bedVerts = verts.map(v => [v[0] + bed_offset_x, v[1] + bed_offset_y]);
         const svgVerts = bedVerts.map(v => [bedToSvgX(v[0]), bedToSvgY(v[1])]);
 
         let pathD = `M ${svgVerts[0][0]} ${svgVerts[0][1]}`;
@@ -140,8 +133,8 @@ function buildBitmapView(data) {
     ];
     components.forEach((comp, idx) => {
         const color = COMP_COLORS[idx % COMP_COLORS.length];
-        const bedX = (comp.x_mm || 0) - origin_x;
-        const bedY = (comp.y_mm || 0) - origin_y;
+        const bedX = (comp.x_mm || 0) + bed_offset_x;
+        const bedY = (comp.y_mm || 0) + bed_offset_y;
         const body = comp.body || {};
         const rot = comp.rotation_deg || 0;
         let bw = (body.width_mm || 5);
@@ -183,8 +176,8 @@ function buildBitmapView(data) {
             const path = trace.path;
             if (!path || path.length < 2) continue;
             const points = path.map(p => {
-                const bx = p[0] - origin_x;
-                const by = p[1] - origin_y;
+                const bx = p[0] + bed_offset_x;
+                const by = p[1] + bed_offset_y;
                 return `${bedToSvgX(bx)},${bedToSvgY(by)}`;
             }).join(' ');
             const polyline = document.createElementNS(NS, 'polyline');

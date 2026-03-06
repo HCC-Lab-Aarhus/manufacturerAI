@@ -157,6 +157,8 @@ def _invalidate_downstream(session: Session, current_step: str) -> list[str]:
         if later in session.pipeline_state:
             del session.pipeline_state[later]
             invalidated.append(later)
+        if later == "routing":
+            session.delete_artifact("trace_bitmap.txt")
     return invalidated
 
 
@@ -232,7 +234,10 @@ async def api_set_printer(session: str = Query(...), printer_id: str = Query(...
     """Set the printer for a session."""
     s = _resolve_session(session)
     pdef = get_printer(printer_id)
+    old_id = s.printer_id
     s.printer_id = pdef.id
+    if old_id != pdef.id:
+        _invalidate_downstream(s, "placement")
     s.save()
     return {"printer_id": pdef.id, "label": pdef.label}
 
@@ -436,17 +441,22 @@ async def api_run_routing(session: str = Query(...)):
 
     s.write_artifact("routing.json", data)
 
-    # Generate trace bitmap stretched over the build plate
+    # Generate trace bitmap stretched over the build plate.
+    # PrusaSlicer auto-centres the model on the bed, so the bitmap must
+    # use the same centering: model_bbox_centre → bed_centre.
+    pdef = get_printer(s.printer_id)
     outline_verts = placement.outline.vertices
-    origin_x = min(v[0] for v in outline_verts)
-    origin_y = min(v[1] for v in outline_verts)
+    model_cx = (min(v[0] for v in outline_verts) + max(v[0] for v in outline_verts)) / 2
+    model_cy = (min(v[1] for v in outline_verts) + max(v[1] for v in outline_verts)) / 2
+    bed_offset_x = pdef.bed_width / 2 - model_cx
+    bed_offset_y = pdef.bed_depth / 2 - model_cy
     write_trace_bitmap(
         result,
         TRACE_RULES.trace_width_mm,
         s.path / "trace_bitmap.txt",
-        printer=get_printer(s.printer_id),
-        origin_x=origin_x,
-        origin_y=origin_y,
+        printer=pdef,
+        origin_x=-bed_offset_x,
+        origin_y=-bed_offset_y,
     )
 
     s.pipeline_state["routing"] = "complete"
@@ -495,15 +505,19 @@ async def api_bitmap(session: str = Query(...)):
         _enrich_components(components, cat)
 
     outline_verts = [[p["x"], p["y"]] for p in outline] if outline else []
-    origin_x = min(v[0] for v in outline_verts) if outline_verts else 0.0
-    origin_y = min(v[1] for v in outline_verts) if outline_verts else 0.0
+    if outline_verts:
+        model_cx = (min(v[0] for v in outline_verts) + max(v[0] for v in outline_verts)) / 2
+        model_cy = (min(v[1] for v in outline_verts) + max(v[1] for v in outline_verts)) / 2
+        bed_offset_x = pdef.bed_width / 2 - model_cx
+        bed_offset_y = pdef.bed_depth / 2 - model_cy
+    else:
+        bed_offset_x = 0.0
+        bed_offset_y = 0.0
 
     bitmap_cfg = BITMAP_CONFIG
     raw = bitmap_path.read_text(encoding="utf-8")
     rows = raw.splitlines()
 
-    # Pack bitmap into 1-bit-per-pixel binary, then base64 encode.
-    # Each row is a sequence of '0'/'1' chars → pack 8 chars per byte.
     num_rows = len(rows)
     cols = bitmap_cfg.cols
     byte_cols = (cols + 7) // 8
@@ -521,8 +535,8 @@ async def api_bitmap(session: str = Query(...)):
         "bitmap_b64": bitmap_b64,
         "bed_width": pdef.bed_width,
         "bed_depth": pdef.bed_depth,
-        "origin_x": origin_x,
-        "origin_y": origin_y,
+        "bed_offset_x": bed_offset_x,
+        "bed_offset_y": bed_offset_y,
         "outline": outline,
         "components": components,
         "traces": traces,
