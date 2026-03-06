@@ -61,12 +61,7 @@ export function buildNetColorMap(netIds) {
     return map;
 }
 
-export function toggleDebugOverlay(layerKey, visible) {
-    const groups = document.querySelectorAll(`g[data-debug-layer="${layerKey}"]`);
-    for (const g of groups) {
-        g.setAttribute('display', visible ? 'inline' : 'none');
-    }
-}
+
 
 
 // ── Preview builder ───────────────────────────────────────────
@@ -165,26 +160,15 @@ function buildRoutingSVG(data) {
         drawTrace(svg, trace, ox, oy, netColorMap[trace.net_id], traceWidthMm);
     });
 
-    // ── Debug grid overlays (hidden by default) ──
+    // ── Combined ownership overlay (hidden by default) ──
     const debugGrids = data.debug_grids || [];
-    const debugKeys = [];
-    if (debugGrids.length > 0) {
-        const debugNetColorMap = buildNetColorMap(
-            debugGrids.filter(g => g.layer === 'keepout').map(g => g.net_id)
-        );
-        for (const snap of debugGrids) {
-            const g = document.createElementNS(NS, 'g');
-            const key = snap.layer === 'keepout' ? `keepout:${snap.net_id}` : snap.layer;
-            g.setAttribute('data-debug-layer', key);
-            g.setAttribute('display', 'none');
-            debugKeys.push(key);
-            if (snap.layer === 'keepout') {
-                drawDebugGrid(g, snap, ox, oy, debugNetColorMap[snap.net_id]);
-            } else {
-                drawOwnershipGrid(g, snap, ox, oy);
-            }
-            svg.appendChild(g);
-        }
+    const ownershipSnap = debugGrids.find(g => g.layer === 'combined_owner');
+    let ownershipGroup = null;
+    if (ownershipSnap) {
+        ownershipGroup = document.createElementNS(NS, 'g');
+        ownershipGroup.setAttribute('display', 'none');
+        drawOwnershipGrid(ownershipGroup, ownershipSnap, ox, oy);
+        svg.appendChild(ownershipGroup);
     }
 
     // ── Trace legend (right side, vertical column) ──
@@ -251,50 +235,18 @@ function buildRoutingSVG(data) {
     svgWrap.style.position = 'relative';
     svgWrap.appendChild(svg);
 
-    if (debugKeys.length > 0) {
-        const sel = document.createElement('select');
-        sel.style.cssText = 'position:absolute; top:6px; left:6px; font-size:11px; padding:2px 4px; background:#161b22; color:#c9d1d9; border:1px solid #30363d; border-radius:4px; cursor:pointer; z-index:1;';
-        const none = document.createElement('option');
-        none.value = '';
-        none.textContent = 'Debug: none';
-        sel.appendChild(none);
-
-        const LAYER_LABELS = {
-            combined_owner: 'Combined ownership',
-        };
-
-        const ownershipKeys = debugKeys.filter(k => k === 'combined_owner');
-        const keepoutKeys = debugKeys.filter(k => k.startsWith('keepout:'));
-
-        if (ownershipKeys.length > 0) {
-            const grp = document.createElement('optgroup');
-            grp.label = 'Ownership';
-            for (const key of ownershipKeys) {
-                const opt = document.createElement('option');
-                opt.value = key;
-                opt.textContent = LAYER_LABELS[key] || key;
-                grp.appendChild(opt);
-            }
-            sel.appendChild(grp);
-        }
-        if (keepoutKeys.length > 0) {
-            const grp = document.createElement('optgroup');
-            grp.label = 'Keepout (per net)';
-            for (const key of keepoutKeys) {
-                const opt = document.createElement('option');
-                opt.value = key;
-                opt.textContent = key.replace('keepout:', '');
-                grp.appendChild(opt);
-            }
-            sel.appendChild(grp);
-        }
-
-        sel.addEventListener('change', () => {
-            for (const key of debugKeys) {
-                toggleDebugOverlay(key, key === sel.value);
-            }
+    if (ownershipGroup) {
+        const lbl = document.createElement('label');
+        lbl.style.cssText = 'position:absolute; top:6px; left:6px; font-size:11px; color:#c9d1d9; cursor:pointer; z-index:1; user-select:none;';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.style.cssText = 'margin-right:4px; vertical-align:middle; cursor:pointer;';
+        cb.addEventListener('change', () => {
+            ownershipGroup.setAttribute('display', cb.checked ? 'inline' : 'none');
         });
-        svgWrap.appendChild(sel);
+        lbl.appendChild(cb);
+        lbl.appendChild(document.createTextNode('Ownership'));
+        svgWrap.appendChild(lbl);
     }
 
     section.appendChild(svgWrap);
@@ -335,64 +287,6 @@ function drawTrace(svg, trace, ox, oy, color, traceWidthMm) {
 
 
 // ── Draw debug grid overlay as an embedded bitmap ─────────────
-
-function drawDebugGrid(group, snap, ox, oy, netColor) {
-    const { width: gw, height: gh, origin_x, origin_y, resolution, cells: b64 } = snap;
-    const raw = atob(b64);
-    const cells = new Uint8Array(raw.length);
-    for (let i = 0; i < raw.length; i++) cells[i] = raw.charCodeAt(i);
-
-    const canvas = document.createElement('canvas');
-    canvas.width = gw;
-    canvas.height = gh;
-    const ctx = canvas.getContext('2d');
-    const img = ctx.createImageData(gw, gh);
-
-    const m = netColor.match(/hsl\((\d+)/);
-    const hue = m ? parseInt(m[1], 10) : 0;
-
-    for (let gy = 0; gy < gh; gy++) {
-        for (let gx = 0; gx < gw; gx++) {
-            const cell = cells[gy * gw + gx];
-            const pi = (gy * gw + gx) * 4;
-            if (cell === 1) {           // Trace clearance (other nets)
-                img.data[pi]     = 255;
-                img.data[pi + 1] = 160;
-                img.data[pi + 2] = 0;
-                img.data[pi + 3] = 160;
-            } else if (cell === 2) {    // Permanently blocked (bodies/edges)
-                img.data[pi]     = 100;
-                img.data[pi + 1] = 100;
-                img.data[pi + 2] = 100;
-                img.data[pi + 3] = 100;
-            } else if (cell === 3) {    // Trace path (other nets)
-                img.data[pi]     = 255;
-                img.data[pi + 1] = 50;
-                img.data[pi + 2] = 50;
-                img.data[pi + 3] = 200;
-            } else if (cell === 4) {    // Voronoi pin clearance
-                img.data[pi]     = 100;
-                img.data[pi + 1] = 140;
-                img.data[pi + 2] = 255;
-                img.data[pi + 3] = 140;
-            } else {
-                img.data[pi + 3] = 0;  // FREE — transparent
-            }
-        }
-    }
-    ctx.putImageData(img, 0, 0);
-
-    const cellPx = resolution * SCALE;
-    const imgEl = document.createElementNS(NS, 'image');
-    imgEl.setAttribute('x', ox + origin_x * SCALE);
-    imgEl.setAttribute('y', oy + origin_y * SCALE);
-    imgEl.setAttribute('width', gw * cellPx);
-    imgEl.setAttribute('height', gh * cellPx);
-    imgEl.setAttribute('image-rendering', 'pixelated');
-    imgEl.setAttributeNS('http://www.w3.org/1999/xlink', 'href', canvas.toDataURL());
-    group.appendChild(imgEl);
-}
-
 
 // ── Draw ownership grid overlay (palette-indexed) ─────────────
 
@@ -442,36 +336,6 @@ function drawOwnershipGrid(group, snap, ox, oy) {
     imgEl.setAttribute('image-rendering', 'pixelated');
     imgEl.setAttributeNS('http://www.w3.org/1999/xlink', 'href', canvas.toDataURL());
     group.appendChild(imgEl);
-
-    // Legend (left side, vertical column)
-    const legendX = 6;
-    const totalLegendH = netIds.length * 14;
-    const gridTopY = oy + origin_y * SCALE;
-    const gridBotY = oy + (origin_y + gh * resolution) * SCALE;
-    const gridMidY = (gridTopY + gridBotY) / 2;
-    let legendY = gridMidY - totalLegendH / 2;
-    for (const nid of netIds) {
-        const hue = hues[palette[nid]] ?? 0;
-        const [r, g, b] = hslToRgb(hue, 75, 55);
-        const color = `rgb(${r},${g},${b})`;
-
-        const dot = document.createElementNS(NS, 'circle');
-        dot.setAttribute('cx', legendX);
-        dot.setAttribute('cy', legendY);
-        dot.setAttribute('r', '3');
-        dot.setAttribute('fill', color);
-        group.appendChild(dot);
-
-        const label = document.createElementNS(NS, 'text');
-        label.setAttribute('x', legendX + 7);
-        label.setAttribute('y', legendY + 3);
-        label.setAttribute('font-size', '8');
-        label.setAttribute('fill', color);
-        label.textContent = nid;
-        group.appendChild(label);
-
-        legendY += 12;
-    }
 }
 
 function hslToRgb(h, s, l) {
