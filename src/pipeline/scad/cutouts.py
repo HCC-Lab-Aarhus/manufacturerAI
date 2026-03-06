@@ -384,6 +384,12 @@ def _bottom_mount(
                 label=f"battery ledge — {cid}",
             ))
 
+    # Pin bridge slots: for pins that sit outside the body pocket, cut a
+    # narrow (TRACE_WIDTH-wide) slot from the pin centre to the nearest
+    # pocket face.  This punches through the cavity wall so battery terminal
+    # connections are not blocked by solid material.
+    _pin_to_pocket_slots(comp, cat, cuts, bw, bh, ceil_start)
+
     # Pin pinholes
     _pinholes(comp, cat, cuts)
 
@@ -497,6 +503,79 @@ def _internal_mount(
 
 
 # ── Shared: pinholes ──────────────────────────────────────────────
+
+
+def _pin_to_pocket_slots(
+    comp: PlacedComponent,
+    cat: Component,
+    cuts: list[Cutout],
+    pocket_w: float,
+    pocket_h: float,
+    ceil_start: float,
+) -> None:
+    """For each pin that sits outside the body pocket, add a narrow slot
+    (TRACE_WIDTH wide, full cavity height) from the pin centre to the
+    nearest pocket face.
+
+    This punches through the cavity wall so that battery terminal wires /
+    conductive filament connections are not blocked by solid material between
+    the pinhole and the battery compartment.
+
+    The slot is only added when the pin is actually outside the pocket
+    (centre-to-edge distance > half the pin's hole diameter).
+    """
+    cx, cy = comp.x_mm, comp.y_mm
+    rot = comp.rotation_deg
+    channel_depth = ceil_start - CAVITY_TOP
+    hw = pocket_w / 2   # half-extents in the UNrotated frame
+    hh = pocket_h / 2
+
+    for pin in cat.pins:
+        px_rel, py_rel = float(pin.position_mm[0]), float(pin.position_mm[1])
+
+        # Is the pin outside the unrotated pocket rectangle?
+        # We work in the component-local frame (before rotation) because the
+        # pocket is defined as a centred rect before being rotated.
+        outside_x = abs(px_rel) - hw   # positive means outside on ±X face
+        outside_y = abs(py_rel) - hh   # positive means outside on ±Y face
+
+        if outside_x <= 0 and outside_y <= 0:
+            continue  # pin is already inside the pocket — no slot needed
+
+        # World position of the pin
+        if rot:
+            rx, ry = _rotate_pt(px_rel, py_rel, rot)
+        else:
+            rx, ry = px_rel, py_rel
+        pin_wx = cx + rx
+        pin_wy = cy + ry
+
+        # Determine which face the pin is closest to and compute the
+        # nearest point on that pocket face in the local frame, then rotate.
+        if outside_x >= outside_y:
+            # pin is beyond the ±X face — slot runs along X toward x=0
+            face_x = math.copysign(hw, px_rel)
+            face_y = py_rel
+        else:
+            # pin is beyond the ±Y face
+            face_x = px_rel
+            face_y = math.copysign(hh, py_rel)
+
+        # Rotate the face point to world coordinates
+        if rot:
+            frx, fry = _rotate_pt(face_x, face_y, rot)
+        else:
+            frx, fry = face_x, face_y
+        face_wx = cx + frx
+        face_wy = cy + fry
+
+        # Emit a trace-width slot from pin centre to pocket face
+        cuts.append(Cutout(
+            polygon=_segment_rect(pin_wx, pin_wy, face_wx, face_wy, TRACE_WIDTH),
+            depth=channel_depth,
+            z_base=CAVITY_TOP,
+            label=f"pin bridge {comp.instance_id}:{pin.id}",
+        ))
 
 
 def _pinholes(
