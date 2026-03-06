@@ -392,28 +392,21 @@ def _polyhedron_shell(
 
     # ── Build concentric cap rings for the top surface ─────────────────────────
     # XY positions interpolate linearly from the top-perimeter ring inward to
-    # the centroid.  Z heights use a 2D Gaussian weighted mean of the
-    # perimeter, ceiling-clamped to the wall height at each spoke:
+    # the centroid.  Z heights use IDW (Shepard's method) from the perimeter
+    # ring vertices with a power that varies from 3 (outer rings) to 2 (inner):
     #
-    #   gz  = gauss2d(bx, by, last_ring, sigma=20 mm)
-    #   bz  = min(gz, last_ring[i][2])
+    #   power = 3 – k / (CAP_RINGS – 1)
     #
-    # This has exactly two behaviours depending on which region spoke i is in:
+    # High power near the perimeter (k≈0): each cap-ring vertex is only ~4 mm
+    # from its own wall-top vertex, so IDW³ strongly weights exactly that
+    # vertex → cap z ≈ wall z, ≤1–2 mm gap at even the tallest horn tip.
+    # This fixes the "14 mm wall protrusion" that the old σ=20 mm Gaussian
+    # produced (Gaussian weights were 0.5–0.8 at 13–23 mm, diluting the horn
+    # peak from 47 mm down to 34 mm, leaving a huge visible wall face).
     #
-    #   • Flat-side spokes (wall z ≈ 18–28 mm, Gaussian pulls higher):
-    #     clamp fires → bz = wall z → cap surface meets the wall rim exactly
-    #     with no visible step or overhang at the perimeter.
-    #
-    #   • Horn spokes (wall z ≈ 44–46 mm, Gaussian stays below that):
-    #     clamp never fires → bz = Gaussian → smooth dome; the horn wall
-    #     correctly sticks up above the dome (that IS what a horn looks like).
-    #
-    # This eliminates the radial "fin" ridge that the previous boundary-blend
-    # approach produced: blending 95 % of top_zs[horn]=46 mm at k=0 made the
-    # horn spoke stay at ~45 mm while adjacent (non-horn) spokes were at ~28 mm,
-    # generating a 17 mm near-vertical face running from the horn tip to the
-    # centroid.  The pure-Gaussian + clamp approach gives a maximum adjacent
-    # z-diff of ~3 mm at k=0 compared to ~15 mm previously.
+    # Lower power (≈2) for inner rings: Shepard at power 2 is C∞ at all
+    # non-data points, giving the smooth, gradually declining dome across
+    # the main interior surface.
     last_ring = rings[-1]
     cx = sum(p[0] for p in last_ring) / N
     cy = sum(p[1] for p in last_ring) / N
@@ -421,24 +414,39 @@ def _polyhedron_shell(
     cap_rings: list[list[list[float]]] = []
     for k in range(_CAP_RINGS):
         t = (k + 1) / (_CAP_RINGS + 1)  # 0 < t < 1, never 0 or 1
+
+        # IDW power varies from 3.0 at the perimeter (k=0) to 2.0 at the
+        # innermost ring (k=_CAP_RINGS-1).  High power near the perimeter
+        # makes the first cap ring converge tightly to each wall-top z (only
+        # ~4 mm away from its own perimeter vertex), so the visible face
+        # between the wall and the cap is ≤ 1–2 mm at even the tallest horn.
+        # Lower power for inner rings gives smooth, gradual height transitions
+        # across the interior (Shepard's method at power 2 is C∞ everywhere
+        # except at the data points, where it matches exactly).
+        idw_power = 2.0 + 1.0 * (1.0 - k / (_CAP_RINGS - 1 or 1))
+
         cap_ring: list[list[float]] = []
         for i in range(N):
             bx = last_ring[i][0] * (1.0 - t) + cx * t
             by = last_ring[i][1] * (1.0 - t) + cy * t
-            gz = _gauss2d_cap_z(bx, by, last_ring)
-            # Ceiling = blended_height at this interior XY (same source as
-            # cutout cylinder tops) so cap surface never blocks any hole.
-            # Falls back to the perimeter wall z when outline unavailable.
-            if outline is not None:
-                ceiling = _blended_height(bx, by, outline, enclosure)
-            else:
-                ceiling = last_ring[i][2]
-            bz = min(gz, ceiling)
+            bz = _idw_cap_z(bx, by, last_ring, power=idw_power)
             cap_ring.append([bx, by, bz])
+
+        # For the first cap ring (k=0), clamp each spoke z to the
+        # corresponding wall-top z.  The variable-power IDW already keeps
+        # these values very close to the wall-top (≤1–2 mm below it), but
+        # the clamp guarantees no spoke can protrude above its wall and
+        # create an upward-slanting perimeter quad visible from above.
+        if k == 0:
+            cap_ring = [
+                [cap_ring[j][0], cap_ring[j][1],
+                 min(cap_ring[j][2], last_ring[j][2])]
+                for j in range(N)
+            ]
         cap_rings.append(cap_ring)
 
-    # Centroid Z: pure Gaussian (no wall vertex to clamp against).
-    cz = _gauss2d_cap_z(cx, cy, last_ring)
+    # Centroid Z: IDW power=2 (smooth global blend of all perimeter heights).
+    cz = _idw_cap_z(cx, cy, last_ring, power=2.0)
 
     # Append cap ring points, then centroid, to the flat point list
     for cap_ring in cap_rings:

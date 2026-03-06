@@ -96,7 +96,10 @@ def _interpolate_vertex_heights(
         d2 = (x - vx) ** 2 + (y - vy) ** 2
         if d2 < 1e-6:
             return heights[i]   # exactly on a vertex
-        w = 1.0 / d2             # 1/d² weight (power = 2)
+        w = 1.0 / (d2 * d2)     # 1/d⁴ weight (power = 4) — more local than
+                                 # 1/d² so narrow horn tips are not diluted by
+                                 # the accumulated contributions of many distant
+                                 # flat-rim vertices.
         sum_w  += w
         sum_wz += w * heights[i]
 
