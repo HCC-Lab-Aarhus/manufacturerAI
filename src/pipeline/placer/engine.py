@@ -58,8 +58,14 @@ def _edge_rotation(
 def _snap_to_edge(
     x_mm: float, y_mm: float,
     outline: Outline, edge_index: int,
+    inward_offset: float = 0.0,
 ) -> tuple[float, float, float]:
     """Snap a point to the nearest position on an outline edge.
+
+    If *inward_offset* is given the snapped point is shifted toward
+    the interior of the outline by that many mm (along the inward
+    normal, which for clockwise winding is the *left* side of the
+    edge direction vector).
 
     Returns (snapped_x, snapped_y, rotation_deg).
     """
@@ -73,6 +79,15 @@ def _snap_to_edge(
     snap_x = p1[0] + t * dx
     snap_y = p1[1] + t * dy
     rotation = _edge_rotation(p1, p2)
+
+    if inward_offset:
+        length = math.sqrt(length_sq)
+        # Inward normal (left of edge direction for CW winding)
+        nx = dy / length
+        ny = -dx / length
+        snap_x -= nx * inward_offset
+        snap_y -= ny * inward_offset
+
     return (snap_x, snap_y, rotation)
 
 
@@ -151,7 +166,8 @@ def place_components(
         style = effective_style.get(ci.instance_id, cat.mounting.style)
 
         if style == "side" and up.edge_index is not None:
-            x, y, rot = _snap_to_edge(up.x_mm, up.y_mm, design.outline, up.edge_index)
+            half_depth = (cat.body.length_mm or 1.0) / 2
+            x, y, rot = _snap_to_edge(up.x_mm, up.y_mm, design.outline, up.edge_index, inward_offset=half_depth)
         else:
             x, y, rot = up.x_mm, up.y_mm, 0
 
