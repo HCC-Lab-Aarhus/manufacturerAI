@@ -51,7 +51,7 @@ registerHandler('routing', {
 // Build a colour map for a list of net names by distributing hues
 // evenly around the HSL wheel so every net gets a maximally distinct colour.
 export function buildNetColorMap(netIds) {
-    const unique = [...new Set(netIds)];
+    const unique = [...new Set(netIds)].sort();
     const n = unique.length;
     const map = {};
     unique.forEach((id, i) => {
@@ -61,8 +61,8 @@ export function buildNetColorMap(netIds) {
     return map;
 }
 
-export function toggleDebugOverlay(netId, visible) {
-    const groups = document.querySelectorAll(`g[data-debug-net="${netId}"]`);
+export function toggleDebugOverlay(layerKey, visible) {
+    const groups = document.querySelectorAll(`g[data-debug-layer="${layerKey}"]`);
     for (const g of groups) {
         g.setAttribute('display', visible ? 'inline' : 'none');
     }
@@ -167,41 +167,50 @@ function buildRoutingSVG(data) {
 
     // ── Debug grid overlays (hidden by default) ──
     const debugGrids = data.debug_grids || [];
+    const debugKeys = [];
     if (debugGrids.length > 0) {
-        const debugNetColorMap = buildNetColorMap(debugGrids.map(g => g.net_id));
+        const debugNetColorMap = buildNetColorMap(
+            debugGrids.filter(g => g.layer === 'keepout').map(g => g.net_id)
+        );
         for (const snap of debugGrids) {
             const g = document.createElementNS(NS, 'g');
-            g.setAttribute('data-debug-net', snap.net_id);
+            const key = snap.layer === 'keepout' ? `keepout:${snap.net_id}` : snap.layer;
+            g.setAttribute('data-debug-layer', key);
             g.setAttribute('display', 'none');
-            drawDebugGrid(g, snap, ox, oy, debugNetColorMap[snap.net_id]);
+            debugKeys.push(key);
+            if (snap.layer === 'keepout') {
+                drawDebugGrid(g, snap, ox, oy, debugNetColorMap[snap.net_id]);
+            } else {
+                drawOwnershipGrid(g, snap, ox, oy);
+            }
             svg.appendChild(g);
         }
     }
 
-    // ── Trace legend ──
+    // ── Trace legend (right side, vertical column) ──
     if (traces.length > 0) {
-        const legendY = h - 8;
-        let legendX = ox;
-        for (const [netId, color] of Object.entries(netColorMap)) {
+        const entries = Object.entries(netColorMap);
+        const totalH = entries.length * 14;
+        const startY = (h - totalH) / 2;
+        const legendX = w - 6;
+        entries.forEach(([netId, color], i) => {
+            const cy = startY + i * 14;
             const dot = document.createElementNS(NS, 'circle');
             dot.setAttribute('cx', legendX);
-            dot.setAttribute('cy', legendY);
-            dot.setAttribute('r', '4');
+            dot.setAttribute('cy', cy);
+            dot.setAttribute('r', '3');
             dot.setAttribute('fill', color);
             svg.appendChild(dot);
 
             const label = document.createElementNS(NS, 'text');
-            label.setAttribute('x', legendX + 8);
-            label.setAttribute('y', legendY + 3);
-            label.setAttribute('class', 'vp-dim-label');
+            label.setAttribute('x', legendX - 7);
+            label.setAttribute('y', cy + 3);
+            label.setAttribute('font-size', '8');
             label.setAttribute('fill', color);
-            label.setAttribute('text-anchor', 'start');
-            label.setAttribute('font-size', '10');
+            label.setAttribute('text-anchor', 'end');
             label.textContent = netId;
             svg.appendChild(label);
-
-            legendX += netId.length * 7 + 22;
-        }
+        });
     }
 
     // ── Dimension labels ──
@@ -242,23 +251,47 @@ function buildRoutingSVG(data) {
     svgWrap.style.position = 'relative';
     svgWrap.appendChild(svg);
 
-    if (debugGrids.length > 0) {
-        const debugNets = [...new Set(debugGrids.map(g => g.net_id))];
+    if (debugKeys.length > 0) {
         const sel = document.createElement('select');
         sel.style.cssText = 'position:absolute; top:6px; left:6px; font-size:11px; padding:2px 4px; background:#161b22; color:#c9d1d9; border:1px solid #30363d; border-radius:4px; cursor:pointer; z-index:1;';
         const none = document.createElement('option');
         none.value = '';
         none.textContent = 'Debug: none';
         sel.appendChild(none);
-        for (const nid of debugNets) {
-            const opt = document.createElement('option');
-            opt.value = nid;
-            opt.textContent = `Debug: ${nid}`;
-            sel.appendChild(opt);
+
+        const LAYER_LABELS = {
+            combined_owner: 'Combined ownership',
+        };
+
+        const ownershipKeys = debugKeys.filter(k => k === 'combined_owner');
+        const keepoutKeys = debugKeys.filter(k => k.startsWith('keepout:'));
+
+        if (ownershipKeys.length > 0) {
+            const grp = document.createElement('optgroup');
+            grp.label = 'Ownership';
+            for (const key of ownershipKeys) {
+                const opt = document.createElement('option');
+                opt.value = key;
+                opt.textContent = LAYER_LABELS[key] || key;
+                grp.appendChild(opt);
+            }
+            sel.appendChild(grp);
         }
+        if (keepoutKeys.length > 0) {
+            const grp = document.createElement('optgroup');
+            grp.label = 'Keepout (per net)';
+            for (const key of keepoutKeys) {
+                const opt = document.createElement('option');
+                opt.value = key;
+                opt.textContent = key.replace('keepout:', '');
+                grp.appendChild(opt);
+            }
+            sel.appendChild(grp);
+        }
+
         sel.addEventListener('change', () => {
-            for (const nid of debugNets) {
-                toggleDebugOverlay(nid, nid === sel.value);
+            for (const key of debugKeys) {
+                toggleDebugOverlay(key, key === sel.value);
             }
         });
         svgWrap.appendChild(sel);
@@ -358,6 +391,95 @@ function drawDebugGrid(group, snap, ox, oy, netColor) {
     imgEl.setAttribute('image-rendering', 'pixelated');
     imgEl.setAttributeNS('http://www.w3.org/1999/xlink', 'href', canvas.toDataURL());
     group.appendChild(imgEl);
+}
+
+
+// ── Draw ownership grid overlay (palette-indexed) ─────────────
+
+function drawOwnershipGrid(group, snap, ox, oy) {
+    const { width: gw, height: gh, origin_x, origin_y, resolution, cells: b64, palette } = snap;
+    const raw = atob(b64);
+    const cells = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) cells[i] = raw.charCodeAt(i);
+
+    const netIds = Object.keys(palette || {});
+    const n = netIds.length || 1;
+    const hues = {};
+    netIds.forEach((nid, i) => {
+        hues[palette[nid]] = Math.round((i * 360) / n);
+    });
+
+    const canvas = document.createElement('canvas');
+    canvas.width = gw;
+    canvas.height = gh;
+    const ctx = canvas.getContext('2d');
+    const img = ctx.createImageData(gw, gh);
+
+    for (let gy = 0; gy < gh; gy++) {
+        for (let gx = 0; gx < gw; gx++) {
+            const idx = cells[gy * gw + gx];
+            const pi = (gy * gw + gx) * 4;
+            if (idx === 0) {
+                img.data[pi + 3] = 0;
+                continue;
+            }
+            const hue = hues[idx] ?? 0;
+            const [r, g, b] = hslToRgb(hue, 75, 55);
+            img.data[pi]     = r;
+            img.data[pi + 1] = g;
+            img.data[pi + 2] = b;
+            img.data[pi + 3] = 180;
+        }
+    }
+    ctx.putImageData(img, 0, 0);
+
+    const cellPx = resolution * SCALE;
+    const imgEl = document.createElementNS(NS, 'image');
+    imgEl.setAttribute('x', ox + origin_x * SCALE);
+    imgEl.setAttribute('y', oy + origin_y * SCALE);
+    imgEl.setAttribute('width', gw * cellPx);
+    imgEl.setAttribute('height', gh * cellPx);
+    imgEl.setAttribute('image-rendering', 'pixelated');
+    imgEl.setAttributeNS('http://www.w3.org/1999/xlink', 'href', canvas.toDataURL());
+    group.appendChild(imgEl);
+
+    // Legend (left side, vertical column)
+    const legendX = 6;
+    const totalLegendH = netIds.length * 14;
+    const gridTopY = oy + origin_y * SCALE;
+    const gridBotY = oy + (origin_y + gh * resolution) * SCALE;
+    const gridMidY = (gridTopY + gridBotY) / 2;
+    let legendY = gridMidY - totalLegendH / 2;
+    for (const nid of netIds) {
+        const hue = hues[palette[nid]] ?? 0;
+        const [r, g, b] = hslToRgb(hue, 75, 55);
+        const color = `rgb(${r},${g},${b})`;
+
+        const dot = document.createElementNS(NS, 'circle');
+        dot.setAttribute('cx', legendX);
+        dot.setAttribute('cy', legendY);
+        dot.setAttribute('r', '3');
+        dot.setAttribute('fill', color);
+        group.appendChild(dot);
+
+        const label = document.createElementNS(NS, 'text');
+        label.setAttribute('x', legendX + 7);
+        label.setAttribute('y', legendY + 3);
+        label.setAttribute('font-size', '8');
+        label.setAttribute('fill', color);
+        label.textContent = nid;
+        group.appendChild(label);
+
+        legendY += 12;
+    }
+}
+
+function hslToRgb(h, s, l) {
+    s /= 100; l /= 100;
+    const k = n => (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1));
+    return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
 }
 
 

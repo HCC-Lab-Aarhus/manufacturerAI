@@ -118,6 +118,7 @@ def build_debug_grids(
 
         results.append({
             "net_id": nid,
+            "layer": "keepout",
             "width": W,
             "height": H,
             "origin_x": grid.origin_x,
@@ -125,6 +126,37 @@ def build_debug_grids(
             "resolution": grid.resolution,
             "cells": base64.b64encode(bytes(cells)).decode("ascii"),
         })
+
+    # -- Ownership layers (global, not per-net) --------------------
+    net_ids = sorted(routed_paths.keys())
+    net_index = {nid: i + 1 for i, nid in enumerate(net_ids)}
+
+    combined_map = bytearray(W * H)
+    for flat, owner in grid._trace_owner.items():
+        idx = net_index.get(owner, 0)
+        if idx:
+            combined_map[flat] = idx
+    for flat, owners in grid._clearance_owner.items():
+        if combined_map[flat]:
+            continue
+        for owner in owners:
+            idx = net_index.get(owner, 0)
+            if idx:
+                combined_map[flat] = idx
+                break
+
+    palette = {nid: i + 1 for i, nid in enumerate(net_ids)}
+
+    results.append({
+        "layer": "combined_owner",
+        "width": W,
+        "height": H,
+        "origin_x": grid.origin_x,
+        "origin_y": grid.origin_y,
+        "resolution": grid.resolution,
+        "cells": base64.b64encode(bytes(combined_map)).decode("ascii"),
+        "palette": palette,
+    })
 
     return results
 
