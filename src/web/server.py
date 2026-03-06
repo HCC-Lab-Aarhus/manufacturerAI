@@ -34,7 +34,7 @@ from src.agent import DesignAgent, TOOLS, MODEL, THINKING_BUDGET, TOKEN_BUDGET, 
 from src.pipeline.design import parse_design, validate_design
 from src.pipeline.placer import place_components, placement_to_dict, parse_placement, PlacementError
 from src.pipeline.router import route_traces, routing_to_dict, write_trace_bitmap
-from src.pipeline.config import TRACE_RULES, PRINTERS, get_printer
+from src.pipeline.config import TRACE_RULES, BITMAP_CONFIG, PRINTERS, get_printer
 from src.pipeline.gcode.filaments import FILAMENTS
 from src.pipeline.scad import run_scad_step
 from src.web.naming import generate_session_name
