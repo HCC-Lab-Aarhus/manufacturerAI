@@ -25,13 +25,17 @@ from fastapi.staticfiles import StaticFiles
 # compile state: session_id -> {status, message, cancel}
 _stl_compile: dict[str, dict] = {}
 
+# gcode pipeline state: session_id -> {status, message, stages, ...}
+_gcode_state: dict[str, dict] = {}
+
 from src.catalog import load_catalog, catalog_to_dict, CatalogResult
 from src.session import create_session, load_session, list_sessions, Session
 from src.agent import DesignAgent, TOOLS, MODEL, THINKING_BUDGET, TOKEN_BUDGET, _build_system_prompt, _prune_messages
 from src.pipeline.design import parse_design, validate_design
 from src.pipeline.placer import place_components, placement_to_dict, parse_placement, PlacementError
 from src.pipeline.router import route_traces, routing_to_dict, write_trace_bitmap
-from src.pipeline.config import TRACE_RULES, BITMAP_CONFIG, PRINTERS, get_printer
+from src.pipeline.config import TRACE_RULES, PRINTERS, get_printer
+from src.pipeline.gcode.filaments import FILAMENTS
 from src.pipeline.scad import run_scad_step
 from src.web.naming import generate_session_name
 
@@ -651,6 +655,134 @@ async def api_serve_stl(session: str = Query(...)):
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     return response
+
+
+# ── Routes: G-code API ──────────────────────────────────────────
+
+@app.get("/api/filaments")
+async def api_list_filaments():
+    """List available filament profiles."""
+    return {
+        "filaments": [
+            {"id": f.id, "label": f.label}
+            for f in FILAMENTS.values()
+        ]
+    }
+
+
+@app.post("/api/session/gcode")
+async def api_run_gcode(
+    session: str = Query(...),
+    force: bool = Query(False),
+    filament: str = Query(None),
+):
+    """Start the background G-code pipeline (slice STL → inject pauses → output)."""
+    s = _resolve_session(session)
+    stl_path = s.path / "enclosure.stl"
+    if not stl_path.exists():
+        raise HTTPException(400, "No enclosure.stl — compile SCAD first")
+
+    routing_data = s.read_artifact("routing.json")
+    if routing_data is None:
+        raise HTTPException(400, "No routing.json — run routing first")
+
+    cur = _gcode_state.get(session)
+    if not force and cur and cur["status"] == "running":
+        return {"status": "running"}
+    if not force and cur and cur["status"] in ("done", "error"):
+        return cur
+
+    _gcode_state[session] = {"status": "running", "message": "Starting G-code pipeline…", "stages": []}
+
+    def _do_gcode():
+        from src.pipeline.gcode.pipeline import run_gcode_pipeline
+        from src.pipeline.design.parsing import parse_design as _pd
+        try:
+            shell_height = None
+            design_data = s.read_artifact("design.json")
+            if design_data:
+                try:
+                    shell_height = _pd(design_data).enclosure.height_mm
+                except Exception:
+                    pass
+
+            result = run_gcode_pipeline(
+                stl_path=stl_path,
+                output_dir=s.path,
+                routing_result=routing_data,
+                shell_height=shell_height,
+                printer=s.printer_id,
+                filament=filament,
+            )
+            if result.success:
+                s.pipeline_state["gcode"] = "complete"
+                s.save()
+                _gcode_state[session] = {
+                    "status": "done",
+                    "message": result.message,
+                    "stages": result.stages,
+                    "has_bgcode": result.bgcode_path is not None and Path(result.bgcode_path).exists(),
+                    "gcode_bytes": (
+                        Path(result.staged_gcode_path).stat().st_size
+                        if result.staged_gcode_path and Path(result.staged_gcode_path).exists()
+                        else 0
+                    ),
+                }
+            else:
+                _gcode_state[session] = {
+                    "status": "error",
+                    "message": result.message,
+                    "stages": result.stages,
+                }
+        except Exception as exc:
+            log.exception("G-code pipeline error")
+            _gcode_state[session] = {"status": "error", "message": str(exc), "stages": []}
+
+    threading.Thread(target=_do_gcode, daemon=True).start()
+    return {"status": "running"}
+
+
+@app.get("/api/session/gcode")
+async def api_gcode_status(session: str = Query(...)):
+    """Poll the G-code pipeline status."""
+    s = _resolve_session(session)
+    cur = _gcode_state.get(session)
+    if cur:
+        return cur
+    # Reconstruct state from disk
+    staged = s.path / "enclosure_staged.gcode"
+    bgcode = s.path / "enclosure_staged.bgcode"
+    if staged.exists():
+        return {
+            "status": "done",
+            "message": "G-code pipeline completed successfully.",
+            "stages": [],
+            "has_bgcode": bgcode.exists(),
+            "gcode_bytes": staged.stat().st_size,
+        }
+    return {"status": "pending"}
+
+
+@app.get("/api/session/gcode/download")
+async def api_gcode_download(session: str = Query(...), format: str = Query("gcode")):
+    """Download the staged G-code or binary G-code file."""
+    s = _resolve_session(session)
+    if format == "bgcode":
+        path = s.path / "enclosure_staged.bgcode"
+        fname = "enclosure_staged.bgcode"
+        mime = "application/octet-stream"
+    else:
+        path = s.path / "enclosure_staged.gcode"
+        fname = "enclosure_staged.gcode"
+        mime = "text/plain"
+    if not path.exists():
+        raise HTTPException(404, f"No {fname} — run the G-code pipeline first")
+    return FileResponse(
+        path,
+        media_type=mime,
+        filename=fname,
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 # ── Routes: Design Agent API ──────────────────────────────────────

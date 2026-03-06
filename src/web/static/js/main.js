@@ -9,6 +9,7 @@ import { runPlacement, loadPlacementResult, enablePlacementTab } from './placeme
 import { runRouting, loadRoutingResult, enableRoutingTab } from './routing.js';
 import { loadBitmapResult, enableBitmapTab } from './bitmap.js';
 import { runScad, loadScadResult, enableScadTab } from './scad.js';
+import { runGcode, loadGcodeResult, enableGcodeTab, resetGcodePanel } from './gcode.js';
 import { initGuide, openGuide, enableGuideBtn } from './guide.js';
 import { setStep } from './viewport.js';
 import './viewportDesign.js';   // registers the design viewport handler
@@ -52,6 +53,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (data?.artifacts?.routing) {
                     enableBitmapTab(false);
                     enableScadTab(!data?.artifacts?.scad);
+                }
+                // Enable G-code nav if STL has been compiled
+                if (data?.artifacts?.scad) {
+                    enableGcodeTab(!data?.artifacts?.gcode);
+                    loadGcodeResult();
                 }
                 // Enable guide if placement is complete
                 if (data?.artifacts?.placement) {
@@ -125,6 +131,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // SCAD
     document.getElementById('btn-run-scad').addEventListener('click', runScad);
+
+    // G-code
+    document.getElementById('btn-run-gcode').addEventListener('click', runGcode);
 
     // Design chat
     document.getElementById('btn-send-design').addEventListener('click', sendDesignPrompt);
