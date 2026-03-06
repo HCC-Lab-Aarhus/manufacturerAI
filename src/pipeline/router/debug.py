@@ -76,9 +76,9 @@ def build_debug_grids(
     pin_voronoi = _build_voronoi(all_pin_cells, grid, pin_clearance_cells)
 
     # -- Commit every routed net's traces to the fresh grid --------
-    for paths in routed_paths.values():
+    for nid, paths in routed_paths.items():
         for path in paths:
-            grid.block_trace(path)
+            grid.block_trace(path, net_id=nid)
 
     # -- Snapshot each net -----------------------------------------
     W = grid.width

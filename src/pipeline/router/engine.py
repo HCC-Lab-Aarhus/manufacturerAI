@@ -245,9 +245,9 @@ def route_traces(
                  attempt + 1, len(failed_nets), len(ordering),
                  ", ".join(failed_nets))
 
-        for net_paths in routed_paths.values():
+        for nid, net_paths in routed_paths.items():
             for path in net_paths:
-                grid.free_trace(path)
+                grid.free_trace(path, net_id=nid)
 
         prev_failed = list(failed_nets)
         ordering = _perturb_ordering(baseline_order, failed_nets, attempt)
@@ -369,9 +369,8 @@ def _try_crossing_ripup(
     crossed_nets: set[str] = set()
     for path in paths_cross:
         for gx, gy in path:
-            owner = grid.trace_owner_at(gx, gy)
-            if owner is not None and owner != net_id:
-                crossed_nets.add(owner)
+            owners = grid.cell_owner_at(gx, gy)
+            crossed_nets.update(owners - {net_id})
 
     if not crossed_nets:
         for path in paths_cross:
@@ -386,7 +385,7 @@ def _try_crossing_ripup(
     for cn in crossed_nets:
         saved[cn] = routed_paths[cn]
         for path in routed_paths[cn]:
-            grid.free_trace(path)
+            grid.free_trace(path, net_id=cn)
 
     for path in paths_cross:
         grid.block_trace(path, net_id=net_id)
@@ -414,13 +413,13 @@ def _try_crossing_ripup(
         return True
 
     for path in paths_cross:
-        grid.free_trace(path)
+        grid.free_trace(path, net_id=net_id)
     del routed_paths[net_id]
 
     for rn in crossed_nets:
         if rn in routed_paths and routed_paths[rn] is not saved.get(rn):
             for path in routed_paths[rn]:
-                grid.free_trace(path)
+                grid.free_trace(path, net_id=rn)
         if rn in saved:
             routed_paths[rn] = saved[rn]
             for path in saved[rn]:
