@@ -60,6 +60,9 @@ class RoutingGrid:
         # them so nearby pads stay reachable.
         self._protected: set[tuple[int, int]] = set()
 
+        # Trace ownership: maps flat index → net_id that owns the trace
+        self._trace_owner: dict[int, str] = {}
+
         # Block cells outside polygon or too close to its edges
         inset_poly = outline_poly.buffer(-edge_clearance)
         for gy in range(self.height):
@@ -100,6 +103,12 @@ class RoutingGrid:
         if not self.in_bounds(gx, gy):
             return True
         return self._cells[gy * self.width + gx] != FREE
+
+    def trace_owner_at(self, gx: int, gy: int) -> str | None:
+        """Return the net_id owning the trace at (gx, gy), or None."""
+        if not self.in_bounds(gx, gy):
+            return None
+        return self._trace_owner.get(gy * self.width + gx)
 
     def is_permanently_blocked(self, gx: int, gy: int) -> bool:
         if not self.in_bounds(gx, gy):
@@ -185,6 +194,7 @@ class RoutingGrid:
         self,
         path: list[tuple[int, int]],
         clearance_cells: int | None = None,
+        net_id: str | None = None,
     ) -> None:
         """Block cells along a trace path, including clearance radius.
 
@@ -212,6 +222,8 @@ class RoutingGrid:
                 v = self._cells[gy * self.width + gx]
                 if v == FREE or v == BLOCKED:
                     self._cells[gy * self.width + gx] = TRACE_PATH
+                if net_id is not None:
+                    self._trace_owner[gy * self.width + gx] = net_id
 
         # 2) Mark clearance zone as BLOCKED (skip protected & path cells)
         for gx, gy in path:
@@ -236,6 +248,9 @@ class RoutingGrid:
                 ))
             )
         for gx, gy in path:
+            if self.in_bounds(gx, gy):
+                flat = gy * self.width + gx
+                self._trace_owner.pop(flat, None)
             for dy in range(-clearance_cells, clearance_cells + 1):
                 for dx in range(-clearance_cells, clearance_cells + 1):
                     nx, ny = gx + dx, gy + dy

@@ -187,6 +187,7 @@ def route_traces(
         routed_pads: dict[str, list[NetPad]] = {}
         pin_assignments: dict[str, str] = {}
         failed_nets: list[str] = []
+        failed_pads_map: dict[str, list[NetPad]] = {}
 
         for nid in ordering:
             refs = net_pad_map[nid]
@@ -208,17 +209,26 @@ def route_traces(
                 routed_paths[nid] = paths
                 routed_pads[nid] = pads
                 for path in paths:
-                    grid.block_trace(path)
+                    grid.block_trace(path, net_id=nid)
                 log.info("  %-20s OK — %d segments", nid, len(paths))
             else:
-                failed_nets.append(nid)
-                log.info("  %-20s FAIL — no route", nid)
+                ok2 = _try_crossing_ripup(
+                    nid, pads, grid, pad_radius, config,
+                    routed_paths, routed_pads, pin_voronoi,
+                )
+                if ok2:
+                    log.info("  %-20s OK — rip-up resolved", nid)
+                else:
+                    failed_nets.append(nid)
+                    failed_pads_map[nid] = pads
+                    log.info("  %-20s FAIL — no route", nid)
 
         last_attempt = {
             "routed_paths": routed_paths,
             "routed_pads": routed_pads,
             "pin_assignments": pin_assignments,
             "failed_nets": failed_nets,
+            "failed_pads": failed_pads_map,
         }
 
         if not failed_nets:
@@ -245,9 +255,9 @@ def route_traces(
     assert best is not None
 
     if best is not last_attempt:
-        for net_paths in best["routed_paths"].values():
+        for nid, net_paths in best["routed_paths"].items():
             for path in net_paths:
-                grid.block_trace(path)
+                grid.block_trace(path, net_id=nid)
 
     routed_paths = best["routed_paths"]
     routed_pads = best["routed_pads"]
@@ -325,6 +335,98 @@ def _perturb_ordering(
                   attempt, failed_nets)
 
     return ordering
+
+
+# ── Crossing rip-up ────────────────────────────────────────────────
+
+
+def _try_crossing_ripup(
+    net_id: str,
+    pads: list[NetPad],
+    grid: RoutingGrid,
+    pad_radius: int,
+    config: RouterConfig,
+    routed_paths: dict[str, list[list[tuple[int, int]]]],
+    routed_pads: dict[str, list[NetPad]],
+    pin_voronoi: dict[int, str] | None,
+) -> bool:
+    """Route a net using crossing-cost A*, then rip up crossed nets.
+
+    1. Run A* with crossing_cost — the path may walk through existing
+       traces, paying a high penalty.
+    2. Identify which nets the path crossed (via grid trace ownership).
+    3. Rip those nets, commit the new path, reroute ripped nets.
+    4. If any ripped net cannot reroute, revert everything.
+    """
+    paths_cross, ok, _ = _route_single_net(
+        net_id, pads, grid, pad_radius, config.turn_penalty,
+        pin_voronoi=pin_voronoi,
+        crossing_cost=config.crossing_cost,
+    )
+    if not ok or not paths_cross:
+        return False
+
+    crossed_nets: set[str] = set()
+    for path in paths_cross:
+        for gx, gy in path:
+            owner = grid.trace_owner_at(gx, gy)
+            if owner is not None and owner != net_id:
+                crossed_nets.add(owner)
+
+    if not crossed_nets:
+        for path in paths_cross:
+            grid.block_trace(path, net_id=net_id)
+        routed_paths[net_id] = paths_cross
+        routed_pads[net_id] = pads
+        return True
+
+    log.debug("  rip-up: %s crosses %s", net_id, list(crossed_nets))
+
+    saved: dict[str, list[list[tuple[int, int]]]] = {}
+    for cn in crossed_nets:
+        saved[cn] = routed_paths[cn]
+        for path in routed_paths[cn]:
+            grid.free_trace(path)
+
+    for path in paths_cross:
+        grid.block_trace(path, net_id=net_id)
+    routed_paths[net_id] = paths_cross
+    routed_pads[net_id] = pads
+
+    all_rerouted = True
+    for cn in crossed_nets:
+        cn_pads = routed_pads[cn]
+        cn_paths, cn_ok, _ = _route_single_net(
+            cn, cn_pads, grid, pad_radius, config.turn_penalty,
+            pin_voronoi=pin_voronoi,
+        )
+        if cn_ok and cn_paths:
+            for path in cn_paths:
+                grid.block_trace(path, net_id=cn)
+            routed_paths[cn] = cn_paths
+            log.debug("  rip-up: rerouted %s OK", cn)
+        else:
+            log.debug("  rip-up: rerouted %s FAIL, reverting", cn)
+            all_rerouted = False
+            break
+
+    if all_rerouted:
+        return True
+
+    for path in paths_cross:
+        grid.free_trace(path)
+    del routed_paths[net_id]
+
+    for rn in crossed_nets:
+        if rn in routed_paths and routed_paths[rn] is not saved.get(rn):
+            for path in routed_paths[rn]:
+                grid.free_trace(path)
+        if rn in saved:
+            routed_paths[rn] = saved[rn]
+            for path in saved[rn]:
+                grid.block_trace(path, net_id=rn)
+
+    return False
 
 
 # ── Component blocking ─────────────────────────────────────────────
@@ -652,6 +754,7 @@ def _route_single_net(
     turn_penalty: int = TURN_PENALTY,
     *,
     pin_voronoi: dict[int, str] | None = None,
+    crossing_cost: int = 0,
 ) -> tuple[list[list[tuple[int, int]]], bool, list[dict]]:
     """Route a single net. Returns (grid_paths, success, debug_snapshots)."""
     if len(pads) < 2:
@@ -660,12 +763,12 @@ def _route_single_net(
     if len(pads) == 2:
         return _route_two_pin(
             net_id, pads, grid, pad_radius, turn_penalty,
-            pin_voronoi,
+            pin_voronoi, crossing_cost=crossing_cost,
         )
 
     return _route_multi_pin(
         net_id, pads, grid, pad_radius, turn_penalty,
-        pin_voronoi,
+        pin_voronoi, crossing_cost=crossing_cost,
     )
 
 
@@ -676,6 +779,8 @@ def _route_two_pin(
     pad_radius: int,
     turn_penalty: int,
     pin_voronoi: dict[int, str] | None,
+    *,
+    crossing_cost: int = 0,
 ) -> tuple[list[list[tuple[int, int]]], bool, list[dict]]:
     src = (pads[0].gx, pads[0].gy)
     snk = (pads[1].gx, pads[1].gy)
@@ -684,7 +789,7 @@ def _route_two_pin(
     if pin_voronoi is not None:
         blocked_v = _block_voronoi(grid, pin_voronoi, pads)
 
-    path = find_path(grid, src, snk, turn_penalty=turn_penalty)
+    path = find_path(grid, src, snk, turn_penalty=turn_penalty, crossing_cost=crossing_cost)
 
     _unblock_voronoi(grid, blocked_v)
 
@@ -700,6 +805,8 @@ def _route_multi_pin(
     pad_radius: int,
     turn_penalty: int,
     pin_voronoi: dict[int, str] | None,
+    *,
+    crossing_cost: int = 0,
 ) -> tuple[list[list[tuple[int, int]]], bool, list[dict]]:
     """MST-guided Steiner tree routing for multi-pin nets."""
     mst_edges = _compute_mst(pads)
@@ -767,6 +874,7 @@ def _route_multi_pin(
         path = find_path_to_tree(
             grid, src_tree, target_tree,
             turn_penalty=turn_penalty,
+            crossing_cost=crossing_cost,
         )
 
         _unblock_voronoi(grid, blocked_v)
