@@ -510,7 +510,7 @@ def _trace_channels(
 
 def _rotated(
     pts: list[list[float]],
-    angle_deg: int,
+    angle_deg: float,
     cx: float,
     cy: float,
 ) -> list[list[float]]:

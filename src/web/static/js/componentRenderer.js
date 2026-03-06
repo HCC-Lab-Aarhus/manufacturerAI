@@ -88,7 +88,6 @@ export function drawComponentIcon(svg, comp, ox, oy, scale, opts = {}) {
         // Rectangular body
         let bw = (body.width_mm || 4) * scale;
         let bh = (body.length_mm || 4) * scale;
-        if (rot === 90 || rot === 270) [bw, bh] = [bh, bw];
 
         const rect = document.createElementNS(NS, 'rect');
         rect.setAttribute('x', cx - bw / 2);
@@ -101,6 +100,7 @@ export function drawComponentIcon(svg, comp, ox, oy, scale, opts = {}) {
         rect.setAttribute('stroke', color);
         rect.setAttribute('stroke-width', '1.5');
         rect.setAttribute('stroke-opacity', String(Math.min(1, bodyOpacity + 0.4)));
+        if (rot) rect.setAttribute('transform', `rotate(${rot} ${cx} ${cy})`);
         group.appendChild(rect);
 
         // Pin-1 notch for DIP/IC packages (many pins)

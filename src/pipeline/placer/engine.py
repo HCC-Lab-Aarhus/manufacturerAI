@@ -42,8 +42,8 @@ def _edge_direction(
 
 def _edge_rotation(
     p1: tuple[float, float], p2: tuple[float, float],
-) -> int:
-    """Compute the nearest 90° rotation for a component on an edge.
+) -> float:
+    """Compute the rotation for a component on an edge.
 
     The component's "forward" direction should point outward through
     the wall.  For clockwise winding, the outward normal is to the
@@ -52,15 +52,13 @@ def _edge_rotation(
     dx = p2[0] - p1[0]
     dy = p2[1] - p1[1]
     angle = math.degrees(math.atan2(dy, dx))
-    normal_angle = angle - 90
-    snapped = round(normal_angle / 90) * 90
-    return int(snapped) % 360
+    return angle % 360
 
 
 def _snap_to_edge(
     x_mm: float, y_mm: float,
     outline: Outline, edge_index: int,
-) -> tuple[float, float, int]:
+) -> tuple[float, float, float]:
     """Snap a point to the nearest position on an outline edge.
 
     Returns (snapped_x, snapped_y, rotation_deg).

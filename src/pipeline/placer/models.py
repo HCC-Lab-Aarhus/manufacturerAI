@@ -18,7 +18,7 @@ class PlacedComponent:
     catalog_id: str
     x_mm: float
     y_mm: float
-    rotation_deg: int   # 0, 90, 180, 270
+    rotation_deg: float   # degrees, arbitrary for side-mount; 0/90/180/270 for internal
 
 
 @dataclass

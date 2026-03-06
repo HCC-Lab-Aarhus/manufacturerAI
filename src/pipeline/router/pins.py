@@ -40,7 +40,7 @@ class PinPool:
 def pin_world_xy(
     pin_local: tuple[float, float],
     cx: float, cy: float,
-    rotation_deg: int,
+    rotation_deg: float,
 ) -> tuple[float, float]:
     """Transform a component-local pin position to world coordinates."""
     px, py = pin_local

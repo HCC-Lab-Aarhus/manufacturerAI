@@ -11,26 +11,27 @@ from src.catalog.models import Component
 
 
 def footprint_halfdims(
-    cat: Component, rotation_deg: int,
+    cat: Component, rotation_deg: float,
 ) -> tuple[float, float]:
-    """Return (half_width, half_height) of the body at a given rotation.
+    """Return (half_width, half_height) of the axis-aligned bounding box
+    of the body at a given rotation.
 
-    For rect bodies, width/length swap at 90° and 270°.
     For circle bodies, the half-dims are equal regardless of rotation.
+    For rect bodies at arbitrary angles, computes the rotated AABB.
     """
     if cat.body.shape == "circle":
         r = (cat.body.diameter_mm or 5.0) / 2
         return (r, r)
-    # rect
     w = (cat.body.width_mm or 1.0) / 2
     h = (cat.body.length_mm or 1.0) / 2
-    if rotation_deg in (90, 270):
-        return (h, w)
-    return (w, h)
+    rad = math.radians(rotation_deg)
+    cos_r = abs(math.cos(rad))
+    sin_r = abs(math.sin(rad))
+    return (w * cos_r + h * sin_r, w * sin_r + h * cos_r)
 
 
 def footprint_envelope_halfdims(
-    cat: Component, rotation_deg: int,
+    cat: Component, rotation_deg: float,
 ) -> tuple[float, float]:
     """Return (half_width, half_height) of the pin-inclusive envelope.
 
@@ -71,7 +72,7 @@ def footprint_area(cat: Component) -> float:
 def pin_world_xy(
     pin_local: tuple[float, float],
     cx: float, cy: float,
-    rotation_deg: int,
+    rotation_deg: float,
 ) -> tuple[float, float]:
     """Transform a component-local pin position to world coordinates."""
     px, py = pin_local
