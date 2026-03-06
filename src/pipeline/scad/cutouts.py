@@ -328,11 +328,15 @@ def _bottom_mount(
     bw = (body.width_mm  or 25.0) + 2 * margin
     bh = (body.length_mm or 48.0) + 2 * margin
     body_h = body.height_mm
+    rot = comp.rotation_deg
 
     # Body pocket inside the cavity (from CAVITY_TOP upward)
     pocket_depth = min(body_h + margin, ceil_start - CAVITY_TOP)
+    pocket_poly = _rect(cx, cy, bw, bh)
+    if rot:
+        pocket_poly = _rotated(pocket_poly, rot, cx, cy)
     cuts.append(Cutout(
-        polygon=_rect(cx, cy, bw, bh),
+        polygon=pocket_poly,
         depth=pocket_depth,
         z_base=CAVITY_TOP,
         label=f"bottom-mount body — {cid}",
@@ -345,27 +349,35 @@ def _bottom_mount(
         hh2 = (body.length_mm or 48.0) / 2 - hatch_clr
         # Extend 1 mm below shell bottom (z=-1) to guarantee a clean cut
         hatch_depth = FLOOR_TOP + 1.5
+        hatch_poly = [
+            [cx - hw2, cy - hh2],
+            [cx + hw2, cy - hh2],
+            [cx + hw2, cy + hh2],
+            [cx - hw2, cy + hh2],
+        ]
+        if rot:
+            hatch_poly = _rotated(hatch_poly, rot, cx, cy)
         cuts.append(Cutout(
-            polygon=[
-                [cx - hw2, cy - hh2],
-                [cx + hw2, cy - hh2],
-                [cx + hw2, cy + hh2],
-                [cx - hw2, cy + hh2],
-            ],
+            polygon=hatch_poly,
             depth=hatch_depth,
             z_base=-1.0,
             label=f"battery floor opening — {cid}",
         ))
 
-        # Ledge recesses on the long sides (hatch panel rests here)
+        # Ledge recesses on the long sides of the hatch (hatch panel rests here).
+        # In the unrotated frame ledges sit on the ±X sides; rotate the polygon
+        # so they follow the component orientation.
         hatch_thick = mounting.hatch.thickness_mm
         ledge_w = 2.5
         ledge_d = hatch_thick + 0.3
         half_bw = (body.width_mm or 25.0) / 2 - hatch_clr
+        ledge_len = (body.length_mm or 48.0) - hatch_clr * 2
         for side in (-1, 1):
-            ledge_cx = cx + side * (half_bw - ledge_w / 2)
+            ledge_poly = _rect(cx + side * (half_bw - ledge_w / 2), cy, ledge_w, ledge_len)
+            if rot:
+                ledge_poly = _rotated(ledge_poly, rot, cx, cy)
             cuts.append(Cutout(
-                polygon=_rect(ledge_cx, cy, ledge_w, (body.length_mm or 48.0) - hatch_clr * 2),
+                polygon=ledge_poly,
                 depth=ledge_d + 0.5,
                 z_base=-0.5,
                 label=f"battery ledge — {cid}",
