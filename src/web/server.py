@@ -473,8 +473,6 @@ async def api_run_scad(session: str = Query(...)):
     s = _resolve_session(session)
     if s.read_artifact("placement.json") is None:
         raise HTTPException(400, "No placement.json — run the placer first")
-    if s.read_artifact("routing.json") is None:
-        raise HTTPException(400, "No routing.json — run the router first")
 
     try:
         scad_path = run_scad_step(s)
@@ -524,7 +522,10 @@ async def api_compile_stl(session: str = Query(...), force: bool = Query(False))
 
     # Already done (and not forcing a redo)
     if not force and stl_path.exists() and session not in _stl_compile:
-        return {"status": "done", "stl_bytes": stl_path.stat().st_size}
+        # Recompile if SCAD has been updated more recently than STL
+        scad_newer = scad_path.stat().st_mtime > stl_path.stat().st_mtime
+        if not scad_newer:
+            return {"status": "done", "stl_bytes": stl_path.stat().st_size}
 
     # Already compiling
     cur = _stl_compile.get(session)
@@ -581,11 +582,14 @@ async def api_serve_stl(session: str = Query(...)):
     stl_path = s.path / "enclosure.stl"
     if not stl_path.exists():
         raise HTTPException(404, "No enclosure.stl yet -- compile first")
-    return FileResponse(
+    response = FileResponse(
         stl_path,
         media_type="application/octet-stream",
         filename="enclosure.stl",
     )
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 # ── Routes: Design Agent API ──────────────────────────────────────

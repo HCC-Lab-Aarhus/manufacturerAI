@@ -1,14 +1,26 @@
 """layers.py — generate OpenSCAD lines for the shell body.
 
-Uses stacked ``polygon() + linear_extrude()`` layers — one for the straight
-wall, plus thin layers for chamfer/fillet profiles on top and bottom edges.
-Inset polygons are pre-computed in Python via Shapely so no SCAD ``offset()``
-or ``hull()`` is needed; this keeps OpenSCAD's CGAL solver fast even with
-hundreds of cutouts.
+Two code paths are selected automatically:
 
-The ``flat_pts`` argument (from ``outline.tessellate_outline``) is the
-Bézier-expanded 2-D footprint polygon — identical to the footprint used for
-cutout placement, so the shell and cutouts are always perfectly aligned.
+**Uniform height** (all ceiling Z values within 0.1 mm of each other)
+  Uses the original stacked ``polygon() + linear_extrude()`` approach — one
+  layer per chamfer/fillet step plus a single straight-wall extrude.  This
+  path is unchanged from the previous implementation.
+
+**Variable height** (per-vertex ``z_top`` values differ by > 0.1 mm)
+  Uses a single OpenSCAD ``polyhedron()`` primitive built from vertex rings.
+  Each ring corresponds to a profile step (bottom edge, top edge) or to the
+  top/bottom of the straight wall section.  Because every vertex in a ring
+  can sit at a different Z, the ceiling can follow the per-vertex heights
+  defined in the design outline.
+
+  Edge profiles (chamfer / fillet) are applied via miter-normal insets
+  computed in pure Python — preserving the exact vertex count across all
+  rings so the face index table stays consistent.
+
+The ``flat_pts`` argument is the Bézier-expanded 2-D footprint polygon from
+``outline.tessellate_outline`` — identical to the polygon used for cutout
+placement so the shell and cutouts are always aligned.
 """
 
 from __future__ import annotations
@@ -25,14 +37,22 @@ from shapely.geometry import Polygon as _ShapelyPoly
 
 log = logging.getLogger(__name__)
 
-# Number of stacked layers per chamfer / fillet profile zone.
-# More steps = smoother rounded edge; each adds one SCAD union child.
-# 6 steps keeps chamfer quality acceptable for 3D printing while
-# halving the number of shell layers (vs 12), which speeds up CGAL CSG.
-_CURVE_STEPS = 6
+# Number of profile steps per chamfer / fillet zone.
+# 14 gives smooth quarter-circle fillets (~6.4° per step).
+_CURVE_STEPS = 14
+
+# Number of concentric rings inside the top cap (between the perimeter ring
+# and the centroid point).  More rings → smoother height transitions on the
+# visible top surface for variable-height shells.
+# 14 rings match _CURVE_STEPS giving consistent radial density: each ring
+# spans ~1/15 of the cap radius, similar to the fillet arc step size.
+_CAP_RINGS = 14
+
+# Height variation threshold below which the uniform path is used (mm).
+_VARIABLE_HEIGHT_THRESHOLD = 0.1
 
 
-# ── Shapely inset helper ───────────────────────────────────────────────────────
+# ── Shapely inset helper (2-D string, for uniform path) ──────────────────────
 
 
 def _inset_polygon(
@@ -56,6 +76,399 @@ def _inset_polygon(
     return ", ".join(f"[{x:.3f}, {y:.3f}]" for x, y in coords)
 
 
+# ── Per-vertex miter inset (for polyhedron path) ──────────────────────────────
+
+
+def _polygon_signed_area(pts: list[list[float]]) -> float:
+    """Signed shoelace area.  Positive = CCW in standard math coords (Y up)."""
+    n = len(pts)
+    return 0.5 * sum(
+        pts[i][0] * pts[(i + 1) % n][1] - pts[(i + 1) % n][0] * pts[i][1]
+        for i in range(n)
+    )
+
+
+def _inset_polygon_pts(
+    pts: list[list[float]],
+    inset: float,
+    _area: float | None = None,
+) -> list[list[float]]:
+    """Inset each vertex along its miter normal by ``inset`` mm.
+
+    Unlike the Shapely-based ``_inset_polygon``, this function always returns
+    exactly ``len(pts)`` vertices — a hard requirement for building consistent
+    polyhedron ring tables.  A miter limit of 5× prevents very acute corners
+    from producing extreme spikes.
+
+    Parameters
+    ----------
+    pts    : 2-D polygon vertices [[x, y], ...].
+    inset  : Inward offset in mm.  ≤ 0 returns a copy of the original vertices.
+    _area  : Pre-computed signed area (optional, avoids recomputing in a loop).
+    """
+    if inset < 1e-9:
+        return [[x, y] for x, y in pts]
+
+    n = len(pts)
+    area = _area if _area is not None else _polygon_signed_area(pts)
+    # +1 → CCW math convention (interior is to the left of each directed edge).
+    # −1 → CW math / CCW screen convention (interior to the right).
+    sign = 1.0 if area >= 0 else -1.0
+
+    result: list[list[float]] = []
+    for i in range(n):
+        x0, y0 = pts[(i - 1) % n]
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % n]
+
+        # Normalised tangent of the incoming edge (prev → current)
+        dx_in = x1 - x0
+        dy_in = y1 - y0
+        len_in = math.hypot(dx_in, dy_in)
+        dx_in /= max(len_in, 1e-12)
+        dy_in /= max(len_in, 1e-12)
+
+        # Normalised tangent of the outgoing edge (current → next)
+        dx_out = x2 - x1
+        dy_out = y2 - y1
+        len_out = math.hypot(dx_out, dy_out)
+        dx_out /= max(len_out, 1e-12)
+        dy_out /= max(len_out, 1e-12)
+
+        # Inward normals: left-perpendicular for CCW, right for CW
+        nx_in  = sign * (-dy_in);  ny_in  = sign * dx_in
+        nx_out = sign * (-dy_out); ny_out = sign * dx_out
+
+        # Miter bisector (average of the two inward normals, normalised)
+        bx = nx_in + nx_out
+        by = ny_in + ny_out
+        b_len = math.hypot(bx, by)
+        if b_len < 1e-9:
+            bx, by = nx_in, ny_in
+        else:
+            bx /= b_len
+            by /= b_len
+
+        # Scale: how far along the bisector to travel to get the requested
+        # perpendicular inset distance.  Clamped so miter ≤ 5× inset.
+        cos_a = nx_in * bx + ny_in * by
+        miter = inset / max(cos_a, 0.2)
+
+        result.append([x1 + bx * miter, y1 + by * miter])
+
+    return result
+
+
+# ── Polyhedron ring builder ───────────────────────────────────────────────────
+
+
+def _smooth_top_zs(
+    top_zs: list[float],
+    sigma: float = 4.0,
+    passes: int = 3,
+) -> list[float]:
+    """Smooth per-vertex ceiling heights along the perimeter ring.
+
+    Applies a Gaussian blur (σ in vertex-index units) along the circular
+    array of ceiling heights.  After every pass the result is clamped from
+    below by the *original* values so component clearances are never reduced.
+
+    Parameters
+    ----------
+    top_zs : list of float  Per-vertex required ceiling heights.
+    sigma  : float          Gaussian σ in vertex-index units.  Larger values
+                            produce smoother transitions (default 4 → ±12
+                            vertex neighbourhood at 3σ).
+    passes : int            Number of independent blur passes.
+    """
+    N    = len(top_zs)
+    orig = list(top_zs)
+    arr  = list(top_zs)
+    half = int(math.ceil(3.0 * sigma))
+
+    for _ in range(passes):
+        new_arr: list[float] = []
+        for i in range(N):
+            wsum = 0.0
+            vsum = 0.0
+            for di in range(-half, half + 1):
+                j = (i + di) % N
+                w = math.exp(-0.5 * (di / sigma) ** 2)
+                vsum += arr[j] * w
+                wsum += w
+            new_arr.append(vsum / wsum)
+        # Clamp from below to preserve minimum component clearances
+        arr = [max(orig[i], new_arr[i]) for i in range(N)]
+
+    return arr
+
+
+def _build_rings(
+    flat_pts: list[list[float]],
+    top_zs: list[float],
+    enclosure: Enclosure,
+) -> list[list[list[float]]]:
+    """Build an ordered list of vertex rings from bottom to top.
+
+    Each ring is a list of N ``[x, y, z]`` points (N = len(flat_pts)).
+    Rings are stacked bottom → top:
+
+    * Bottom edge zone: ``_CURVE_STEPS + 1`` rings (last ring = z=bot_size,
+      full-width polygon = start of the straight wall).
+    * OR single flat bottom ring at z=0 (no bottom profile).
+    * Top edge zone: ``_CURVE_STEPS + 1`` rings (first ring = per-vertex
+      ``top_zs[i] − top_size``, full-width = end of the straight wall).
+    * OR single per-vertex top ring at z=top_zs[i] (no top profile).
+
+    The straight wall section is implicitly encoded as the quad between the
+    last bottom ring and the first top ring.
+    """
+    N = len(flat_pts)
+    edge_top = enclosure.edge_top
+    edge_bot = enclosure.edge_bottom
+
+    top_type = (edge_top.type    if edge_top else "none") or "none"
+    top_size = (edge_top.size_mm if edge_top else 0.0)    or 0.0
+    bot_type = (edge_bot.type    if edge_bot else "none") or "none"
+    bot_size = (edge_bot.size_mm if edge_bot else 0.0)    or 0.0
+
+    has_top = top_size > 0 and top_type in ("chamfer", "fillet")
+    has_bot = bot_size > 0 and bot_type in ("chamfer", "fillet")
+
+    area = _polygon_signed_area(flat_pts)
+    rings: list[list[list[float]]] = []
+
+    # ── Bottom edge rings ──────────────────────────────────────────────────────
+    if has_bot:
+        for step in range(_CURVE_STEPS + 1):
+            frac = step / _CURVE_STEPS
+            if bot_type == "fillet":
+                theta = (1.0 - frac) * (math.pi / 2)
+                inset = bot_size * (1.0 - math.cos(theta))
+                z     = bot_size * (1.0 - math.sin(theta))
+            else:  # chamfer
+                inset = bot_size * (1.0 - frac)
+                z     = bot_size * frac
+            ipts = _inset_polygon_pts(flat_pts, inset, _area=area)
+            rings.append([[ix, iy, z] for ix, iy in ipts])
+    else:
+        rings.append([[x, y, 0.0] for x, y in flat_pts])
+
+    # ── Top edge rings (also encodes the straight wall top in ring[0]) ─────────
+    if has_top:
+        for step in range(_CURVE_STEPS + 1):
+            frac = step / _CURVE_STEPS
+            if top_type == "fillet":
+                theta    = frac * (math.pi / 2)
+                inset    = top_size * (1.0 - math.cos(theta))
+                z_offset = top_size * math.sin(theta)
+            else:  # chamfer
+                inset    = top_size * frac
+                z_offset = top_size * frac
+            ipts = _inset_polygon_pts(flat_pts, inset, _area=area)
+            ring = [
+                [ipts[i][0], ipts[i][1], (top_zs[i] - top_size) + z_offset]
+                for i in range(N)
+            ]
+            rings.append(ring)
+    else:
+        rings.append([[flat_pts[i][0], flat_pts[i][1], top_zs[i]] for i in range(N)])
+
+    return rings
+
+
+def _polyhedron_shell(
+    flat_pts: list[list[float]],
+    top_zs: list[float],
+    enclosure: Enclosure,
+) -> list[str]:
+    """Emit an OpenSCAD ``polyhedron()`` for a variable-height shell body.
+
+    Each outline vertex can have a different ceiling height (from ``top_zs``).
+    Edge profiles (chamfer / fillet) are applied via per-vertex miter insets
+    so the ring vertex count is always identical — a requirement for building
+    a valid polyhedron face table.
+
+    Face winding follows OpenSCAD's left-hand/CW-from-outside convention so
+    all outward normals point away from the interior.  The ``convexity``
+    parameter is set to 10 to assist CGAL in evaluating the CSG tree even
+    for non-convex shapes.
+    """
+    N = len(flat_pts)
+    rings = _build_rings(flat_pts, top_zs, enclosure)
+    R = len(rings)
+
+    # Flat point list (ring-major, vertex-minor order)
+    all_pts: list[list[float]] = [pt for ring in rings for pt in ring]
+
+    # ── Build concentric cap rings for the top surface ─────────────────────────
+    # Instead of a single centroid fan (which creates steep triangles between
+    # the horn peaks at ~46 mm and the valley sides at ~14 mm), we add
+    # _CAP_RINGS concentric intermediate rings whose XY positions linearly
+    # interpolate from the top-perimeter ring inward to the centroid, and
+    # whose Z heights are Gaussian-blurred with progressively larger sigma as
+    # we move toward the centre.  The result is a smooth terrain-like cap:
+    # peaks stay where they are at the perimeter, but the height landscape
+    # blends gradually inward so no single triangle spans the full drop.
+    last_ring = rings[-1]
+    cx = sum(p[0] for p in last_ring) / N
+    cy = sum(p[1] for p in last_ring) / N
+    cz_raw = sum(p[2] for p in last_ring) / N  # raw (un-smoothed) average
+
+    cap_rings: list[list[list[float]]] = []
+    for k in range(_CAP_RINGS):
+        t = (k + 1) / (_CAP_RINGS + 1)  # 0 < t < 1, never 0 or 1
+        # Z: lerp from perimeter heights toward centroid z, then Gaussian-smooth.
+        # sigma increases with t so we blend more aggressively near the centre.
+        z_lerp = [last_ring[i][2] * (1.0 - t) + cz_raw * t for i in range(N)]
+        sigma = 6.0 + t * 18.0   # sigma 6 → 24 as we go from edge to centre
+        z_smooth = _smooth_top_zs(z_lerp, sigma=sigma, passes=4)
+        cap_ring = [
+            [
+                last_ring[i][0] * (1.0 - t) + cx * t,
+                last_ring[i][1] * (1.0 - t) + cy * t,
+                # CRITICAL: clamp to the per-vertex ceiling so cap geometry
+                # never rises above top_zs[i] and buries cutout cylinders.
+                min(z_smooth[i], last_ring[i][2]),
+            ]
+            for i in range(N)
+        ]
+        cap_rings.append(cap_ring)
+
+    # Centroid Z = average of the innermost (most-blended) cap ring
+    cz = sum(p[2] for p in cap_rings[-1]) / N
+
+    # Append cap ring points, then centroid, to the flat point list
+    for cap_ring in cap_rings:
+        all_pts.extend(cap_ring)
+    all_pts.append([cx, cy, cz])
+
+    # Index helpers
+    # Main rings: 0 … R*N-1  (ring ri, vertex vi → ri*N + vi%N)
+    # Cap ring k (0-based): R*N + k*N … R*N + k*N + N-1
+    # Centroid: R*N + _CAP_RINGS*N
+    center_idx = R * N + _CAP_RINGS * N
+
+    def cap_base(k: int) -> int:
+        return R * N + k * N
+
+    def idx(ri: int, vi: int) -> int:
+        return ri * N + (vi % N)
+
+    # Determine winding: OpenSCAD uses CW-from-outside (left-hand) convention.
+    # For a CCW polygon (area > 0 in math / Y-up coordinates):
+    #   bottom cap:  list as-is (CCW in XY = CW from below = CW from outside ✓)
+    #   top cap:     reversed   (CW in XY  = CW from above = CW from outside ✓)
+    #   side faces:  [a, d, c], [a, c, b]  (CW from the outer right side)
+    # For a CW polygon (area < 0): all three are flipped.
+    area = _polygon_signed_area(flat_pts)
+    ccw = area >= 0
+
+    faces: list[list[int]] = []
+
+    # ── Bottom cap ─────────────────────────────────────────────────────────────
+    bot_face = list(range(N))
+    if not ccw:
+        bot_face = bot_face[::-1]
+    faces.append(bot_face)
+
+    # ── Top cap — concentric ring layers + final centroid fan ──────────────────
+    # Winding for top-facing outward normals (CW from above = CW from outside):
+    #   For each quad (a=outer_vi, b=outer_nxt, c=inner_nxt, d=inner_vi):
+    #     CCW polygon: [d,b,a], [d,c,b]
+    #     CW  polygon: [d,a,b], [d,b,c]
+    #   This reduces to the existing centroid fan [center,nxt,curr] when the
+    #   "inner ring" degenerates to a single centroid point.
+
+    def _cap_quad(a: int, b: int, c: int, d: int) -> None:
+        """Emit two triangles for a top-cap quad (outer→inner, inward-facing up)."""
+        if ccw:
+            faces.append([d, b, a])
+            faces.append([d, c, b])
+        else:
+            faces.append([d, a, b])
+            faces.append([d, b, c])
+
+    # Layer 0: last main ring → first cap ring
+    for vi in range(N):
+        a = idx(R - 1, vi)
+        b = idx(R - 1, vi + 1)
+        c = cap_base(0) + (vi + 1) % N
+        d = cap_base(0) + vi
+        _cap_quad(a, b, c, d)
+
+    # Layers 1…_CAP_RINGS-1: successive cap ring pairs
+    for k in range(_CAP_RINGS - 1):
+        for vi in range(N):
+            a = cap_base(k)     + vi
+            b = cap_base(k)     + (vi + 1) % N
+            c = cap_base(k + 1) + (vi + 1) % N
+            d = cap_base(k + 1) + vi
+            _cap_quad(a, b, c, d)
+
+    # Final layer: innermost cap ring → centroid fan
+    innermost = cap_base(_CAP_RINGS - 1)
+    for vi in range(N):
+        curr = innermost + vi
+        nxt  = innermost + (vi + 1) % N
+        if ccw:
+            faces.append([center_idx, nxt, curr])
+        else:
+            faces.append([center_idx, curr, nxt])
+
+    # ── Side faces (triangulated quads, two triangles per ring-edge pair) ──────
+    # Quad vertices: a = ring_i[j],   b = ring_i[j+1],
+    #                c = ring_{i+1}[j+1], d = ring_{i+1}[j]
+    # CCW polygon:  CW-from-outside winding → [a,d,c] + [a,c,b]
+    # CW  polygon:  opposite              → [a,b,c] + [a,c,d]
+    for ri in range(R - 1):
+        for vi in range(N):
+            a = idx(ri,     vi)
+            b = idx(ri,     vi + 1)
+            c = idx(ri + 1, vi + 1)
+            d = idx(ri + 1, vi)
+            if ccw:
+                faces.append([a, d, c])
+                faces.append([a, c, b])
+            else:
+                faces.append([a, b, c])
+                faces.append([a, c, d])
+
+    # ── Format as OpenSCAD source ──────────────────────────────────────────────
+    min_z = min(top_zs)
+    max_z = max(top_zs)
+    edge_top = enclosure.edge_top
+    edge_bot = enclosure.edge_bottom
+    top_type = (edge_top.type    if edge_top else "none") or "none"
+    top_size = (edge_top.size_mm if edge_top else 0.0)    or 0.0
+    bot_type = (edge_bot.type    if edge_bot else "none") or "none"
+    bot_size = (edge_bot.size_mm if edge_bot else 0.0)    or 0.0
+
+    pts_str   = ", ".join(
+        f"[{x:.4f}, {y:.4f}, {z:.4f}]" for x, y, z in all_pts
+    )
+    faces_str = ", ".join(
+        "[" + ", ".join(str(i) for i in face) + "]" for face in faces
+    )
+
+    log.info(
+        "Shell body (polyhedron): %d rings, %d pts, %d faces, z=%.1f..%.1f mm",
+        R, len(all_pts), len(faces), min_z, max_z,
+    )
+
+    return [
+        f"// Shell body — variable-height polyhedron",
+        f"// ceiling z: {min_z:.1f}..{max_z:.1f} mm"
+        f"  bottom={bot_type}({bot_size:.1f}mm)  top={top_type}({top_size:.1f}mm)",
+        f"// {N} footprint verts, {R} rings, {len(all_pts)} pts, {len(faces)} faces",
+        f"polyhedron(",
+        f"  points   = [{pts_str}],",
+        f"  faces    = [{faces_str}],",
+        f"  convexity = 10",
+        f");",
+    ]
+
+
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 
@@ -63,24 +476,48 @@ def shell_body_lines(
     outline:   Outline,
     enclosure: Enclosure,
     flat_pts:  list[list[float]],
+    top_zs:    list[float] | None = None,
     indent:    str = "",
 ) -> list[str]:
-    """Return OpenSCAD lines for the shell body using stacked linear_extrude.
+    """Return OpenSCAD lines for the shell body.
 
-    The body is composed of three zones (all using the Bézier-expanded
-    ``flat_pts`` polygon, with Shapely-pre-computed inset profiles):
+    Automatically selects between two implementations:
 
-    * **Bottom edge zone** — stacked thin layers with an inward-shrinking
-      polygon, creating a chamfer or quarter-circle fillet on the bottom edge.
-    * **Straight wall** — a single ``linear_extrude`` of the full-size polygon.
-    * **Top edge zone** — stacked thin layers with an inward-shrinking polygon
-      producing a chamfer or fillet on the top edge.
+    * **Uniform path** — when ``top_zs`` is ``None`` or all values are within
+      ``_VARIABLE_HEIGHT_THRESHOLD`` mm of each other.  Uses the original
+      stacked ``linear_extrude`` approach with Shapely pre-computed insets.
+      Fast to compile and unchanged from the previous behaviour.
 
-    All inset polygons are pre-computed in Python via Shapely; no OpenSCAD
-    ``offset()`` or ``hull()`` is needed, which keeps CGAL compile time fast
-    even with hundreds of cutouts.
+    * **Polyhedron path** — when ceiling heights vary significantly across
+      outline vertices.  Emits a single ``polyhedron()`` primitive whose
+      top ring follows the per-vertex heights in ``top_zs``.  Edge profiles
+      are handled by additional intermediate rings built with the miter-inset
+      helper ``_inset_polygon_pts``.
+
+    Parameters
+    ----------
+    outline   : Outline   The design outline (used only for logging context).
+    enclosure : Enclosure Edge-profile settings and default height.
+    flat_pts  : list      Bézier-expanded 2-D footprint vertices [[x, y], ...].
+    top_zs    : list | None
+        Per-vertex ceiling heights, one value per element of ``flat_pts``.
+        Pass ``None`` (or omit) to always use the uniform path.
+    indent    : str       Unused legacy parameter; kept for API compatibility.
     """
-    h        = enclosure.height_mm
+    # ── Decide which path to use ───────────────────────────────────────────────
+    if top_zs is not None and len(top_zs) == len(flat_pts):
+        z_range = max(top_zs) - min(top_zs)
+        if z_range >= _VARIABLE_HEIGHT_THRESHOLD:
+            return _polyhedron_shell(flat_pts, top_zs, enclosure)
+        # All heights are effectively equal — use the uniform value from top_zs
+        # (which may differ slightly from enclosure.height_mm if all vertices
+        # carry an explicit z_top that overrides the enclosure default).
+        h_uniform = top_zs[0]
+    else:
+        h_uniform = enclosure.height_mm
+
+    # ── Uniform path (original stacked linear_extrude) ────────────────────────
+    h        = h_uniform
     edge_top = enclosure.edge_top
     edge_bot = enclosure.edge_bottom
 
@@ -118,19 +555,17 @@ def shell_body_lines(
             frac1 = (i + 1) / _CURVE_STEPS
 
             if direction == "bottom":
-                # θ: π/2 → 0  (inset shrinks from size → 0 upward)
                 theta0 = (1.0 - frac0) * (math.pi / 2)
                 theta1 = (1.0 - frac1) * (math.pi / 2)
                 if profile_type == "fillet":
                     inset0 = size * (1.0 - math.cos(theta0))
                     z0     = size * (1.0 - math.sin(theta0))
                     z1     = size * (1.0 - math.sin(theta1))
-                else:  # chamfer — linear
+                else:  # chamfer
                     inset0 = size * (1.0 - frac0)
                     z0     = size * frac0
                     z1     = size * frac1
             else:  # top
-                # θ: 0 → π/2  (inset grows from 0 → size upward)
                 theta0 = frac0 * (math.pi / 2)
                 theta1 = frac1 * (math.pi / 2)
                 if profile_type == "fillet":

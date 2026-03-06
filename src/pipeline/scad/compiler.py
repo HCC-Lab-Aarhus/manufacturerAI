@@ -9,6 +9,7 @@ import signal
 import subprocess
 import shutil
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -35,14 +36,22 @@ def _is_windows() -> bool:
 
 
 def check_scad(scad_path: Path) -> tuple[bool, str]:
-    """Syntax-check an OpenSCAD file without rendering. Returns (ok, message)."""
+    """Syntax-check an OpenSCAD file without rendering. Returns (ok, message).
+
+    Outputs to a temporary ``.csg`` file (then deletes it) rather than
+    ``NUL`` / ``/dev/null`` so the call is compatible with both old and new
+    OpenSCAD versions.  New versions (≥ 2021) require a recognised file
+    extension or an explicit ``--export-format`` flag when writing to a null
+    device; ``.csg`` is always accepted and is very fast to write.
+    """
     exe = _find_openscad()
     if not exe:
         return False, "OpenSCAD not found on PATH."
 
+    tmp_csg = Path(tempfile.mktemp(suffix=".csg"))
     try:
         result = subprocess.run(
-            [exe, "-o", "NUL" if _is_windows() else "/dev/null", str(scad_path)],
+            [exe, "-o", str(tmp_csg), str(scad_path)],
             capture_output=True,
             text=True,
             timeout=30,
@@ -55,6 +64,8 @@ def check_scad(scad_path: Path) -> tuple[bool, str]:
         return False, "OpenSCAD timed out (30s)."
     except Exception as e:
         return False, str(e)
+    finally:
+        tmp_csg.unlink(missing_ok=True)
 
 
 def _kill_proc_tree(pid: int) -> None:

@@ -115,6 +115,10 @@ function createScadScene(container) {
         loader.load(
             url,
             (geometry) => {
+                // OpenSCAD exports z-up; Three.js uses y-up.
+                // Rotate -90° around X so the model stands upright on the grid.
+                geometry.applyMatrix4(new THREE.Matrix4().makeRotationX(-Math.PI / 2));
+
                 geometry.computeVertexNormals();
                 geometry.computeBoundingBox();
 

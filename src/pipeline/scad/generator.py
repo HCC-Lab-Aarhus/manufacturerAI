@@ -17,8 +17,9 @@ from pathlib import Path
 
 from src.catalog.loader import load_catalog
 from src.pipeline.design.parsing import parse_design
-from src.pipeline.design.height_field import sample_height_grid
+from src.pipeline.design.height_field import blended_height, sample_height_grid
 from src.pipeline.placer.serialization import parse_placement
+from src.pipeline.router.models import RoutingResult
 from src.pipeline.router.serialization import parse_routing
 from src.session import Session
 
@@ -56,14 +57,19 @@ def run_scad_step(
 
     if placement_raw is None:
         raise RuntimeError("placement.json not found — run the placer step first.")
-    if routing_raw is None:
-        raise RuntimeError("routing.json not found — run the router step first.")
     if design_raw is None:
         raise RuntimeError("design.json not found — run the design step first.")
 
     placement = parse_placement(placement_raw)
-    routing   = parse_routing(routing_raw)
     design    = parse_design(design_raw)
+
+    if routing_raw is not None:
+        routing = parse_routing(routing_raw)
+    else:
+        log.warning(
+            "routing.json not found — generating enclosure without trace channels."
+        )
+        routing = RoutingResult(traces=[], pin_assignments={}, failed_nets=[])
     catalog   = load_catalog()
 
     if not catalog.ok:
@@ -84,17 +90,32 @@ def run_scad_step(
     flat_pts = tessellate_outline(outline)
     log.info("Footprint: %d vertices", len(flat_pts))
 
-    # ── 3. Compute shell body layers ──────────────────────────────
-    body_lines = shell_body_lines(outline, enclosure, flat_pts)
+    # ── 3. Compute per-vertex ceiling heights ─────────────────────
+    # blended_height() applies IDW interpolation of z_top values across
+    # outline vertices, then takes the max with any surface-bump descriptor.
+    top_zs = [
+        blended_height(x, y, outline, enclosure)
+        for x, y in flat_pts
+    ]
+    z_min = min(top_zs)
+    z_max = max(top_zs)
+    variable_height = (z_max - z_min) >= 0.1
+    log.info(
+        "Ceiling heights: min=%.2f  max=%.2f mm  variable=%s",
+        z_min, z_max, variable_height,
+    )
+
+    # ── 4. Compute shell body layers ──────────────────────────────
+    body_lines = shell_body_lines(outline, enclosure, flat_pts, top_zs=top_zs)
     log.info("Shell body: %d SCAD lines", len(body_lines))
 
-    # ── 4. Compute cutouts ────────────────────────────────────────
+    # ── 5. Compute cutouts ────────────────────────────────────────
     cuts = build_cutouts(placement, routing, catalog, outline, enclosure)
     log.info("Cutouts: %d total", len(cuts))
 
-    # ── 5. Compute metadata for header comment ────────────────────
+    # ── 6. Compute metadata for header comment ────────────────────
     height_grid = sample_height_grid(outline, enclosure, resolution_mm=2.0)
-    max_h = enclosure.height_mm
+    max_h = z_max  # already computed from blended_height per flat_pt above
     for row in height_grid["grid"]:
         for h in row:
             if h is not None and h > max_h:
@@ -107,9 +128,10 @@ def run_scad_step(
         "base_height_mm":   enclosure.height_mm,
         "max_height_mm":    round(max_h, 1),
         "footprint_verts":  len(flat_pts),
+        "variable_height":  variable_height,
     }
 
-    # ── 6. Emit SCAD string ───────────────────────────────────────
+    # ── 7. Emit SCAD string ───────────────────────────────────────
     scad_str = generate_scad(
         body_lines, cuts,
         session_id=session.id,
@@ -117,7 +139,7 @@ def run_scad_step(
         outline_pts=flat_pts,
     )
 
-    # ── 7. Write to session folder ────────────────────────────────
+    # ── 8. Write to session folder ────────────────────────────────
     scad_path: Path = session.path / "enclosure.scad"
     scad_path.write_text(scad_str, encoding="utf-8")
 
@@ -131,7 +153,7 @@ def run_scad_step(
     session.pipeline_state["scad"] = "done"
     session.save()
 
-    # ── 8. Optional: compile to STL ───────────────────────────────
+    # ── 9. Optional: compile to STL ───────────────────────────────
     if compile_stl:
         stl_path = session.path / "enclosure.stl"
         ok, msg, out = compile_scad(scad_path, stl_path)

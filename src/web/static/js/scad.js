@@ -127,7 +127,8 @@ export async function loadScadResult() {
 // ── STL compile / poll ────────────────────────────────────────────
 
 function stlUrl() {
-    return `${API}/api/session/scad/stl?session=${encodeURIComponent(state.session)}`;
+    // Add timestamp to bust browser cache after each compile
+    return `${API}/api/session/scad/stl?session=${encodeURIComponent(state.session)}&t=${Date.now()}`;
 }
 
 function stopPolling() {
@@ -148,7 +149,7 @@ async function startStlCompile(scadData) {
 
     try {
         await fetch(
-            `${API}/api/session/scad/compile?session=${encodeURIComponent(state.session)}`,
+            `${API}/api/session/scad/compile?session=${encodeURIComponent(state.session)}&force=true`,
             { method: 'POST' },
         );
     } catch { /* ignore — poll will catch status */ }
