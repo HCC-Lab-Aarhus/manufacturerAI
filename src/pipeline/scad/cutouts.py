@@ -192,6 +192,8 @@ def _component_cutouts(
         _top_mount(comp, cat, cuts, outline, enclosure, ceil_start, cavity_depth)
     elif style == "bottom":
         _bottom_mount(comp, cat, cuts, base_h, ceil_start, cavity_depth)
+    elif style == "side":
+        _side_mount(comp, cat, cuts, ceil_start)
     else:
         # "internal" and everything else
         _internal_mount(comp, cat, cuts, ceil_start, cavity_depth)
@@ -370,6 +372,66 @@ def _bottom_mount(
             ))
 
     # Pin pinholes
+    _pinholes(comp, cat, cuts)
+
+
+# ── Side-mount components ──────────────────────────────────────────
+
+
+def _side_mount(
+    comp: PlacedComponent,
+    cat: Component,
+    cuts: list[Cutout],
+    ceil_start: float,
+) -> None:
+    """Side-wall slot + body pocket for side-mounted components (e.g. slide switch).
+
+    Unlike an internal pocket (which spans the full cavity height), a
+    side-mounted component only needs a slot as tall as its body so the
+    wall stays structurally intact above and below the actuator.
+
+    The slot starts at CAVITY_TOP (just above the floor) and extends
+    upward by ``body.height_mm + COMPONENT_MARGIN``.
+    """
+    cx, cy = comp.x_mm, comp.y_mm
+    cid = comp.instance_id
+    body = cat.body
+    margin = COMPONENT_MARGIN
+
+    body_h = body.height_mm or 4.0
+    slot_z = min(body_h + margin, ceil_start - CAVITY_TOP)  # cap at cavity top
+
+    if body.shape == "rect":
+        w = (body.width_mm  or 5.0) + 2 * margin
+        h = (body.length_mm or 5.0) + 2 * margin
+        poly = _rect(cx, cy, w, h)
+        if comp.rotation_deg:
+            poly = _rotated(poly, comp.rotation_deg, cx, cy)
+    elif body.shape == "circle":
+        r = (body.diameter_mm or 5.0) / 2 + margin
+        cuts.append(Cutout(
+            polygon=[],
+            depth=slot_z,
+            z_base=CAVITY_TOP,
+            label=f"side slot — {cid}",
+            cylinder_r=r,
+            cylinder_cx=cx,
+            cylinder_cy=cy,
+        ))
+        _pinholes(comp, cat, cuts)
+        return
+    else:
+        w = 8.0 + 2 * margin
+        h = 8.0 + 2 * margin
+        poly = _rect(cx, cy, w, h)
+
+    cuts.append(Cutout(
+        polygon=poly,
+        depth=slot_z,
+        z_base=CAVITY_TOP,
+        label=f"side slot — {cid}",
+    ))
+
     _pinholes(comp, cat, cuts)
 
 

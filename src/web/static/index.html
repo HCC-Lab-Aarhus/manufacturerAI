@@ -102,8 +102,19 @@
                 </div>
             </section>
             <section id="step-manufacturing" class="step-panel" hidden>
-                <h2>Manufacturing</h2>
-                <p class="placeholder">Coming in Stage 6</p>
+                <div id="gcode-hero" class="placement-hero">
+                    <div class="placement-hero-icon">🖨️</div>
+                    <p>Slice the enclosure STL with PrusaSlicer and inject pause &amp; ink toolpaths</p>
+                    <div style="margin-bottom:10px;">
+                        <label for="gcode-filament" style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">Filament</label>
+                        <select id="gcode-filament" style="padding:4px 8px; border-radius:4px; background:var(--surface-raised,#2a2a2a); color:var(--text); border:1px solid var(--border,#444);"></select>
+                    </div>
+                    <button id="btn-run-gcode" class="placement-cta">Generate G-code</button>
+                    <span id="gcode-status" class="design-status-inline"></span>
+                </div>
+                <div id="gcode-scroll" class="placement-scroll" hidden>
+                    <div id="gcode-info" class="placement-info"></div>
+                </div>
             </section>
         </div>
 

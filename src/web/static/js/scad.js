@@ -2,6 +2,7 @@
 
 import { API, state } from './state.js';
 import { setData as setViewportData } from './viewport.js';
+import { enableGcodeTab } from './gcode.js';
 
 // Active poll timer handle
 let _pollTimer = null;
@@ -176,6 +177,7 @@ async function pollOrRestoreStl(scadData) {
                 scadLines: scadData?.scad_lines,
                 scadBytes: scadData?.scad_bytes,
             });
+            enableGcodeTab(false);
         } else if (st.status === 'compiling') {
             setViewportData('scad', { stlStatus: 'compiling' });
             pollStlStatus(scadData);
@@ -222,6 +224,8 @@ function pollStlStatus(scadData) {
                     scadLines: scadData?.scad_lines,
                     scadBytes: scadData?.scad_bytes,
                 });
+                // Enable the Manufacturing tab now that the STL is ready
+                enableGcodeTab(true);
                 // Update panel label
                 const el = document.getElementById('scad-info');
                 if (el) {
