@@ -55,7 +55,8 @@ class RouterConfig:
 
     # ── Router-only knobs ──────────────────────────────────────
     turn_penalty: int = 5                # A* cost penalty for changing direction
-    max_retries: int = 100              # rip-up/reroute attempts with shuffled ordering
+    crossing_cost: int = 50              # A* cost penalty for crossing an existing trace
+    max_retries: int = 30               # ordering-shuffle attempts (each includes crossing rip-up)
 
 
 # Module-level defaults (used when no RouterConfig is passed)

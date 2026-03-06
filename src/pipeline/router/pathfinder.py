@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import heapq
 
-from .grid import RoutingGrid, FREE, TRACE_PATH
+from .grid import RoutingGrid, FREE, BLOCKED, TRACE_PATH, PERMANENTLY_BLOCKED
 from .models import TURN_PENALTY
 
 
@@ -24,11 +24,15 @@ def find_path(
     sink: tuple[int, int],
     *,
     turn_penalty: int = TURN_PENALTY,
+    crossing_cost: int = 0,
 ) -> list[tuple[int, int]] | None:
     """A* point-to-point Manhattan routing.
 
     Returns a list of (gx, gy) grid cells from source to sink,
     or None if no path exists.
+
+    When crossing_cost > 0 the pathfinder is allowed to walk through
+    TRACE_PATH and BLOCKED cells at the given extra cost per cell.
     """
     sx, sy = source
     tx, ty = sink
@@ -46,9 +50,10 @@ def find_path(
     if source == sink:
         return [source]
 
-    l_path = _try_l_route(grid, source, sink)
-    if l_path is not None:
-        return l_path
+    if crossing_cost == 0:
+        l_path = _try_l_route(grid, source, sink)
+        if l_path is not None:
+            return l_path
 
     start_key = sy * W + sx
     sink_key = ty * W + tx
@@ -92,14 +97,20 @@ def find_path(
                 continue
 
             nval = cells[nkey]
+            cross_extra = 0
             if nval != FREE:
-                if nval == TRACE_PATH:
+                if nval == PERMANENTLY_BLOCKED:
                     continue
-                if (nx, ny) != sink and (nx, ny) != source:
-                    continue
+                if crossing_cost > 0 and (nval == TRACE_PATH or nval == BLOCKED):
+                    cross_extra = crossing_cost
+                else:
+                    if nval == TRACE_PATH:
+                        continue
+                    if (nx, ny) != sink and (nx, ny) != source:
+                        continue
 
             is_turn = direction != -1 and direction != d
-            cost = 1 + (turn_penalty if is_turn else 0)
+            cost = 1 + (turn_penalty if is_turn else 0) + cross_extra
             tentative_g = cur_g + cost
 
             if nkey not in g_scores or tentative_g < g_scores[nkey]:
@@ -117,6 +128,7 @@ def find_path_to_tree(
     tree: set[tuple[int, int]],
     *,
     turn_penalty: int = TURN_PENALTY,
+    crossing_cost: int = 0,
 ) -> list[tuple[int, int]] | None:
     """A* from source point(s) to any cell in an existing routing tree.
 
@@ -219,11 +231,17 @@ def find_path_to_tree(
                 continue
 
             nval = cells[nkey]
+            cross_extra = 0
             if nval != FREE and nkey not in tree_keys:
-                continue
+                if nval == PERMANENTLY_BLOCKED:
+                    continue
+                if crossing_cost > 0 and (nval == TRACE_PATH or nval == BLOCKED):
+                    cross_extra = crossing_cost
+                else:
+                    continue
 
             is_turn = direction != -1 and direction != d
-            cost = 1 + (turn_penalty if is_turn else 0)
+            cost = 1 + (turn_penalty if is_turn else 0) + cross_extra
             tentative_g = cur_g + cost
 
             if nkey not in g_scores or tentative_g < g_scores[nkey]:

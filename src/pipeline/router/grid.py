@@ -60,6 +60,11 @@ class RoutingGrid:
         # them so nearby pads stay reachable.
         self._protected: set[tuple[int, int]] = set()
 
+        # Trace ownership: flat index → net_id that placed the trace
+        self._trace_owner: dict[int, str] = {}
+        # Clearance ownership: flat index → set of net_ids whose clearance covers this cell
+        self._clearance_owner: dict[int, set[str]] = {}
+
         # Block cells outside polygon or too close to its edges
         inset_poly = outline_poly.buffer(-edge_clearance)
         for gy in range(self.height):
@@ -100,6 +105,20 @@ class RoutingGrid:
         if not self.in_bounds(gx, gy):
             return True
         return self._cells[gy * self.width + gx] != FREE
+
+    def cell_owner_at(self, gx: int, gy: int) -> set[str]:
+        """Return all net_ids that own this cell (trace or clearance)."""
+        if not self.in_bounds(gx, gy):
+            return set()
+        flat = gy * self.width + gx
+        owners: set[str] = set()
+        trace = self._trace_owner.get(flat)
+        if trace is not None:
+            owners.add(trace)
+        clearance = self._clearance_owner.get(flat)
+        if clearance is not None:
+            owners.update(clearance)
+        return owners
 
     def is_permanently_blocked(self, gx: int, gy: int) -> bool:
         if not self.in_bounds(gx, gy):
@@ -185,16 +204,16 @@ class RoutingGrid:
         self,
         path: list[tuple[int, int]],
         clearance_cells: int | None = None,
+        *,
+        net_id: str,
     ) -> None:
         """Block cells along a trace path, including clearance radius.
 
-        Path cells themselves are ALWAYS marked as TRACE_PATH,
-        regardless of protection — the physical trace is there and no
-        other net may use those cells.
-
-        Clearance-zone cells (surrounding the path) are marked as
-        BLOCKED, but protected pin-pad cells are skipped so that
-        other nets can still reach their pin pads.
+        Path cells are marked TRACE_PATH and recorded in ``_trace_owner``.
+        Clearance-zone cells are marked BLOCKED and recorded in
+        ``_clearance_owner`` so that ``free_trace`` can remove only the
+        requesting net's contribution without damaging other nets.
+        Protected pin-pad cells are skipped for clearance.
         """
         if clearance_cells is None:
             clearance_cells = max(
@@ -205,28 +224,43 @@ class RoutingGrid:
             )
         path_set = set(path)
         protected = self._protected
+        W = self.width
 
-        # 1) Mark actual trace cells as TRACE_PATH (always)
         for gx, gy in path_set:
             if self.in_bounds(gx, gy):
-                v = self._cells[gy * self.width + gx]
+                flat = gy * W + gx
+                v = self._cells[flat]
                 if v == FREE or v == BLOCKED:
-                    self._cells[gy * self.width + gx] = TRACE_PATH
+                    self._cells[flat] = TRACE_PATH
+                self._trace_owner[flat] = net_id
 
-        # 2) Mark clearance zone as BLOCKED (skip protected & path cells)
         for gx, gy in path:
             for dy in range(-clearance_cells, clearance_cells + 1):
                 for dx in range(-clearance_cells, clearance_cells + 1):
                     nx, ny = gx + dx, gy + dy
-                    if (nx, ny) not in path_set and (nx, ny) not in protected:
-                        self.block_cell(nx, ny)
+                    if (nx, ny) in path_set or (nx, ny) in protected:
+                        continue
+                    if not self.in_bounds(nx, ny):
+                        continue
+                    flat = ny * W + nx
+                    if self._cells[flat] == FREE:
+                        self._cells[flat] = BLOCKED
+                    if self._cells[flat] == BLOCKED:
+                        self._clearance_owner.setdefault(flat, set()).add(net_id)
 
-    def free_trace(self, path: list[tuple[int, int]], clearance_cells: int | None = None) -> None:
-        """Free cells along a trace path (for rip-up).
+    def free_trace(
+        self,
+        path: list[tuple[int, int]],
+        clearance_cells: int | None = None,
+        *,
+        net_id: str,
+    ) -> None:
+        """Free cells belonging to *net_id* along a trace path.
 
-        Frees both TRACE_PATH cells (the path itself) and BLOCKED
-        cells (the clearance zone).  Permanently-blocked cells are
-        never touched.
+        Path cells (TRACE_PATH) are freed unconditionally.
+        Clearance cells (BLOCKED) are freed only when no other net
+        still claims them, preventing collateral damage to neighbours.
+        Permanently-blocked cells are never touched.
         """
         if clearance_cells is None:
             clearance_cells = max(
@@ -235,13 +269,32 @@ class RoutingGrid:
                     (self.trace_width_mm / 2 + self.trace_clearance_mm) / self.resolution
                 ))
             )
+        W = self.width
+        path_set = set(path)
+
+        for gx, gy in path_set:
+            if self.in_bounds(gx, gy):
+                flat = gy * W + gx
+                self._trace_owner.pop(flat, None)
+                if self._cells[flat] == TRACE_PATH:
+                    self._cells[flat] = FREE
+
         for gx, gy in path:
             for dy in range(-clearance_cells, clearance_cells + 1):
                 for dx in range(-clearance_cells, clearance_cells + 1):
                     nx, ny = gx + dx, gy + dy
-                    if self.in_bounds(nx, ny):
-                        v = self._cells[ny * self.width + nx]
-                        if v == BLOCKED or v == TRACE_PATH:
-                            self._cells[ny * self.width + nx] = FREE
+                    if (nx, ny) in path_set or not self.in_bounds(nx, ny):
+                        continue
+                    flat = ny * W + nx
+                    if self._cells[flat] != BLOCKED:
+                        continue
+                    owners = self._clearance_owner.get(flat)
+                    if owners is None:
+                        self._cells[flat] = FREE
+                        continue
+                    owners.discard(net_id)
+                    if not owners:
+                        del self._clearance_owner[flat]
+                        self._cells[flat] = FREE
 
 
