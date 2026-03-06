@@ -7,6 +7,7 @@ import { loadCatalog, reloadCatalog } from './catalog.js';
 import { sendDesignPrompt, loadConversation } from './design.js';
 import { runPlacement, loadPlacementResult, enablePlacementTab } from './placement.js';
 import { runRouting, loadRoutingResult, enableRoutingTab } from './routing.js';
+import { loadBitmapResult, enableBitmapTab } from './bitmap.js';
 import { runScad, loadScadResult, enableScadTab } from './scad.js';
 import { runGcode, loadGcodeResult, enableGcodeTab, resetGcodePanel } from './gcode.js';
 import { initGuide, openGuide, enableGuideBtn } from './guide.js';
@@ -14,6 +15,7 @@ import { setStep } from './viewport.js';
 import './viewportDesign.js';   // registers the design viewport handler
 import './viewportPlacement.js'; // registers the placement viewport handler
 import './viewportRouting.js';   // registers the routing viewport handler
+import './viewportBitmap.js';    // registers the bitmap viewport handler
 import './viewportScad.js';      // registers the SCAD / STL viewport handler
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -25,6 +27,7 @@ document.addEventListener('DOMContentLoaded', () => {
         loadConversation();
         loadPlacementResult();    // load existing placement if present
         loadRoutingResult();      // load existing routing if present
+        loadBitmapResult();       // load existing bitmap if present
         loadScadResult();         // load existing SCAD if present
         // Fetch session name for the label; clear URL if session no longer exists
         fetch(`${API}/api/session?session=${encodeURIComponent(state.session)}`)
@@ -46,8 +49,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (data?.artifacts?.placement) {
                     enableRoutingTab(!data?.artifacts?.routing);
                 }
-                // Enable SCAD nav if routing is complete
+                // Enable bitmap + SCAD nav if routing is complete
                 if (data?.artifacts?.routing) {
+                    enableBitmapTab(false);
                     enableScadTab(!data?.artifacts?.scad);
                 }
                 // Enable G-code nav if STL has been compiled
