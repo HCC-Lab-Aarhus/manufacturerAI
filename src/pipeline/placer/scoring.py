@@ -41,6 +41,16 @@ class Placed:
             self.env_hh = self.hh
 
 
+def _used_pin_count(
+    instance_id: str, net_graph: dict[str, list[NetEdge]],
+) -> int:
+    """Count unique pins used by an instance across all nets."""
+    pins: set[str] = set()
+    for edge in net_graph.get(instance_id, []):
+        pins.update(edge.my_pins)
+    return max(len(pins), 1)
+
+
 # ── Net-segment types for crossing detection ──────────────────────
 
 # A virtual wire: (net_id, endpoint_1, endpoint_2)
@@ -141,6 +151,9 @@ def score_candidate(
     # O(1) placed-component lookup (replaces 3 linear scans)
     placed_map: dict[str, Placed] = {p.instance_id: p for p in placed}
 
+    # Pin-usage count for this candidate (used by spacing terms)
+    my_used_pins = _used_pin_count(instance_id, net_graph)
+
     # ── 1. Net proximity (MAIN driver) ──────────────────────────────
     #
     # High-fanout nets (3+ instances, e.g. GND, VCC) get a boosted
@@ -174,6 +187,9 @@ def score_candidate(
     score += min(edge_dist, 5.0) * W_EDGE_CLEARANCE
 
     # ── 3. Uniform clearance to neighbors ───────────────────────────
+    #
+    # Target gap scales with pin usage: components with more used pins
+    # need proportionally more surrounding space for trace routing.
     if placed:
         for p in placed:
             gap = aabb_gap(cx, cy, env_hw, env_hh,
@@ -182,7 +198,9 @@ def score_candidate(
                 instance_id, p.instance_id, net_graph,
             )
             channel_gap = n_channels * ROUTING_CHANNEL_MM
-            target = max(keepout, p.keepout, channel_gap)
+            their_used = _used_pin_count(p.instance_id, net_graph)
+            pin_factor = math.sqrt(max(my_used_pins, their_used) / 2.0)
+            target = max(keepout, p.keepout, channel_gap) * max(pin_factor, 1.0)
             if gap > 0:
                 deviation = abs(gap - target)
                 score -= deviation * W_CLEARANCE_UNIFORM / len(placed)
@@ -210,7 +228,8 @@ def score_candidate(
                 if g < min_gap:
                     min_gap = g
             if min_gap < float("inf"):
-                score += min(min_gap, 15.0) * W_SPREAD * slack
+                pin_weight = math.sqrt(my_used_pins / 2.0)
+                score += min(min_gap, 15.0) * W_SPREAD * slack * max(pin_weight, 1.0)
 
     # ── 5. Bottom preference for bottom-mount components ────────────
     if mounting_style == "bottom":
