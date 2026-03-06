@@ -133,24 +133,24 @@ PRINTERS: dict[str, PrinterDef] = {
     "mk3s": PrinterDef(
         id="mk3s",
         label="Prusa MK3S",
-        bed_width=250.0,
-        bed_depth=210.0,
+        bed_width=219.0, # 250 - 31 for inkjet carriage
+        bed_depth=178.0, # 210 - 32 for inkjet carriage
         max_z_mm=210.0,
         profile_filename="slicer_profile.ini",
     ),
     "mk3s_plus": PrinterDef(
         id="mk3s_plus",
         label="Prusa i3 MK3S+",
-        bed_width=250.0,
-        bed_depth=210.0,
+        bed_width=219.0, # 250 - 31 for inkjet carriage
+        bed_depth=178.0, # 210 - 32 for inkjet carriage
         max_z_mm=210.0,
         profile_filename="slicer_profile_mk3s_plus.ini",
     ),
     "coreone": PrinterDef(
         id="coreone",
         label="Prusa Core One+",
-        bed_width=250.0,
-        bed_depth=220.0,
+        bed_width=219.0, # 250 - 31 for inkjet carriage
+        bed_depth=219.0, # 250 - 31 for inkjet carriage
         max_z_mm=220.0,
         profile_filename="slicer_profile_coreone.ini",
         native_printer="Prusa CORE One HF0.4 nozzle",
