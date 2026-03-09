@@ -26,30 +26,75 @@
     "pins": [
         {
             "id": "V+",
-            "label": "Positive (3V)",
-            "position_mm": [
-                0,
-                27.0
-            ],
+            "label": "Positive tab (3V)",
+            "position_mm": [0, 27.0],
             "direction": "out",
             "voltage_v": 3.0,
             "current_max_ma": 1000,
             "hole_diameter_mm": 1.2,
-            "description": "Positive terminal. Outputs ~3V from 2x AAA in series."
+            "shape": { "type": "rect", "width_mm": 3.0, "length_mm": 8.0 },
+            "description": "Positive solder tab. Flat rectangular strip extending from holder end."
         },
         {
             "id": "GND",
-            "label": "Ground (-)",
-            "position_mm": [
-                0,
-                -27.0
-            ],
+            "label": "Ground tab (-)",
+            "position_mm": [0, -27.0],
             "direction": "out",
             "voltage_v": 0,
             "current_max_ma": 1000,
             "hole_diameter_mm": 1.2,
-            "description": "Negative terminal (ground)."
+            "shape": { "type": "rect", "width_mm": 3.0, "length_mm": 8.0 },
+            "description": "Negative solder tab. Flat rectangular strip extending from holder end."
         }
     ],
-    "internal_nets": []
+    "internal_nets": [],
+    "scad": {
+        "features": [
+            {
+                "shape": "rect",
+                "label": "positive spring channel",
+                "position_mm": [6.25, 22.0],
+                "width_mm": 8.0,
+                "length_mm": 2.5,
+                "depth_mm": 3.0,
+                "z_anchor": "cavity_start"
+            },
+            {
+                "shape": "rect",
+                "label": "positive spring channel",
+                "position_mm": [-6.25, 22.0],
+                "width_mm": 8.0,
+                "length_mm": 2.5,
+                "depth_mm": 3.0,
+                "z_anchor": "cavity_start"
+            },
+            {
+                "shape": "rect",
+                "label": "negative tab channel",
+                "position_mm": [6.25, -22.0],
+                "width_mm": 8.0,
+                "length_mm": 2.0,
+                "depth_mm": 2.0,
+                "z_anchor": "cavity_start"
+            },
+            {
+                "shape": "rect",
+                "label": "negative tab channel",
+                "position_mm": [-6.25, -22.0],
+                "width_mm": 8.0,
+                "length_mm": 2.0,
+                "depth_mm": 2.0,
+                "z_anchor": "cavity_start"
+            },
+            {
+                "shape": "rect",
+                "label": "inter-cell contact plate",
+                "position_mm": [0, 0],
+                "width_mm": 21.0,
+                "length_mm": 13.0,
+                "depth_mm": 2.0,
+                "z_anchor": "cavity_start"
+            }
+        ]
+    }
 }

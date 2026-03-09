@@ -59,5 +59,18 @@
             "description": "Power supply. 2.7V–5.5V. Place 100nF decoupling capacitor close to this pin."
         }
     ],
-    "internal_nets": []
+    "internal_nets": [],
+    "scad": {
+        "features": [
+            {
+                "shape": "rect",
+                "label": "IR window",
+                "position_mm": [0, -2.75],
+                "width_mm": 5.0,
+                "length_mm": 3.0,
+                "depth_mm": 3.0,
+                "z_anchor": "cavity_start"
+            }
+        ]
+    }
 }

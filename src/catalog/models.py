@@ -76,6 +76,29 @@ class PinGroup:
 
 
 @dataclass
+class ScadPattern:
+    """Repeat pattern for a scad feature (e.g. grid of sound holes)."""
+    type: str                           # "grid"
+    spacing_mm: float
+    clip_to_body: bool = True
+
+
+@dataclass
+class ScadFeature:
+    """Additional cutout feature described in catalog JSON."""
+    shape: str                          # "rect" | "circle"
+    label: str
+    position_mm: tuple[float, float]    # relative to component center
+    width_mm: float | None = None       # rect
+    length_mm: float | None = None      # rect
+    diameter_mm: float | None = None    # circle
+    depth_mm: float | None = None       # override; else uses cavity_depth
+    z_anchor: str = "cavity_start"      # "cavity_start" | "floor" | "ceil_start"
+    through_surface: bool = False       # cut through dome (e.g. shaft hole)
+    pattern: ScadPattern | None = None  # repeat pattern (e.g. grid of holes)
+
+
+@dataclass
 class Component:
     id: str
     name: str
@@ -87,7 +110,7 @@ class Component:
     internal_nets: list[list[str]] = field(default_factory=list)
     pin_groups: list[PinGroup] | None = None
     configurable: dict | None = None
-    scad: dict | None = None            # per-mounting-style SCAD geometry descriptors
+    scad_features: list[ScadFeature] = field(default_factory=list)
     source_file: str = ""               # path of the JSON file (for error reporting)
 
 

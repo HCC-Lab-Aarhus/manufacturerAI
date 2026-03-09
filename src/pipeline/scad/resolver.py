@@ -74,6 +74,7 @@ class ComponentResolver:
 
         frags.extend(self._pin_bridge_fragments())
         frags.extend(self._pinhole_fragments())
+        frags.extend(self._scad_feature_fragments())
         return frags
 
     # ── Mounting-style handlers ────────────────────────────────────
@@ -348,6 +349,102 @@ class ComponentResolver:
             ))
 
         return frags
+
+    # ── Catalog scad_features ──────────────────────────────────────
+
+    def _scad_feature_fragments(self) -> list[ScadFragment]:
+        frags: list[ScadFragment] = []
+        for feat in self.catalog.scad_features:
+            fx, fy = float(feat.position_mm[0]), float(feat.position_mm[1])
+            if self.rot:
+                fx, fy = rotate_point(fx, fy, self.rot)
+            wx, wy = self.cx + fx, self.cy + fy
+
+            if feat.z_anchor == "floor":
+                z_base = FLOOR_MM
+            elif feat.z_anchor == "ceil_start":
+                z_base = self.ctx.ceil_start
+            else:
+                z_base = CAVITY_START_MM
+
+            if feat.through_surface:
+                depth = max(self._surface_depth(), 1.0)
+            elif feat.depth_mm:
+                depth = feat.depth_mm
+            else:
+                depth = self.ctx.cavity_depth
+
+            if feat.pattern and feat.pattern.type == "grid":
+                frags.extend(self._grid_pattern_fragments(
+                    feat, wx, wy, z_base, depth,
+                ))
+            else:
+                if feat.shape == "circle":
+                    geom = CylinderGeometry(wx, wy, (feat.diameter_mm or 1.0) / 2)
+                else:
+                    w = feat.width_mm or 1.0
+                    h = feat.length_mm or 1.0
+                    geom = self._rect_geom_at(wx, wy, w, h)
+
+                frags.append(ScadFragment(
+                    type="cutout",
+                    geometry=geom,
+                    z_base=z_base,
+                    depth=depth,
+                    label=f"{feat.label} — {self.cid}",
+                ))
+        return frags
+
+    def _grid_pattern_fragments(
+        self, feat, cx: float, cy: float, z_base: float, depth: float,
+    ) -> list[ScadFragment]:
+        """Expand a single feature with a grid pattern into multiple fragments."""
+        frags: list[ScadFragment] = []
+        spacing = feat.pattern.spacing_mm
+        body = self.catalog.body
+
+        if feat.pattern.clip_to_body:
+            if body.shape == "circle":
+                limit_r = body.diameter_mm / 2 - spacing / 2
+            else:
+                limit_r = min(body.width_mm, body.length_mm) / 2 - spacing / 2
+        else:
+            limit_r = 1000.0
+
+        n = int(limit_r / spacing)
+        for ix in range(-n, n + 1):
+            for iy in range(-n, n + 1):
+                dx, dy = ix * spacing, iy * spacing
+                if math.hypot(dx, dy) > limit_r:
+                    continue
+                if self.rot:
+                    dx, dy = rotate_point(dx, dy, self.rot)
+
+                if feat.shape == "circle":
+                    geom = CylinderGeometry(
+                        cx + dx, cy + dy, (feat.diameter_mm or 1.0) / 2,
+                    )
+                else:
+                    w = feat.width_mm or 1.0
+                    h = feat.length_mm or 1.0
+                    geom = self._rect_geom_at(cx + dx, cy + dy, w, h)
+
+                frags.append(ScadFragment(
+                    type="cutout",
+                    geometry=geom,
+                    z_base=z_base,
+                    depth=depth,
+                    label=f"{feat.label} — {self.cid}",
+                ))
+        return frags
+
+    def _rect_geom_at(self, cx: float, cy: float, w: float, h: float):
+        """Rotated rect geometry centered at an absolute position."""
+        if self.rot:
+            pts = RectGeometry(cx, cy, w, h).to_polygon()
+            pts = rotated_polygon(pts, self.rot, self.cx, self.cy)
+            return PolygonGeometry(pts)
+        return RectGeometry(cx, cy, w, h)
 
 
 def resolve_component(

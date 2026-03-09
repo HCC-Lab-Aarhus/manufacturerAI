@@ -96,7 +96,28 @@ def component_to_dict(c: Component) -> dict:
         ]
     if c.configurable:
         d["configurable"] = c.configurable
-    if c.scad:
-        d["scad"] = c.scad
+
+    if c.scad_features:
+        d["scad"] = {
+            "features": [
+                {
+                    "shape": f.shape,
+                    "label": f.label,
+                    "position_mm": list(f.position_mm),
+                    **({} if f.width_mm is None else {"width_mm": f.width_mm}),
+                    **({} if f.length_mm is None else {"length_mm": f.length_mm}),
+                    **({} if f.diameter_mm is None else {"diameter_mm": f.diameter_mm}),
+                    **({} if f.depth_mm is None else {"depth_mm": f.depth_mm}),
+                    "z_anchor": f.z_anchor,
+                    **({"through_surface": True} if f.through_surface else {}),
+                    **({"pattern": {
+                        "type": f.pattern.type,
+                        "spacing_mm": f.pattern.spacing_mm,
+                        "clip_to_body": f.pattern.clip_to_body,
+                    }} if f.pattern else {}),
+                }
+                for f in c.scad_features
+            ],
+        }
 
     return d

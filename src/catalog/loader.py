@@ -6,7 +6,8 @@ import json
 from pathlib import Path
 
 from .models import (
-    Body, Cap, Hatch, Mounting, Pin, PinShape, PinGroup, Component,
+    Body, Cap, Hatch, Mounting,
+    Pin, PinShape, PinGroup, ScadPattern, ScadFeature, Component,
     ValidationError, CatalogResult,
 )
 
@@ -159,7 +160,33 @@ def _parse_pin_group(data: dict) -> PinGroup:
     )
 
 
+def _parse_scad_feature(data: dict) -> ScadFeature:
+    pos = data.get("position_mm", [0, 0])
+    pattern_raw = data.get("pattern")
+    pattern = None
+    if pattern_raw is not None:
+        pattern = ScadPattern(
+            type=pattern_raw["type"],
+            spacing_mm=pattern_raw["spacing_mm"],
+            clip_to_body=pattern_raw.get("clip_to_body", True),
+        )
+    return ScadFeature(
+        shape=data["shape"],
+        label=data.get("label", ""),
+        position_mm=(pos[0], pos[1]),
+        width_mm=data.get("width_mm"),
+        length_mm=data.get("length_mm"),
+        diameter_mm=data.get("diameter_mm"),
+        depth_mm=data.get("depth_mm"),
+        z_anchor=data.get("z_anchor", "cavity_start"),
+        through_surface=data.get("through_surface", False),
+        pattern=pattern,
+    )
+
+
 def _parse_component(data: dict, source_file: str = "") -> Component:
+    scad_raw = data.get("scad", {})
+    features_raw = scad_raw.get("features", []) if isinstance(scad_raw, dict) else []
     return Component(
         id=data["id"],
         name=data["name"],
@@ -171,7 +198,7 @@ def _parse_component(data: dict, source_file: str = "") -> Component:
         internal_nets=data.get("internal_nets", []),
         pin_groups=[_parse_pin_group(g) for g in data["pin_groups"]] if data.get("pin_groups") else None,
         configurable=data.get("configurable"),
-        scad=data.get("scad"),
+        scad_features=[_parse_scad_feature(f) for f in features_raw],
         source_file=source_file,
     )
 
