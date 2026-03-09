@@ -30,7 +30,7 @@ from .layers import shell_body_lines
 from .emit import generate_scad
 from .compiler import compile_scad
 from .traces import build_trace_fragments
-from .resolvers import resolve_component, ResolverContext
+from .resolver import resolve_component, ResolverContext
 from .fragment import ScadFragment
 
 log = logging.getLogger(__name__)
