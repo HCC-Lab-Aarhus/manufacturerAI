@@ -105,15 +105,20 @@ TRACE_RULES = TraceRules()
 # validation) must reference these constants so they stay in sync.
 #
 #   0 ─── build plate
-#   │  FLOOR_MM          solid printed floor
-#   │  CAVITY_START_MM   cavity / trace zone begins
-#   │  ... component pockets, traces ...
-#   │  CEIL_START         = total_height - CEILING_MM
-#   │  CEILING_MM         solid printed ceiling
+#   │  FLOOR_MM              solid printed floor (ironed top surface — no cutouts)
+#   │  FLOOR_MM              trace zone begins (channels for conductive ink)
+#   │  FLOOR_MM + TRACE_H    trace zone top
+#   │  ...                   pin shafts bridge this gap
+#   │  CAVITY_START_MM       component zone begins (= FLOOR_MM + COMP_OFFSET)
+#   │  ... component pockets ...
+#   │  CEIL_START            = total_height - CEILING_MM
+#   │  CEILING_MM            solid printed ceiling
 #   └── total_height
 
 FLOOR_MM: float = 2.0
-CAVITY_START_MM: float = 3.0
+TRACE_HEIGHT_MM: float = 5.0
+COMPONENT_OFFSET_MM: float = 10.0
+CAVITY_START_MM: float = FLOOR_MM + COMPONENT_OFFSET_MM
 CEILING_MM: float = 2.0
 
 

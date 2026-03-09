@@ -74,7 +74,7 @@ def compute_pause_points(
 
     CAVITY_END = h - CEILING_MM
 
-    ink_z = _snap_to_layer(CAVITY_START_MM, layer_height)
+    ink_z = _snap_to_layer(FLOOR_MM, layer_height)
 
     # 2. Component insertion: just before the ceiling closes.
     #    CAVITY_END is where the solid ceiling starts.  Components

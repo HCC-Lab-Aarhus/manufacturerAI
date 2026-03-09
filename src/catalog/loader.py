@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from .models import (
-    Body, Cap, Hatch, Mounting, Pin, PinGroup, Component,
+    Body, Cap, Hatch, Mounting, Pin, PinShape, PinGroup, Component,
     ValidationError, CatalogResult,
 )
 
@@ -127,6 +127,14 @@ def _parse_mounting(data: dict) -> Mounting:
 
 def _parse_pin(data: dict) -> Pin:
     pos = data.get("position_mm", [0, 0])
+    shape_raw = data.get("shape")
+    shape = None
+    if shape_raw is not None:
+        shape = PinShape(
+            type=shape_raw.get("type", "circle"),
+            width_mm=shape_raw.get("width_mm"),
+            length_mm=shape_raw.get("length_mm"),
+        )
     return Pin(
         id=data["id"],
         label=data.get("label", data["id"]),
@@ -136,6 +144,7 @@ def _parse_pin(data: dict) -> Pin:
         current_max_ma=data.get("current_max_ma"),
         hole_diameter_mm=data.get("hole_diameter_mm", 0.8),
         description=data.get("description", ""),
+        shape=shape,
     )
 
 
@@ -162,6 +171,7 @@ def _parse_component(data: dict, source_file: str = "") -> Component:
         internal_nets=data.get("internal_nets", []),
         pin_groups=[_parse_pin_group(g) for g in data["pin_groups"]] if data.get("pin_groups") else None,
         configurable=data.get("configurable"),
+        scad=data.get("scad"),
         source_file=source_file,
     )
 

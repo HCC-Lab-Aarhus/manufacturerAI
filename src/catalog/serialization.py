@@ -45,6 +45,13 @@ def component_to_dict(c: Component) -> dict:
                 "current_max_ma": p.current_max_ma,
                 "hole_diameter_mm": p.hole_diameter_mm,
                 "description": p.description,
+                **({
+                    "shape": {
+                        "type": p.shape.type,
+                        **(({"width_mm": p.shape.width_mm} if p.shape.width_mm is not None else {})),
+                        **(({"length_mm": p.shape.length_mm} if p.shape.length_mm is not None else {})),
+                    }
+                } if p.shape is not None else {}),
             }
             for p in c.pins
         ],
@@ -89,5 +96,7 @@ def component_to_dict(c: Component) -> dict:
         ]
     if c.configurable:
         d["configurable"] = c.configurable
+    if c.scad:
+        d["scad"] = c.scad
 
     return d

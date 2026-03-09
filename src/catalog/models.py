@@ -39,6 +39,20 @@ class Mounting:
 
 
 @dataclass
+class PinShape:
+    """Optional non-circular pin geometry.
+
+    type:
+      "circle" — default round hole (uses Pin.hole_diameter_mm).
+      "rect"   — rectangular pad / contact area.
+      "slot"   — elongated slot (width × length, rounded ends).
+    """
+    type: str = "circle"                # "circle" | "rect" | "slot"
+    width_mm: float | None = None       # rect / slot width
+    length_mm: float | None = None      # rect / slot length
+
+
+@dataclass
 class Pin:
     id: str
     label: str
@@ -48,6 +62,7 @@ class Pin:
     description: str
     voltage_v: float | None = None
     current_max_ma: float | None = None
+    shape: PinShape | None = None       # None → default circle from hole_diameter_mm
 
 
 @dataclass
@@ -72,6 +87,7 @@ class Component:
     internal_nets: list[list[str]] = field(default_factory=list)
     pin_groups: list[PinGroup] | None = None
     configurable: dict | None = None
+    scad: dict | None = None            # per-mounting-style SCAD geometry descriptors
     source_file: str = ""               # path of the JSON file (for error reporting)
 
 
