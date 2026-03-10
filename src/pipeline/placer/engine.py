@@ -469,7 +469,9 @@ def place_components(
         y = round(p.y, 2)
         rot = p.rotation
         style = effective_style.get(p.instance_id, "top")
-        side_y_offset = cat.body.height_mm / 2 if style == "side" else 0
+        side_y_offset = (cat.body.height_mm / 2
+                         if style == "side" and cat.mounting.style != "side"
+                         else 0)
 
         pin_positions: dict[str, tuple[float, float]] = {}
         if cat is not None:
