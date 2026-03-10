@@ -10,7 +10,7 @@
         "height_mm": 4.0
     },
     "mounting": {
-        "style": "side",
+        "style": "top",
         "allowed_styles": [
             "top",
             "side"
