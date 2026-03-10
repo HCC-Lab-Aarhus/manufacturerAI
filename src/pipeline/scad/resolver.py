@@ -202,11 +202,15 @@ class ComponentResolver:
         shaft_h = (self.ctx.ceil_start - FLOOR_MM) - PINHOLE_TAPER_DEPTH
 
         for pin in self.catalog.pins:
-            px_rel, py_rel = float(pin.position_mm[0]), float(pin.position_mm[1])
-            if self.rot:
-                px_rel, py_rel = rotate_point(px_rel, py_rel, self.rot)
-            px = self.cx + px_rel
-            py = self.cy + py_rel
+            pos = self.placed.pin_positions.get(pin.id)
+            if pos is not None:
+                px, py = pos[0], pos[1]
+            else:
+                px_rel, py_rel = float(pin.position_mm[0]), float(pin.position_mm[1])
+                if self.rot:
+                    px_rel, py_rel = rotate_point(px_rel, py_rel, self.rot)
+                px = self.cx + px_rel
+                py = self.cy + py_rel
 
             pin_d = pin.hole_diameter_mm + PINHOLE_CLEARANCE
 
@@ -297,8 +301,23 @@ class ComponentResolver:
         channel_depth = self.ctx.ceil_start - CAVITY_START_MM
 
         for pin in self.catalog.pins:
-            px_rel = float(pin.position_mm[0])
-            py_rel = float(pin.position_mm[1])
+            pos = self.placed.pin_positions.get(pin.id)
+            if pos is not None:
+                pin_wx, pin_wy = pos[0], pos[1]
+                rx, ry = pin_wx - self.cx, pin_wy - self.cy
+                if self.rot:
+                    px_rel, py_rel = rotate_point(rx, ry, -self.rot)
+                else:
+                    px_rel, py_rel = rx, ry
+            else:
+                px_rel = float(pin.position_mm[0])
+                py_rel = float(pin.position_mm[1])
+                if self.rot:
+                    rx, ry = rotate_point(px_rel, py_rel, self.rot)
+                else:
+                    rx, ry = px_rel, py_rel
+                pin_wx = self.cx + rx
+                pin_wy = self.cy + ry
 
             if body.shape == "circle":
                 r = body.diameter_mm / 2
@@ -310,13 +329,6 @@ class ComponentResolver:
                 hh = body.length_mm / 2
                 if abs(px_rel) <= hw and abs(py_rel) <= hh:
                     continue
-
-            if self.rot:
-                rx, ry = rotate_point(px_rel, py_rel, self.rot)
-            else:
-                rx, ry = px_rel, py_rel
-            pin_wx = self.cx + rx
-            pin_wy = self.cy + ry
 
             if body.shape == "circle":
                 face_x = px_rel * r / dist

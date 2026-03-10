@@ -17,6 +17,9 @@ def placement_to_dict(fp: FullPlacement) -> dict:
                 "x_mm": c.x_mm,
                 "y_mm": c.y_mm,
                 "rotation_deg": c.rotation_deg,
+                "pin_positions": {
+                    pid: list(pos) for pid, pos in c.pin_positions.items()
+                },
             }
             for c in fp.components
         ],
@@ -41,6 +44,10 @@ def parse_placement(data: dict) -> FullPlacement:
             x_mm=c["x_mm"],
             y_mm=c["y_mm"],
             rotation_deg=c["rotation_deg"],
+            pin_positions={
+                pid: tuple(pos)
+                for pid, pos in c.get("pin_positions", {}).items()
+            },
         )
         for c in data["components"]
     ]

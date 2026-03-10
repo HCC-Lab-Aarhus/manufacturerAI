@@ -132,19 +132,22 @@ def get_pin_world_pos(
     catalog: CatalogResult,
 ) -> tuple[float, float] | None:
     """Get the world position of a specific physical pin."""
-    catalog_map = {c.id: c for c in catalog.components}
     pc = next((p for p in placement.components if p.instance_id == instance_id), None)
     if pc is None:
         return None
 
+    pos = pc.pin_positions.get(pin_id)
+    if pos is not None:
+        return pos
+
+    # Fallback: compute from catalog (e.g. legacy placement without pin_positions)
+    catalog_map = {c.id: c for c in catalog.components}
     cat = catalog_map.get(pc.catalog_id)
     if cat is None:
         return None
-
     pin = next((p for p in cat.pins if p.id == pin_id), None)
     if pin is None:
         return None
-
     return pin_world_xy(pin.position_mm, pc.x_mm, pc.y_mm, pc.rotation_deg)
 
 
@@ -171,12 +174,16 @@ def get_group_pin_positions(
     if group is None:
         return []
 
-    pin_map = {p.id: p.position_mm for p in cat.pins}
     result: list[tuple[str, float, float]] = []
     for pid in group.pin_ids:
-        if pid in pin_map:
-            wx, wy = pin_world_xy(pin_map[pid], pc.x_mm, pc.y_mm, pc.rotation_deg)
-            result.append((pid, wx, wy))
+        pos = pc.pin_positions.get(pid)
+        if pos is not None:
+            result.append((pid, pos[0], pos[1]))
+        else:
+            pin_map = {p.id: p.position_mm for p in cat.pins}
+            if pid in pin_map:
+                wx, wy = pin_world_xy(pin_map[pid], pc.x_mm, pc.y_mm, pc.rotation_deg)
+                result.append((pid, wx, wy))
 
     return result
 
@@ -199,24 +206,27 @@ def allocate_best_pin(
     if not available:
         return None
 
-    catalog_map = {c.id: c for c in catalog.components}
     pc = next((p for p in placement.components if p.instance_id == instance_id), None)
     if pc is None:
         return None
-
-    cat = catalog_map.get(pc.catalog_id)
-    if cat is None:
-        return None
-
-    pin_map = {p.id: p.position_mm for p in cat.pins}
 
     best_pin: str | None = None
     best_dist = float("inf")
 
     for pid in available:
-        if pid not in pin_map:
-            continue
-        wx, wy = pin_world_xy(pin_map[pid], pc.x_mm, pc.y_mm, pc.rotation_deg)
+        pos = pc.pin_positions.get(pid)
+        if pos is not None:
+            wx, wy = pos
+        else:
+            catalog_map = {c.id: c for c in catalog.components}
+            cat = catalog_map.get(pc.catalog_id)
+            if cat is None:
+                continue
+            pin_map = {p.id: p.position_mm for p in cat.pins}
+            if pid not in pin_map:
+                continue
+            wx, wy = pin_world_xy(pin_map[pid], pc.x_mm, pc.y_mm, pc.rotation_deg)
+
         d = math.hypot(wx - target_x, wy - target_y)
         if d < best_dist:
             best_dist = d

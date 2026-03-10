@@ -348,10 +348,15 @@ def _enrich_components(components: list, cat) -> None:
             "width_mm": c.body.width_mm,
             "length_mm": c.body.length_mm,
             "diameter_mm": c.body.diameter_mm,
-            "height_mm": c.body.height_mm,   # needed for 3D viewport component boxes
+            "height_mm": c.body.height_mm,
         }
+        pp = comp.get("pin_positions", {})
         comp["pins"] = [
-            {"id": p.id, "position_mm": list(p.position_mm)}
+            {
+                "id": p.id,
+                "position_mm": list(p.position_mm),
+                **({"world_mm": list(pp[p.id])} if p.id in pp else {}),
+            }
             for p in c.pins
         ]
         comp["ui_placement"] = c.ui_placement

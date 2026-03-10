@@ -136,10 +136,15 @@ export function drawComponentIcon(svg, comp, ox, oy, scale, opts = {}) {
 
         for (const pin of comp.pins) {
             if (!pin.position_mm) continue;
-            const [lpx, lpy] = pin.position_mm;
-            // Rotate local pin position
-            const wpx = cx + (lpx * cosA - lpy * sinA) * scale;
-            const wpy = cy + (lpx * sinA + lpy * cosA) * scale;
+            let wpx, wpy;
+            if (pin.world_mm) {
+                wpx = ox + pin.world_mm[0] * scale;
+                wpy = oy + pin.world_mm[1] * scale;
+            } else {
+                const [lpx, lpy] = pin.position_mm;
+                wpx = cx + (lpx * cosA - lpy * sinA) * scale;
+                wpy = cy + (lpx * sinA + lpy * cosA) * scale;
+            }
 
             const dot = document.createElementNS(NS, 'circle');
             dot.setAttribute('cx', wpx);

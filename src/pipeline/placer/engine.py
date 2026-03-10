@@ -462,16 +462,35 @@ def place_components(
 
     # ── 4. Build output ────────────────────────────────────────────
 
-    result_components = [
-        PlacedComponent(
+    result_components = []
+    for p in placed:
+        cat = catalog_map.get(p.catalog_id)
+        x = round(p.x, 2)
+        y = round(p.y, 2)
+        rot = p.rotation
+        style = effective_style.get(p.instance_id, "top")
+        side_y_offset = cat.body.height_mm / 2 if style == "side" else 0
+
+        pin_positions: dict[str, tuple[float, float]] = {}
+        if cat is not None:
+            rad = math.radians(rot)
+            cos_r = math.cos(rad)
+            sin_r = math.sin(rad)
+            for pin in cat.pins:
+                px, py = pin.position_mm[0], pin.position_mm[1] + side_y_offset
+                pin_positions[pin.id] = (
+                    round(x + px * cos_r - py * sin_r, 4),
+                    round(y + px * sin_r + py * cos_r, 4),
+                )
+
+        result_components.append(PlacedComponent(
             instance_id=p.instance_id,
             catalog_id=p.catalog_id,
-            x_mm=round(p.x, 2),
-            y_mm=round(p.y, 2),
-            rotation_deg=p.rotation,
-        )
-        for p in placed
-    ]
+            x_mm=x,
+            y_mm=y,
+            rotation_deg=rot,
+            pin_positions=pin_positions,
+        ))
 
     return FullPlacement(
         components=result_components,

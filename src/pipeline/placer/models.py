@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.pipeline.design.models import Outline, Net, Enclosure
 
@@ -19,6 +19,7 @@ class PlacedComponent:
     x_mm: float
     y_mm: float
     rotation_deg: float   # degrees, arbitrary for side-mount; 0/90/180/270 for internal
+    pin_positions: dict[str, tuple[float, float]] = field(default_factory=dict)
 
 
 @dataclass
