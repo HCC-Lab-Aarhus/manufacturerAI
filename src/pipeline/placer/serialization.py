@@ -20,6 +20,7 @@ def placement_to_dict(fp: FullPlacement) -> dict:
                 "pin_positions": {
                     pid: list(pos) for pid, pos in c.pin_positions.items()
                 },
+                "mounting_style": c.mounting_style,
             }
             for c in fp.components
         ],
@@ -48,6 +49,7 @@ def parse_placement(data: dict) -> FullPlacement:
                 pid: tuple(pos)
                 for pid, pos in c.get("pin_positions", {}).items()
             },
+            mounting_style=c.get("mounting_style", "top"),
         )
         for c in data["components"]
     ]
