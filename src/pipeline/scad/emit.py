@@ -22,8 +22,8 @@ from shapely.geometry import Polygon as _SPoly
 from shapely.ops import unary_union
 
 from .fragment import (
-    ScadFragment, RectGeometry, CylinderGeometry, PolygonGeometry,
-    SegmentGeometry,
+    ScadFragment, RectGeometry, CylinderGeometry,
+    PolygonGeometry, SegmentGeometry,
 )
 
 log = logging.getLogger(__name__)
@@ -260,11 +260,14 @@ def generate_scad(
     if not cutouts and not additions:
         return header + "\n".join(shell_body_lines) + "\n"
 
-    # Split cutouts into cylinders vs. polygons
+    # Split cutouts into cylinders, tilted, and polygons
     cylinder_cuts: list[ScadFragment] = []
+    tilted_cuts: list[ScadFragment] = []
     polygon_cuts: list[ScadFragment] = []
     for f in cutouts:
-        if isinstance(f.geometry, CylinderGeometry):
+        if f.tilt_deg:
+            tilted_cuts.append(f)
+        elif isinstance(f.geometry, CylinderGeometry):
             cylinder_cuts.append(f)
         else:
             polygon_cuts.append(f)
@@ -272,8 +275,8 @@ def generate_scad(
     merged_groups = _merge_polygon_fragments(polygon_cuts, outline_pts)
 
     log.info(
-        "Cutout merging: %d polygon → %d groups  |  %d cylinder  |  %d additions",
-        len(polygon_cuts), len(merged_groups), len(cylinder_cuts), len(additions),
+        "Cutout merging: %d polygon → %d groups  |  %d cylinder  |  %d tilted  |  %d additions",
+        len(polygon_cuts), len(merged_groups), len(cylinder_cuts), len(tilted_cuts), len(additions),
     )
 
     out_lines: list[str] = []
@@ -328,13 +331,46 @@ def generate_scad(
                     f"      cylinder(h = {c.depth + 2 * _EPS:.3f}, r = {cg.r:.3f});",
                 ]
 
+        # Tilted cutouts (side-mounted reoriented bodies)
+        if tilted_cuts:
+            out_lines.append("")
+            out_lines.append(f"    // --- Tilted cutouts ({len(tilted_cuts)}) ---")
+            for c in tilted_cuts:
+                if c.label:
+                    out_lines.append(f"    // {c.label}")
+                out_lines += _indent(_tilted_scad_lines(c), "    ")
+
         out_lines += ["", "}"]     # close difference()
 
     return header + "\n".join(out_lines) + "\n"
 
 
+def _tilted_scad_lines(frag: ScadFragment) -> list[str]:
+    """Emit a fragment that is tilted (rotated in 3-D) around its centre."""
+    g = frag.geometry
+    z_center = frag.z_base + frag.depth / 2
+    _EPS = 0.001
+
+    if isinstance(g, CylinderGeometry):
+        return [
+            f"translate([{g.cx:.3f}, {g.cy:.3f}, {z_center:.3f}])",
+            f"  rotate([0, {frag.tilt_deg:.1f}, {frag.rotation_deg:.1f}])",
+            f"    cylinder(h = {frag.tilt_length + 2 * _EPS:.3f}, r = {g.r + _EPS:.3f}, center = true);",
+        ]
+    elif isinstance(g, RectGeometry):
+        return [
+            f"translate([{g.cx:.3f}, {g.cy:.3f}, {z_center:.3f}])",
+            f"  rotate([0, {frag.tilt_deg:.1f}, {frag.rotation_deg:.1f}])",
+            f"    linear_extrude(height = {frag.tilt_length + 2 * _EPS:.3f}, center = true)",
+            f"      square([{g.width + 2 * _EPS:.3f}, {g.height + 2 * _EPS:.3f}], center = true);",
+        ]
+    return [f"// unsupported tilted geometry: {frag.label}"]
+
+
 def _fragment_scad_lines(frag: ScadFragment) -> list[str]:
     """Convert a single fragment to OpenSCAD lines (for additions or standalone use)."""
+    if frag.tilt_deg:
+        return _tilted_scad_lines(frag)
     g = frag.geometry
     if isinstance(g, CylinderGeometry):
         return [

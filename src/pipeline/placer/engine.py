@@ -492,6 +492,7 @@ def place_components(
             y_mm=y,
             rotation_deg=rot,
             pin_positions=pin_positions,
+            mounting_style=style,
         ))
 
     return FullPlacement(

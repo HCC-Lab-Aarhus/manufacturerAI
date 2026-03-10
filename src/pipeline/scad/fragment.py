@@ -102,6 +102,8 @@ class ScadFragment:
     rotation_deg: float = 0.0           # rotation around geometry centre
     rotate_cx: float = 0.0             # rotation pivot X (world coords)
     rotate_cy: float = 0.0             # rotation pivot Y (world coords)
+    tilt_deg: float = 0.0              # 3-D tilt (0 = upright, 90 = horizontal)
+    tilt_length: float = 0.0           # pre-tilt extrusion length (body height)
 
 
 # ── Helpers ────────────────────────────────────────────────────────

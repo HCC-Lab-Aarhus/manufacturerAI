@@ -16,8 +16,8 @@ from src.pipeline.design.models import Outline, Enclosure
 from src.pipeline.placer.models import PlacedComponent
 
 from .fragment import (
-    ScadFragment, RectGeometry, CylinderGeometry, PolygonGeometry,
-    SegmentGeometry, rotated_polygon, rotate_point,
+    ScadFragment, RectGeometry, CylinderGeometry,
+    PolygonGeometry, SegmentGeometry, rotated_polygon, rotate_point,
 )
 
 SURFACE_OVERSHOOT: float = 1.0
@@ -62,7 +62,7 @@ class ComponentResolver:
         self.cid = placed.instance_id
 
     def resolve(self) -> list[ScadFragment]:
-        style = self.catalog.mounting.style
+        style = self.placed.mounting_style or self.catalog.mounting.style
         if style == "top":
             frags = self._top_mount()
         elif style == "bottom":
@@ -142,20 +142,45 @@ class ComponentResolver:
 
     def _side_mount(self) -> list[ScadFragment]:
         body = self.catalog.body
-        slot_depth = min(body.height_mm, self.ctx.cavity_depth)
+        is_reoriented = self.catalog.mounting.style != "side"
 
-        if body.shape == "circle":
-            geom = CylinderGeometry(self.cx, self.cy, body.diameter_mm / 2)
+        if is_reoriented:
+            if body.shape == "circle":
+                geom = CylinderGeometry(self.cx, self.cy, body.diameter_mm / 2)
+                z_ext = min(body.diameter_mm, self.ctx.cavity_depth)
+                return [ScadFragment(
+                    type="cutout",
+                    geometry=geom,
+                    z_base=CAVITY_START_MM,
+                    depth=z_ext,
+                    tilt_deg=90,
+                    tilt_length=body.height_mm,
+                    rotation_deg=self.rot + 90,
+                    label=f"side slot — {self.cid}",
+                )]
+            else:
+                geom = self._rect_geom(body.width_mm, body.height_mm)
+                z_ext = min(body.length_mm, self.ctx.cavity_depth)
+                return [ScadFragment(
+                    type="cutout",
+                    geometry=geom,
+                    z_base=CAVITY_START_MM,
+                    depth=z_ext,
+                    label=f"side slot — {self.cid}",
+                )]
         else:
-            geom = self._rect_geom(body.width_mm, body.length_mm)
-
-        return [ScadFragment(
-            type="cutout",
-            geometry=geom,
-            z_base=CAVITY_START_MM,
-            depth=slot_depth,
-            label=f"side slot — {self.cid}",
-        )]
+            slot_depth = min(body.height_mm, self.ctx.cavity_depth)
+            if body.shape == "circle":
+                geom = CylinderGeometry(self.cx, self.cy, body.diameter_mm / 2)
+            else:
+                geom = self._rect_geom(body.width_mm, body.length_mm)
+            return [ScadFragment(
+                type="cutout",
+                geometry=geom,
+                z_base=CAVITY_START_MM,
+                depth=slot_depth,
+                label=f"side slot — {self.cid}",
+            )]
 
     def _internal_mount(self) -> list[ScadFragment]:
         return [self._body_pocket()]
@@ -190,16 +215,34 @@ class ComponentResolver:
             label=f"body pocket — {self.cid}",
         )
 
+    def _component_z_top(self) -> float:
+        """Z where this component's body cutout ends."""
+        style = self.placed.mounting_style or self.catalog.mounting.style
+        if style != "side":
+            return self.ctx.ceil_start
+        body = self.catalog.body
+        is_reoriented = self.catalog.mounting.style != "side"
+        if is_reoriented:
+            if body.shape == "circle":
+                z_ext = body.diameter_mm
+            else:
+                z_ext = body.length_mm
+            z_ext = min(z_ext, self.ctx.cavity_depth)
+        else:
+            z_ext = min(body.height_mm, self.ctx.cavity_depth)
+        return CAVITY_START_MM + z_ext
+
     # ── Pinholes ───────────────────────────────────────────────────
 
     def _pinhole_fragments(self) -> list[ScadFragment]:
         """Press-fit shaft + taper pinholes for every pin.
 
-        Pins extend from FLOOR_MM (trace bottom) up to ceil_start
-        (component pocket top), with a taper at the bottom.
+        Pins extend from FLOOR_MM (trace bottom) up to the component's
+        body cutout top.
         """
         frags: list[ScadFragment] = []
-        shaft_h = (self.ctx.ceil_start - FLOOR_MM) - PINHOLE_TAPER_DEPTH
+        z_top = self._component_z_top()
+        shaft_h = (z_top - FLOOR_MM) - PINHOLE_TAPER_DEPTH
 
         for pin in self.catalog.pins:
             pos = self.placed.pin_positions.get(pin.id)
@@ -298,7 +341,7 @@ class ComponentResolver:
         """Bridge channels for pins that fall outside the body pocket."""
         frags: list[ScadFragment] = []
         body = self.catalog.body
-        channel_depth = self.ctx.ceil_start - CAVITY_START_MM
+        channel_depth = self._component_z_top() - CAVITY_START_MM
 
         for pin in self.catalog.pins:
             pos = self.placed.pin_positions.get(pin.id)
@@ -365,6 +408,9 @@ class ComponentResolver:
     # ── Catalog scad_features ──────────────────────────────────────
 
     def _scad_feature_fragments(self) -> list[ScadFragment]:
+        style = self.placed.mounting_style or self.catalog.mounting.style
+        if style != self.catalog.mounting.style:
+            return []
         frags: list[ScadFragment] = []
         for feat in self.catalog.scad_features:
             fx, fy = float(feat.position_mm[0]), float(feat.position_mm[1])
@@ -454,7 +500,7 @@ class ComponentResolver:
         """Rotated rect geometry centered at an absolute position."""
         if self.rot:
             pts = RectGeometry(cx, cy, w, h).to_polygon()
-            pts = rotated_polygon(pts, self.rot, self.cx, self.cy)
+            pts = rotated_polygon(pts, self.rot, cx, cy)
             return PolygonGeometry(pts)
         return RectGeometry(cx, cy, w, h)
 
