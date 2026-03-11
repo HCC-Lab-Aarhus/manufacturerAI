@@ -72,13 +72,13 @@ def validate_design_3d(
     for sp in spec.surface_placements:
         if sp.instance_id not in seen_ids:
             errors.append(f"Surface placement: unknown instance '{sp.instance_id}'")
-        if len(sp.position) != 3:
+        if len(sp.at) != 3:
             errors.append(
-                f"Surface placement '{sp.instance_id}': position must be [x, y, z]"
+                f"Surface placement '{sp.instance_id}': 'at' must be [x, y, z]"
             )
-        if sp.face_hint and sp.face_hint not in _VALID_HINTS:
+        if sp.face not in _VALID_HINTS:
             errors.append(
-                f"Surface placement '{sp.instance_id}': invalid face_hint '{sp.face_hint}'"
+                f"Surface placement '{sp.instance_id}': invalid face '{sp.face}'"
             )
 
     return errors

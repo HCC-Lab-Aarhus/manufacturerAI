@@ -26,13 +26,7 @@ def parse_design_3d(data: dict) -> DesignSpec3D:
     shape = _parse_csg_node(data["shape"])
 
     surface_placements = [
-        SurfacePlacement(
-            instance_id=sp["instance_id"],
-            position=tuple(float(v) for v in sp["position"]) if "position" in sp else (0.0, 0.0, 0.0),
-            face_hint=sp.get("face_hint"),
-            rotation_deg=float(sp.get("rotation_deg", 0.0)),
-            offset_mm=tuple(float(v) for v in sp["offset_mm"]) if "offset_mm" in sp else None,
-        )
+        _parse_surface_placement(sp)
         for sp in data.get("surface_placements", [])
     ]
 
@@ -41,6 +35,18 @@ def parse_design_3d(data: dict) -> DesignSpec3D:
         nets=nets,
         shape=shape,
         surface_placements=surface_placements,
+    )
+
+
+def _parse_surface_placement(sp: dict) -> SurfacePlacement:
+    """Parse a single surface placement dict."""
+    at = tuple(float(v) for v in sp["at"]) if "at" in sp else (0.0, 0.0, 0.0)
+
+    return SurfacePlacement(
+        instance_id=sp["instance_id"],
+        face=sp.get("face", "top"),
+        at=at,
+        rotation_deg=float(sp.get("rotation_deg", 0.0)),
     )
 
 
@@ -56,18 +62,12 @@ def _parse_csg_node(data: dict) -> CSGNode:
         )
     elif "type" in data:
         ptype = data["type"]
-        # Normalize legacy type names
-        if ptype == "cone":
-            ptype = "cylinder"
-        elif ptype == "wedge":
-            ptype = "box"
 
         # radius: number → scalar, array → per-axis radii
         radius_val = data.get("radius")
         radius, radii = _parse_scalar_or_tuple(radius_val)
 
-        # radius_top (accept legacy "top_radius" alias)
-        radius_top_val = data.get("radius_top", data.get("top_radius"))
+        radius_top_val = data.get("radius_top")
         radius_top, radii_top = _parse_scalar_or_tuple(radius_top_val)
 
         # size: number → cube, array → [x,y,z]

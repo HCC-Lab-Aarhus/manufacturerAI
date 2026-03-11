@@ -57,14 +57,20 @@ class CSGNode:
 
 @dataclass
 class SurfacePlacement:
-    """A component placed on the mesh surface."""
-    instance_id: str
-    position: tuple[float, float, float] = (0.0, 0.0, 0.0)  # 3D world position (or resolved from offset)
-    face_hint: str | None = None            # "top"|"bottom"|"front"|"back"|"left"|"right"
-    rotation_deg: float = 0.0               # rotation around the surface normal
-    offset_mm: tuple[float, float] | None = None  # 2D offset from face zone center
+    """A component placed on the mesh surface.
 
-    # Computed after snapping (populated by the surface snapper, not the agent)
+    The agent specifies ``face`` and ``at``.
+    ``face`` selects which surface to project onto (top/bottom/front/back/left/right).
+    ``at`` is an approximate [x, y, z] aim-point in the same coordinate system
+    as the CSG shapes — the depth axis (perpendicular to ``face``) is ignored
+    and resolved automatically by ray-casting to the actual surface.
+    """
+    instance_id: str
+    face: str = "top"                       # "top"|"bottom"|"front"|"back"|"left"|"right"
+    at: tuple[float, float, float] = (0.0, 0.0, 0.0)  # aim point (depth axis auto-projected)
+    rotation_deg: float = 0.0               # rotation around the surface normal
+
+    # Computed after projection (populated by the surface projector, not the agent)
     snapped_position: tuple[float, float, float] | None = None
     surface_normal: tuple[float, float, float] | None = None
     face_id: int | None = None

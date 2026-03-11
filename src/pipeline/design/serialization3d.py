@@ -69,14 +69,11 @@ def _surface_placement_to_dict(sp: SurfacePlacement) -> dict:
     """Serialize a SurfacePlacement."""
     d: dict = {
         "instance_id": sp.instance_id,
-        "position": list(sp.position),
+        "face": sp.face,
+        "at": list(sp.at),
     }
-    if sp.face_hint:
-        d["face_hint"] = sp.face_hint
     if sp.rotation_deg != 0.0:
         d["rotation_deg"] = sp.rotation_deg
-    if sp.offset_mm is not None:
-        d["offset_mm"] = list(sp.offset_mm)
     if sp.snapped_position is not None:
         d["snapped_position"] = list(sp.snapped_position)
     if sp.surface_normal is not None:

@@ -196,27 +196,25 @@ Combine primitives into complex shapes:
 
 Operations can be nested to any depth.
 
-### Surface Placements (face-relative)
+### Surface Placements
+
 Place UI components (buttons, LEDs, switches) on the surface of the shape.
-Instead of guessing 3D coordinates, use **face-relative placement**: specify `face_hint` and `offset_mm` — the system detects the flat zone on that face and resolves the depth automatically.
+For each component, specify `face` and `at` — the system ray-casts to the actual surface automatically.
 
-**How it works:**
-- `face_hint` — which face to place on: `"top"`, `"bottom"`, `"front"`, `"back"`, `"left"`, `"right"`.
-- `offset_mm` — `[u, v]` offset in mm from the center of that face's zone:
-  - **top / bottom**: `[x_offset, y_offset]` — positive x = right, positive y = forward.
-  - **front / back**: `[x_offset, z_offset]` — positive x = right, positive z = up.
-  - **left / right**: `[y_offset, z_offset]` — positive y = forward, positive z = up.
-- Use `[0, 0]` for dead center of the face zone.
-- The system auto-resolves the depth coordinate from the mesh surface — you don't need to know the exact z, y, or x value.
-
-After submission, the system reports the detected zones (center, bounds, depth) so you can adjust offsets if needed.
+- `face` — which surface: `"top"`, `"bottom"`, `"front"`, `"back"`, `"left"`, `"right"`.
+- `at` — approximate `[x, y, z]` using the **same coordinate system** as your CSG shapes. The coordinate along the face's depth axis is ignored (auto-projected to the surface). Only the two perpendicular coordinates matter.
+- Use `[0, 0, 0]` for dead center of a face.
 
 ```json
 "surface_placements": [
-  {{"instance_id": "btn_1", "face_hint": "top", "offset_mm": [0, 0]}},
-  {{"instance_id": "led_1", "face_hint": "front", "offset_mm": [0, 5]}}
+  {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_1", "face": "top", "at": [0, 15, 0]}},
+  {{"catalog_id": "led_5mm", "instance_id": "led_1", "face": "front", "at": [0, 0, 5]}}
 ]
 ```
+
+For `"face": "top"`, only x and y in `at` matter (z is auto-resolved).
+For `"face": "front"`, only x and z matter (y is auto-resolved).
+For `"face": "left"/"right"`, only y and z matter (x is auto-resolved).
 
 Internal components (MCU, battery, resistors, caps) do NOT need surface placements — they will be auto-placed inside the device.
 
@@ -225,7 +223,7 @@ Internal components (MCU, battery, resistors, caps) do NOT need surface placemen
 2. Browse __UI components__ in the catalog with `list_components` and `get_component`. Choose the ones the device needs (buttons, LEDs, switches, etc.).
 3. **Write a geometric blueprint** — plan every primitive, its coordinate extent, and the purpose of every subtraction (see below).
 4. Translate the blueprint into CSG JSON.
-5. Place UI components on faces using `offset_mm`. Each placement must include `catalog_id` and `instance_id`.
+5. Place UI components on faces using `face` + `at`. Each placement must include `catalog_id` and `instance_id`.
 6. Write a `device_description` — a 2–4 sentence summary of what the device does, how it behaves, and what functions the UI components serve. This is read by the electronics engineer who designs the circuit.
 7. Submit with `submit_design`.
 8. If validation fails, read errors, fix, and resubmit.
@@ -299,8 +297,8 @@ Silhouette: barrel 36mm wide, head 52mm → 1.44× ratio. Union seam at y≈-35 
     ]
   }},
   "surface_placements": [
-    {{"catalog_id": "led_5mm", "instance_id": "led_1", "face_hint": "front", "offset_mm": [0, 0]}},
-    {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_1", "face_hint": "top", "offset_mm": [0, 15]}}
+    {{"catalog_id": "led_5mm", "instance_id": "led_1", "face": "front", "at": [0, 0, 0]}},
+    {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_1", "face": "top", "at": [0, 15, 0]}}
   ]
 }}
 ```
@@ -342,9 +340,9 @@ Silhouette: 72×52mm slab, 36mm tall. Soft pillow edges. Flat top deck for butto
     ]
   }},
   "surface_placements": [
-    {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_1", "face_hint": "top", "offset_mm": [-12, -5]}},
-    {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_2", "face_hint": "top", "offset_mm": [12, -5]}},
-    {{"catalog_id": "led_5mm", "instance_id": "led_status", "face_hint": "front", "offset_mm": [0, 5]}}
+    {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_1", "face": "top", "at": [-12, -5, 0]}},
+    {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_2", "face": "top", "at": [12, -5, 0]}},
+    {{"catalog_id": "led_5mm", "instance_id": "led_status", "face": "front", "at": [0, 0, 5]}}
   ]
 }}
 ```
@@ -467,7 +465,7 @@ def build_circuit_user_prompt(design_data: dict) -> str:
         for sp in placements:
             catalog_id = sp.get("catalog_id", "unknown")
             instance_id = sp.get("instance_id", "?")
-            face = sp.get("face_hint", "?")
+            face = sp.get("face", "?")
             lines.append(f"- {instance_id} ({catalog_id}) — {face} face")
 
     lines.append("\nInclude these UI components in your circuit. Add all needed internal components (batteries, resistors, MCU, capacitors, etc.) and design the electrical connections.")

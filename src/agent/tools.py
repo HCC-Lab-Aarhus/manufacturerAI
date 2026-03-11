@@ -123,9 +123,12 @@ _CSG_SHAPE_SCHEMA = {
 _SURFACE_PLACEMENTS_SCHEMA = {
     "type": "array",
     "description": (
-        "Components placed on the mesh surface. Use face_hint + offset_mm "
-        "to place relative to a detected face zone (preferred), or provide "
-        "an absolute position as fallback. "
+        "Components placed on the mesh surface. For each component, specify "
+        "which face to project onto and an approximate [x, y, z] aim-point "
+        "using the same coordinates as your CSG shapes. The system ray-casts "
+        "to the actual surface automatically — only the two coordinates "
+        "perpendicular to the face matter; the depth axis is auto-resolved. "
+        "Use [0, 0, 0] for dead center. "
         "Only for UI components (buttons, LEDs, switches). "
         "Internal components (MCU, resistors, battery) will be auto-placed inside."
     ),
@@ -137,42 +140,31 @@ _SURFACE_PLACEMENTS_SCHEMA = {
                 "description": "Component catalog ID (e.g. 'led_5mm', 'tactile_button_6x6')",
             },
             "instance_id": {"type": "string"},
-            "face_hint": {
+            "face": {
                 "type": "string",
                 "description": (
-                    "Which face to place on: "
-                    "'top', 'bottom', 'front', 'back', 'left', 'right'. "
-                    "Required when using offset_mm."
+                    "Which surface to place on: "
+                    "'top', 'bottom', 'front', 'back', 'left', 'right'."
                 ),
             },
-            "offset_mm": {
+            "at": {
                 "type": "array",
                 "description": (
-                    "2D offset [u, v] in mm from the face zone center. "
-                    "For top/bottom: [x_offset, y_offset]. "
-                    "For front/back: [x_offset, z_offset]. "
-                    "For left/right: [y_offset, z_offset]. "
-                    "Use [0, 0] for dead center of the face. "
-                    "The system resolves the depth coordinate automatically."
+                    "Approximate [x, y, z] aim-point in the same coordinate "
+                    "system as the CSG shapes. The coordinate along the face's "
+                    "depth axis is ignored (auto-projected to the surface). "
+                    "Use [0, 0, 0] for dead center of the face."
                 ),
                 "items": {"type": "number"},
-                "minItems": 2,
-                "maxItems": 2,
-            },
-            "position": {
-                "type": "array",
-                "description": (
-                    "Fallback: absolute [x, y, z] in mm near the desired surface. "
-                    "Prefer offset_mm + face_hint instead."
-                ),
-                "items": {"type": "number"},
+                "minItems": 3,
+                "maxItems": 3,
             },
             "rotation_deg": {
                 "type": "number",
                 "description": "Rotation around the surface normal in degrees (default 0).",
             },
         },
-        "required": ["catalog_id", "instance_id", "face_hint"],
+        "required": ["catalog_id", "instance_id", "face"],
     },
 }
 
