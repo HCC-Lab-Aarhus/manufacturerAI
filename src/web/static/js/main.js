@@ -4,7 +4,7 @@ import { API, state } from './state.js';
 import { closeModal } from './utils.js';
 import { setSessionLabel, startNewSession, showSessionsModal, setSessionUrl, initPrinterSelector, setPrinterFromSession, loadPrinters } from './session.js';
 import { loadCatalog, reloadCatalog } from './catalog.js';
-import { runCircuit, loadCircuitResult, enableCircuitTab } from './circuit.js';
+import { runCircuit, loadCircuitResult, loadCircuitConversation, enableCircuitTab } from './circuit.js';
 import { sendDesignPrompt, loadConversation } from './design.js';
 import { runPlacement, loadPlacementResult, enablePlacementTab } from './placement.js';
 import { runRouting, loadRoutingResult, enableRoutingTab } from './routing.js';
@@ -26,6 +26,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (state.session) {
         setSessionLabel(state.session);
         loadConversation();
+        loadCircuitConversation();
         loadCircuitResult();
         loadPlacementResult();
         loadRoutingResult();

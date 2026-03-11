@@ -849,6 +849,14 @@ async def api_conversation(session: str = Query(...)):
     return data if isinstance(data, list) else []
 
 
+@app.get("/api/session/circuit/conversation")
+async def api_circuit_conversation(session: str = Query(...)):
+    """Return the saved circuit conversation history."""
+    s = _resolve_session(session)
+    data = s.read_artifact("circuit_conversation.json")
+    return data if isinstance(data, list) else []
+
+
 @app.get("/api/session/circuit/result")
 async def api_circuit_result(session: str = Query(...)):
     """Return the saved circuit spec for a session, if any."""

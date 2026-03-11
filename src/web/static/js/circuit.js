@@ -18,6 +18,86 @@ export function enableCircuitTab(flash = false) {
     btn.classList.toggle('tab-flash', flash);
 }
 
+export async function loadCircuitConversation() {
+    const log = logDiv();
+    if (!log || !state.session) return;
+    try {
+        const res = await fetch(
+            `${API}/api/session/circuit/conversation?session=${encodeURIComponent(state.session)}`
+        );
+        if (!res.ok) return;
+        const messages = await res.json();
+        if (!Array.isArray(messages) || messages.length === 0) return;
+
+        const hero = heroDiv();
+        const scroll = scrollDiv();
+        if (hero) hero.hidden = true;
+        if (scroll) scroll.hidden = false;
+        log.innerHTML = '';
+
+        for (const msg of messages) {
+            if (msg.role === 'user' && typeof msg.content === 'string') {
+                appendLogMessage('user', msg.content);
+            } else if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+                renderSavedAssistantBlocks(msg.content);
+            }
+        }
+    } catch { /* no conversation yet */ }
+}
+
+function renderSavedAssistantBlocks(blocks) {
+    let toolItems = [];
+
+    const flushToolItems = () => {
+        if (toolItems.length === 0) return;
+        const div = document.createElement('div');
+        div.className = 'chat-bubble tool-group';
+        const details = document.createElement('details');
+        const summary = document.createElement('summary');
+        summary.className = 'tool-group-header';
+        summary.innerHTML = `<span class="tool-icon">🔧</span> ${toolItems.length} tool call${toolItems.length > 1 ? 's' : ''}`;
+        const items = document.createElement('div');
+        items.className = 'tool-group-items';
+        for (const el of toolItems) items.appendChild(el);
+        details.appendChild(summary);
+        details.appendChild(items);
+        div.appendChild(details);
+        logDiv()?.appendChild(div);
+        toolItems = [];
+    };
+
+    for (const block of blocks) {
+        switch (block.type) {
+            case 'thinking':
+                flushToolItems();
+                if (block.thinking) {
+                    const pre = createThinkingBubble(false);
+                    pre.textContent = block.thinking;
+                }
+                break;
+            case 'text':
+                flushToolItems();
+                if (block.text) {
+                    const div = createMessageBubble();
+                    div.innerHTML = renderMarkdown(block.text);
+                }
+                break;
+            case 'tool_use': {
+                const item = document.createElement('div');
+                item.className = 'tool-item';
+                const input = block.input;
+                const inputStr = input && Object.keys(input).length > 0
+                    ? `(${Object.values(input).map(v => typeof v === 'string' ? v : JSON.stringify(v)).join(', ')})`
+                    : '()';
+                item.innerHTML = `<span class="tool-name">✓ ${escapeHtml(block.name)}</span>${escapeHtml(inputStr)}`;
+                toolItems.push(item);
+                break;
+            }
+        }
+    }
+    flushToolItems();
+}
+
 export function resetCircuitPanel() {
     const hero = heroDiv();
     const scroll = scrollDiv();
