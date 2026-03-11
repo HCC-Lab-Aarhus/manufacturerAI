@@ -107,7 +107,7 @@ TRACE_RULES = TraceRules()
 #   0 ─── build plate
 #   │  FLOOR_MM (2)          solid printed floor (ironed top surface)
 #   │  FLOOR_MM              trace zone begins (conductive ink on ironed surface)
-#   │  FLOOR_MM + TRACE_H    trace zone top (shallow channels, 1 mm)
+#   │  FLOOR_MM + TRACE_H    trace zone top (shallow channels, 0.4 mm)
 #   │  CAVITY_START_MM (3)   component zone begins (= FLOOR_MM + COMP_OFFSET)
 #   │  ... component pockets / pin shafts ...
 #   │  CEIL_START            = total_height - CEILING_MM
@@ -115,7 +115,7 @@ TRACE_RULES = TraceRules()
 #   └── total_height
 
 FLOOR_MM: float = 2.0
-TRACE_HEIGHT_MM: float = 1.0
+TRACE_HEIGHT_MM: float = 0.4
 COMPONENT_OFFSET_MM: float = 1.0
 CAVITY_START_MM: float = FLOOR_MM + COMPONENT_OFFSET_MM
 CEILING_MM: float = 2.0
