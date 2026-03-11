@@ -21,9 +21,7 @@ from .fragment import (
 )
 
 SURFACE_OVERSHOOT: float = 1.0
-PINHOLE_CLEARANCE: float = 0.15
-PINHOLE_TAPER_D: float = 1.4
-PINHOLE_TAPER_DEPTH: float = 0.5
+PINHOLE_CLEARANCE: float = 0.3
 PIN_BRIDGE_WIDTH: float = 1.2
 HATCH_LEDGE_WIDTH: float = 2.5
 
@@ -235,14 +233,14 @@ class ComponentResolver:
     # ── Pinholes ───────────────────────────────────────────────────
 
     def _pinhole_fragments(self) -> list[ScadFragment]:
-        """Press-fit shaft + taper pinholes for every pin.
+        """Pin shafts for every pin.
 
-        Pins extend from FLOOR_MM (trace bottom) up to the component's
-        body cutout top.
+        Each shaft spans from FLOOR_MM (trace surface) up to the component's
+        body cutout top, letting pins seat flush against the ink layer.
         """
         frags: list[ScadFragment] = []
         z_top = self._component_z_top()
-        shaft_h = (z_top - FLOOR_MM) - PINHOLE_TAPER_DEPTH
+        shaft_h = z_top - FLOOR_MM
 
         for pin in self.catalog.pins:
             pos = self.placed.pin_positions.get(pin.id)
@@ -260,25 +258,16 @@ class ComponentResolver:
             if pin.shape and pin.shape.type in ("rect", "slot"):
                 w = (pin.shape.width_mm or pin_d) + PINHOLE_CLEARANCE
                 h = (pin.shape.length_mm or pin_d) + PINHOLE_CLEARANCE
-                shaft_geom = RectGeometry(px, py, w, h)
+                geom = RectGeometry(px, py, w, h)
             else:
-                shaft_geom = RectGeometry(px, py, pin_d, pin_d)
+                geom = RectGeometry(px, py, pin_d, pin_d)
 
             frags.append(ScadFragment(
                 type="cutout",
-                geometry=shaft_geom,
-                z_base=FLOOR_MM + PINHOLE_TAPER_DEPTH,
+                geometry=geom,
+                z_base=FLOOR_MM,
                 depth=shaft_h,
                 label=f"pin {self.cid}:{pin.id}",
-            ))
-
-            taper_d = max(PINHOLE_TAPER_D, pin_d + 0.4)
-            frags.append(ScadFragment(
-                type="cutout",
-                geometry=RectGeometry(px, py, taper_d, taper_d),
-                z_base=FLOOR_MM,
-                depth=PINHOLE_TAPER_DEPTH,
-                label=f"pin taper {self.cid}:{pin.id}",
             ))
 
         return frags
