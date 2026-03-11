@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 from dataclasses import dataclass
 from typing import AsyncGenerator
@@ -34,10 +33,6 @@ _HINT_VECTORS = {
     "left": (-1.0, 0.0, 0.0),
     "right": (1.0, 0.0, 0.0),
 }
-
-
-def _snap_drift(requested, snapped) -> float:
-    return math.sqrt(sum((a - b) ** 2 for a, b in zip(requested, snapped)))
 
 
 def _normal_alignment(face_hint: str | None, normal: tuple) -> float | None:
@@ -493,55 +488,40 @@ class DesignAgent(_BaseAgent):
             return f"CSG mesh generation failed: {e}", False
 
         try:
-            from src.pipeline.mesh.surface import snap_all, find_placement_zones, resolve_face_offset
-            zones = find_placement_zones(mesh)
-            for p in spec.surface_placements:
-                if p.offset_mm is not None and p.face_hint and p.face_hint in zones:
-                    p.position = resolve_face_offset(zones, p.face_hint, p.offset_mm)
+            from src.pipeline.mesh.surface import project_all
+            project_all(mesh, spec.surface_placements)
         except Exception as e:
-            return f"Zone detection / offset resolution failed: {e}", False
+            return f"Surface projection failed: {e}", False
 
-        try:
-            snap_all(mesh, spec.surface_placements)
-        except Exception as e:
-            return f"Surface placement snapping failed: {e}", False
-
-        zone_lines = []
-        for face, z in sorted(zones.items()):
-            zone_lines.append(
-                f"  {face}: center={z['center']}, bounds={z['bounds']}, depth={z['depth']} (axes: {z['axes']})"
-            )
-        zone_report = "\n".join(zone_lines) if zone_lines else "  (no flat zones detected)"
+        bbox = mesh.bounds
+        bbox_str = "[{:.1f}, {:.1f}, {:.1f}] to [{:.1f}, {:.1f}, {:.1f}]".format(
+            *bbox[0], *bbox[1]
+        )
 
         snap_lines = []
         has_placement_errors = False
         for p in spec.surface_placements:
             if p.snapped_position is None or p.surface_normal is None:
-                snap_lines.append(f"  {p.instance_id}: snap data missing")
+                snap_lines.append(f"  {p.instance_id}: projection failed")
+                has_placement_errors = True
                 continue
-            drift = _snap_drift(p.position, p.snapped_position)
-            alignment = _normal_alignment(p.face_hint, p.surface_normal)
+            alignment = _normal_alignment(p.face, p.surface_normal)
             normal_desc = _describe_normal(p.surface_normal)
             pos_str = "[{:.1f}, {:.1f}, {:.1f}]".format(*p.snapped_position)
-            line = f"  {p.instance_id}: snapped to {pos_str}, normal={normal_desc}, drift={drift:.1f}mm"
+            line = f"  {p.instance_id}: placed at {pos_str}, normal={normal_desc}"
             if alignment is not None and alignment < 0.3:
-                line += " !! surface faces wrong direction for '{}' placement".format(p.face_hint)
+                line += f" !! surface faces wrong direction for '{p.face}'"
                 has_placement_errors = True
             elif alignment is not None and alignment < 0.6:
-                line += " ! surface is steep for '{}' — consider flattening with a box subtraction".format(p.face_hint)
-            if drift > 15:
-                line += " !! large drift from requested position"
-                has_placement_errors = True
+                line += f" ! surface is steep for '{p.face}' \u2014 consider flattening with a box subtraction"
             snap_lines.append(line)
         snap_report = "\n".join(snap_lines)
 
         if has_placement_errors:
             return (
-                f"Design mesh generated ({len(mesh.vertices)} verts, {len(mesh.faces)} faces) "
-                f"but some surface placements landed on unsuitable surfaces:\n\n{snap_report}\n\n"
-                f"Detected placement zones:\n{zone_report}\n\n"
-                f"Reshape so components land on appropriate surfaces. "
-                f"Use offset_mm=[u, v] relative to a zone center — the system resolves the depth automatically.",
+                f"Design mesh generated ({len(mesh.vertices)} verts, {len(mesh.faces)} faces, "
+                f"bbox {bbox_str}) but some surface placements failed:\n\n{snap_report}\n\n"
+                f"Adjust the 'at' coordinates or reshape so the surface exists under the target face.",
                 False,
             )
 
@@ -570,8 +550,8 @@ class DesignAgent(_BaseAgent):
 
         return (
             f"Design validated and mesh generated successfully! "
-            f"Mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces.\n\n"
-            f"Placement zones:\n{zone_report}\n\n"
-            f"Surface snap report:\n{snap_report}",
+            f"Mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces, "
+            f"bbox {bbox_str}.\n\n"
+            f"Surface placement report:\n{snap_report}",
             True,
         )
