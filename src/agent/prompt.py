@@ -69,7 +69,7 @@ Use `get_component` to read full details before placing a component.
 
 ### Design Thinking
 Before writing any CSG, you must be able to describe the finished object in plain language:
-- What is its overall **silhouette**? Describe it as if sketching on paper — "an elongated oval that tapers toward the front", "a wide flat puck with rounded edges", "a cylinder that widens into a bulge at one end".
+- What is its overall **silhouette**? Describe it as if sketching on paper — "an elongated ellipsoid that tapers toward the front", "a wide flat puck with rounded edges", "a cylinder that widens into a bulge at one end", "a wedge that narrows to a ridge along the top".
 - How does it **feel in the hand**? Where does the palm press? Where do fingers curl? Where does the thumb rest?
 - What are the **surfaces** the user interacts with? A flat area for buttons, a curved grip for the palm, a window for an LED.
 - What gives it **character**? What makes it look intentional and finished rather than a random assembly of shapes?
@@ -135,25 +135,47 @@ Build the device shape by combining simple primitives with boolean operations.
 
 #### CSG Primitives
 
+All round shapes accept `radius` as either a single number (uniform) or an array (per-axis).
+Tapered shapes use a `_top` variant to define the positive end of the taper axis.
+
 **Box** — axis-aligned rectangular block:
 ```json
 {{"type": "box", "center": [0, 0, 0], "size": [60, 80, 20]}}
 ```
 
-**Cylinder** — round tube along an axis:
-```json
-{{"type": "cylinder", "center": [0, 0, 10], "radius": 15, "height": 25, "axis": "z"}}
-```
-
-**Sphere** — round ball:
+**Sphere / Ellipsoid** — round shape:
 ```json
 {{"type": "sphere", "center": [0, 0, 15], "radius": 20}}
+{{"type": "sphere", "center": [0, 0, 15], "radius": [20, 30, 15]}}
 ```
+- `radius: number` → perfect sphere
+- `radius: [rx, ry, rz]` → ellipsoid with different radii per axis
 
-**Cone** — tapered cylinder (point at top):
+**Cylinder** — tube along an axis:
+```json
+{{"type": "cylinder", "center": [0, 0, 10], "radius": 15, "height": 25, "axis": "z"}}
+{{"type": "cylinder", "center": [0, 0, 10], "radius": [15, 20], "height": 25, "axis": "z"}}
+```
+- `radius: number` → circular cross-section
+- `radius: [ra, rb]` → oval cross-section (ra, rb are the two radii perpendicular to the axis)
+
+**Cone / Frustum** — tapered cylinder:
 ```json
 {{"type": "cone", "center": [0, 0, 0], "radius": 15, "height": 25, "axis": "z"}}
+{{"type": "cone", "center": [0, 0, 0], "radius": 15, "radius_top": 8, "height": 25, "axis": "z"}}
+{{"type": "cone", "center": [0, 0, 0], "radius": [15, 20], "radius_top": [8, 10], "height": 25, "axis": "z"}}
 ```
+- `radius` — bottom cross-section (number or [ra, rb])
+- `radius_top` — top cross-section (number or [ra, rb], default 0 = pointed cone)
+
+**Wedge** — tapered box (prism / ramp / pyramid):
+```json
+{{"type": "wedge", "center": [0, 0, 0], "size": [60, 80, 20], "size_top": [30, 80, 20], "axis": "z"}}
+```
+- `size: [x, y, z]` — full dimensions (same as box)
+- `size_top: [x, y, z]` — dimensions at the positive end of the taper axis (only the two non-axis values are used)
+- `axis` — taper direction (default "z")
+- Set a `size_top` dimension to 0 to collapse that edge: `size_top: [0, 80, 20]` creates a ridge, `size_top: [0, 0, 20]` creates a point
 
 #### Boolean Operations
 
@@ -238,14 +260,14 @@ Before writing any shape JSON, produce a blueprint that plans the geometry. This
 Example blueprint:
 ```
 Primitives (union):
-1. Body cylinder: r=18, h=120, Y-axis at [0,0,0] → x: -18..18, y: -60..60, z: -18..18
+1. Body ellipsoid: radii [18, 60, 16] at [0,0,0] → x: -18..18, y: -60..60, z: -16..16
 2. Head sphere: r=26 at [0,-55,0] → x: -26..26, y: -81..-29, z: -26..26
 
 Subtractions:
 3. Box at [0,70,0] size [60,20,60] → removes y > 60. Creates a flat rear face. Only affects body tail end ✓
 4. Box at [0,-76,0] size [60,20,60] → removes y < -66. Creates a flat front face on the head. Does not reach body ✓
 
-Silhouette: body 36mm dia, head 52mm dia → ratio 1.44×. Seam hidden inside overlap zone.
+Silhouette: body 36mm wide × 32mm tall, head 52mm dia → ratio 1.44×. Seam hidden inside overlap zone.
 ```
 
 ## Example: Handheld Barrel Device

@@ -1,7 +1,8 @@
 """CSG tree evaluation — converts a CSGNode tree into a trimesh triangle mesh.
 
-Supports primitives (box, cylinder, sphere, cone) and boolean operations
-(union, difference, intersection) using the manifold3d engine.
+Supports primitives (box, cylinder, sphere/ellipsoid, cone/frustum, wedge)
+and boolean operations (union, difference, intersection) using the
+manifold3d engine.
 """
 
 from __future__ import annotations
@@ -16,7 +17,6 @@ from src.pipeline.design.models3d import CSGNode
 
 log = logging.getLogger(__name__)
 
-# Segment count for curved primitives (cylinders, cones, spheres).
 _CYLINDER_SECTIONS = 48
 _SPHERE_SUBDIVISIONS = 3
 
@@ -50,6 +50,8 @@ def evaluate_csg(node: CSGNode) -> trimesh.Trimesh:
     return mesh
 
 
+# ── Primitive dispatch ─────────────────────────────────────────────
+
 def _create_primitive(node: CSGNode) -> trimesh.Trimesh:
     """Create a trimesh mesh from a CSG primitive node."""
     ptype = node.type
@@ -59,40 +61,19 @@ def _create_primitive(node: CSGNode) -> trimesh.Trimesh:
             raise ValueError("Box primitive requires 'size' (x, y, z)")
         mesh = trimesh.creation.box(extents=node.size)
 
+    elif ptype == "sphere":
+        mesh = _build_sphere(node)
+
     elif ptype == "cylinder":
-        if node.radius is None or node.height is None:
-            raise ValueError("Cylinder primitive requires 'radius' and 'height'")
-        mesh = trimesh.creation.cylinder(
-            radius=node.radius,
-            height=node.height,
-            sections=_CYLINDER_SECTIONS,
-        )
+        mesh = _build_cylinder(node)
         mesh = _align_to_axis(mesh, node.axis)
 
-    elif ptype == "sphere":
-        if node.radius is None:
-            raise ValueError("Sphere primitive requires 'radius'")
-        mesh = trimesh.creation.icosphere(
-            subdivisions=_SPHERE_SUBDIVISIONS,
-            radius=node.radius,
-        )
-
     elif ptype == "cone":
-        if node.radius is None or node.height is None:
-            raise ValueError("Cone primitive requires 'radius' and 'height'")
-        top_r = node.top_radius if node.top_radius is not None else 0.0
-        if top_r > 0:
-            mesh = trimesh.creation.cone(
-                radius=node.radius,
-                height=node.height,
-                sections=_CYLINDER_SECTIONS,
-            )
-        else:
-            mesh = trimesh.creation.cone(
-                radius=node.radius,
-                height=node.height,
-                sections=_CYLINDER_SECTIONS,
-            )
+        mesh = _build_cone(node)
+        mesh = _align_to_axis(mesh, node.axis)
+
+    elif ptype == "wedge":
+        mesh = _build_wedge(node)
         mesh = _align_to_axis(mesh, node.axis)
 
     else:
@@ -104,16 +85,177 @@ def _create_primitive(node: CSGNode) -> trimesh.Trimesh:
     return mesh
 
 
-def mesh_to_glb_bytes(mesh: trimesh.Trimesh) -> bytes:
-    """Export a trimesh to binary glTF (.glb)."""
-    return mesh.export(file_type="glb")
+# ── Shape builders ─────────────────────────────────────────────────
+
+def _build_sphere(node: CSGNode) -> trimesh.Trimesh:
+    if node.radii is not None:
+        mesh = trimesh.creation.icosphere(
+            subdivisions=_SPHERE_SUBDIVISIONS, radius=1.0,
+        )
+        mesh.vertices *= np.array(node.radii)
+        return mesh
+    if node.radius is None:
+        raise ValueError("Sphere requires 'radius'")
+    return trimesh.creation.icosphere(
+        subdivisions=_SPHERE_SUBDIVISIONS, radius=node.radius,
+    )
+
+
+def _build_cylinder(node: CSGNode) -> trimesh.Trimesh:
+    if node.height is None:
+        raise ValueError("Cylinder requires 'height'")
+    if node.radii is not None:
+        mesh = trimesh.creation.cylinder(
+            radius=1.0, height=node.height, sections=_CYLINDER_SECTIONS,
+        )
+        mesh.vertices[:, 0] *= node.radii[0]
+        mesh.vertices[:, 1] *= node.radii[1]
+        return mesh
+    if node.radius is None:
+        raise ValueError("Cylinder requires 'radius'")
+    return trimesh.creation.cylinder(
+        radius=node.radius, height=node.height, sections=_CYLINDER_SECTIONS,
+    )
+
+
+def _build_cone(node: CSGNode) -> trimesh.Trimesh:
+    if node.height is None:
+        raise ValueError("Cone requires 'height'")
+    brx, bry = _resolve_radii_pair(node.radius, node.radii)
+    trx, try_ = _resolve_radii_pair(node.radius_top, node.radii_top, default=0.0)
+    return _create_frustum(brx, bry, trx, try_, node.height, _CYLINDER_SECTIONS)
+
+
+def _build_wedge(node: CSGNode) -> trimesh.Trimesh:
+    if node.size is None:
+        raise ValueError("Wedge requires 'size'")
+    if node.size_top is None:
+        raise ValueError("Wedge requires 'size_top'")
+    axis_idx = {"x": 0, "y": 1, "z": 2}[node.axis]
+    cross = [i for i in range(3) if i != axis_idx]
+    height = node.size[axis_idx]
+    bx, by = node.size[cross[0]], node.size[cross[1]]
+    tx, ty = node.size_top[cross[0]], node.size_top[cross[1]]
+    return _create_wedge_mesh(bx, by, tx, ty, height)
+
+
+# ── Mesh constructors ─────────────────────────────────────────────
+
+def _create_frustum(
+    brx: float, bry: float,
+    trx: float, try_: float,
+    height: float, sections: int,
+) -> trimesh.Trimesh:
+    """Build a frustum / cone along Z with independent elliptical radii."""
+    angles = np.linspace(0, 2 * np.pi, sections, endpoint=False)
+    cos_a = np.cos(angles)
+    sin_a = np.sin(angles)
+    hz = height / 2
+
+    verts: list[list[float]] = []
+    faces: list[list[int]] = []
+
+    # Bottom ring
+    for i in range(sections):
+        verts.append([brx * cos_a[i], bry * sin_a[i], -hz])
+
+    top_is_point = trx <= 0 and try_ <= 0
+
+    if top_is_point:
+        apex = len(verts)
+        verts.append([0.0, 0.0, hz])
+        for i in range(sections):
+            j = (i + 1) % sections
+            faces.append([i, j, apex])
+    else:
+        top_start = len(verts)
+        for i in range(sections):
+            verts.append([trx * cos_a[i], try_ * sin_a[i], hz])
+        for i in range(sections):
+            j = (i + 1) % sections
+            bi, bj = i, j
+            ti, tj = top_start + i, top_start + j
+            faces.append([bi, bj, tj])
+            faces.append([bi, tj, ti])
+        # Top cap (normal must point +z outward)
+        tc = len(verts)
+        verts.append([0.0, 0.0, hz])
+        for i in range(sections):
+            j = (i + 1) % sections
+            faces.append([tc, top_start + i, top_start + j])
+
+    # Bottom cap (normal must point −z outward)
+    bc = len(verts)
+    verts.append([0.0, 0.0, -hz])
+    for i in range(sections):
+        j = (i + 1) % sections
+        faces.append([bc, j, i])
+
+    return trimesh.Trimesh(
+        vertices=np.array(verts, dtype=float),
+        faces=np.array(faces, dtype=int),
+    )
+
+
+def _create_wedge_mesh(
+    bx: float, by: float,
+    tx: float, ty: float,
+    height: float,
+) -> trimesh.Trimesh:
+    """Build a wedge (tapered box) along Z.
+
+    Bottom rectangle *bx × by* at z = −h/2,
+    top rectangle *tx × ty* at z = +h/2.
+    """
+    hz = height / 2
+    bx2, by2 = bx / 2, by / 2
+    tx2, ty2 = tx / 2, ty / 2
+
+    verts = np.array([
+        [-bx2, -by2, -hz],  # 0 bottom
+        [ bx2, -by2, -hz],  # 1
+        [ bx2,  by2, -hz],  # 2
+        [-bx2,  by2, -hz],  # 3
+        [-tx2, -ty2,  hz],  # 4 top
+        [ tx2, -ty2,  hz],  # 5
+        [ tx2,  ty2,  hz],  # 6
+        [-tx2,  ty2,  hz],  # 7
+    ], dtype=float)
+
+    faces = np.array([
+        [0, 2, 1], [0, 3, 2],      # bottom
+        [4, 5, 6], [4, 6, 7],      # top
+        [0, 1, 5], [0, 5, 4],      # front (−y)
+        [2, 3, 7], [2, 7, 6],      # back (+y)
+        [1, 2, 6], [1, 6, 5],      # right (+x)
+        [3, 0, 4], [3, 4, 7],      # left (−x)
+    ], dtype=int)
+
+    mesh = trimesh.Trimesh(vertices=verts, faces=faces)
+    mesh.merge_vertices()
+    mesh.update_faces(mesh.nondegenerate_faces())
+    return mesh
+
+
+# ── Helpers ────────────────────────────────────────────────────────
+
+def _resolve_radii_pair(
+    scalar: float | None,
+    array: tuple[float, ...] | None,
+    default: float | None = None,
+) -> tuple[float, float]:
+    """Return (rx, ry) from either a scalar radius or a 2-element radii tuple."""
+    if array is not None:
+        return array[0], array[1]
+    if scalar is not None:
+        return scalar, scalar
+    if default is not None:
+        return default, default
+    raise ValueError("No radius specified")
 
 
 def _align_to_axis(mesh: trimesh.Trimesh, axis: str) -> trimesh.Trimesh:
-    """Rotate a Z-aligned mesh to align with the specified axis.
-
-    trimesh creates cylinders/cones along Z by default.
-    """
+    """Rotate a Z-aligned mesh to align with the specified axis."""
     if axis == "z":
         return mesh
     elif axis == "x":
@@ -123,6 +265,13 @@ def _align_to_axis(mesh: trimesh.Trimesh, axis: str) -> trimesh.Trimesh:
         R = trimesh.transformations.rotation_matrix(-math.pi / 2, [1, 0, 0])
         mesh.apply_transform(R)
     return mesh
+
+
+# ── Exporters ──────────────────────────────────────────────────────
+
+def mesh_to_glb_bytes(mesh: trimesh.Trimesh) -> bytes:
+    """Export a trimesh to binary glTF (.glb)."""
+    return mesh.export(file_type="glb")
 
 
 def mesh_to_stl_bytes(mesh: trimesh.Trimesh) -> bytes:

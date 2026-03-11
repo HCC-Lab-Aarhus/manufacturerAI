@@ -5,7 +5,7 @@ from __future__ import annotations
 from src.catalog import CatalogResult
 from .models3d import CSGNode, DesignSpec3D
 
-_VALID_PRIMITIVES = {"box", "cylinder", "sphere", "cone"}
+_VALID_PRIMITIVES = {"box", "cylinder", "sphere", "cone", "wedge"}
 _VALID_OPS = {"union", "difference", "intersection"}
 _VALID_AXES = {"x", "y", "z"}
 _VALID_HINTS = {"top", "bottom", "front", "back", "left", "right"}
@@ -89,27 +89,45 @@ def _validate_csg_node(node: CSGNode, errors: list[str], path: str) -> None:
     if node.is_primitive:
         if node.type not in _VALID_PRIMITIVES:
             errors.append(f"{path}: unknown primitive type '{node.type}'")
-        if node.type == "box" and node.size is None:
-            errors.append(f"{path}: box requires 'size' [x, y, z]")
-        if node.type == "box" and node.size is not None:
-            if any(s <= 0 for s in node.size):
+
+        if node.type == "box":
+            if node.size is None:
+                errors.append(f"{path}: box requires 'size' [x, y, z]")
+            elif any(s <= 0 for s in node.size):
                 errors.append(f"{path}: box size dimensions must be > 0")
-        if node.type in ("cylinder", "cone"):
-            if node.radius is None:
-                errors.append(f"{path}: {node.type} requires 'radius'")
+
+        elif node.type == "sphere":
+            _validate_radius_fields(node, errors, path, radii_len=3)
+
+        elif node.type in ("cylinder", "cone"):
+            _validate_radius_fields(node, errors, path, radii_len=2)
             if node.height is None:
                 errors.append(f"{path}: {node.type} requires 'height'")
-            if node.radius is not None and node.radius <= 0:
-                errors.append(f"{path}: radius must be > 0")
-            if node.height is not None and node.height <= 0:
+            elif node.height <= 0:
                 errors.append(f"{path}: height must be > 0")
             if node.axis not in _VALID_AXES:
                 errors.append(f"{path}: axis must be 'x', 'y', or 'z'")
-        if node.type == "sphere":
-            if node.radius is None:
-                errors.append(f"{path}: sphere requires 'radius'")
-            if node.radius is not None and node.radius <= 0:
-                errors.append(f"{path}: radius must be > 0")
+            if node.type == "cone":
+                if node.radius_top is not None and node.radius_top < 0:
+                    errors.append(f"{path}: radius_top must be >= 0")
+                if node.radii_top is not None:
+                    if len(node.radii_top) != 2:
+                        errors.append(f"{path}: cone radii_top must have 2 elements [ra, rb]")
+                    elif any(r < 0 for r in node.radii_top):
+                        errors.append(f"{path}: radii_top values must be >= 0")
+
+        elif node.type == "wedge":
+            if node.size is None:
+                errors.append(f"{path}: wedge requires 'size' [x, y, z]")
+            elif any(s <= 0 for s in node.size):
+                errors.append(f"{path}: wedge size dimensions must be > 0")
+            if node.size_top is None:
+                errors.append(f"{path}: wedge requires 'size_top' [x, y, z]")
+            elif any(s < 0 for s in node.size_top):
+                errors.append(f"{path}: wedge size_top dimensions must be >= 0")
+            if node.axis not in _VALID_AXES:
+                errors.append(f"{path}: axis must be 'x', 'y', or 'z'")
+
     elif node.is_operation:
         if node.op not in _VALID_OPS:
             errors.append(f"{path}: unknown operation '{node.op}'")
@@ -119,3 +137,24 @@ def _validate_csg_node(node: CSGNode, errors: list[str], path: str) -> None:
             _validate_csg_node(child, errors, path=f"{path}.children[{i}]")
     else:
         errors.append(f"{path}: node must have 'type' (primitive) or 'op' (operation)")
+
+
+def _validate_radius_fields(
+    node: CSGNode, errors: list[str], path: str, radii_len: int,
+) -> None:
+    """Validate that a node has exactly one of radius/radii and values are > 0."""
+    has_scalar = node.radius is not None
+    has_array = node.radii is not None
+    if not has_scalar and not has_array:
+        errors.append(f"{path}: {node.type} requires 'radius'")
+        return
+    if has_scalar and node.radius <= 0:
+        errors.append(f"{path}: radius must be > 0")
+    if has_array:
+        if len(node.radii) != radii_len:
+            errors.append(
+                f"{path}: {node.type} radii must have {radii_len} "
+                f"element{'s' if radii_len > 1 else ''}"
+            )
+        elif any(r <= 0 for r in node.radii):
+            errors.append(f"{path}: all radii must be > 0")

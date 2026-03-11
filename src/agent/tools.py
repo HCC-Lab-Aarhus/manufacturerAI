@@ -53,7 +53,7 @@ _CSG_SHAPE_SCHEMA = {
         "type": {
             "type": "string",
             "description": (
-                "Primitive type: 'box', 'cylinder', 'sphere', or 'cone'. "
+                "Primitive type: 'box', 'cylinder', 'sphere', 'cone', or 'wedge'. "
                 "Only set for leaf nodes."
             ),
         },
@@ -76,14 +76,39 @@ _CSG_SHAPE_SCHEMA = {
         },
         "size": {
             "type": "array",
-            "description": "Box extents [width_x, depth_y, height_z] in mm.",
+            "description": (
+                "Extents [x, y, z] in mm for box and wedge."
+            ),
             "items": {"type": "number"},
         },
-        "radius": {"type": "number", "description": "Radius in mm (cylinder/sphere/cone)."},
+        "size_top": {
+            "type": "array",
+            "description": (
+                "Top-end extents [x, y, z] in mm (wedge only). Only the two "
+                "non-axis dimensions are used; the axis dimension is ignored."
+            ),
+            "items": {"type": "number"},
+        },
+        "radius": {
+            "description": (
+                "Radius in mm. A single number for uniform shape. "
+                "An array [rx, ry, rz] for ellipsoid (sphere) or "
+                "[ra, rb] for oval cross-section (cylinder/cone)."
+            ),
+        },
+        "radius_top": {
+            "description": (
+                "Top-end radius for cone (default 0 = point). A single number "
+                "for circular top, or [ra, rb] for oval. Set to 0 for a "
+                "pointed cone."
+            ),
+        },
         "height": {"type": "number", "description": "Height in mm (cylinder/cone)."},
         "axis": {
             "type": "string",
-            "description": "Axis for cylinder/cone: 'x', 'y', or 'z' (default 'z').",
+            "description": (
+                "Axis for cylinder/cone/wedge: 'x', 'y', or 'z' (default 'z')."
+            ),
         },
         "rotate": {
             "type": "array",
@@ -161,7 +186,7 @@ DESIGN_TOOLS: list[dict[str, Any]] = [
             "Submit the physical device design (shape + UI placements + "
             "device description) for validation. The device shape is defined "
             "as a CSG tree (union, difference, intersection of "
-            "box/cylinder/sphere/cone primitives). UI components are placed "
+            "box/cylinder/sphere/cone/wedge primitives). UI components are placed "
             "on the mesh surface — the system snaps them to the actual "
             "surface. The device_description is passed to the electronics "
             "engineer who designs the circuit. If validation fails, you'll "

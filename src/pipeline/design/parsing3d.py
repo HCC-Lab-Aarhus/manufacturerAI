@@ -55,14 +55,35 @@ def _parse_csg_node(data: dict) -> CSGNode:
             rotate=_parse_vec3(data.get("rotate")),
         )
     elif "type" in data:
+        # radius: number → scalar, array → per-axis radii
+        radius_val = data.get("radius")
+        radius, radii = _parse_scalar_or_tuple(radius_val)
+
+        # radius_top (accept legacy "top_radius" alias)
+        radius_top_val = data.get("radius_top", data.get("top_radius"))
+        radius_top, radii_top = _parse_scalar_or_tuple(radius_top_val)
+
+        # size: number → cube, array → [x,y,z]
+        size_val = data.get("size")
+        if isinstance(size_val, (int, float)):
+            v = float(size_val)
+            size: tuple[float, float, float] | None = (v, v, v)
+        else:
+            size = _parse_vec3(size_val)
+
+        size_top = _parse_vec3(data.get("size_top"))
+
         return CSGNode(
             type=data["type"],
             center=_parse_vec3(data.get("center"), (0.0, 0.0, 0.0)),
-            size=_parse_vec3(data.get("size")),
-            radius=_float_or_none(data.get("radius")),
+            size=size,
+            size_top=size_top,
+            radius=radius,
+            radii=radii,
             height=_float_or_none(data.get("height")),
             axis=data.get("axis", "z"),
-            top_radius=_float_or_none(data.get("top_radius")),
+            radius_top=radius_top,
+            radii_top=radii_top,
             rotate=_parse_vec3(data.get("rotate")),
         )
     else:
@@ -79,6 +100,22 @@ def _parse_vec3(
     if len(val) != 3:
         raise ValueError(f"Expected 3-element vector, got {len(val)}")
     return (float(val[0]), float(val[1]), float(val[2]))
+
+
+def _parse_scalar_or_tuple(
+    val,
+) -> tuple[float | None, tuple[float, ...] | None]:
+    """Parse a value that can be a scalar or an array.
+
+    Returns ``(scalar, None)`` if *val* is a number,
+    ``(None, tuple)`` if *val* is a list/tuple,
+    or ``(None, None)`` if *val* is None.
+    """
+    if val is None:
+        return None, None
+    if isinstance(val, (list, tuple)):
+        return None, tuple(float(v) for v in val)
+    return float(val), None
 
 
 def _float_or_none(val) -> float | None:

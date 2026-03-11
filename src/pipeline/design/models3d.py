@@ -10,18 +10,31 @@ from .models import ComponentInstance, Net
 class CSGNode:
     """A node in the CSG tree: either a primitive leaf or a boolean operation.
 
-    Primitives have ``type`` set (box/cylinder/sphere/cone).
+    Primitives have ``type`` set (box/cylinder/sphere/cone/wedge).
     Operations have ``op`` set (union/difference/intersection) plus ``children``.
+
+    Round shapes (sphere, cylinder, cone) accept either a scalar ``radius``
+    (uniform) or a per-axis ``radii`` tuple (ellipsoid / oval cross-section).
+    Tapered shapes (cone, wedge) use ``radius_top`` / ``radii_top`` or
+    ``size_top`` to define the shape at the positive end of the taper axis.
     """
 
     # Primitive fields (leaf nodes)
-    type: str | None = None                 # "box" | "cylinder" | "sphere" | "cone"
+    type: str | None = None                 # "box" | "cylinder" | "sphere" | "cone" | "wedge"
     center: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    size: tuple[float, float, float] | None = None     # box extents (x, y, z)
-    radius: float | None = None                         # cylinder/sphere/cone
-    height: float | None = None                         # cylinder/cone
-    axis: str = "z"                                     # cylinder/cone alignment axis
-    top_radius: float | None = None                     # truncated cone top radius
+
+    # Box / Wedge dimensions
+    size: tuple[float, float, float] | None = None         # extents (x, y, z)
+    size_top: tuple[float, float, float] | None = None     # wedge top-end extents
+
+    # Round shape dimensions (scalar = uniform, tuple = per-axis)
+    radius: float | None = None                             # uniform radius
+    radii: tuple[float, ...] | None = None                  # sphere: (rx,ry,rz) / cyl,cone: (ra,rb)
+    radius_top: float | None = None                         # cone uniform top radius (default 0)
+    radii_top: tuple[float, ...] | None = None              # cone oval top: (ra,rb)
+
+    height: float | None = None                             # cylinder / cone
+    axis: str = "z"                                         # cylinder / cone / wedge
 
     # Boolean operation fields (branch nodes)
     op: str | None = None                   # "union" | "difference" | "intersection"
