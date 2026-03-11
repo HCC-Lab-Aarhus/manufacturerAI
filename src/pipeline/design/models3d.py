@@ -10,31 +10,34 @@ from .models import ComponentInstance, Net
 class CSGNode:
     """A node in the CSG tree: either a primitive leaf or a boolean operation.
 
-    Primitives have ``type`` set (box/cylinder/sphere/cone/wedge).
+    Primitives have ``type`` set (box / cylinder / sphere).
     Operations have ``op`` set (union/difference/intersection) plus ``children``.
 
-    Round shapes (sphere, cylinder, cone) accept either a scalar ``radius``
-    (uniform) or a per-axis ``radii`` tuple (ellipsoid / oval cross-section).
-    Tapered shapes (cone, wedge) use ``radius_top`` / ``radii_top`` or
-    ``size_top`` to define the shape at the positive end of the taper axis.
+    Every shape can optionally taper along its axis:
+    - **box**: add ``size_top`` to taper → wedge / prism / pyramid.
+    - **cylinder**: add ``radius_top`` to taper → cone / frustum.
+    - **sphere**: no taper (standalone).
+
+    Round shapes accept ``radius`` as a scalar (uniform) or per-axis tuple
+    (ellipsoid / oval cross-section).
     """
 
     # Primitive fields (leaf nodes)
-    type: str | None = None                 # "box" | "cylinder" | "sphere" | "cone" | "wedge"
+    type: str | None = None                 # "box" | "cylinder" | "sphere"
     center: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
-    # Box / Wedge dimensions
+    # Box dimensions
     size: tuple[float, float, float] | None = None         # extents (x, y, z)
-    size_top: tuple[float, float, float] | None = None     # wedge top-end extents
+    size_top: tuple[float, float, float] | None = None     # tapered box top-end extents
 
     # Round shape dimensions (scalar = uniform, tuple = per-axis)
     radius: float | None = None                             # uniform radius
-    radii: tuple[float, ...] | None = None                  # sphere: (rx,ry,rz) / cyl,cone: (ra,rb)
-    radius_top: float | None = None                         # cone uniform top radius (default 0)
-    radii_top: tuple[float, ...] | None = None              # cone oval top: (ra,rb)
+    radii: tuple[float, ...] | None = None                  # sphere: (rx,ry,rz) / cylinder: (ra,rb)
+    radius_top: float | None = None                         # tapered cylinder top radius
+    radii_top: tuple[float, ...] | None = None              # tapered cylinder oval top: (ra,rb)
 
-    height: float | None = None                             # cylinder / cone
-    axis: str = "z"                                         # cylinder / cone / wedge
+    height: float | None = None                             # cylinder
+    axis: str = "z"                                         # cylinder / tapered box
 
     # Boolean operation fields (branch nodes)
     op: str | None = None                   # "union" | "difference" | "intersection"

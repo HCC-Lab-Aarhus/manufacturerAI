@@ -55,6 +55,13 @@ def _parse_csg_node(data: dict) -> CSGNode:
             rotate=_parse_vec3(data.get("rotate")),
         )
     elif "type" in data:
+        ptype = data["type"]
+        # Normalize legacy type names
+        if ptype == "cone":
+            ptype = "cylinder"
+        elif ptype == "wedge":
+            ptype = "box"
+
         # radius: number → scalar, array → per-axis radii
         radius_val = data.get("radius")
         radius, radii = _parse_scalar_or_tuple(radius_val)
@@ -74,7 +81,7 @@ def _parse_csg_node(data: dict) -> CSGNode:
         size_top = _parse_vec3(data.get("size_top"))
 
         return CSGNode(
-            type=data["type"],
+            type=ptype,
             center=_parse_vec3(data.get("center"), (0.0, 0.0, 0.0)),
             size=size,
             size_top=size_top,

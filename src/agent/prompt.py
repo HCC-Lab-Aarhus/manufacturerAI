@@ -135,47 +135,36 @@ Build the device shape by combining simple primitives with boolean operations.
 
 #### CSG Primitives
 
-All round shapes accept `radius` as either a single number (uniform) or an array (per-axis).
-Tapered shapes use a `_top` variant to define the positive end of the taper axis.
+There are **3 primitive types**: box, cylinder, sphere.
+Each accepts optional modifiers for tapering or per-axis sizing.
 
-**Box** — axis-aligned rectangular block:
+**Box** — rectangular block, optionally tapered:
 ```json
 {{"type": "box", "center": [0, 0, 0], "size": [60, 80, 20]}}
+{{"type": "box", "size": [60, 80, 20], "size_top": [30, 80, 20], "axis": "z"}}
+{{"type": "box", "size": [60, 80, 20], "size_top": [0, 0, 20], "axis": "z"}}
 ```
+- `size: [x, y, z]` — base dimensions (required)
+- `size_top: [x, y, z]` — top-end dimensions for tapering (optional; only the two non-axis dimensions matter)
+- Set `size_top` dims to 0 to collapse edges: `[0, 80, 20]` → ridge, `[0, 0, 20]` → point
+
+**Cylinder** — tube along an axis, optionally tapered:
+```json
+{{"type": "cylinder", "center": [0, 0, 10], "radius": 15, "height": 25, "axis": "z"}}
+{{"type": "cylinder", "radius": [15, 20], "height": 25, "axis": "z"}}
+{{"type": "cylinder", "radius": 15, "radius_top": 8, "height": 25, "axis": "z"}}
+{{"type": "cylinder", "radius": 15, "radius_top": 0, "height": 25, "axis": "z"}}
+```
+- `radius: number` → circular, `radius: [ra, rb]` → oval cross-section
+- `radius_top` — top-end radius for tapering (optional; number or [ra, rb])
+- `radius_top: 0` → pointed cone
 
 **Sphere / Ellipsoid** — round shape:
 ```json
 {{"type": "sphere", "center": [0, 0, 15], "radius": 20}}
 {{"type": "sphere", "center": [0, 0, 15], "radius": [20, 30, 15]}}
 ```
-- `radius: number` → perfect sphere
-- `radius: [rx, ry, rz]` → ellipsoid with different radii per axis
-
-**Cylinder** — tube along an axis:
-```json
-{{"type": "cylinder", "center": [0, 0, 10], "radius": 15, "height": 25, "axis": "z"}}
-{{"type": "cylinder", "center": [0, 0, 10], "radius": [15, 20], "height": 25, "axis": "z"}}
-```
-- `radius: number` → circular cross-section
-- `radius: [ra, rb]` → oval cross-section (ra, rb are the two radii perpendicular to the axis)
-
-**Cone / Frustum** — tapered cylinder:
-```json
-{{"type": "cone", "center": [0, 0, 0], "radius": 15, "height": 25, "axis": "z"}}
-{{"type": "cone", "center": [0, 0, 0], "radius": 15, "radius_top": 8, "height": 25, "axis": "z"}}
-{{"type": "cone", "center": [0, 0, 0], "radius": [15, 20], "radius_top": [8, 10], "height": 25, "axis": "z"}}
-```
-- `radius` — bottom cross-section (number or [ra, rb])
-- `radius_top` — top cross-section (number or [ra, rb], default 0 = pointed cone)
-
-**Wedge** — tapered box (prism / ramp / pyramid):
-```json
-{{"type": "wedge", "center": [0, 0, 0], "size": [60, 80, 20], "size_top": [30, 80, 20], "axis": "z"}}
-```
-- `size: [x, y, z]` — full dimensions (same as box)
-- `size_top: [x, y, z]` — dimensions at the positive end of the taper axis (only the two non-axis values are used)
-- `axis` — taper direction (default "z")
-- Set a `size_top` dimension to 0 to collapse that edge: `size_top: [0, 80, 20]` creates a ridge, `size_top: [0, 0, 20]` creates a point
+- `radius: number` → perfect sphere, `radius: [rx, ry, rz]` → ellipsoid
 
 #### Boolean Operations
 

@@ -1,8 +1,8 @@
 """CSG tree evaluation — converts a CSGNode tree into a trimesh triangle mesh.
 
-Supports primitives (box, cylinder, sphere/ellipsoid, cone/frustum, wedge)
-and boolean operations (union, difference, intersection) using the
-manifold3d engine.
+Supports primitives (box, cylinder, sphere) — each optionally tapered — and
+boolean operations (union, difference, intersection) using the manifold3d
+engine.
 """
 
 from __future__ import annotations
@@ -57,23 +57,15 @@ def _create_primitive(node: CSGNode) -> trimesh.Trimesh:
     ptype = node.type
 
     if ptype == "box":
-        if node.size is None:
-            raise ValueError("Box primitive requires 'size' (x, y, z)")
-        mesh = trimesh.creation.box(extents=node.size)
+        mesh = _build_box(node)
+        if node.size_top is not None:
+            mesh = _align_to_axis(mesh, node.axis)
 
     elif ptype == "sphere":
         mesh = _build_sphere(node)
 
     elif ptype == "cylinder":
         mesh = _build_cylinder(node)
-        mesh = _align_to_axis(mesh, node.axis)
-
-    elif ptype == "cone":
-        mesh = _build_cone(node)
-        mesh = _align_to_axis(mesh, node.axis)
-
-    elif ptype == "wedge":
-        mesh = _build_wedge(node)
         mesh = _align_to_axis(mesh, node.axis)
 
     else:
@@ -86,6 +78,19 @@ def _create_primitive(node: CSGNode) -> trimesh.Trimesh:
 
 
 # ── Shape builders ─────────────────────────────────────────────────
+
+def _build_box(node: CSGNode) -> trimesh.Trimesh:
+    if node.size is None:
+        raise ValueError("Box requires 'size'")
+    if node.size_top is None:
+        return trimesh.creation.box(extents=node.size)
+    axis_idx = {"x": 0, "y": 1, "z": 2}[node.axis]
+    cross = [i for i in range(3) if i != axis_idx]
+    height = node.size[axis_idx]
+    bx, by = node.size[cross[0]], node.size[cross[1]]
+    tx, ty = node.size_top[cross[0]], node.size_top[cross[1]]
+    return _create_tapered_box(bx, by, tx, ty, height)
+
 
 def _build_sphere(node: CSGNode) -> trimesh.Trimesh:
     if node.radii is not None:
@@ -104,6 +109,11 @@ def _build_sphere(node: CSGNode) -> trimesh.Trimesh:
 def _build_cylinder(node: CSGNode) -> trimesh.Trimesh:
     if node.height is None:
         raise ValueError("Cylinder requires 'height'")
+    has_taper = node.radius_top is not None or node.radii_top is not None
+    if has_taper:
+        brx, bry = _resolve_radii_pair(node.radius, node.radii)
+        trx, try_ = _resolve_radii_pair(node.radius_top, node.radii_top, default=0.0)
+        return _create_frustum(brx, bry, trx, try_, node.height, _CYLINDER_SECTIONS)
     if node.radii is not None:
         mesh = trimesh.creation.cylinder(
             radius=1.0, height=node.height, sections=_CYLINDER_SECTIONS,
@@ -116,27 +126,6 @@ def _build_cylinder(node: CSGNode) -> trimesh.Trimesh:
     return trimesh.creation.cylinder(
         radius=node.radius, height=node.height, sections=_CYLINDER_SECTIONS,
     )
-
-
-def _build_cone(node: CSGNode) -> trimesh.Trimesh:
-    if node.height is None:
-        raise ValueError("Cone requires 'height'")
-    brx, bry = _resolve_radii_pair(node.radius, node.radii)
-    trx, try_ = _resolve_radii_pair(node.radius_top, node.radii_top, default=0.0)
-    return _create_frustum(brx, bry, trx, try_, node.height, _CYLINDER_SECTIONS)
-
-
-def _build_wedge(node: CSGNode) -> trimesh.Trimesh:
-    if node.size is None:
-        raise ValueError("Wedge requires 'size'")
-    if node.size_top is None:
-        raise ValueError("Wedge requires 'size_top'")
-    axis_idx = {"x": 0, "y": 1, "z": 2}[node.axis]
-    cross = [i for i in range(3) if i != axis_idx]
-    height = node.size[axis_idx]
-    bx, by = node.size[cross[0]], node.size[cross[1]]
-    tx, ty = node.size_top[cross[0]], node.size_top[cross[1]]
-    return _create_wedge_mesh(bx, by, tx, ty, height)
 
 
 # ── Mesh constructors ─────────────────────────────────────────────
@@ -197,12 +186,12 @@ def _create_frustum(
     )
 
 
-def _create_wedge_mesh(
+def _create_tapered_box(
     bx: float, by: float,
     tx: float, ty: float,
     height: float,
 ) -> trimesh.Trimesh:
-    """Build a wedge (tapered box) along Z.
+    """Build a tapered box along Z.
 
     Bottom rectangle *bx × by* at z = −h/2,
     top rectangle *tx × ty* at z = +h/2.
