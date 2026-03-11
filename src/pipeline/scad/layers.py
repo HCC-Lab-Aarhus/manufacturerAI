@@ -462,20 +462,11 @@ def _polyhedron_shell(
         all_pts.extend(cap_ring)
     all_pts.append([cx, cy, cz])
 
-    # Bottom centroid for fan tessellation of the bottom cap
-    bot_ring = rings[0]
-    bot_cx = sum(p[0] for p in bot_ring) / N
-    bot_cy = sum(p[1] for p in bot_ring) / N
-    bot_cz = sum(p[2] for p in bot_ring) / N
-    all_pts.append([bot_cx, bot_cy, bot_cz])
-
     # Index helpers
     # Main rings: 0 … R*N-1  (ring ri, vertex vi → ri*N + vi%N)
     # Cap ring k (0-based): R*N + k*N … R*N + k*N + N-1
     # Top centroid: R*N + _CAP_RINGS*N
-    # Bottom centroid: R*N + _CAP_RINGS*N + 1
     center_idx = R * N + _CAP_RINGS * N
-    bot_center_idx = center_idx + 1
 
     def cap_base(k: int) -> int:
         return R * N + k * N
@@ -494,14 +485,11 @@ def _polyhedron_shell(
 
     faces: list[list[int]] = []
 
-    # ── Bottom cap — fan from centroid ──────────────────────────────────────
-    for vi in range(N):
-        curr = vi
-        nxt  = (vi + 1) % N
-        if ccw:
-            faces.append([bot_center_idx, curr, nxt])
-        else:
-            faces.append([bot_center_idx, nxt, curr])
+    # ── Bottom cap — one N-gon face ──────────────────────────────────────
+    if ccw:
+        faces.append(list(range(N)))
+    else:
+        faces.append(list(range(N))[::-1])
 
     # ── Top cap — concentric ring layers + final centroid fan ──────────────────
     # Winding for top-facing outward normals (CW from above = CW from outside):
