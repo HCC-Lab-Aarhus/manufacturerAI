@@ -1,18 +1,7 @@
 /**
  * Viewport handler for the Design step.
  *
- * Renders a visual preview of the DesignSpec:
- *   - SVG outline with UI placement markers
- *   - Component summary table
- *   - Net connection list
- *
- * Data shape (matches DesignSpec JSON from the backend):
- * {
- *   components: [{ catalog_id, instance_id, config?, mounting_style? }]
- *   nets:       [{ id, pins: ["instance:pin", …] }]
- *   outline:    [{ x, y, ease_in?, ease_out? }, ...]
- *   ui_placements: [{ instance_id, x_mm, y_mm }]
- * }
+ * Renders a 3D CSG preview of the design with surface placement markers.
  */
 
 import { registerHandler, cacheData } from './viewport.js';
@@ -54,16 +43,226 @@ registerHandler('design', {
     label: 'Design Preview',
     placeholder: 'Submit a design prompt to see the preview',
 
-    render(el, design) { _toggle.render(el, design); },
+    render(el, design) {
+        if (design && design.has_mesh) {
+            _render3dDesign(el, design);
+        } else {
+            _toggle.render(el, design);
+        }
+    },
 
     clear(el) {
+        _cleanup3dDesign();
         _toggle.clear(el);
         el.innerHTML = '<p class="viewport-empty">Submit a design prompt to see the preview</p>';
     },
 
-    unmount()        { _toggle.unmount(); },
-    onResize(el,w,h) { _toggle.resize(w, h); },
+    unmount() {
+        _cleanup3dDesign();
+        _toggle.unmount();
+    },
+    onResize(el,w,h) {
+        if (_scene3d) _scene3d.resize(w, h);
+        else _toggle.resize(w, h);
+    },
 });
+
+
+// ── 3D CSG design renderer ──────────────────────────────────
+
+let _scene3d = null;
+let _scene3dHost = null;
+
+function _cleanup3dDesign() {
+    if (_scene3d) { _scene3d.destroy(); _scene3d = null; }
+    if (_scene3dHost) { _scene3dHost.remove(); _scene3dHost = null; }
+}
+
+async function _render3dDesign(el, design) {
+    _cleanup3dDesign();
+    el.innerHTML = '';
+
+    // Create the 3D viewport
+    const host = document.createElement('div');
+    host.className = 'vp-3d-host';
+    host.style.cssText = 'width:100%;height:100%;position:relative;';
+    el.appendChild(host);
+    _scene3dHost = host;
+
+    // Info overlay
+    const info = document.createElement('div');
+    info.style.cssText = 'position:absolute;top:8px;left:8px;color:#8ba;font-size:12px;z-index:10;pointer-events:none;';
+    const compCount = design.components?.length || 0;
+    const placeCount = design.surface_placements?.length || 0;
+    info.textContent = `3D Design: ${compCount} components · ${placeCount} surface placements`;
+    host.appendChild(info);
+
+    // Load Three.js and STLLoader
+    const THREE = await import('three');
+    const { OrbitControls } = await import('three/addons/controls/OrbitControls.js');
+    const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+    const { getSharedRenderer, setSharedRenderer } = await import('./viewport.js');
+
+    let renderer = getSharedRenderer();
+    if (!renderer) {
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setClearColor(0x000000, 0);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        setSharedRenderer(renderer);
+    }
+
+    const canvas = renderer.domElement;
+    canvas.style.display = 'block';
+    host.appendChild(canvas);
+
+    const w = host.clientWidth || 600;
+    const h = host.clientHeight || 400;
+    renderer.setSize(w, h);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0d1117);
+    scene.fog = new THREE.FogExp2(0x0d1117, 0.002);
+
+    const camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 10000);
+    camera.position.set(80, 100, 150);
+
+    const controls = new OrbitControls(camera, canvas);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+    const key = new THREE.DirectionalLight(0xffffff, 1.2);
+    key.position.set(80, 200, 120);
+    scene.add(key);
+    const fill = new THREE.DirectionalLight(0xaac8ff, 0.5);
+    fill.position.set(-80, 60, -120);
+    scene.add(fill);
+
+    const grid = new THREE.GridHelper(400, 40, 0x1a2a3a, 0x151f2a);
+    grid.position.y = -0.5;
+    scene.add(grid);
+
+    let animId = null;
+    function animate() {
+        animId = requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+    }
+    animate();
+
+    if (design.has_mesh && state.session) {
+        const loader = new GLTFLoader();
+        const url = `${API}/api/session/design/mesh?session=${encodeURIComponent(state.session)}&t=${Date.now()}`;
+        loader.load(url, (gltf) => {
+            const root = gltf.scene;
+            root.rotation.x = -Math.PI / 2; // Z-up → Y-up
+
+            // Apply viewport material to all meshes
+            const mat = new THREE.MeshPhongMaterial({
+                color: 0x3a7a9a,
+                shininess: 40,
+                transparent: true,
+                opacity: 0.6,
+                side: THREE.DoubleSide,
+                depthWrite: true,
+            });
+            root.traverse((child) => {
+                if (child.isMesh) {
+                    child.material = mat;
+                    // Add wireframe overlay per sub-mesh
+                    const wire = new THREE.WireframeGeometry(child.geometry);
+                    const wireMat = new THREE.LineBasicMaterial({ color: 0x60b0d0, opacity: 0.3, transparent: true });
+                    child.add(new THREE.LineSegments(wire, wireMat));
+                }
+            });
+            scene.add(root);
+
+            _addPlacementMarkers(scene, design, THREE);
+
+            // Fit camera
+            const box = new THREE.Box3().setFromObject(root);
+            if (!box.isEmpty()) {
+                const center = box.getCenter(new THREE.Vector3());
+                const size = box.getSize(new THREE.Vector3());
+                const maxDim = Math.max(size.x, size.y, size.z);
+                const dist = maxDim * 1.4 / Math.tan((camera.fov / 2) * Math.PI / 180);
+                camera.position.set(center.x + dist * 0.6, center.y + dist * 0.5, center.z + dist * 0.8);
+                camera.lookAt(center);
+                controls.target.copy(center);
+                controls.update();
+            }
+        });
+    }
+
+    _scene3d = {
+        resize(w2, h2) {
+            if (w2 <= 0 || h2 <= 0) return;
+            renderer.setSize(w2, h2);
+            camera.aspect = w2 / h2;
+            camera.updateProjectionMatrix();
+        },
+        destroy() {
+            if (animId !== null) cancelAnimationFrame(animId);
+            controls.dispose();
+            if (canvas.parentNode === host) host.removeChild(canvas);
+        },
+    };
+}
+
+const _PLACE_COLORS = [0x4ea8d8, 0x52d474, 0xeeb830, 0xee6e6e, 0xb890e8, 0x40c0d0];
+
+function _addPlacementMarkers(scene, design, THREE) {
+    const placements = design.surface_placements || [];
+    const compMap = {};
+    for (const c of (design.components || [])) compMap[c.instance_id] = c;
+
+    placements.forEach((sp, i) => {
+        const pos = sp.snapped_position || sp.position;
+        if (!pos || pos.length < 3) return;
+        const color = _PLACE_COLORS[i % _PLACE_COLORS.length];
+
+        // Marker sphere
+        const geo = new THREE.SphereGeometry(2.5, 16, 16);
+        const mat = new THREE.MeshPhongMaterial({ color, emissive: color, emissiveIntensity: 0.3 });
+        const marker = new THREE.Mesh(geo, mat);
+        marker.position.set(pos[0], pos[2], -pos[1]);
+        scene.add(marker);
+
+        // Normal arrow
+        const normal = sp.surface_normal;
+        if (normal && normal.length === 3) {
+            const dir = new THREE.Vector3(normal[0], normal[2], -normal[1]).normalize();
+            const arrow = new THREE.ArrowHelper(dir, marker.position, 8, color, 3, 2);
+            scene.add(arrow);
+        }
+
+        // Label
+        const comp = compMap[sp.instance_id];
+        const label = comp ? comp.instance_id : sp.instance_id;
+        const sprite = _textSprite(label, color, THREE);
+        sprite.position.set(pos[0], pos[2] + 6, -pos[1]);
+        scene.add(sprite);
+    });
+}
+
+function _textSprite(text, color, THREE) {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = 256;
+    canvas.height = 64;
+    ctx.fillStyle = 'transparent';
+    ctx.fillRect(0, 0, 256, 64);
+    ctx.font = 'bold 28px monospace';
+    ctx.fillStyle = '#' + color.toString(16).padStart(6, '0');
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 128, 32);
+    const tex = new THREE.CanvasTexture(canvas);
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(20, 5, 1);
+    return sprite;
+}
 
 
 // ── Preview builder ───────────────────────────────────────────

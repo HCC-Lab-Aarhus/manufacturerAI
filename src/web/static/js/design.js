@@ -304,12 +304,9 @@ async function consumeSSE(response) {
                     appendDesignResult(data.design);
                     setViewportData('design', data.design);
                     statusSpan().textContent = 'Design complete!';
-                    // Enable placement step now that design exists
-                    enablePlacementTab(true);
-                    // Invalidate downstream: placement + routing are stale
+                    enablePlacementTab(!!data.design?.outline);
                     resetPlacementPanel();
                     resetRoutingPanel();
-                    // Disable routing tab until new placement
                     {
                         const rBtn = document.querySelector('#pipeline-nav .step[data-step="routing"]');
                         if (rBtn) { rBtn.disabled = true; rBtn.classList.remove('tab-flash'); }
@@ -452,12 +449,13 @@ function appendDesignResult(design) {
 
     const compCount = design.components?.length || 0;
     const netCount = design.nets?.length || 0;
-    const vertCount = (Array.isArray(design.outline) ? design.outline : design.outline?.vertices)?.length || 0;
+    const placeCount = design.surface_placements?.length || 0;
+    const summaryText = `${compCount} components · ${netCount} nets · ${placeCount} surface placements · CSG shape`;
 
     div.innerHTML = `
         <div class="design-summary">
             <strong>✅ Design Validated</strong>
-            <span>${compCount} components · ${netCount} nets · ${vertCount}-vertex outline</span>
+            <span>${summaryText}</span>
         </div>
         <details>
             <summary>View design JSON</summary>

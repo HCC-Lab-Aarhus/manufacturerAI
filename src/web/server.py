@@ -846,11 +846,24 @@ async def api_design_result(session: str = Query(...)):
     data = s.read_artifact("design.json")
     if data is None:
         raise HTTPException(404, "No design yet")
-    # Enrich components with body + pin data for rendering
     cat = _get_catalog()
     _enrich_components(data.get("components", []), cat)
-    _enrich_design_3d(data)
+    data["has_mesh"] = s.has_artifact("design_mesh.glb")
     return data
+
+
+@app.get("/api/session/design/mesh")
+async def api_design_mesh(session: str = Query(...)):
+    """Serve the design mesh as a binary glTF (.glb) file."""
+    s = _resolve_session(session)
+    glb_path = s.path / "design_mesh.glb"
+    if not glb_path.exists():
+        raise HTTPException(404, "No design mesh. Run the agent first.")
+    return FileResponse(
+        glb_path,
+        media_type="model/gltf-binary",
+        filename="design_mesh.glb",
+    )
 
 
 @app.patch("/api/session/design/enclosure")
@@ -937,7 +950,8 @@ async def api_design(request: Request, session: str = Query(None)):
                         _enrich_components(
                             design.get("components", []), cat,
                         )
-                        _enrich_design_3d(design)
+                        design["has_mesh"] = sess.has_artifact("design_mesh.glb")
+
                 data = json.dumps(event.data) if event.data else "{}"
                 yield f"event: {event.type}\ndata: {data}\n\n"
 

@@ -68,6 +68,14 @@ class Session:
         self.save()  # update last_modified
         return p
 
+    def write_artifact_bytes(self, filename: str, data: bytes) -> Path:
+        """Write a binary artifact to the session folder."""
+        p = self.path / filename
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+        self.save()
+        return p
+
     def read_artifact(self, filename: str) -> Any | None:
         """Read a JSON artifact from the session folder. Returns None if missing."""
         p = self.path / filename
