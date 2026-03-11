@@ -41,16 +41,16 @@ def _csg_node_to_dict(node: CSGNode) -> dict:
             d["center"] = list(node.center)
         if node.size is not None:
             d["size"] = list(node.size)
-        if node.size_top is not None:
-            d["size_top"] = list(node.size_top)
+        if node.size_end is not None:
+            d["size_end"] = list(node.size_end)
         if node.radii is not None:
             d["radius"] = list(node.radii)
         elif node.radius is not None:
             d["radius"] = node.radius
-        if node.radii_top is not None:
-            d["radius_top"] = list(node.radii_top)
-        elif node.radius_top is not None:
-            d["radius_top"] = node.radius_top
+        if node.radii_end is not None:
+            d["radius_end"] = list(node.radii_end)
+        elif node.radius_end is not None:
+            d["radius_end"] = node.radius_end
         if node.height is not None:
             d["height"] = node.height
         if node.axis != "z":

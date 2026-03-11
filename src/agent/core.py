@@ -35,10 +35,10 @@ _HINT_VECTORS = {
 }
 
 
-def _normal_alignment(face_hint: str | None, normal: tuple) -> float | None:
-    if not face_hint or face_hint not in _HINT_VECTORS:
+def _normal_alignment(face: str, normal: tuple) -> float | None:
+    if face not in _HINT_VECTORS:
         return None
-    expected = _HINT_VECTORS[face_hint]
+    expected = _HINT_VECTORS[face]
     return sum(a * b for a, b in zip(expected, normal))
 
 

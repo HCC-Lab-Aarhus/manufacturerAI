@@ -81,12 +81,13 @@ _CSG_SHAPE_SCHEMA = {
             ),
             "items": {"type": "number"},
         },
-        "size_top": {
+        "size_end": {
             "type": "array",
             "description": (
-                "Top-end extents [x, y, z] in mm (tapered box). Only the two "
-                "non-axis dimensions matter. Omit for a regular box. Set "
-                "dimensions to 0 to collapse edges (ridge/point)."
+                "+axis-end extents [x, y, z] in mm (tapered box). Only the "
+                "two non-axis dimensions matter. `size` defines the \u2212axis "
+                "end; `size_end` defines the +axis end. Omit for a regular "
+                "box. Set dimensions to 0 to collapse edges."
             ),
             "items": {"type": "number"},
         },
@@ -94,14 +95,16 @@ _CSG_SHAPE_SCHEMA = {
             "description": (
                 "Radius in mm. A single number for uniform shape. "
                 "An array [rx, ry, rz] for ellipsoid (sphere) or "
-                "[ra, rb] for oval cross-section (cylinder)."
+                "[ra, rb] for oval cross-section (cylinder). "
+                "For tapered cylinders, this is the \u2212axis end."
             ),
         },
-        "radius_top": {
+        "radius_end": {
             "description": (
-                "Top-end radius for tapered cylinder. Omit for a regular "
-                "cylinder. A number for uniform, [ra, rb] for oval. "
-                "Set to 0 for a pointed cone."
+                "+axis-end radius for tapered cylinder. `radius` defines "
+                "the \u2212axis end; `radius_end` defines the +axis end. "
+                "A number for uniform, [ra, rb] for oval. "
+                "Set to 0 for a pointed cone. Omit for a straight cylinder."
             ),
         },
         "height": {"type": "number", "description": "Height in mm (cylinder)."},
@@ -109,7 +112,8 @@ _CSG_SHAPE_SCHEMA = {
             "type": "string",
             "description": (
                 "Alignment axis: 'x', 'y', or 'z' (default 'z'). "
-                "Used by cylinder and tapered box."
+                "The shape spans from center[axis]\u2212height/2 (−axis end) "
+                "to center[axis]+height/2 (+axis end)."
             ),
         },
         "rotate": {

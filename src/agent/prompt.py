@@ -138,26 +138,36 @@ Build the device shape by combining simple primitives with boolean operations.
 There are **3 primitive types**: box, cylinder, sphere.
 Each accepts optional modifiers for tapering or per-axis sizing.
 
+##### Axis convention for tapered shapes
+
+A tapered shape spans along `axis` from `center[axis] − height/2` to `center[axis] + height/2`.
+- `radius` / `size` = cross-section at the **−axis end** (the end with the smaller coordinate).
+- `radius_end` / `size_end` = cross-section at the **+axis end** (the end with the larger coordinate).
+
+Example: `axis: "y"`, `center: [0, −25, 0]`, `height: 20`
+→ −axis end at y = −35, +axis end at y = −15.
+`radius` describes the y = −35 end; `radius_end` describes the y = −15 end.
+
 **Box** — rectangular block, optionally tapered:
 ```json
 {{"type": "box", "center": [0, 0, 0], "size": [60, 80, 20]}}
-{{"type": "box", "size": [60, 80, 20], "size_top": [30, 80, 20], "axis": "z"}}
-{{"type": "box", "size": [60, 80, 20], "size_top": [0, 0, 20], "axis": "z"}}
+{{"type": "box", "size": [60, 80, 20], "size_end": [30, 80, 20], "axis": "z"}}
+{{"type": "box", "size": [60, 80, 20], "size_end": [0, 0, 20], "axis": "z"}}
 ```
-- `size: [x, y, z]` — base dimensions (required)
-- `size_top: [x, y, z]` — top-end dimensions for tapering (optional; only the two non-axis dimensions matter)
-- Set `size_top` dims to 0 to collapse edges: `[0, 80, 20]` → ridge, `[0, 0, 20]` → point
+- `size: [x, y, z]` — −axis end dimensions (required)
+- `size_end: [x, y, z]` — +axis end dimensions for tapering (optional; only the two non-axis dimensions matter)
+- Set `size_end` dims to 0 to collapse edges: `[0, 80, 20]` → ridge, `[0, 0, 20]` → point
 
 **Cylinder** — tube along an axis, optionally tapered:
 ```json
 {{"type": "cylinder", "center": [0, 0, 10], "radius": 15, "height": 25, "axis": "z"}}
 {{"type": "cylinder", "radius": [15, 20], "height": 25, "axis": "z"}}
-{{"type": "cylinder", "radius": 15, "radius_top": 8, "height": 25, "axis": "z"}}
-{{"type": "cylinder", "radius": 15, "radius_top": 0, "height": 25, "axis": "z"}}
+{{"type": "cylinder", "radius": 15, "radius_end": 8, "height": 25, "axis": "z"}}
+{{"type": "cylinder", "radius": 15, "radius_end": 0, "height": 25, "axis": "z"}}
 ```
-- `radius: number` → circular, `radius: [ra, rb]` → oval cross-section
-- `radius_top` — top-end radius for tapering (optional; number or [ra, rb])
-- `radius_top: 0` → pointed cone
+- `radius: number` → circular, `radius: [ra, rb]` → oval cross-section (−axis end for tapered shapes)
+- `radius_end` — +axis end radius for tapering (optional; number or [ra, rb])
+- `radius_end: 0` → pointed cone
 
 **Sphere / Ellipsoid** — round shape:
 ```json

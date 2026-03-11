@@ -1,4 +1,9 @@
-"""Surface placement utilities — snap components to mesh surfaces and validate."""
+"""Surface placement utilities — project components onto mesh surfaces.
+
+Uses ray-casting: for each placement, a ray is shot from outside the mesh
+bounding box inward along the ``face`` direction.  The first intersection
+on a face whose normal matches the direction is the placement position.
+"""
 
 from __future__ import annotations
 
@@ -12,11 +17,9 @@ from src.pipeline.design.models3d import SurfacePlacement
 
 log = logging.getLogger(__name__)
 
-# Maximum angle (degrees) between face normal and hint direction to be a candidate.
 _HINT_ANGLE_THRESHOLD = 60.0
 
-# Hint direction vectors (unit vectors in world space).
-_HINT_NORMALS = {
+_HINT_NORMALS: dict[str, np.ndarray] = {
     "top":    np.array([0.0,  0.0,  1.0]),
     "bottom": np.array([0.0,  0.0, -1.0]),
     "front":  np.array([0.0, -1.0,  0.0]),
@@ -25,36 +28,81 @@ _HINT_NORMALS = {
     "right":  np.array([1.0,  0.0,  0.0]),
 }
 
+# Depth axis index and whether the outward face is on the positive side.
+_FACE_AXIS: dict[str, tuple[int, bool]] = {
+    "top":    (2, True),   # +z face
+    "bottom": (2, False),  # -z face
+    "back":   (1, True),   # +y face
+    "front":  (1, False),  # -y face
+    "right":  (0, True),   # +x face
+    "left":   (0, False),  # -x face
+}
 
-def snap_to_surface(
+_RAY_MARGIN = 10.0
+
+
+def project_to_surface(
     mesh: trimesh.Trimesh,
     placement: SurfacePlacement,
 ) -> SurfacePlacement:
-    """Snap a surface placement to the nearest mesh face.
+    """Project a placement onto the mesh surface by ray-casting.
 
-    Updates ``snapped_position``, ``surface_normal``, and ``face_id``
-    on the placement (mutates in place and returns it).
+    The ``at`` coordinate's depth axis (perpendicular to ``face``) is
+    overridden — a ray is cast from outside the bounding box inward,
+    and the first hit on an appropriately-oriented face is used.
+
+    Mutates ``snapped_position``, ``surface_normal``, and ``face_id``
+    on *placement* and returns it.
     """
-    point = np.array(placement.position, dtype=np.float64)
+    face = placement.face
+    at = np.array(placement.at, dtype=np.float64)
+    bbox_min, bbox_max = mesh.bounds[0], mesh.bounds[1]
 
-    if placement.face_hint and placement.face_hint in _HINT_NORMALS:
-        result = _snap_with_hint(mesh, point, placement.face_hint)
+    axis_idx, is_positive = _FACE_AXIS[face]
+
+    origin = at.copy()
+    direction = np.zeros(3)
+    if is_positive:
+        origin[axis_idx] = bbox_max[axis_idx] + _RAY_MARGIN
+        direction[axis_idx] = -1.0
     else:
-        result = _snap_nearest(mesh, point)
+        origin[axis_idx] = bbox_min[axis_idx] - _RAY_MARGIN
+        direction[axis_idx] = 1.0
 
-    snapped, normal, face_id = result
+    locations, _, face_ids = mesh.ray.intersects_location(
+        ray_origins=[origin],
+        ray_directions=[direction],
+    )
+
+    if len(locations) > 0:
+        hint_normal = _HINT_NORMALS[face]
+        cos_threshold = np.cos(np.radians(_HINT_ANGLE_THRESHOLD))
+        for i in np.argsort(np.linalg.norm(locations - origin, axis=1)):
+            fid = int(face_ids[i])
+            if mesh.face_normals[fid] @ hint_normal >= cos_threshold:
+                snapped = locations[i]
+                placement.snapped_position = tuple(float(v) for v in snapped)
+                placement.surface_normal = tuple(float(v) for v in mesh.face_normals[fid])
+                placement.face_id = fid
+                return placement
+
+    log.warning(
+        "Ray-cast missed for '%s' face=%s at=%s; falling back to nearest face",
+        placement.instance_id, face, placement.at,
+    )
+    snapped, normal, fid = _snap_with_hint(mesh, at, face)
     placement.snapped_position = tuple(float(v) for v in snapped)
     placement.surface_normal = tuple(float(v) for v in normal)
-    placement.face_id = int(face_id)
+    placement.face_id = int(fid)
     return placement
 
 
-def snap_all(
+def project_all(
     mesh: trimesh.Trimesh,
     placements: Sequence[SurfacePlacement],
 ) -> list[SurfacePlacement]:
-    """Snap all surface placements to the mesh."""
-    return [snap_to_surface(mesh, p) for p in placements]
+    """Project all surface placements onto the mesh."""
+    return [project_to_surface(mesh, p) for p in placements]
 
 
 def validate_surface_flatness(
@@ -63,11 +111,7 @@ def validate_surface_flatness(
     radius_mm: float = 5.0,
     max_angle_deg: float = 15.0,
 ) -> bool:
-    """Check that the mesh surface near a face is locally flat enough for a component.
-
-    Examines neighboring faces within ``radius_mm`` of the face centroid and
-    checks that all their normals are within ``max_angle_deg`` of the target face normal.
-    """
+    """Check that the mesh surface near a face is locally flat enough for a component."""
     target_normal = mesh.face_normals[face_id]
     target_center = mesh.triangles_center[face_id]
 
@@ -85,23 +129,15 @@ def validate_surface_flatness(
     return float(np.max(angles)) <= max_angle_deg
 
 
-def _snap_nearest(
-    mesh: trimesh.Trimesh,
-    point: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, int]:
-    """Find the closest point on the mesh surface."""
-    closest, distance, face_id = trimesh.proximity.closest_point(mesh, [point])
-    fid = int(face_id[0])
-    return closest[0], mesh.face_normals[fid], fid
-
+# ── Internal helpers ──────────────────────────────────────────────
 
 def _snap_with_hint(
     mesh: trimesh.Trimesh,
     point: np.ndarray,
-    face_hint: str,
+    face: str,
 ) -> tuple[np.ndarray, np.ndarray, int]:
-    """Find closest point on mesh faces whose normal roughly matches the hint."""
-    hint_dir = _HINT_NORMALS[face_hint]
+    """Find closest point on mesh faces whose normal roughly matches the face direction."""
+    hint_dir = _HINT_NORMALS[face]
     cos_threshold = np.cos(np.radians(_HINT_ANGLE_THRESHOLD))
 
     dots = mesh.face_normals @ hint_dir
@@ -109,8 +145,8 @@ def _snap_with_hint(
 
     if not np.any(candidate_mask):
         log.warning(
-            "No faces match hint '%s'; falling back to nearest face",
-            face_hint,
+            "No faces match face '%s'; falling back to nearest face",
+            face,
         )
         return _snap_nearest(mesh, point)
 
@@ -120,97 +156,20 @@ def _snap_with_hint(
     best_local = int(np.argmin(dists))
     best_face = int(candidate_ids[best_local])
 
-    closest, _, _ = trimesh.proximity.closest_point(mesh, [point])
-    snapped = closest[0]
-
     target_tri = mesh.triangles[best_face]
     closest_on_face = _closest_point_on_triangle(point, target_tri)
 
     return closest_on_face, mesh.face_normals[best_face], best_face
 
 
-# ── Zone detection ──────────────────────────────────────────────
-
-# Mapping from face hint to (u_axis, v_axis, depth_axis) indices.
-_FACE_AXES: dict[str, tuple[int, int, int]] = {
-    "top":    (0, 1, 2),  # u=x, v=y, depth=z
-    "bottom": (0, 1, 2),
-    "front":  (0, 2, 1),  # u=x, v=z, depth=y
-    "back":   (0, 2, 1),
-    "left":   (1, 2, 0),  # u=y, v=z, depth=x
-    "right":  (1, 2, 0),
-}
-
-# Faces where depth = max (outward-pointing faces).
-_DEPTH_MAX_FACES = {"top", "right", "back"}
-
-
-def find_placement_zones(
+def _snap_nearest(
     mesh: trimesh.Trimesh,
-) -> dict[str, dict]:
-    """Detect flat placement zones for each face direction.
-
-    Returns a dict keyed by face_hint ("top", "front", etc.) with:
-      center  – [u, v] center of the zone in face-plane coords
-      bounds  – [u_min, v_min, u_max, v_max]
-      depth   – the depth coordinate (z for top, y for front, etc.)
-      axes    – human label, e.g. "x, y" for top
-    """
-    cos_threshold = np.cos(np.radians(_HINT_ANGLE_THRESHOLD))
-    axis_labels = {0: "x", 1: "y", 2: "z"}
-    zones: dict[str, dict] = {}
-
-    for hint, hint_normal in _HINT_NORMALS.items():
-        dots = mesh.face_normals @ hint_normal
-        mask = dots >= cos_threshold
-        if not mask.any():
-            continue
-
-        u_idx, v_idx, d_idx = _FACE_AXES[hint]
-        centers = mesh.triangles_center[mask]
-
-        if hint in _DEPTH_MAX_FACES:
-            depth = float(np.max(centers[:, d_idx]))
-            near = centers[:, d_idx] >= (depth - 2.0)
-        else:
-            depth = float(np.min(centers[:, d_idx]))
-            near = centers[:, d_idx] <= (depth + 2.0)
-
-        pts = centers[near]
-        if len(pts) == 0:
-            continue
-
-        zones[hint] = {
-            "center": [round(float(np.mean(pts[:, u_idx])), 1),
-                        round(float(np.mean(pts[:, v_idx])), 1)],
-            "bounds": [round(float(np.min(pts[:, u_idx])), 1),
-                        round(float(np.min(pts[:, v_idx])), 1),
-                        round(float(np.max(pts[:, u_idx])), 1),
-                        round(float(np.max(pts[:, v_idx])), 1)],
-            "depth": round(depth, 1),
-            "axes": f"{axis_labels[u_idx]}, {axis_labels[v_idx]}",
-        }
-
-    return zones
-
-
-def resolve_face_offset(
-    zones: dict[str, dict],
-    face_hint: str,
-    offset: tuple[float, float],
-) -> tuple[float, float, float]:
-    """Convert a 2D face-relative offset to a 3D world position."""
-    zone = zones[face_hint]
-    u = zone["center"][0] + offset[0]
-    v = zone["center"][1] + offset[1]
-    d = zone["depth"]
-
-    u_idx, v_idx, d_idx = _FACE_AXES[face_hint]
-    pos = [0.0, 0.0, 0.0]
-    pos[u_idx] = u
-    pos[v_idx] = v
-    pos[d_idx] = d
-    return (pos[0], pos[1], pos[2])
+    point: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Find the closest point on the mesh surface."""
+    closest, _distance, face_id = trimesh.proximity.closest_point(mesh, [point])
+    fid = int(face_id[0])
+    return closest[0], mesh.face_normals[fid], fid
 
 
 def _closest_point_on_triangle(
@@ -219,11 +178,7 @@ def _closest_point_on_triangle(
 ) -> np.ndarray:
     """Project a point onto a triangle, clamping to the triangle surface."""
     a, b, c = triangle[0], triangle[1], triangle[2]
-    ab, ac, ap = b - a, c - a, point - a
-
-    d1, d2 = ab @ ap, ac @ ap
-    d3, d4 = ab @ (point - b), ac @ (point - b)
-    d5, d6 = ab @ (point - c), ac @ (point - c)
+    ab, ac = b - a, c - a
 
     normal = np.cross(ab, ac)
     n_len_sq = normal @ normal

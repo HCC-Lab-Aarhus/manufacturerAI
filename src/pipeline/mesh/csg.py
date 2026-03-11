@@ -58,7 +58,7 @@ def _create_primitive(node: CSGNode) -> trimesh.Trimesh:
 
     if ptype == "box":
         mesh = _build_box(node)
-        if node.size_top is not None:
+        if node.size_end is not None:
             mesh = _align_to_axis(mesh, node.axis)
 
     elif ptype == "sphere":
@@ -82,13 +82,13 @@ def _create_primitive(node: CSGNode) -> trimesh.Trimesh:
 def _build_box(node: CSGNode) -> trimesh.Trimesh:
     if node.size is None:
         raise ValueError("Box requires 'size'")
-    if node.size_top is None:
+    if node.size_end is None:
         return trimesh.creation.box(extents=node.size)
     axis_idx = {"x": 0, "y": 1, "z": 2}[node.axis]
     cross = [i for i in range(3) if i != axis_idx]
     height = node.size[axis_idx]
     bx, by = node.size[cross[0]], node.size[cross[1]]
-    tx, ty = node.size_top[cross[0]], node.size_top[cross[1]]
+    tx, ty = node.size_end[cross[0]], node.size_end[cross[1]]
     return _create_tapered_box(bx, by, tx, ty, height)
 
 
@@ -109,10 +109,10 @@ def _build_sphere(node: CSGNode) -> trimesh.Trimesh:
 def _build_cylinder(node: CSGNode) -> trimesh.Trimesh:
     if node.height is None:
         raise ValueError("Cylinder requires 'height'")
-    has_taper = node.radius_top is not None or node.radii_top is not None
+    has_taper = node.radius_end is not None or node.radii_end is not None
     if has_taper:
         brx, bry = _resolve_radii_pair(node.radius, node.radii)
-        trx, try_ = _resolve_radii_pair(node.radius_top, node.radii_top, default=0.0)
+        trx, try_ = _resolve_radii_pair(node.radius_end, node.radii_end, default=0.0)
         return _create_frustum(brx, bry, trx, try_, node.height, _CYLINDER_SECTIONS)
     if node.radii is not None:
         mesh = trimesh.creation.cylinder(

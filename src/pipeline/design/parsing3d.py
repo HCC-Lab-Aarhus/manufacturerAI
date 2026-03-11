@@ -67,8 +67,8 @@ def _parse_csg_node(data: dict) -> CSGNode:
         radius_val = data.get("radius")
         radius, radii = _parse_scalar_or_tuple(radius_val)
 
-        radius_top_val = data.get("radius_top")
-        radius_top, radii_top = _parse_scalar_or_tuple(radius_top_val)
+        radius_end_val = data.get("radius_end")
+        radius_end, radii_end = _parse_scalar_or_tuple(radius_end_val)
 
         # size: number → cube, array → [x,y,z]
         size_val = data.get("size")
@@ -78,19 +78,19 @@ def _parse_csg_node(data: dict) -> CSGNode:
         else:
             size = _parse_vec3(size_val)
 
-        size_top = _parse_vec3(data.get("size_top"))
+        size_end = _parse_vec3(data.get("size_end"))
 
         return CSGNode(
             type=ptype,
             center=_parse_vec3(data.get("center"), (0.0, 0.0, 0.0)),
             size=size,
-            size_top=size_top,
+            size_end=size_end,
             radius=radius,
             radii=radii,
             height=_float_or_none(data.get("height")),
             axis=data.get("axis", "z"),
-            radius_top=radius_top,
-            radii_top=radii_top,
+            radius_end=radius_end,
+            radii_end=radii_end,
             rotate=_parse_vec3(data.get("rotate")),
         )
     else:

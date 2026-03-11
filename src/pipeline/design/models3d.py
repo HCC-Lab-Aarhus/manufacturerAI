@@ -13,9 +13,13 @@ class CSGNode:
     Primitives have ``type`` set (box / cylinder / sphere).
     Operations have ``op`` set (union/difference/intersection) plus ``children``.
 
-    Every shape can optionally taper along its axis:
-    - **box**: add ``size_top`` to taper → wedge / prism / pyramid.
-    - **cylinder**: add ``radius_top`` to taper → cone / frustum.
+    Tapered shapes span along ``axis`` from ``center[axis] - height/2`` (the
+    **−axis end**) to ``center[axis] + height/2`` (the **+axis end**):
+
+    - **box**: ``size`` defines the −axis end cross-section.
+      Add ``size_end`` to taper toward the +axis end.
+    - **cylinder**: ``radius`` defines the −axis end cross-section.
+      Add ``radius_end`` to taper toward the +axis end.
     - **sphere**: no taper (standalone).
 
     Round shapes accept ``radius`` as a scalar (uniform) or per-axis tuple
@@ -28,13 +32,13 @@ class CSGNode:
 
     # Box dimensions
     size: tuple[float, float, float] | None = None         # extents (x, y, z)
-    size_top: tuple[float, float, float] | None = None     # tapered box top-end extents
+    size_end: tuple[float, float, float] | None = None      # +axis end extents
 
     # Round shape dimensions (scalar = uniform, tuple = per-axis)
     radius: float | None = None                             # uniform radius
     radii: tuple[float, ...] | None = None                  # sphere: (rx,ry,rz) / cylinder: (ra,rb)
-    radius_top: float | None = None                         # tapered cylinder top radius
-    radii_top: tuple[float, ...] | None = None              # tapered cylinder oval top: (ra,rb)
+    radius_end: float | None = None                         # +axis end radius
+    radii_end: tuple[float, ...] | None = None              # +axis end oval: (ra,rb)
 
     height: float | None = None                             # cylinder
     axis: str = "z"                                         # cylinder / tapered box
