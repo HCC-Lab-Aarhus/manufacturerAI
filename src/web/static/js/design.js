@@ -3,7 +3,8 @@
 import { API, state } from './state.js';
 import { onSessionCreated, setSessionLabel } from './session.js';
 import { setData as setViewportData, clearData as clearViewportData } from './viewport.js';
-import { enablePlacementTab, resetPlacementPanel } from './placement.js';
+import { enableCircuitTab, resetCircuitPanel } from './circuit.js';
+import { resetPlacementPanel } from './placement.js';
 import { resetRoutingPanel } from './routing.js';
 
 const messagesDiv = () => document.getElementById('chat-messages');
@@ -21,7 +22,7 @@ export async function loadConversation() {
 
     try {
         const res = await fetch(
-            `${API}/api/session/conversation?session=${encodeURIComponent(state.session)}`
+            `${API}/api/session/conversation?session=${encodeURIComponent(state.session)}&step=design`
         );
         if (!res.ok) return;
         const messages = await res.json();
@@ -35,7 +36,7 @@ export async function loadConversation() {
     // Fetch current token count and update the meter
     if (state.session) {
         try {
-            const res = await fetch(`${API}/api/session/tokens?session=${encodeURIComponent(state.session)}`);
+            const res = await fetch(`${API}/api/session/tokens?session=${encodeURIComponent(state.session)}&step=design`);
             if (res.ok) {
                 const t = await res.json();
                 updateTokenMeter(t.input_tokens, t.budget);
@@ -132,8 +133,7 @@ async function loadDesignResult() {
         if (design && design.components) {
             appendDesignResult(design);
             setViewportData('design', design);
-            // Enable placement tab since design exists
-            enablePlacementTab();
+            enableCircuitTab();
         }
     } catch {
         // No design yet — that's fine
@@ -304,12 +304,15 @@ async function consumeSSE(response) {
                     appendDesignResult(data.design);
                     setViewportData('design', data.design);
                     statusSpan().textContent = 'Design complete!';
-                    enablePlacementTab(!!data.design?.outline);
+                    enableCircuitTab(true);
+                    resetCircuitPanel();
                     resetPlacementPanel();
                     resetRoutingPanel();
                     {
                         const rBtn = document.querySelector('#pipeline-nav .step[data-step="routing"]');
                         if (rBtn) { rBtn.disabled = true; rBtn.classList.remove('tab-flash'); }
+                        const pBtn = document.querySelector('#pipeline-nav .step[data-step="placement"]');
+                        if (pBtn) { pBtn.disabled = true; pBtn.classList.remove('tab-flash'); }
                     }
                     break;
 
@@ -329,20 +332,15 @@ async function consumeSSE(response) {
                     break;
 
                 case 'done': {
-                    // Refresh token count from server after turn completes
-                    // (includes any tool_result messages appended after last count)
+                    statusSpan().textContent = 'Done';
                     if (state.session) {
-                        fetch(`${API}/api/session/tokens?session=${encodeURIComponent(state.session)}`)
+                        fetch(`${API}/api/session/tokens?session=${encodeURIComponent(state.session)}&step=design`)
                             .then(r => r.ok ? r.json() : null)
                             .then(t => { if (t) updateTokenMeter(t.input_tokens, t.budget); })
                             .catch(() => {});
                     }
                     break;
                 }
-
-                case 'done':
-                    statusSpan().textContent = 'Done';
-                    break;
             }
         }
     }
@@ -520,6 +518,8 @@ function escapeHtml(text) {
     el.textContent = text;
     return el.innerHTML;
 }
+
+// ── Tab management ────────────────────────────────────────────────
 
 // ── Token meter ───────────────────────────────────────────────────
 

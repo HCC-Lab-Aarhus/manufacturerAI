@@ -19,11 +19,12 @@
 
     <nav id="pipeline-nav">
         <button class="step active" data-step="design">1. Design</button>
-        <button class="step" data-step="placement" disabled>2. Placement</button>
-        <button class="step" data-step="routing" disabled>3. Routing</button>
-        <button class="step" data-step="bitmap" disabled>4. Bitmap</button>
-        <button class="step" data-step="scad" disabled>5. SCAD</button>
-        <button class="step" data-step="manufacturing" disabled>6. Manufacturing</button>
+        <button class="step" data-step="circuit" disabled>2. Circuit</button>
+        <button class="step" data-step="placement" disabled>3. Placement</button>
+        <button class="step" data-step="routing" disabled>4. Routing</button>
+        <button class="step" data-step="bitmap" disabled>5. Bitmap</button>
+        <button class="step" data-step="scad" disabled>6. SCAD</button>
+        <button class="step" data-step="manufacturing" disabled>7. Manufacturing</button>
         <div class="nav-spacer"></div>
         <button class="step" id="btn-guide" disabled>Guide</button>
         <button class="step" id="btn-catalog">Catalog</button>
@@ -33,12 +34,12 @@
     <main id="content">
         <!-- Left: step panels -->
         <div id="step-panels">
-            <!-- Design step — chat interface (default view) -->
+            <!-- Design step — physical designer chat (default view) -->
             <section id="step-design" class="step-panel">
                 <div id="design-chat" class="chat-container">
                     <div id="chat-messages" class="chat-messages"></div>
                     <div class="chat-input-row">
-                        <textarea id="chat-input" placeholder="Describe the device you want to design..." rows="2"></textarea>
+                        <textarea id="chat-input" placeholder="Describe what the device should do and look like…" rows="2"></textarea>
                         <div class="chat-input-right">
                             <div id="token-meter" class="token-meter" hidden>
                                 <svg viewBox="0 0 36 36" class="token-pie">
@@ -52,6 +53,20 @@
                         </div>
                     </div>
                     <span id="design-status" class="design-status-inline"></span>
+                </div>
+            </section>
+
+            <!-- Circuit step — automated circuit engineer (run-button, no chat) -->
+            <section id="step-circuit" class="step-panel" hidden>
+                <div id="circuit-hero" class="placement-hero">
+                    <div class="placement-hero-icon">⚡</div>
+                    <p>Automatically generate the circuit from the device design and description</p>
+                    <button id="btn-run-circuit" class="placement-cta">Run Circuit Agent</button>
+                    <span id="circuit-status" class="design-status-inline"></span>
+                </div>
+                <div id="circuit-scroll" class="placement-scroll" hidden>
+                    <div id="circuit-log" class="chat-messages"></div>
+                    <div id="circuit-info" class="placement-info"></div>
                 </div>
             </section>
 

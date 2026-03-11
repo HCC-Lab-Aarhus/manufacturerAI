@@ -4,6 +4,7 @@ import { API, state } from './state.js';
 import { closeModal } from './utils.js';
 import { setSessionLabel, startNewSession, showSessionsModal, setSessionUrl, initPrinterSelector, setPrinterFromSession, loadPrinters } from './session.js';
 import { loadCatalog, reloadCatalog } from './catalog.js';
+import { runCircuit, loadCircuitResult, enableCircuitTab } from './circuit.js';
 import { sendDesignPrompt, loadConversation } from './design.js';
 import { runPlacement, loadPlacementResult, enablePlacementTab } from './placement.js';
 import { runRouting, loadRoutingResult, enableRoutingTab } from './routing.js';
@@ -12,11 +13,11 @@ import { runScad, loadScadResult, enableScadTab } from './scad.js';
 import { runGcode, loadGcodeResult, enableGcodeTab, resetGcodePanel } from './gcode.js';
 import { initGuide, openGuide, enableGuideBtn } from './guide.js';
 import { setStep } from './viewport.js';
-import './viewportDesign.js';   // registers the design viewport handler
-import './viewportPlacement.js'; // registers the placement viewport handler
-import './viewportRouting.js';   // registers the routing viewport handler
-import './viewportBitmap.js';    // registers the bitmap viewport handler
-import './viewportScad.js';      // registers the SCAD / STL viewport handler
+import './viewportDesign.js';
+import './viewportPlacement.js';
+import './viewportRouting.js';
+import './viewportBitmap.js';
+import './viewportScad.js';
 
 document.addEventListener('DOMContentLoaded', () => {
     // Restore session from URL
@@ -25,10 +26,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (state.session) {
         setSessionLabel(state.session);
         loadConversation();
-        loadPlacementResult();    // load existing placement if present
-        loadRoutingResult();      // load existing routing if present
-        loadBitmapResult();       // load existing bitmap if present
-        loadScadResult();         // load existing SCAD if present
+        loadCircuitResult();
+        loadPlacementResult();
+        loadRoutingResult();
+        loadBitmapResult();
+        loadScadResult();
         // Fetch session name for the label; clear URL if session no longer exists
         fetch(`${API}/api/session?session=${encodeURIComponent(state.session)}`)
             .then(r => {
@@ -41,8 +43,12 @@ document.addEventListener('DOMContentLoaded', () => {
             .then(data => {
                 if (data?.name) setSessionLabel(state.session, data.name);
                 if (data?.printer_id) setPrinterFromSession(data.printer_id);
-                // Enable placement nav if design is complete
+                // Enable circuit nav if design is complete
                 if (data?.artifacts?.design) {
+                    enableCircuitTab(!data?.artifacts?.circuit);
+                }
+                // Enable placement nav if circuit is complete
+                if (data?.artifacts?.circuit) {
                     enablePlacementTab(!data?.artifacts?.placement);
                 }
                 // Enable routing nav if placement is complete
@@ -134,6 +140,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // G-code
     document.getElementById('btn-run-gcode').addEventListener('click', runGcode);
+
+    // Circuit (run button)
+    document.getElementById('btn-run-circuit').addEventListener('click', runCircuit);
 
     // Design chat
     document.getElementById('btn-send-design').addEventListener('click', sendDesignPrompt);
