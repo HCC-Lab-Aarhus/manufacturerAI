@@ -501,34 +501,84 @@ let _scrollSticky = true;
 function renderMarkdown(text) {
     const lines = text.split('\n');
     const out = [];
-    let inList = false;
+    let listStack = null; // 'ul' | 'ol' | null
+    let tableRows = [];
 
-    const closeList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+    const closeList = () => {
+        if (listStack) { out.push(`</${listStack}>`); listStack = null; }
+    };
+    const flushTable = () => {
+        if (tableRows.length === 0) return;
+        out.push('<table class="md-table">');
+        for (let r = 0; r < tableRows.length; r++) {
+            if (r === 1 && /^[\s|:-]+$/.test(tableRows[r].map(c => c.trim()).join(''))) continue;
+            const tag = r === 0 ? 'th' : 'td';
+            out.push('<tr>' + tableRows[r].map(c => `<${tag}>${inlineMarkdown(c.trim())}</${tag}>`).join('') + '</tr>');
+        }
+        out.push('</table>');
+        tableRows = [];
+    };
 
     for (const line of lines) {
-        if (/^[-*] /.test(line)) {
-            if (!inList) { out.push('<ul>'); inList = true; }
-            out.push(`<li>${inlineMarkdown(line.slice(2))}</li>`);
-        } else {
+        // Table row
+        if (/^\|(.+)\|$/.test(line.trim())) {
             closeList();
-            if (line.trim() === '') {
-                out.push('<br>');
-            } else {
-                out.push(`<p>${inlineMarkdown(line)}</p>`);
-            }
+            const cells = line.trim().slice(1, -1).split('|');
+            tableRows.push(cells);
+            continue;
+        } else {
+            flushTable();
+        }
+
+        // Horizontal rule
+        if (/^[-*_]{3,}\s*$/.test(line.trim())) {
+            closeList();
+            out.push('<hr>');
+            continue;
+        }
+
+        // Headings
+        const hMatch = line.match(/^(#{1,6})\s+(.+)/);
+        if (hMatch) {
+            closeList();
+            const level = hMatch[1].length;
+            out.push(`<h${level}>${inlineMarkdown(hMatch[2])}</h${level}>`);
+            continue;
+        }
+
+        // Unordered list
+        if (/^[-*] /.test(line.trimStart())) {
+            if (listStack !== 'ul') { closeList(); out.push('<ul>'); listStack = 'ul'; }
+            out.push(`<li>${inlineMarkdown(line.trimStart().slice(2))}</li>`);
+            continue;
+        }
+
+        // Ordered list
+        const olMatch = line.trimStart().match(/^(\d+)[.)]\s+(.*)/);
+        if (olMatch) {
+            if (listStack !== 'ol') { closeList(); out.push('<ol>'); listStack = 'ol'; }
+            out.push(`<li>${inlineMarkdown(olMatch[2])}</li>`);
+            continue;
+        }
+
+        closeList();
+
+        if (line.trim() === '') {
+            out.push('<br>');
+        } else {
+            out.push(`<p>${inlineMarkdown(line)}</p>`);
         }
     }
     closeList();
+    flushTable();
     return out.join('');
 }
 
 function inlineMarkdown(raw) {
-    // Escape HTML first to prevent XSS
     const esc = raw
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
-    // Then apply inline patterns
     return esc
         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
         .replace(/\*(.+?)\*/g, '<em>$1</em>')
