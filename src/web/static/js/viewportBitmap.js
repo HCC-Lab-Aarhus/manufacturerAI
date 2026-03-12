@@ -227,6 +227,7 @@ function buildBitmapView(data) {
         bitmapImage.setAttribute('y', PLATE_PAD);
         bitmapImage.setAttribute('width', bed_width * SCALE);
         bitmapImage.setAttribute('height', bed_depth * SCALE);
+        bitmapImage.setAttribute('preserveAspectRatio', 'none');
         bitmapImage.setAttribute('image-rendering', 'pixelated');
         bitmapImage.setAttributeNS('http://www.w3.org/1999/xlink', 'href', canvas.toDataURL());
         svg.appendChild(bitmapImage);
