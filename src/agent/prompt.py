@@ -206,6 +206,31 @@ Combine primitives into complex shapes:
 
 Operations can be nested to any depth.
 
+#### Fit Dimensions
+
+Replace any numeric dimension with `"fit"` to auto-conform it to surrounding
+geometry. The system ray-casts each vertex inward until it hits the nearest
+surface of the shape built so far, so the primitive hugs curves and tapers
+naturally.
+
+- `height: "fit"` — spans the full gap along the axis
+- `radius: "fit"` — expands to fill the surrounding cavity
+- `size: [10, "fit", 20]` — Y dimension conforms to surfaces
+- `radius_end: "fit"` — +axis end conforms to the surface
+
+Use `{{"fit": 30}}` to cap the maximum at 30 mm (result will be ≤ 30).
+
+The node **must** be inside a boolean operation (union / difference / intersection)
+so there is a surface to conform to.
+
+Hole that auto-conforms to wall thickness:
+```json
+{{"op": "difference", "children": [
+  {{"type": "box", "size": [60, 40, 20]}},
+  {{"type": "cylinder", "radius": 3, "height": "fit", "center": [10, 0, 0], "axis": "z"}}
+]}}
+```
+
 ### Surface Placements
 
 Place UI components (buttons, LEDs, switches) on the surface of the shape.

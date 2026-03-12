@@ -75,28 +75,27 @@ _CSG_SHAPE_SCHEMA = {
             "items": {"type": "number"},
         },
         "size": {
-            "type": "array",
             "description": (
-                "Extents [x, y, z] in mm (box)."
+                "Extents [x, y, z] in mm (box). Individual elements may be "
+                "\"fit\" to auto-conform to surrounding geometry."
             ),
-            "items": {"type": "number"},
         },
         "size_end": {
-            "type": "array",
             "description": (
                 "+axis-end extents [x, y, z] in mm (tapered box). Only the "
                 "two non-axis dimensions matter. `size` defines the \u2212axis "
                 "end; `size_end` defines the +axis end. Omit for a regular "
-                "box. Set dimensions to 0 to collapse edges."
+                "box. Set dimensions to 0 to collapse edges. "
+                "Individual elements may be \"fit\"."
             ),
-            "items": {"type": "number"},
         },
         "radius": {
             "description": (
                 "Radius in mm. A single number for uniform shape. "
                 "An array [rx, ry, rz] for ellipsoid (sphere) or "
                 "[ra, rb] for oval cross-section (cylinder). "
-                "For tapered cylinders, this is the \u2212axis end."
+                "For tapered cylinders, this is the \u2212axis end. "
+                "Use \"fit\" to auto-conform to surrounding geometry."
             ),
         },
         "radius_end": {
@@ -104,10 +103,16 @@ _CSG_SHAPE_SCHEMA = {
                 "+axis-end radius for tapered cylinder. `radius` defines "
                 "the \u2212axis end; `radius_end` defines the +axis end. "
                 "A number for uniform, [ra, rb] for oval. "
-                "Set to 0 for a pointed cone. Omit for a straight cylinder."
+                "Set to 0 for a pointed cone. Omit for a straight cylinder. "
+                "Use \"fit\" to auto-conform to surrounding geometry."
             ),
         },
-        "height": {"type": "number", "description": "Height in mm (cylinder)."},
+        "height": {
+            "description": (
+                "Height in mm (cylinder). "
+                "Use \"fit\" to auto-conform to surrounding geometry."
+            ),
+        },
         "axis": {
             "type": "string",
             "description": (

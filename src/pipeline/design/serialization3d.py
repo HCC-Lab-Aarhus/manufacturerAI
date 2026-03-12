@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .models3d import CSGNode, SurfacePlacement, DesignSpec3D
+from .models3d import CSGNode, FitMarker, SurfacePlacement, DesignSpec3D
 
 
 def design3d_to_dict(spec: DesignSpec3D) -> dict:
@@ -39,20 +39,39 @@ def _csg_node_to_dict(node: CSGNode) -> dict:
         d["type"] = node.type
         if node.center != (0.0, 0.0, 0.0):
             d["center"] = list(node.center)
-        if node.size is not None:
-            d["size"] = list(node.size)
-        if node.size_end is not None:
-            d["size_end"] = list(node.size_end)
-        if node.radii is not None:
+
+        # size / size_end — may contain per-axis fit markers
+        if "size" in node.fit:
+            d["size"] = _fit_to_json(node.fit["size"])
+        elif node.size is not None:
+            d["size"] = _inject_axis_fits(list(node.size), "size", node.fit)
+        if "size_end" in node.fit:
+            d["size_end"] = _fit_to_json(node.fit["size_end"])
+        elif node.size_end is not None:
+            d["size_end"] = _inject_axis_fits(list(node.size_end), "size_end", node.fit)
+
+        # radius
+        if "radius" in node.fit:
+            d["radius"] = _fit_to_json(node.fit["radius"])
+        elif node.radii is not None:
             d["radius"] = list(node.radii)
         elif node.radius is not None:
             d["radius"] = node.radius
-        if node.radii_end is not None:
+
+        # radius_end
+        if "radius_end" in node.fit:
+            d["radius_end"] = _fit_to_json(node.fit["radius_end"])
+        elif node.radii_end is not None:
             d["radius_end"] = list(node.radii_end)
         elif node.radius_end is not None:
             d["radius_end"] = node.radius_end
-        if node.height is not None:
+
+        # height
+        if "height" in node.fit:
+            d["height"] = _fit_to_json(node.fit["height"])
+        elif node.height is not None:
             d["height"] = node.height
+
         if node.axis != "z":
             d["axis"] = node.axis
     elif node.is_operation:
@@ -63,6 +82,27 @@ def _csg_node_to_dict(node: CSGNode) -> dict:
         d["rotate"] = list(node.rotate)
 
     return d
+
+
+def _fit_to_json(marker: FitMarker):
+    """Serialize a FitMarker back to JSON form."""
+    if marker.cap is None:
+        return "fit"
+    return {"fit": marker.cap}
+
+
+_AXES = ("x", "y", "z")
+
+
+def _inject_axis_fits(
+    vec: list, field_name: str, fit: dict[str, FitMarker],
+) -> list:
+    """Replace elements in a 3-element list with fit markers where present."""
+    for i, axis in enumerate(_AXES):
+        key = f"{field_name}.{axis}"
+        if key in fit:
+            vec[i] = _fit_to_json(fit[key])
+    return vec
 
 
 def _surface_placement_to_dict(sp: SurfacePlacement) -> dict:

@@ -7,6 +7,16 @@ from .models import ComponentInstance, Net
 
 
 @dataclass
+class FitMarker:
+    """Marks a dimension as adaptive — resolved at mesh-build time by
+    ray-casting each vertex inward until it hits the nearest surface.
+
+    ``cap`` limits the maximum extent (``None`` = derive from context bbox).
+    """
+    cap: float | None = None
+
+
+@dataclass
 class CSGNode:
     """A node in the CSG tree: either a primitive leaf or a boolean operation.
 
@@ -49,6 +59,11 @@ class CSGNode:
 
     # Optional transform applied to the entire subtree result
     rotate: tuple[float, float, float] | None = None    # Euler XYZ degrees
+
+    # Adaptive dimensions — keys are field names, values are FitMarkers.
+    # When present the numeric field is left None; the mesh builder resolves
+    # the actual geometry by ray-casting against the accumulated context mesh.
+    fit: dict[str, FitMarker] = field(default_factory=dict)
 
     @property
     def is_primitive(self) -> bool:

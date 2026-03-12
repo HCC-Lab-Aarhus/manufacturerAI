@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .models import ComponentInstance, Net
-from .models3d import CSGNode, SurfacePlacement, DesignSpec3D
+from .models3d import CSGNode, FitMarker, SurfacePlacement, DesignSpec3D
 
 
 def parse_design_3d(data: dict) -> DesignSpec3D:
@@ -62,23 +62,40 @@ def _parse_csg_node(data: dict) -> CSGNode:
         )
     elif "type" in data:
         ptype = data["type"]
+        fit: dict[str, FitMarker] = {}
 
-        # radius: number → scalar, array → per-axis radii
+        # radius: number → scalar, array → per-axis radii, "fit" → marker
         radius_val = data.get("radius")
+        radius_val, _fit = _extract_fit(radius_val)
+        if _fit is not None:
+            fit["radius"] = _fit
         radius, radii = _parse_scalar_or_tuple(radius_val)
 
         radius_end_val = data.get("radius_end")
+        radius_end_val, _fit = _extract_fit(radius_end_val)
+        if _fit is not None:
+            fit["radius_end"] = _fit
         radius_end, radii_end = _parse_scalar_or_tuple(radius_end_val)
 
-        # size: number → cube, array → [x,y,z]
+        # height
+        height_val = data.get("height")
+        height_val, _fit = _extract_fit(height_val)
+        if _fit is not None:
+            fit["height"] = _fit
+        height = _float_or_none(height_val)
+
+        # size: number → cube, array → [x,y,z], may contain per-element "fit"
         size_val = data.get("size")
+        size_val, fit = _extract_fit_vec3(size_val, "size", fit)
         if isinstance(size_val, (int, float)):
             v = float(size_val)
             size: tuple[float, float, float] | None = (v, v, v)
         else:
             size = _parse_vec3(size_val)
 
-        size_end = _parse_vec3(data.get("size_end"))
+        size_end_val = data.get("size_end")
+        size_end_val, fit = _extract_fit_vec3(size_end_val, "size_end", fit)
+        size_end = _parse_vec3(size_end_val)
 
         return CSGNode(
             type=ptype,
@@ -87,11 +104,12 @@ def _parse_csg_node(data: dict) -> CSGNode:
             size_end=size_end,
             radius=radius,
             radii=radii,
-            height=_float_or_none(data.get("height")),
+            height=height,
             axis=data.get("axis", "z"),
             radius_end=radius_end,
             radii_end=radii_end,
             rotate=_parse_vec3(data.get("rotate")),
+            fit=fit,
         )
     else:
         raise ValueError("CSG node must have 'type' (primitive) or 'op' (boolean)")
@@ -127,3 +145,51 @@ def _parse_scalar_or_tuple(
 
 def _float_or_none(val) -> float | None:
     return float(val) if val is not None else None
+
+
+def _is_fit(val) -> bool:
+    """Check if a value is a fit marker (``"fit"`` or ``{"fit": N}``)."""
+    if val == "fit":
+        return True
+    if isinstance(val, dict) and "fit" in val:
+        return True
+    return False
+
+
+def _extract_fit(val):
+    """If *val* is a fit marker, return ``(None, FitMarker)``.
+    Otherwise return ``(val, None)`` unchanged."""
+    if val == "fit":
+        return None, FitMarker()
+    if isinstance(val, dict) and "fit" in val:
+        cap = val["fit"]
+        return None, FitMarker(cap=float(cap) if cap is not None else None)
+    return val, None
+
+
+_SIZE_AXES = ("x", "y", "z")
+
+
+def _extract_fit_vec3(
+    val,
+    field_name: str,
+    fit: dict[str, FitMarker],
+) -> tuple:
+    """Handle per-element ``"fit"`` inside a 3-element vector like ``size``.
+
+    Returns ``(cleaned_val, updated_fit_dict)``.  Elements that are fit
+    markers are replaced with ``0.0`` in the vector so downstream parsing
+    still gets a valid tuple, and per-axis keys like ``size.x`` are added
+    to the fit dict.
+    """
+    if val is None or isinstance(val, (int, float)):
+        return val, fit
+    if not isinstance(val, (list, tuple)) or len(val) != 3:
+        return val, fit
+    cleaned = list(val)
+    for i, elem in enumerate(val):
+        if _is_fit(elem):
+            _, marker = _extract_fit(elem)
+            fit[f"{field_name}.{_SIZE_AXES[i]}"] = marker
+            cleaned[i] = 0.0
+    return cleaned, fit

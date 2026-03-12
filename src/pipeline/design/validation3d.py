@@ -10,6 +10,12 @@ _VALID_OPS = {"union", "difference", "intersection"}
 _VALID_AXES = {"x", "y", "z"}
 _VALID_HINTS = {"top", "bottom", "front", "back", "left", "right"}
 
+_BOX_FIT_FIELDS = {"height", "size", "size_end",
+                   "size.x", "size.y", "size.z",
+                   "size_end.x", "size_end.y", "size_end.z"}
+_CYLINDER_FIT_FIELDS = {"height", "radius", "radius_end"}
+_SPHERE_FIT_FIELDS = {"radius"}
+
 
 def validate_design_3d(
     spec: DesignSpec3D,
@@ -66,7 +72,7 @@ def validate_design_3d(
                 )
 
     # CSG shape validation
-    _validate_csg_node(spec.shape, errors, path="shape")
+    _validate_csg_node(spec.shape, errors, path="shape", inside_op=False)
 
     # Surface placement validation
     for sp in spec.surface_placements:
@@ -84,41 +90,80 @@ def validate_design_3d(
     return errors
 
 
-def _validate_csg_node(node: CSGNode, errors: list[str], path: str) -> None:
+def _validate_csg_node(
+    node: CSGNode, errors: list[str], path: str, inside_op: bool,
+) -> None:
     """Recursively validate a CSG node."""
     if node.is_primitive:
         if node.type not in _VALID_PRIMITIVES:
             errors.append(f"{path}: unknown primitive type '{node.type}'")
 
+        # Validate fit markers
+        if node.fit:
+            if not inside_op:
+                errors.append(
+                    f"{path}: 'fit' dimensions require the node to be "
+                    f"inside a boolean operation (no context mesh at root)"
+                )
+            allowed = (
+                _BOX_FIT_FIELDS if node.type == "box"
+                else _CYLINDER_FIT_FIELDS if node.type == "cylinder"
+                else _SPHERE_FIT_FIELDS
+            )
+            for key in node.fit:
+                if key not in allowed:
+                    errors.append(
+                        f"{path}: 'fit' not valid for '{key}' on {node.type}"
+                    )
+                marker = node.fit[key]
+                if marker.cap is not None and marker.cap <= 0:
+                    errors.append(
+                        f"{path}: fit cap for '{key}' must be > 0"
+                    )
+
+        has_fit = node.fit
+
         if node.type == "box":
-            if node.size is None:
+            if node.size is None and "size" not in has_fit:
                 errors.append(f"{path}: box requires 'size' [x, y, z]")
-            elif any(s <= 0 for s in node.size):
-                errors.append(f"{path}: box size dimensions must be > 0")
+            elif node.size is not None and all(
+                f"size.{a}" not in has_fit for a in "xyz"
+            ):
+                if any(s <= 0 for s in node.size):
+                    errors.append(f"{path}: box size dimensions must be > 0")
             if node.size_end is not None:
-                if any(s < 0 for s in node.size_end):
+                if any(
+                    s < 0 for i, s in enumerate(node.size_end)
+                    if f"size_end.{'xyz'[i]}" not in has_fit
+                ):
                     errors.append(f"{path}: size_end dimensions must be >= 0")
                 if node.axis not in _VALID_AXES:
                     errors.append(f"{path}: axis must be 'x', 'y', or 'z'")
 
         elif node.type == "sphere":
-            _validate_radius_fields(node, errors, path, radii_len=3)
+            if "radius" not in has_fit:
+                _validate_radius_fields(node, errors, path, radii_len=3)
 
         elif node.type == "cylinder":
-            _validate_radius_fields(node, errors, path, radii_len=2)
-            if node.height is None:
+            if "radius" not in has_fit:
+                _validate_radius_fields(node, errors, path, radii_len=2)
+            if node.height is None and "height" not in has_fit:
                 errors.append(f"{path}: cylinder requires 'height'")
-            elif node.height <= 0:
-                errors.append(f"{path}: height must be > 0")
+            elif node.height is not None and "height" not in has_fit:
+                if node.height <= 0:
+                    errors.append(f"{path}: height must be > 0")
             if node.axis not in _VALID_AXES:
                 errors.append(f"{path}: axis must be 'x', 'y', or 'z'")
-            if node.radius_end is not None and node.radius_end < 0:
-                errors.append(f"{path}: radius_end must be >= 0")
-            if node.radii_end is not None:
-                if len(node.radii_end) != 2:
-                    errors.append(f"{path}: radii_end must have 2 elements [ra, rb]")
-                elif any(r < 0 for r in node.radii_end):
-                    errors.append(f"{path}: radii_end values must be >= 0")
+            if "radius_end" not in has_fit:
+                if node.radius_end is not None and node.radius_end < 0:
+                    errors.append(f"{path}: radius_end must be >= 0")
+                if node.radii_end is not None:
+                    if len(node.radii_end) != 2:
+                        errors.append(
+                            f"{path}: radii_end must have 2 elements [ra, rb]"
+                        )
+                    elif any(r < 0 for r in node.radii_end):
+                        errors.append(f"{path}: radii_end values must be >= 0")
 
     elif node.is_operation:
         if node.op not in _VALID_OPS:
@@ -126,7 +171,9 @@ def _validate_csg_node(node: CSGNode, errors: list[str], path: str) -> None:
         if len(node.children) < 2:
             errors.append(f"{path}: operation '{node.op}' requires at least 2 children")
         for i, child in enumerate(node.children):
-            _validate_csg_node(child, errors, path=f"{path}.children[{i}]")
+            _validate_csg_node(
+                child, errors, path=f"{path}.children[{i}]", inside_op=True,
+            )
     else:
         errors.append(f"{path}: node must have 'type' (primitive) or 'op' (operation)")
 
