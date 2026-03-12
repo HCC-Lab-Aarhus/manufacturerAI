@@ -364,6 +364,27 @@ function buildOutlineSVG(design) {
     return section;
 }
 
+// ── Nearest-edge detection ────────────────────────────────────
+
+function _nearestEdge(x, y, verts) {
+    let best = { edgeIndex: 0, t: 0.5, snapX: x, snapY: y, dist: Infinity };
+    const n = verts.length;
+    for (let i = 0; i < n; i++) {
+        const v0 = verts[i], v1 = verts[(i + 1) % n];
+        const ex = v1[0] - v0[0], ey = v1[1] - v0[1];
+        const lenSq = ex * ex + ey * ey;
+        if (lenSq < 1e-12) continue;
+        let t = ((x - v0[0]) * ex + (y - v0[1]) * ey) / lenSq;
+        t = Math.max(0, Math.min(1, t));
+        const sx = v0[0] + t * ex, sy = v0[1] + t * ey;
+        const d = Math.hypot(x - sx, y - sy);
+        if (d < best.dist) {
+            best = { edgeIndex: i, t, snapX: Math.round(sx * 10) / 10, snapY: Math.round(sy * 10) / 10, dist: d };
+        }
+    }
+    return best;
+}
+
 // ── Drag-to-move logic ────────────────────────────────────────
 
 function _attachDrag(svg, group, up, idx, design, ox, oy, verts, compMap, colors, statusBar) {
@@ -400,26 +421,40 @@ function _attachDrag(svg, group, up, idx, design, ox, oy, verts, compMap, colors
         svg.addEventListener('pointerup', onPointerUp);
     }
 
+    const isSideMount = up.edge_index != null;
+    let dragEdge = up.edge_index;
+
     function onPointerMove(e) {
         if (!dragging) return;
         const cur = svgPoint(e);
         const dx = (cur.x - startPt.x) / SCALE;
         const dy = (cur.y - startPt.y) / SCALE;
-        const newX = origX + dx;
-        const newY = origY + dy;
+        let newX = origX + dx;
+        let newY = origY + dy;
 
-        // Move the group visually via SVG transform
-        group.setAttribute('transform', `translate(${(newX - origX) * SCALE}, ${(newY - origY) * SCALE})`);
+        if (isSideMount) {
+            const snap = _nearestEdge(newX, newY, verts);
+            dragEdge = snap.edgeIndex;
+            newX = snap.snapX;
+            newY = snap.snapY;
+            const edgeTransX = (newX - origX) * SCALE;
+            const edgeTransY = (newY - origY) * SCALE;
+            group.setAttribute('transform', `translate(${edgeTransX}, ${edgeTransY})`);
+        } else {
+            group.setAttribute('transform', `translate(${(newX - origX) * SCALE}, ${(newY - origY) * SCALE})`);
+        }
 
         // Debounced validation
         clearTimeout(_validateTimer);
+        const valX = newX, valY = newY, valEdge = dragEdge;
         _validateTimer = setTimeout(async () => {
-            const result = await _validatePlacement(up.instance_id, newX, newY, up.edge_index);
+            const result = await _validatePlacement(up.instance_id, valX, valY, valEdge);
             lastValid = result.valid;
+            const edgeLabel = isSideMount ? ` edge ${valEdge}` : '';
             if (result.valid) {
                 group.classList.remove('vp-drag-invalid');
                 group.classList.add('vp-drag-valid');
-                statusBar.textContent = `${up.instance_id}: (${newX.toFixed(1)}, ${newY.toFixed(1)}) mm ✓`;
+                statusBar.textContent = `${up.instance_id}: (${valX.toFixed(1)}, ${valY.toFixed(1)}) mm${edgeLabel} ✓`;
                 statusBar.className = 'vp-drag-status vp-drag-status-valid';
             } else {
                 group.classList.remove('vp-drag-valid');
@@ -444,17 +479,24 @@ function _attachDrag(svg, group, up, idx, design, ox, oy, verts, compMap, colors
         const cur = svgPoint(e);
         const dx = (cur.x - startPt.x) / SCALE;
         const dy = (cur.y - startPt.y) / SCALE;
-        const newX = Math.round((origX + dx) * 10) / 10;
-        const newY = Math.round((origY + dy) * 10) / 10;
+        let newX = Math.round((origX + dx) * 10) / 10;
+        let newY = Math.round((origY + dy) * 10) / 10;
 
-        if (Math.abs(newX - origX) < 0.2 && Math.abs(newY - origY) < 0.2) {
+        if (isSideMount) {
+            const snap = _nearestEdge(newX, newY, verts);
+            dragEdge = snap.edgeIndex;
+            newX = snap.snapX;
+            newY = snap.snapY;
+        }
+
+        if (Math.abs(newX - origX) < 0.2 && Math.abs(newY - origY) < 0.2 && dragEdge === up.edge_index) {
             group.setAttribute('transform', '');
             statusBar.textContent = '';
             return;
         }
 
         // Final validation
-        const result = await _validatePlacement(up.instance_id, newX, newY, up.edge_index);
+        const result = await _validatePlacement(up.instance_id, newX, newY, isSideMount ? dragEdge : up.edge_index);
         if (!result.valid) {
             group.setAttribute('transform', '');
             statusBar.textContent = `Reverted — ${result.errors[0] || 'invalid placement'}`;
@@ -466,7 +508,8 @@ function _attachDrag(svg, group, up, idx, design, ox, oy, verts, compMap, colors
         // Commit the move
         up.x_mm = newX;
         up.y_mm = newY;
-        design.ui_placements[idx] = { ...design.ui_placements[idx], x_mm: newX, y_mm: newY };
+        if (isSideMount) up.edge_index = dragEdge;
+        design.ui_placements[idx] = { ...design.ui_placements[idx], x_mm: newX, y_mm: newY, ...(isSideMount ? { edge_index: dragEdge } : {}) };
 
         statusBar.textContent = `Saving ${up.instance_id}…`;
         statusBar.className = 'vp-drag-status';
@@ -687,35 +730,18 @@ function _buildCompCard(comp, up, design) {
     }
     props.appendChild(mountRow);
 
-    // Edge index row (side-mount only)
+    // Edge indicator (side-mount only, auto-detected during drag)
     if (up && up.edge_index != null) {
         const edgeRow = document.createElement('div');
         edgeRow.className = 'vp-comp-prop';
         edgeRow.innerHTML = `<span class="vp-prop-label">Edge</span>`;
-
+        const edgeVal = document.createElement('span');
+        edgeVal.className = 'vp-prop-value vp-mono';
         const verts = normaliseOutline(design.outline).verts;
-        const edgeSelect = document.createElement('select');
-        edgeSelect.className = 'vp-mount-select';
-        for (let i = 0; i < verts.length; i++) {
-            const v0 = verts[i], v1 = verts[(i + 1) % verts.length];
-            const len = Math.hypot(v1[0] - v0[0], v1[1] - v0[1]).toFixed(1);
-            const opt = document.createElement('option');
-            opt.value = i;
-            opt.textContent = `Edge ${i} (${len} mm)`;
-            if (i === up.edge_index) opt.selected = true;
-            edgeSelect.appendChild(opt);
-        }
-        edgeSelect.addEventListener('change', async () => {
-            const newEdge = parseInt(edgeSelect.value);
-            up.edge_index = newEdge;
-            const mid = _edgeMidpoint(verts, newEdge);
-            up.x_mm = mid.x;
-            up.y_mm = mid.y;
-            await _persistDesign(design);
-            await _persistConversationSubmitDesign(design);
-            setViewportData('design', _currentDesign || design);
-        });
-        edgeRow.appendChild(edgeSelect);
+        const v0 = verts[up.edge_index], v1 = verts[(up.edge_index + 1) % verts.length];
+        const len = Math.hypot(v1[0] - v0[0], v1[1] - v0[1]).toFixed(1);
+        edgeVal.textContent = `Edge ${up.edge_index} (${len} mm) — drag to change`;
+        edgeRow.appendChild(edgeVal);
         props.appendChild(edgeRow);
     }
 
