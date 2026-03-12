@@ -72,8 +72,10 @@ export async function runGcode() {
     if (rerun) { rerun.disabled = true; rerun.textContent = '⏳ Slicing…'; }
 
     const filamentId = filamentSel()?.value || null;
+    const silverinkOnly = document.getElementById('gcode-silverink-only')?.checked || false;
     const params = new URLSearchParams({ session: state.session, force: 'true' });
     if (filamentId) params.set('filament', filamentId);
+    if (silverinkOnly) params.set('silverink_only', 'true');
 
     try {
         const res = await fetch(`${API}/api/session/gcode?${params}`, { method: 'POST' });
@@ -202,6 +204,19 @@ function renderResult(data) {
     rerunBtn.textContent = '↻ Re-slice';
     rerunBtn.addEventListener('click', runGcode);
     toolbar.appendChild(rerunBtn);
+
+    // Silver ink debug toggle (synced with hero checkbox)
+    const heroCheckbox = document.getElementById('gcode-silverink-only');
+    const toggleWrap = document.createElement('label');
+    toggleWrap.style.cssText = 'display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-muted); cursor:pointer; margin-left:8px;';
+    const toggleCb = document.createElement('input');
+    toggleCb.type = 'checkbox';
+    toggleCb.style.accentColor = 'var(--accent,#58a6ff)';
+    toggleCb.checked = heroCheckbox?.checked || false;
+    toggleCb.addEventListener('change', () => { if (heroCheckbox) heroCheckbox.checked = toggleCb.checked; });
+    toggleWrap.appendChild(toggleCb);
+    toggleWrap.appendChild(document.createTextNode('Silver ink debug'));
+    toolbar.appendChild(toggleWrap);
 
     el.appendChild(toolbar);
 

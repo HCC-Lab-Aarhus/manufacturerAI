@@ -40,8 +40,8 @@ FILAMENTS: dict[str, FilamentDef] = {
             "first_layer_temperature":          "215",
             "filament_temperature":             "215",
             "filament_first_layer_temperature":  "215",
-            "bed_temperature":                  "60",
-            "first_layer_bed_temperature":      "60",
+            "bed_temperature":                  "40",
+            "first_layer_bed_temperature":      "40",
             # Standard cooling — fan on from layer 1.
             "disable_fan_first_layers":         "0",
             "full_fan_speed_layer":             "0",
@@ -64,8 +64,8 @@ FILAMENTS: dict[str, FilamentDef] = {
             "filament_temperature":             "200",
             "filament_first_layer_temperature":  "200",
             # Bed 60 °C normal, 65 °C first layer to fight warping.
-            "bed_temperature":                  "60",
-            "first_layer_bed_temperature":      "65",
+            "bed_temperature":                  "40",
+            "first_layer_bed_temperature":      "40",
             # +5 % flow to compensate for mineral particles displacing
             # plastic in the melt zone.
             "extrusion_multiplier":             "1.05",

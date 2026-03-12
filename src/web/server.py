@@ -694,6 +694,7 @@ async def api_run_gcode(
     session: str = Query(...),
     force: bool = Query(False),
     filament: str = Query(None),
+    silverink_only: bool = Query(False),
 ):
     """Start the background G-code pipeline (slice STL → inject pauses → output)."""
     s = _resolve_session(session)
@@ -732,6 +733,7 @@ async def api_run_gcode(
                 shell_height=shell_height,
                 printer=s.printer_id,
                 filament=filament,
+                silverink_only=silverink_only,
             )
             if result.success:
                 s.pipeline_state["gcode"] = "complete"
@@ -754,7 +756,7 @@ async def api_run_gcode(
                     "stages": result.stages,
                 }
         except Exception as exc:
-            log.exception("G-code pipeline error")
+            logging.exception("G-code pipeline error")
             _gcode_state[session] = {"status": "error", "message": str(exc), "stages": []}
 
     threading.Thread(target=_do_gcode, daemon=True).start()

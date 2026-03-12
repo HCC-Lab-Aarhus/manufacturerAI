@@ -296,7 +296,12 @@ def _filter_ironing_at_ink_layer(
 
 
 
-def _ink_pause_block(label: str, z: float, instructions: list[str]) -> list[str]:
+def _ink_pause_block(
+    label: str,
+    z: float,
+    instructions: list[str],
+    display_msg: str | None = None,
+) -> list[str]:
     """Generate an M0 pause for ink deposition — head stays in place.
 
     ``M0`` (Unconditional Stop) halts the printer immediately without
@@ -316,12 +321,18 @@ def _ink_pause_block(label: str, z: float, instructions: list[str]) -> list[str]
     ]
     for instr in instructions:
         lines.append(f"; >> {instr}")
+    if display_msg:
+        m0_line = f"M0 {display_msg}"
+    else:
+        m0_line = "M0 ; unconditional stop — head stays in place, press knob/LCD to resume"
     lines.extend([
         "; " + "=" * 50,
         "",
-        "M0 ; unconditional stop — head stays in place, press knob/LCD to resume",
-        "",
+        m0_line,
     ])
+    if display_msg:
+        lines.append(";silverink")
+    lines.append("")
     return lines
 
 
@@ -547,9 +558,9 @@ def postprocess_gcode(
     output_path: Path | None,
     ink_z: float,
     component_z: float,
-    ink_gcode_lines: list[str] | None = None,
     trace_segments: list[tuple[float, float, float, float]] | None = None,
     bed_offset: tuple[float, float] | None = None,
+    silverink_only: bool = False,
 ) -> PostProcessResult:
     """Read slicer G-code, inject pauses and ink, write result.
 
@@ -564,9 +575,6 @@ def postprocess_gcode(
         Z-height for the ink layer (top of floor).
     component_z : float
         Z-height for component insertion (top of cavity).
-    ink_gcode_lines : list[str] or None
-        Pre-generated ink deposition G-code (from ``ink_traces``).
-        If *None*, only a pause is inserted (manual ink application).
     trace_segments : list or None
         Trace path segments as ``(x1, y1, x2, y2)`` in mm.  Used to
         filter ironing moves over trace channels.
@@ -596,10 +604,6 @@ def postprocess_gcode(
         trace_segs = _offset_segments(trace_segs, offset_x, offset_y)
         log.info("Trace segments shifted by (%.3f, %.3f) to match bed", offset_x, offset_y)
 
-    if ink_gcode_lines and (offset_x or offset_y):
-        ink_gcode_lines = _offset_ink_gcode(ink_gcode_lines, offset_x, offset_y)
-        log.info("Ink G-code shifted by (%.3f, %.3f) to match bed", offset_x, offset_y)
-
     out: list[str] = []
     total_layers = 0
     ink_injected = False
@@ -616,6 +620,12 @@ def postprocess_gcode(
     # next layer change) so we can filter ironing in that range.
     in_ink_layer = False
 
+    # silverink_only: skip all layers before the ink layer, keeping
+    # only the startup preamble (before the first ;LAYER_CHANGE) and
+    # the ink layer itself (at ink_z).
+    past_preamble = False       # True once we've seen the first ;LAYER_CHANGE
+    at_ink_layer = False        # True once we reach the ink layer (Z ≈ ink_z)
+
     stages = []
 
     track_x, track_y = 0.0, 0.0
@@ -623,6 +633,23 @@ def postprocess_gcode(
     i = 0
     while i < len(raw_lines):
         line = raw_lines[i]
+
+        # Detect when the preamble ends (first ;LAYER_CHANGE)
+        if silverink_only and not past_preamble and line.strip() == ';LAYER_CHANGE':
+            past_preamble = True
+
+        # In silverink_only mode, detect when we arrive at the ink layer
+        if silverink_only and past_preamble and not at_ink_layer:
+            z_peek = _Z_RE.match(line)
+            if z_peek:
+                z_peek_val = float(z_peek.group(1))
+                if abs(z_peek_val - ink_z) < 0.01:
+                    at_ink_layer = True
+
+        # silverink_only: skip lines between preamble and ink layer
+        if silverink_only and past_preamble and not at_ink_layer:
+            i += 1
+            continue
 
         # Track nozzle position from G0/G1 moves
         m_pos = _MOVE_RE.match(line)
@@ -670,26 +697,35 @@ def postprocess_gcode(
                         "Deposit conductive ink along the trace channels.",
                         "Press the knob when done to resume printing.",
                     ],
+                    display_msg="connect silver ink",
                 ))
 
-                # Insert ink G-code if provided
-                if ink_gcode_lines:
-                    out.extend(ink_gcode_lines)
-                    stages.append(f"Ink G-code injected at Z={ink_z:.2f} ({len(ink_gcode_lines)} lines)")
-                    # Second pause after ink to let it dry / cure
-                    out.extend(_ink_pause_block(
-                        "INK CURING",
-                        ink_z,
-                        [
-                            "Conductive ink has been deposited.",
-                            "Allow ink to dry / cure if needed.",
-                            "Press the knob to resume printing.",
-                        ],
-                    ))
-                else:
-                    stages.append(f"Manual ink pause at Z={ink_z:.2f}")
-
+                stages.append(f"Ink pause at Z={ink_z:.2f}")
                 stages.append(f"Ink layer: {ink_layer_num}")
+
+                if silverink_only:
+                    stages.append("Silver ink debug mode — stopping after ink pause")
+                    z_offset = ink_z - 0.2
+                    _Z_PARAM = re.compile(r'(?<=Z)([\d.]+)')
+                    shifted_out = []
+                    for ol in out:
+                        s_ol = ol.strip()
+                        if s_ol.startswith(';Z:'):
+                            old_z = float(s_ol[3:])
+                            shifted_out.append(f";Z:{max(old_z - z_offset, 0.0):.3f}")
+                        elif re.match(r'^G[01]\s', s_ol) and 'Z' in ol:
+                            shifted_out.append(_Z_PARAM.sub(
+                                lambda m: f"{max(float(m.group(1)) - z_offset, 0.0):.3f}", ol
+                            ))
+                        else:
+                            shifted_out.append(ol)
+                    out = shifted_out
+                    stages.append(f"Z-offset: shifted down by {z_offset:.2f} mm")
+                    for j in range(len(raw_lines) - 1, -1, -1):
+                        if raw_lines[j].strip() == "; prusaslicer_config = begin":
+                            out.extend(raw_lines[j:])
+                            break
+                    break
 
             # ── Component insertion pause (first Z >= component_z) ──
             if not component_injected and z_val >= component_z - 0.001:

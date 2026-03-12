@@ -120,6 +120,10 @@
                         <label for="gcode-filament" style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">Filament</label>
                         <select id="gcode-filament" style="padding:4px 8px; border-radius:4px; background:var(--surface-raised,#2a2a2a); color:var(--text); border:1px solid var(--border,#444);"></select>
                     </div>
+                    <div style="margin-bottom:10px; display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" id="gcode-silverink-only" style="accent-color:var(--accent,#58a6ff);">
+                        <label for="gcode-silverink-only" style="font-size:12px; color:var(--text-muted); cursor:pointer;">Silver ink debug (ironing + ink comments only)</label>
+                    </div>
                     <button id="btn-run-gcode" class="placement-cta">Generate G-code</button>
                     <span id="gcode-status" class="design-status-inline"></span>
                 </div>
