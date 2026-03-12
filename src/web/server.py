@@ -418,9 +418,43 @@ def _enrich_design_3d(data: dict) -> None:
             pass
 
 
+def _attach_pcb_contour(data: dict) -> None:
+    """Compute and attach pcb_contour to any data dict with outline + enclosure.
+
+    Used by placement and routing responses so the frontend can render the
+    flat-trace region boundary in those viewports too.
+    """
+    if "pcb_contour" in data:
+        return  # already present
+    outline_data = data.get("outline", [])
+    enclosure_data = data.get("enclosure", {})
+    if not outline_data:
+        return
+    try:
+        from src.pipeline.design.parsing import _parse_outline, _parse_enclosure
+        from src.pipeline.design.height_field import (
+            sample_bottom_height_grid, pcb_contour_from_bottom_grid,
+        )
+        from src.pipeline.config import FLOOR_MM
+
+        outline = _parse_outline(outline_data)
+        enclosure = _parse_enclosure(enclosure_data)
+        bottom_grid = sample_bottom_height_grid(outline, enclosure, resolution_mm=1.0)
+        if bottom_grid is None:
+            return
+        contour = pcb_contour_from_bottom_grid(
+            bottom_grid, outline, threshold_mm=FLOOR_MM,
+        )
+        if contour is not None:
+            data["pcb_contour"] = contour
+    except Exception:
+        pass
+
+
 def _enrich_placement(data: dict, cat) -> dict:
     """Add body dimensions and pin positions to each placed component."""
     _enrich_components(data.get("components", []), cat)
+    _attach_pcb_contour(data)
     return data
 
 
@@ -458,6 +492,7 @@ async def api_run_routing(session: str = Query(...)):
 
     # Enrich components with body + pin data for rendering
     _enrich_components(data.get("components", []), cat)
+    _attach_pcb_contour(data)
 
     s.write_artifact("routing.json", data)
 
@@ -496,6 +531,7 @@ async def api_routing_result(session: str = Query(...)):
     for comp in data.get("components", []):
         if "body" not in comp or "pins" not in comp:
             _enrich_components([comp], cat)
+    _attach_pcb_contour(data)
     return data
 
 

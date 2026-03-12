@@ -138,6 +138,31 @@ function buildRoutingSVG(data) {
     pathEl.setAttribute('class', 'vp-outline-path');
     svg.appendChild(pathEl);
 
+    // PCB flat-trace contour overlay (dashed green line)
+    if (data.pcb_contour && data.pcb_contour.length > 2) {
+        let cd = '';
+        data.pcb_contour.forEach((pt, i) => {
+            const sx = ox + pt[0] * SCALE;
+            const sy = oy + pt[1] * SCALE;
+            cd += (i === 0 ? 'M' : 'L') + sx.toFixed(2) + ',' + sy.toFixed(2);
+        });
+        cd += 'Z';
+        const contourFill = document.createElementNS(NS, 'path');
+        contourFill.setAttribute('d', cd);
+        contourFill.setAttribute('fill', 'rgba(0, 180, 0, 0.06)');
+        contourFill.setAttribute('stroke', 'none');
+        contourFill.setAttribute('pointer-events', 'none');
+        svg.appendChild(contourFill);
+        const contourStroke = document.createElementNS(NS, 'path');
+        contourStroke.setAttribute('d', cd);
+        contourStroke.setAttribute('fill', 'none');
+        contourStroke.setAttribute('stroke', '#00aa44');
+        contourStroke.setAttribute('stroke-width', '1.5');
+        contourStroke.setAttribute('stroke-dasharray', '6,3');
+        contourStroke.setAttribute('pointer-events', 'none');
+        svg.appendChild(contourStroke);
+    }
+
     // ── Components (dimmed) ──
     const COMP_COLORS = [
         '#58a6ff', '#3fb950', '#d29922', '#f778ba', '#bc8cff',

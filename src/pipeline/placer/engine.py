@@ -145,10 +145,28 @@ def place_components(
         getattr(p, 'z_bottom', None) for p in design.outline.points
     ) or design.enclosure.bottom_surface is not None
     _floor_threshold: float = 0.0
+    _pcb_contour_verts: list[tuple[float, float]] | None = None
     if _has_raised_bottom:
-        from src.pipeline.design.height_field import blended_bottom_height
+        from src.pipeline.design.height_field import (
+            blended_bottom_height, sample_bottom_height_grid,
+            pcb_contour_from_bottom_grid,
+        )
         from src.pipeline.config import FLOOR_MM
         _floor_threshold = FLOOR_MM - 0.1
+
+        # Derive PCB contour polygon so edge clearance can also be
+        # enforced against the flat→raised boundary, not just the
+        # raw outline.  Without this a component could sit right at
+        # the transition line with zero clearance.
+        _bot_grid = sample_bottom_height_grid(design.outline, design.enclosure)
+        if _bot_grid is not None:
+            _contour_pts = pcb_contour_from_bottom_grid(
+                _bot_grid, design.outline, FLOOR_MM,
+            )
+            if _contour_pts is not None and len(_contour_pts) >= 3:
+                _pcb_contour_verts = [(p[0], p[1]) for p in _contour_pts]
+                log.info("PCB contour edge-clearance polygon: %d vertices",
+                         len(_pcb_contour_verts))
 
     # A bottom fillet or chamfer curves the wall inward at floor level by
     # exactly size_mm.  Components placed within that zone would sit inside
@@ -274,13 +292,18 @@ def place_components(
                         continue
 
                     # Reject positions in the raised-floor zone
+                    # Check body corners AND all pin positions — a pin landing
+                    # in the raised zone can't have traces connected to it.
                     if _has_raised_bottom:
                         _raised = False
-                        for _px, _py in (
+                        _check_pts = [
                             (cx, cy),
                             (cx - ehw, cy - ehh), (cx + ehw, cy - ehh),
                             (cx - ehw, cy + ehh), (cx + ehw, cy + ehh),
-                        ):
+                        ]
+                        for _pox, _poy in my_pin_offsets:
+                            _check_pts.append((cx + _pox, cy + _poy))
+                        for _px, _py in _check_pts:
                             if blended_bottom_height(
                                 _px, _py, design.outline, design.enclosure,
                             ) >= _floor_threshold:
@@ -316,6 +339,14 @@ def place_components(
                     if edge_dist < edge_clr:
                         continue
 
+                    # Also enforce clearance from the PCB contour
+                    # boundary (flat→raised transition) when present.
+                    if _pcb_contour_verts is not None:
+                        contour_edge_dist = rect_edge_clearance(
+                            cx, cy, ehw, ehh, _pcb_contour_verts)
+                        if contour_edge_dist < edge_clr:
+                            continue
+
                     pin_clash = False
                     my_pins_world = [(cx + ox, cy + oy) for ox, oy in my_pin_offsets]
                     for p in placed:
@@ -343,6 +374,7 @@ def place_components(
                         catalog_map, net_graph,
                         outline_verts, outline_bounds, style,
                         congestion_grid=cg,
+                        pcb_contour_verts=_pcb_contour_verts,
                     )
 
                     if score > best_score:

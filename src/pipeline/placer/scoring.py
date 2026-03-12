@@ -28,6 +28,7 @@ def score_candidate(
     outline_bounds: tuple[float, float, float, float],
     mounting_style: str,
     congestion_grid: CongestionGrid | None = None,
+    pcb_contour_verts: list[tuple[float, float]] | None = None,
 ) -> float:
     """Lightweight scoring: net proximity + edge/bottom preference + spacing."""
     score = 0.0
@@ -87,6 +88,10 @@ def score_candidate(
 
     # 2. Edge clearance (small reward for safe distance)
     edge_dist = rect_edge_clearance(cx, cy, ehw, ehh, outline_verts)
+    if pcb_contour_verts is not None:
+        contour_edge_dist = rect_edge_clearance(
+            cx, cy, ehw, ehh, pcb_contour_verts)
+        edge_dist = min(edge_dist, contour_edge_dist)
     score += min(edge_dist, 5.0) * 0.5
 
     # 3. Bottom preference
