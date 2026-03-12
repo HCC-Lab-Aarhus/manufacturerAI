@@ -29,6 +29,10 @@ class OutlineVertex:
               curve ends.    0 = no easing on that side.
     z_top:    ceiling height (mm) at this vertex.  None means inherit
               from Enclosure.height_mm (the default enclosure height).
+    z_bottom: floor height (mm) at this vertex.  None means 0.0
+              (flat on the build plate).  When set the bottom
+              surface is raised at this vertex, enabling sculpted
+              undersides (boat-hull, raised pedestal, etc.).
 
     If both ease values are 0 the corner is sharp.  If only one is
     provided at parse time, the other defaults to the same value
@@ -39,6 +43,7 @@ class OutlineVertex:
     ease_in: float = 0
     ease_out: float = 0
     z_top: float | None = None              # per-vertex ceiling height; None = use enclosure default
+    z_bottom: float | None = None           # per-vertex floor height; None = 0.0
 
     def to_dict(self) -> dict:
         """Serialize to a JSON-safe dict, omitting default/None fields."""
@@ -49,6 +54,8 @@ class OutlineVertex:
             d["ease_out"] = self.ease_out
         if self.z_top is not None:
             d["z_top"] = self.z_top
+        if self.z_bottom is not None:
+            d["z_bottom"] = self.z_bottom
         return d
 
 
@@ -110,6 +117,50 @@ class TopSurface:
 
 
 @dataclass
+class BottomSurface:
+    """Optional smooth bump applied to the bottom (floor) of the enclosure.
+
+    Mirrors :class:`TopSurface` but affects the *floor* height instead of
+    the ceiling.  A bump here **raises** the floor (pushes it away from
+    z=0), creating a contoured underside.
+
+    type:
+      "flat"  — no additional bump; the floor is purely the per-vertex
+                z_bottom interpolation.  This is the default.
+      "dome"  — a Gaussian-like rounded peak raising the floor at a point.
+      "ridge" — a cylindrical crest raising the floor along a line.
+
+    All positional fields are in mm, same coordinate system as the outline.
+    """
+    type: str = "flat"                  # "flat" | "dome" | "ridge"
+
+    # ── Dome params (used when type == "dome") ──
+    peak_x_mm: float | None = None      # XY position of the peak
+    peak_y_mm: float | None = None
+    peak_height_mm: float | None = None  # absolute Z height of the dome peak
+    base_height_mm: float | None = None  # flat Z level the dome rises from (usually 0)
+
+    # ── Ridge params (used when type == "ridge") ──
+    x1: float | None = None
+    y1: float | None = None
+    x2: float | None = None
+    y2: float | None = None
+    crest_height_mm: float | None = None
+    falloff_mm: float | None = None
+
+    def to_dict(self) -> dict:
+        d: dict = {"type": self.type}
+        for attr in (
+            "peak_x_mm", "peak_y_mm", "peak_height_mm", "base_height_mm",
+            "x1", "y1", "x2", "y2", "crest_height_mm", "falloff_mm",
+        ):
+            v = getattr(self, attr)
+            if v is not None:
+                d[attr] = v
+        return d
+
+
+@dataclass
 class EdgeProfile:
     """Profile applied to the top or bottom edge of the enclosure wall.
 
@@ -142,6 +193,8 @@ class Enclosure:
                  subtract below this value).
     top_surface: optional smooth bump added on top of the vertex-height
                  linear interpolation.
+    bottom_surface: optional smooth bump applied to the floor. Raises
+                 the floor above the default z_bottom interpolation.
     edge_top:    profile applied to the top edge of the wall (wall-to-lid
                  junction).  A chamfer creates a bevelled shoulder; a fillet
                  gives a smooth rounded rim.
@@ -150,6 +203,7 @@ class Enclosure:
     """
     height_mm: float = 25.0
     top_surface: TopSurface | None = None
+    bottom_surface: BottomSurface | None = None
     edge_top: EdgeProfile = field(default_factory=EdgeProfile)
     edge_bottom: EdgeProfile = field(default_factory=EdgeProfile)
 
@@ -157,6 +211,8 @@ class Enclosure:
         d: dict = {"height_mm": self.height_mm}
         if self.top_surface is not None:
             d["top_surface"] = self.top_surface.to_dict()
+        if self.bottom_surface is not None:
+            d["bottom_surface"] = self.bottom_surface.to_dict()
         if self.edge_top.type != "none":
             d["edge_top"] = self.edge_top.to_dict()
         if self.edge_bottom.type != "none":

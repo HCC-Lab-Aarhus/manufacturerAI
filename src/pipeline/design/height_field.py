@@ -10,6 +10,10 @@ blended_height(x, y, outline, enclosure) -> float
     Returns the final ceiling Z at world position (x, y).
     = max(vertex_interpolated_z_top, surface_bump(x, y))
 
+blended_bottom_height(x, y, outline, enclosure) -> float
+    Returns the final floor Z at world position (x, y).
+    = max(vertex_interpolated_z_bottom, bottom_surface_bump(x, y))
+
 sample_height_grid(outline, enclosure, resolution_mm) -> dict
     Samples blended_height on a regular grid covering the outline bounding
     box, masked to the interior of the polygon.  Returns a JSON-safe dict
@@ -35,6 +39,11 @@ if TYPE_CHECKING:
 def _resolved_z_top(vertex_z: float | None, default: float) -> float:
     """Return the effective z_top for a vertex, falling back to default."""
     return vertex_z if vertex_z is not None else default
+
+
+def _resolved_z_bottom(vertex_z: float | None) -> float:
+    """Return the effective z_bottom for a vertex, falling back to 0.0."""
+    return vertex_z if vertex_z is not None else 0.0
 
 
 def _point_in_triangle(
@@ -106,6 +115,36 @@ def _interpolate_vertex_heights(
     return sum_wz / sum_w if sum_w > 0 else default_height
 
 
+def _interpolate_vertex_bottom_heights(
+    x: float, y: float,
+    outline: "Outline",
+) -> float:
+    """IDW interpolation of z_bottom from the outline vertices.
+
+    Same algorithm as ``_interpolate_vertex_heights`` but reads z_bottom
+    from each vertex (defaulting to 0.0 when absent).
+    """
+    verts = outline.vertices
+    n = len(verts)
+    if n < 1:
+        return 0.0
+
+    heights = [_resolved_z_bottom(p.z_bottom) for p in outline.points]
+
+    sum_w = 0.0
+    sum_wz = 0.0
+    for i in range(n):
+        vx, vy = verts[i]
+        d2 = (x - vx) ** 2 + (y - vy) ** 2
+        if d2 < 1e-6:
+            return heights[i]
+        w = 1.0 / (d2 * d2)     # 1/d⁴ weight (power = 4)
+        sum_w  += w
+        sum_wz += w * heights[i]
+
+    return sum_wz / sum_w if sum_w > 0 else 0.0
+
+
 def _surface_bump(x: float, y: float, top_surface: "Enclosure | None") -> float:
     """Return the additive height bump from the top_surface descriptor.
 
@@ -163,6 +202,59 @@ def _surface_bump(x: float, y: float, top_surface: "Enclosure | None") -> float:
         return max(0.0, bump)
 
     # "flat" or unknown
+    return 0.0
+
+
+def _bottom_surface_bump(x: float, y: float, bottom_surface) -> float:
+    """Return the additive height bump from the bottom_surface descriptor.
+
+    A bump here *raises* the floor (pushes it away from z=0).
+    A "flat" or missing descriptor contributes 0 (no bump).
+    """
+    if bottom_surface is None:
+        return 0.0
+    bs = bottom_surface
+
+    if bs.type == "dome":
+        px = bs.peak_x_mm
+        py = bs.peak_y_mm
+        peak = bs.peak_height_mm
+        base = bs.base_height_mm
+        if None in (px, py, peak, base):
+            return 0.0
+        dist = math.hypot(x - px, y - py)
+        amplitude = peak - base
+        if amplitude <= 0:
+            return 0.0
+        sigma = max(1.0, amplitude * 2.0)
+        bump = amplitude * math.exp(-(dist * dist) / (2 * sigma * sigma))
+        return max(0.0, bump)
+
+    if bs.type == "ridge":
+        x1, y1 = bs.x1, bs.y1
+        x2, y2 = bs.x2, bs.y2
+        crest = bs.crest_height_mm
+        base = bs.base_height_mm
+        falloff = bs.falloff_mm
+        if None in (x1, y1, x2, y2, crest, base, falloff):
+            return 0.0
+        amplitude = crest - base
+        if amplitude <= 0 or falloff <= 0:
+            return 0.0
+        lx, ly = x2 - x1, y2 - y1
+        ll = math.hypot(lx, ly)
+        if ll < 1e-9:
+            dist = math.hypot(x - x1, y - y1)
+        else:
+            t = max(0.0, min(1.0, ((x - x1) * lx + (y - y1) * ly) / (ll * ll)))
+            cx = x1 + t * lx
+            cy = y1 + t * ly
+            dist = math.hypot(x - cx, y - cy)
+        if dist >= falloff:
+            return 0.0
+        bump = amplitude * (0.5 + 0.5 * math.cos(math.pi * dist / falloff))
+        return max(0.0, bump)
+
     return 0.0
 
 
@@ -237,6 +329,22 @@ def blended_height(
     return max(vertex_z, base + bump)
 
 
+def blended_bottom_height(
+    x: float,
+    y: float,
+    outline: "Outline",
+    enclosure: "Enclosure",
+) -> float:
+    """Return the final floor Z at world position (x, y).
+
+    Final Z = max(vertex-interpolated z_bottom at (x,y), bottom_surface bump).
+    The result is always ≥ 0.
+    """
+    vertex_z = _interpolate_vertex_bottom_heights(x, y, outline)
+    bump = _bottom_surface_bump(x, y, enclosure.bottom_surface)
+    return max(vertex_z, bump)
+
+
 def sample_height_grid(
     outline: "Outline",
     enclosure: "Enclosure",
@@ -298,6 +406,77 @@ def sample_height_grid(
                 inside = _point_in_polygon(x, y, verts)
             if inside:
                 row.append(round(blended_height(x, y, outline, enclosure), 3))
+            else:
+                row.append(None)
+        grid.append(row)
+
+    return {
+        "origin_x": round(min_x, 3),
+        "origin_y": round(min_y, 3),
+        "step_mm": step,
+        "cols": cols,
+        "rows": rows,
+        "grid": grid,
+    }
+
+
+def sample_bottom_height_grid(
+    outline: "Outline",
+    enclosure: "Enclosure",
+    resolution_mm: float = 2.0,
+) -> dict | None:
+    """Sample blended_bottom_height on a regular grid over the outline bounding box.
+
+    Returns None when every vertex has z_bottom == 0 (or None) and there is no
+    bottom_surface descriptor — i.e. the floor is perfectly flat and there's
+    nothing for the frontend to render differently.
+
+    Otherwise returns the same dict format as sample_height_grid but with floor
+    heights instead of ceiling heights.
+    """
+    # Quick check: is there anything to sample?
+    has_variation = any(getattr(p, 'z_bottom', None) for p in outline.points)
+    if not has_variation and enclosure.bottom_surface is None:
+        return None
+
+    verts = outline.vertices
+    if len(verts) < 3:
+        return None
+
+    expanded_verts = _bezier_expand_outline(outline) or verts
+
+    xs = [v[0] for v in expanded_verts]
+    ys = [v[1] for v in expanded_verts]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+
+    step = resolution_mm
+    cols = max(1, int(math.ceil((max_x - min_x) / step)) + 1)
+    rows = max(1, int(math.ceil((max_y - min_y) / step)) + 1)
+
+    poly_expanded = None
+    use_shapely = False
+    try:
+        from shapely.geometry import Polygon, Point
+        poly = Polygon(expanded_verts)
+        if poly.is_valid:
+            poly_expanded = poly
+            use_shapely = True
+    except ImportError:
+        pass
+
+    grid: list[list[float | None]] = []
+    for r in range(rows):
+        row: list[float | None] = []
+        y = min_y + r * step
+        for c in range(cols):
+            x = min_x + c * step
+            if use_shapely:
+                inside = poly_expanded.contains(Point(x, y))
+            else:
+                inside = _point_in_polygon(x, y, verts)
+            if inside:
+                row.append(round(blended_bottom_height(x, y, outline, enclosure), 3))
             else:
                 row.append(None)
         grid.append(row)

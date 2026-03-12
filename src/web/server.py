@@ -373,7 +373,8 @@ def _enrich_design_3d(data: dict) -> None:
     """
     from src.pipeline.design.parsing import _parse_outline, _parse_enclosure
     from src.pipeline.design.height_field import (
-        sample_height_grid, surface_normal_at, blended_height,
+        sample_height_grid, sample_bottom_height_grid,
+        surface_normal_at, blended_height,
     )
 
     outline_data = data.get("outline", [])
@@ -387,9 +388,14 @@ def _enrich_design_3d(data: dict) -> None:
     except Exception:
         return
 
-    # Sample the height field on a 2mm grid
+    # Sample the height field on a 1mm grid (top surface)
     grid = sample_height_grid(outline, enclosure, resolution_mm=1.0)
     data["height_grid"] = grid
+
+    # Sample the bottom height field (floor surface) — only when non-flat
+    bottom_grid = sample_bottom_height_grid(outline, enclosure, resolution_mm=1.0)
+    if bottom_grid is not None:
+        data["bottom_height_grid"] = bottom_grid
 
     # Add surface_normal and z_at_position to each UI placement
     for up in data.get("ui_placements", []):

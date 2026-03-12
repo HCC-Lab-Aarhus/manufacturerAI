@@ -45,7 +45,9 @@ Before choosing dimensions, consider that this device will be 3D-printed and phy
 3. Component insertion — pins poke through holes into the ink traces (during pause 2)
 4. 3D printer resumes and seals the ceiling
 
-The enclosure has: solid floor (2mm PLA), ink layer at Z=2mm (ironed surface), cavity for components, solid ceiling (2mm PLA). Components sit in pockets; their pins reach down through pinholes to contact the ink traces.
+The enclosure has: solid floor (2mm PLA by default), ink layer at Z=2mm (ironed surface), cavity for components, solid ceiling (2mm PLA). Components sit in pockets; their pins reach down through pinholes to contact the ink traces.
+
+The floor is flat by default, but parts of it can be **raised** using per-vertex `z_bottom` heights (see below). Raised floor areas lift the bottom surface away from the ground — useful for aesthetic shaping (lifted chins, tapered feet, rocking profiles). **Important:** conductive traces are deposited at the flat Z=2mm ink layer, so components and traces must be placed in areas where the floor is at its default height (z_bottom=0). The raised floor areas are purely structural/decorative.
 
 ## Your Task
 Given a user's device description, design it by:
@@ -123,6 +125,36 @@ The ceiling is **linearly interpolated** across each wall face between adjacent 
 ```
 This produces a remote-style wedge: 30mm tall at the top, tapering to 18mm at the bottom.
 
+#### Per-vertex floor heights (`z_bottom`)
+Add `"z_bottom"` to any outline vertex to raise the floor at that corner above ground
+level (z=0). Omitting `z_bottom` keeps the vertex on the ground (z=0).
+
+The floor height is **smoothly interpolated** (IDW) between vertices — this naturally
+produces smooth curved transitions rather than hard creases.
+
+```json
+"outline": [
+  {{"x": 30, "y": 0,   "z_bottom": 6}},
+  {{"x": 55, "y": 20}},
+  {{"x": 55, "y": 100}},
+  {{"x": 30, "y": 120, "z_bottom": 6}},
+  {{"x": 5,  "y": 100}},
+  {{"x": 5,  "y": 20}}
+]
+```
+This lifts the top and bottom tips (chin / forehead) 6mm off the ground while the
+sides sit flat — the floor smoothly curves upward toward the tips.
+
+**Rules:**
+- `z_bottom` values are in mm above ground. Reasonable values: 2–8mm.
+- The wall height at every vertex must remain positive: `z_top − z_bottom > 0`.
+  If `z_bottom` is raised too high, the wall disappears.
+- **Components and traces live at z=2mm** (the flat ink layer). Only vertices where
+  `z_bottom` is 0 (default) have traces underneath. Place all components and UI
+  elements in the flat-floor region, not in the raised area.
+- Small `z_bottom` values (2–6mm) on extremity vertices create subtle lifts;
+  larger values create more dramatic rocking or stand-off effects.
+
 #### Smooth surface bumps (`top_surface`)
 For ergonomic curves (domes, ridges), add a `top_surface` descriptor to the enclosure.
 The bump is **added on top of** the per-vertex z_top interpolation — the two combine as:
@@ -151,6 +183,38 @@ The bump is **added on top of** the per-vertex z_top interpolation — the two c
 }}
 ```
 `falloff_mm` is the distance from the crest line where the surface returns to `base_height_mm`.
+
+#### Smooth floor bumps (`bottom_surface`)
+Mirrors `top_surface` but affects the **floor** instead of the ceiling. A bump here
+**raises** the floor (pushes it away from z=0), creating a contoured underside.
+Combines with per-vertex `z_bottom` as:
+`final_floor_z(x,y) = max(vertex_interpolated_z_bottom, bottom_surface_bump(x,y))`
+
+**Dome** — a rounded mound on the bottom (e.g. a belly or convex base):
+```json
+"bottom_surface": {{
+  "type": "dome",
+  "peak_x_mm": 30,
+  "peak_y_mm": 60,
+  "peak_height_mm": 5,
+  "base_height_mm": 0
+}}
+```
+
+**Ridge** — a raised keel or rail along the bottom:
+```json
+"bottom_surface": {{
+  "type": "ridge",
+  "x1": 10, "y1": 60,
+  "x2": 50, "y2": 60,
+  "crest_height_mm": 4,
+  "base_height_mm": 0,
+  "falloff_mm": 12
+}}
+```
+
+**Important:** `bottom_surface` heights are modest (2–6mm typically) and mostly
+for aesthetic shaping. Keep the raised area away from where components are placed.
 
 #### UI component surface conformance
 By default, top-mount UI components (buttons, LEDs) have their ceiling holes angled

@@ -17,15 +17,17 @@ export const NS    = 'http://www.w3.org/2000/svg';
 /**
  * Normalise an outline array to a consistent internal shape.
  *
- * Input:   [{x, y, ease_in?, ease_out?, z_top?}, ...]
+ * Input:   [{x, y, ease_in?, ease_out?, z_top?, z_bottom?}, ...]
  * Returns: { verts: [[x,y],...], corners: [{ease_in, ease_out},...],
- *            zTops: [z_top | null, ...] }
+ *            zTops: [z_top | null, ...],
+ *            zBottoms: [z_bottom | null, ...] }
  */
 export function normaliseOutline(outline) {
-    if (!outline || !Array.isArray(outline)) return { verts: [], corners: [], zTops: [] };
+    if (!outline || !Array.isArray(outline)) return { verts: [], corners: [], zTops: [], zBottoms: [] };
 
-    const verts  = outline.map(p => [p.x, p.y]);
-    const zTops  = outline.map(p => (p.z_top != null ? p.z_top : null));
+    const verts   = outline.map(p => [p.x, p.y]);
+    const zTops   = outline.map(p => (p.z_top    != null ? p.z_top    : null));
+    const zBottoms = outline.map(p => (p.z_bottom != null ? p.z_bottom : null));
     const corners = outline.map(p => {
         let ein  = p.ease_in  ?? null;
         let eout = p.ease_out ?? null;
@@ -34,7 +36,7 @@ export function normaliseOutline(outline) {
         if (eout != null && ein  == null) ein  = eout;
         return { ease_in: ein ?? 0, ease_out: eout ?? 0 };
     });
-    return { verts, corners, zTops };
+    return { verts, corners, zTops, zBottoms };
 }
 
 
@@ -44,23 +46,28 @@ export function normaliseOutline(outline) {
  * Expand a normalised outline into a dense polygon by approximating each
  * eased corner with a quadratic Bézier arc.
  *
- * Returns { pts: [[x,y],...], zs: [z,...] } where each expanded point also
- * carries an interpolated z_top value (for use in 3‑D wall/wireframe heights).
+ * Returns { pts, zs, zbots, cornerIndices } where each expanded point also
+ * carries interpolated z_top and z_bottom values.
  *
- * @param {number[][]}          verts    Raw control-point positions [[x,y],...]
+ * @param {number[][]}          verts     Raw control-point positions [[x,y],...]
  * @param {{ease_in,ease_out}[]} corners  Per-vertex easing
- * @param {(number|null)[]}     zTopRaw  Per-vertex z_top (null → defaultZ)
- * @param {number}              defaultZ Fallback z when z_top absent
- * @param {number}              [segs=6] Bézier sub-segments per eased corner
+ * @param {(number|null)[]}     zTopRaw   Per-vertex z_top (null → defaultZ)
+ * @param {number}              defaultZ  Fallback z when z_top absent
+ * @param {(number|null)[]}     [zBotRaw] Per-vertex z_bottom (null → 0)
+ * @param {number}              [segs=6]  Bézier sub-segments per eased corner
  */
-export function expandOutlineVertices(verts, corners, zTopRaw, defaultZ, segs = 6) {
+export function expandOutlineVertices(verts, corners, zTopRaw, defaultZ, zBotRaw = null, segs = 6) {
     const n   = verts.length;
     const pts = [];
     const zs  = [];
+    const zbots = [];
     // Index in `pts` that best represents each original corner vertex.
     // For uneased corners it's the exact vertex; for eased corners it's the
     // midpoint of the bezier arc (closest expanded point to the original corner).
     const cornerIndices = [];
+
+    // Handle legacy callers that pass segs as 5th positional arg (number)
+    if (typeof zBotRaw === 'number') { segs = zBotRaw; zBotRaw = null; }
 
     for (let i = 0; i < n; i++) {
         const prev = (i - 1 + n) % n;
@@ -69,12 +76,15 @@ export function expandOutlineVertices(verts, corners, zTopRaw, defaultZ, segs = 
         const zC = zTopRaw[i]    ?? defaultZ;
         const zP = zTopRaw[prev] ?? defaultZ;
         const zN = zTopRaw[next] ?? defaultZ;
+        const bC = (zBotRaw && zBotRaw[i])    ?? 0;
+        const bP = (zBotRaw && zBotRaw[prev]) ?? 0;
+        const bN = (zBotRaw && zBotRaw[next]) ?? 0;
         const eIn  = corners[i].ease_in  ?? 0;
         const eOut = corners[i].ease_out ?? 0;
 
         if (eIn === 0 && eOut === 0) {
             cornerIndices.push(pts.length);
-            pts.push(C); zs.push(zC); continue;
+            pts.push(C); zs.push(zC); zbots.push(bC); continue;
         }
 
         const dPx = P[0]-C[0], dPy = P[1]-C[1];
@@ -83,7 +93,7 @@ export function expandOutlineVertices(verts, corners, zTopRaw, defaultZ, segs = 
         const lenN = Math.hypot(dNx, dNy);
         if (lenP === 0 || lenN === 0) {
             cornerIndices.push(pts.length);
-            pts.push(C); zs.push(zC); continue;
+            pts.push(C); zs.push(zC); zbots.push(bC); continue;
         }
 
         const safeIn  = Math.min(eIn,  lenP * 0.45);
@@ -92,6 +102,8 @@ export function expandOutlineVertices(verts, corners, zTopRaw, defaultZ, segs = 
         const t2 = [C[0] + dNx*(safeOut/lenN), C[1] + dNy*(safeOut/lenN)];
         const zT1 = zC + (zP - zC) * (safeIn  / lenP);
         const zT2 = zC + (zN - zC) * (safeOut / lenN);
+        const bT1 = bC + (bP - bC) * (safeIn  / lenP);
+        const bT2 = bC + (bN - bC) * (safeOut / lenN);
 
         // Midpoint of arc (s = segs/2) is the point closest to the original corner C.
         cornerIndices.push(pts.length + Math.floor(segs / 2));
@@ -103,9 +115,10 @@ export function expandOutlineVertices(verts, corners, zTopRaw, defaultZ, segs = 
                 ku*ku*t1[1] + 2*ku*u*C[1] + u*u*t2[1],
             ]);
             zs.push(ku*ku*zT1 + 2*ku*u*zC + u*u*zT2);
+            zbots.push(ku*ku*bT1 + 2*ku*u*bC + u*u*bT2);
         }
     }
-    return { pts, zs, cornerIndices };
+    return { pts, zs, zbots, cornerIndices };
 }
 
 

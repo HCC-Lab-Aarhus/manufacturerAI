@@ -300,23 +300,32 @@ def _build_rings(
     flat_pts: list[list[float]],
     top_zs: list[float],
     enclosure: Enclosure,
+    bottom_zs: list[float] | None = None,
 ) -> list[list[list[float]]]:
     """Build an ordered list of vertex rings from bottom to top.
 
     Each ring is a list of N ``[x, y, z]`` points (N = len(flat_pts)).
     Rings are stacked bottom → top:
 
-    * Bottom edge zone: ``_CURVE_STEPS + 1`` rings (last ring = z=bot_size,
-      full-width polygon = start of the straight wall).
-    * OR single flat bottom ring at z=0 (no bottom profile).
+    * Bottom edge zone: ``_CURVE_STEPS + 1`` rings (last ring =
+      z=bottom_zs[i]+bot_size, full-width polygon = start of the straight wall).
+    * OR single bottom ring at z=bottom_zs[i] (no bottom profile).
     * Top edge zone: ``_CURVE_STEPS + 1`` rings (first ring = per-vertex
       ``top_zs[i] − top_size``, full-width = end of the straight wall).
     * OR single per-vertex top ring at z=top_zs[i] (no top profile).
 
     The straight wall section is implicitly encoded as the quad between the
     last bottom ring and the first top ring.
+
+    Parameters
+    ----------
+    bottom_zs : Per-vertex floor heights.  ``None`` or all-zeros falls back to
+                the legacy flat-bottom behaviour.
     """
     N = len(flat_pts)
+    if bottom_zs is None:
+        bottom_zs = [0.0] * N
+
     edge_top = enclosure.edge_top
     edge_bot = enclosure.edge_bottom
 
@@ -337,18 +346,26 @@ def _build_rings(
             frac = step / _CURVE_STEPS
             if bot_type == "fillet":
                 theta = (1.0 - frac) * (math.pi / 2)
-                inset = bot_size * (1.0 - math.cos(theta))
-                z     = bot_size * (1.0 - math.sin(theta))
+                inset_frac = 1.0 - math.cos(theta)
+                z_frac     = 1.0 - math.sin(theta)
             else:  # chamfer
-                inset = bot_size * (1.0 - frac)
-                z     = bot_size * frac
+                inset_frac = 1.0 - frac
+                z_frac     = frac
+            inset = bot_size * inset_frac
             ipts = _inset_polygon_pts(flat_pts, inset, _area=area)
-            rings.append([[ix, iy, z] for ix, iy in ipts])
+            ring = []
+            for i in range(N):
+                # Clamp bot_size so the bottom profile doesn't exceed available wall
+                avail = max(top_zs[i] - bottom_zs[i], _MIN_WALL_GAP)
+                eff_bs = min(bot_size, avail * 0.45)
+                eff_bs = max(eff_bs, 0.01)
+                z = bottom_zs[i] + eff_bs * z_frac
+                ring.append([ipts[i][0], ipts[i][1], z])
+            rings.append(ring)
     else:
-        rings.append([[x, y, 0.0] for x, y in flat_pts])
+        rings.append([[flat_pts[i][0], flat_pts[i][1], bottom_zs[i]] for i in range(N)])
 
     # ── Top edge rings (also encodes the straight wall top in ring[0]) ─────────
-    last_bot_z = bot_size if has_bot else 0.0
     if has_top:
         for step in range(_CURVE_STEPS + 1):
             frac = step / _CURVE_STEPS
@@ -362,6 +379,7 @@ def _build_rings(
             ipts = _inset_polygon_pts(flat_pts, inset, _area=area)
             ring = []
             for i in range(N):
+                last_bot_z = (bottom_zs[i] + bot_size) if has_bot else bottom_zs[i]
                 avail = max(top_zs[i] - last_bot_z, _MIN_WALL_GAP)
                 eff_ts = min(top_size, avail - _MIN_WALL_GAP)
                 eff_ts = max(eff_ts, 0.01)
@@ -379,10 +397,12 @@ def _polyhedron_shell(
     top_zs: list[float],
     enclosure: Enclosure,
     outline: Outline | None = None,
+    bottom_zs: list[float] | None = None,
 ) -> list[str]:
     """Emit an OpenSCAD ``polyhedron()`` for a variable-height shell body.
 
-    Each outline vertex can have a different ceiling height (from ``top_zs``).
+    Each outline vertex can have a different ceiling height (from ``top_zs``)
+    and/or a different floor height (from ``bottom_zs``).
     Edge profiles (chamfer / fillet) are applied via per-vertex miter insets
     so the ring vertex count is always identical — a requirement for building
     a valid polyhedron face table.
@@ -393,7 +413,9 @@ def _polyhedron_shell(
     for non-convex shapes.
     """
     N = len(flat_pts)
-    rings = _build_rings(flat_pts, top_zs, enclosure)
+    if bottom_zs is None:
+        bottom_zs = [0.0] * N
+    rings = _build_rings(flat_pts, top_zs, enclosure, bottom_zs=bottom_zs)
     R = len(rings)
 
     # Flat point list (ring-major, vertex-minor order)
@@ -462,20 +484,64 @@ def _polyhedron_shell(
         all_pts.extend(cap_ring)
     all_pts.append([cx, cy, cz])
 
-    # Bottom centroid for fan tessellation of the bottom cap
+    # Bottom cap rings — concentric rings for variable-height bottom surface
+    # (mirrors the top-cap ring approach so the bottom surface can follow
+    # per-vertex z_bottom values smoothly).
     bot_ring = rings[0]
     bot_cx = sum(p[0] for p in bot_ring) / N
     bot_cy = sum(p[1] for p in bot_ring) / N
-    bot_cz = sum(p[2] for p in bot_ring) / N
-    all_pts.append([bot_cx, bot_cy, bot_cz])
+
+    bot_z_range = max(p[2] for p in bot_ring) - min(p[2] for p in bot_ring)
+    variable_bot = bot_z_range >= _VARIABLE_HEIGHT_THRESHOLD
+
+    if variable_bot:
+        bot_cap_rings: list[list[list[float]]] = []
+        for k in range(_CAP_RINGS):
+            t = (k + 1) / (_CAP_RINGS + 1)
+            idw_power = 2.0 + 1.0 * (1.0 - k / (_CAP_RINGS - 1 or 1))
+            bcp_ring: list[list[float]] = []
+            for i in range(N):
+                bx = bot_ring[i][0] * (1.0 - t) + bot_cx * t
+                by = bot_ring[i][1] * (1.0 - t) + bot_cy * t
+                bz = _idw_cap_z(bx, by, bot_ring, power=idw_power)
+                bcp_ring.append([bx, by, bz])
+            # For the first bottom cap ring, clamp each spoke z to at least
+            # the corresponding wall-bottom z so no spoke dips below its wall.
+            if k == 0:
+                bcp_ring = [
+                    [bcp_ring[j][0], bcp_ring[j][1],
+                     max(bcp_ring[j][2], bot_ring[j][2])]
+                    for j in range(N)
+                ]
+            bot_cap_rings.append(bcp_ring)
+
+        bot_cz = _idw_cap_z(bot_cx, bot_cy, bot_ring, power=2.0)
+
+        for bcp_ring in bot_cap_rings:
+            all_pts.extend(bcp_ring)
+        all_pts.append([bot_cx, bot_cy, bot_cz])
+
+        _BOT_CAP_RINGS = _CAP_RINGS
+    else:
+        # Flat bottom — single centroid point, no concentric rings needed
+        bot_cz = sum(p[2] for p in bot_ring) / N
+        all_pts.append([bot_cx, bot_cy, bot_cz])
+        _BOT_CAP_RINGS = 0
 
     # Index helpers
     # Main rings: 0 … R*N-1  (ring ri, vertex vi → ri*N + vi%N)
-    # Cap ring k (0-based): R*N + k*N … R*N + k*N + N-1
+    # Top cap ring k (0-based): R*N + k*N … R*N + k*N + N-1
     # Top centroid: R*N + _CAP_RINGS*N
-    # Bottom centroid: R*N + _CAP_RINGS*N + 1
+    # Bottom cap ring k: R*N + _CAP_RINGS*N + 1 + k*N … (+ N-1)
+    #   (only when _BOT_CAP_RINGS > 0; otherwise absent)
+    # Bottom centroid: R*N + _CAP_RINGS*N + 1 + _BOT_CAP_RINGS*N
     center_idx = R * N + _CAP_RINGS * N
-    bot_center_idx = center_idx + 1
+    bot_cap_base_offset = center_idx + 1   # first bottom cap ring point
+
+    def bot_cap_base(k: int) -> int:
+        return bot_cap_base_offset + k * N
+
+    bot_center_idx = bot_cap_base_offset + _BOT_CAP_RINGS * N
 
     def cap_base(k: int) -> int:
         return R * N + k * N
@@ -494,14 +560,56 @@ def _polyhedron_shell(
 
     faces: list[list[int]] = []
 
-    # ── Bottom cap — fan from centroid ──────────────────────────────────────
-    for vi in range(N):
-        curr = vi
-        nxt  = (vi + 1) % N
-        if ccw:
-            faces.append([bot_center_idx, curr, nxt])
-        else:
-            faces.append([bot_center_idx, nxt, curr])
+    # ── Bottom cap ─────────────────────────────────────────────────────────────
+    if _BOT_CAP_RINGS > 0:
+        # Concentric ring layers for variable-height bottom surface.
+        # Winding for bottom-facing outward normals (CW from below):
+        #   For each quad (a=outer_vi, b=outer_nxt, c=inner_nxt, d=inner_vi):
+        #     CCW polygon: [d,a,b], [d,b,c]   (opposite of top cap)
+        #     CW  polygon: [d,b,a], [d,c,b]
+        def _bot_cap_quad(a: int, b: int, c: int, d: int) -> None:
+            if ccw:
+                faces.append([d, a, b])
+                faces.append([d, b, c])
+            else:
+                faces.append([d, b, a])
+                faces.append([d, c, b])
+
+        # Layer 0: first main ring → first bottom cap ring
+        for vi in range(N):
+            a = idx(0, vi)
+            b = idx(0, vi + 1)
+            c = bot_cap_base(0) + (vi + 1) % N
+            d = bot_cap_base(0) + vi
+            _bot_cap_quad(a, b, c, d)
+
+        # Layers 1…_BOT_CAP_RINGS-1: successive bottom cap ring pairs
+        for k in range(_BOT_CAP_RINGS - 1):
+            for vi in range(N):
+                a = bot_cap_base(k)     + vi
+                b = bot_cap_base(k)     + (vi + 1) % N
+                c = bot_cap_base(k + 1) + (vi + 1) % N
+                d = bot_cap_base(k + 1) + vi
+                _bot_cap_quad(a, b, c, d)
+
+        # Final layer: innermost bottom cap ring → centroid fan
+        innermost_bot = bot_cap_base(_BOT_CAP_RINGS - 1)
+        for vi in range(N):
+            curr = innermost_bot + vi
+            nxt  = innermost_bot + (vi + 1) % N
+            if ccw:
+                faces.append([bot_center_idx, curr, nxt])
+            else:
+                faces.append([bot_center_idx, nxt, curr])
+    else:
+        # Simple centroid fan for flat bottom
+        for vi in range(N):
+            curr = vi
+            nxt  = (vi + 1) % N
+            if ccw:
+                faces.append([bot_center_idx, curr, nxt])
+            else:
+                faces.append([bot_center_idx, nxt, curr])
 
     # ── Top cap — concentric ring layers + final centroid fan ──────────────────
     # Winding for top-facing outward normals (CW from above = CW from outside):
@@ -584,12 +692,12 @@ def _polyhedron_shell(
 
     log.info(
         "Shell body (polyhedron): %d rings, %d pts, %d faces, z=%.1f..%.1f mm",
-        R, len(all_pts), len(faces), min_z, max_z,
+        R, len(all_pts), len(faces), min(bottom_zs), max_z,
     )
 
     return [
         f"// Shell body — variable-height polyhedron",
-        f"// ceiling z: {min_z:.1f}..{max_z:.1f} mm"
+        f"// ceiling z: {min_z:.1f}..{max_z:.1f} mm  floor z: {min(bottom_zs):.1f}..{max(bottom_zs):.1f} mm"
         f"  bottom={bot_type}({bot_size:.1f}mm)  top={top_type}({top_size:.1f}mm)",
         f"// {N} footprint verts, {R} rings, {len(all_pts)} pts, {len(faces)} faces",
         f"polyhedron(",
@@ -608,20 +716,21 @@ def shell_body_lines(
     enclosure: Enclosure,
     flat_pts:  list[list[float]],
     top_zs:    list[float] | None = None,
+    bottom_zs: list[float] | None = None,
     indent:    str = "",
 ) -> list[str]:
     """Return OpenSCAD lines for the shell body.
 
     Automatically selects between two implementations:
 
-    * **Uniform path** — when ``top_zs`` is ``None`` or all values are within
-      ``_VARIABLE_HEIGHT_THRESHOLD`` mm of each other.  Uses the original
-      stacked ``linear_extrude`` approach with Shapely pre-computed insets.
-      Fast to compile and unchanged from the previous behaviour.
+    * **Uniform path** — when both ``top_zs`` and ``bottom_zs`` are ``None``
+      or all values are within ``_VARIABLE_HEIGHT_THRESHOLD`` mm of each
+      other.  Uses the original stacked ``linear_extrude`` approach with
+      Shapely pre-computed insets.
 
-    * **Polyhedron path** — when ceiling heights vary significantly across
-      outline vertices.  Emits a single ``polyhedron()`` primitive whose
-      top ring follows the per-vertex heights in ``top_zs``.  Edge profiles
+    * **Polyhedron path** — when ceiling or floor heights vary significantly
+      across outline vertices.  Emits a single ``polyhedron()`` primitive
+      whose top/bottom rings follow the per-vertex heights.  Edge profiles
       are handled by additional intermediate rings built with the miter-inset
       helper ``_inset_polygon_pts``.
 
@@ -633,22 +742,53 @@ def shell_body_lines(
     top_zs    : list | None
         Per-vertex ceiling heights, one value per element of ``flat_pts``.
         Pass ``None`` (or omit) to always use the uniform path.
+    bottom_zs : list | None
+        Per-vertex floor heights, one value per element of ``flat_pts``.
+        Pass ``None`` (or omit) for a flat floor at z=0.
     indent    : str       Unused legacy parameter; kept for API compatibility.
     """
+    N = len(flat_pts)
+
+    # ── Resolve effective heights ──────────────────────────────────────────────
+    top_z_range = 0.0
+    if top_zs is not None and len(top_zs) == N:
+        top_z_range = max(top_zs) - min(top_zs)
+
+    bot_z_range = 0.0
+    bot_z_max = 0.0
+    if bottom_zs is not None and len(bottom_zs) == N:
+        bot_z_range = max(bottom_zs) - min(bottom_zs)
+        bot_z_max = max(bottom_zs)
+
+    use_polyhedron = (
+        top_z_range >= _VARIABLE_HEIGHT_THRESHOLD
+        or bot_z_range >= _VARIABLE_HEIGHT_THRESHOLD
+        or bot_z_max >= _VARIABLE_HEIGHT_THRESHOLD
+    )
+
     # ── Decide which path to use ───────────────────────────────────────────────
-    if top_zs is not None and len(top_zs) == len(flat_pts):
-        z_range = max(top_zs) - min(top_zs)
-        if z_range >= _VARIABLE_HEIGHT_THRESHOLD:
-            return _polyhedron_shell(flat_pts, top_zs, enclosure, outline=outline)
-        # All heights are effectively equal — use the uniform value from top_zs
-        # (which may differ slightly from enclosure.height_mm if all vertices
-        # carry an explicit z_top that overrides the enclosure default).
+    if use_polyhedron:
+        eff_top = top_zs if (top_zs is not None and len(top_zs) == N) else [enclosure.height_mm] * N
+        eff_bot = bottom_zs if (bottom_zs is not None and len(bottom_zs) == N) else [0.0] * N
+        return _polyhedron_shell(flat_pts, eff_top, enclosure, outline=outline, bottom_zs=eff_bot)
+
+    if top_zs is not None and len(top_zs) == N:
+        if top_z_range >= _VARIABLE_HEIGHT_THRESHOLD:
+            eff_bot = bottom_zs if (bottom_zs is not None and len(bottom_zs) == N) else None
+            return _polyhedron_shell(flat_pts, top_zs, enclosure, outline=outline, bottom_zs=eff_bot)
         h_uniform = top_zs[0]
     else:
         h_uniform = enclosure.height_mm
 
+    # Determine uniform bottom z
+    if bottom_zs is not None and len(bottom_zs) == N:
+        b_uniform = bottom_zs[0]
+    else:
+        b_uniform = 0.0
+
     # ── Uniform path (original stacked linear_extrude) ────────────────────────
     h        = h_uniform
+    b        = b_uniform    # uniform bottom z (0.0 when flat)
     edge_top = enclosure.edge_top
     edge_bot = enclosure.edge_bottom
 
@@ -663,14 +803,22 @@ def shell_body_lines(
     # Full-size polygon string (used for straight wall and as base for insets)
     full_pts = ", ".join(f"[{x:.3f}, {y:.3f}]" for x, y in flat_pts)
 
+    wall_height = h - b   # total height from floor to ceiling
+
     # ── Simple case: no edge profiles ─────────────────────────────────────────
     if not has_top and not has_bot:
-        log.info("Shell body: plain extrude h=%.1f mm, %d verts", h, len(flat_pts))
-        return [
-            f"// Shell body — plain extrude, h={h:.1f} mm",
-            f"linear_extrude(height = {h:.3f})",
+        log.info("Shell body: plain extrude h=%.1f mm (floor=%.1f), %d verts",
+                 wall_height, b, len(flat_pts))
+        lines = [
+            f"// Shell body — plain extrude, h={wall_height:.1f} mm, floor={b:.1f} mm",
+        ]
+        if b > 0:
+            lines.append(f"translate([0, 0, {b:.3f}])")
+        lines += [
+            f"linear_extrude(height = {wall_height:.3f})",
             f"    polygon(points = [{full_pts}]);",
         ]
+        return lines
 
     # ── Stacked-layer helper ───────────────────────────────────────────────────
     def _zone_layers(
@@ -690,12 +838,12 @@ def shell_body_lines(
                 theta1 = (1.0 - frac1) * (math.pi / 2)
                 if profile_type == "fillet":
                     inset0 = size * (1.0 - math.cos(theta0))
-                    z0     = size * (1.0 - math.sin(theta0))
-                    z1     = size * (1.0 - math.sin(theta1))
+                    z0     = z_base + size * (1.0 - math.sin(theta0))
+                    z1     = z_base + size * (1.0 - math.sin(theta1))
                 else:  # chamfer
                     inset0 = size * (1.0 - frac0)
-                    z0     = size * frac0
-                    z1     = size * frac1
+                    z0     = z_base + size * frac0
+                    z1     = z_base + size * frac1
             else:  # top
                 theta0 = frac0 * (math.pi / 2)
                 theta1 = frac1 * (math.pi / 2)
@@ -724,12 +872,12 @@ def shell_body_lines(
         return out
 
     # ── Assemble zones ─────────────────────────────────────────────────────────
-    wall_z0 = bot_size if has_bot else 0.0
+    wall_z0 = b + (bot_size if has_bot else 0.0)
     wall_z1 = (h - top_size) if has_top else h
     wall_h  = wall_z1 - wall_z0
 
     lines: list[str] = [
-        f"// Shell body — stacked-layer extrude, h={h:.1f} mm",
+        f"// Shell body — stacked-layer extrude, h={h:.1f} mm, floor={b:.1f} mm",
         f"// bottom={bot_type}({bot_size:.1f} mm)  top={top_type}({top_size:.1f} mm)",
         f"// {len(flat_pts)} footprint vertices, {_CURVE_STEPS} steps per profile",
         "union() {",
@@ -737,7 +885,7 @@ def shell_body_lines(
 
     if has_bot:
         lines.append(f"    // Bottom {bot_type} ({bot_size:.1f} mm)")
-        lines += _zone_layers(0.0, bot_size, bot_type, "bottom")
+        lines += _zone_layers(b, bot_size, bot_type, "bottom")
 
     if wall_h > 0:
         lines += [

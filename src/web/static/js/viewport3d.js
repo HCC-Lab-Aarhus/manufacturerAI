@@ -181,14 +181,14 @@ export function buildSceneContent(data) {
     const components = data.components  ?? [];
     const traces     = data.traces      ?? [];
 
-    const { verts, corners, zTops } = normaliseOutline(outline);
+    const { verts, corners, zTops, zBottoms } = normaliseOutline(outline);
     if (verts.length < 3) return group;
 
     const defaultZ = enclosure.height_mm ?? 25;
     // Expand bezier corners into sub-points so walls, floor, lid, and
     // wireframe all follow the same smooth rounded profile as the 2D view.
-    const { pts: expanded, zs: expandedZ, cornerIndices } = expandOutlineVertices(
-        verts, corners, zTops, defaultZ);
+    const { pts: expanded, zs: expandedZ, zbots: expandedZBot, cornerIndices } = expandOutlineVertices(
+        verts, corners, zTops, defaultZ, zBottoms);
 
     // Build ui_placements lookup before shell so lid cutouts can use it.
     const uiPos = {};
@@ -201,11 +201,12 @@ export function buildSceneContent(data) {
     });
 
     // 1. Enclosure shell
-    const shellGroup = buildEnclosureShell(expanded, expandedZ, enclosure, heightGrid, components, uiPos, cornerIndices);
+    const bottomHeightGrid = data.bottom_height_grid ?? null;
+    const shellGroup = buildEnclosureShell(expanded, expandedZ, expandedZBot, enclosure, heightGrid, bottomHeightGrid, components, uiPos, cornerIndices);
     group.add(shellGroup);
 
     // 2. PCB floor
-    group.add(buildPCBFloor(expanded));
+    group.add(buildPCBFloor(expanded, expandedZBot, bottomHeightGrid));
 
     // 3. Placed components
     const FLOOR_Z = 2;  // mm above PCB floor
@@ -237,7 +238,8 @@ export function buildSceneContent(data) {
 
 // pts: expanded bezier polygon [[x,y],...]
 // expandedZ: per-point ceiling heights already interpolated from z_top vertices
-function buildEnclosureShell(pts, expandedZ, enclosure, heightGrid, compList = [], uiPosMap = {}, cornerIndices = []) {
+// expandedZBot: per-point floor heights already interpolated from z_bottom vertices
+function buildEnclosureShell(pts, expandedZ, expandedZBot, enclosure, heightGrid, bottomHeightGrid, compList = [], uiPosMap = {}, cornerIndices = []) {
     const group = new THREE.Group();
     const eTop  = enclosure.edge_top;
     const eBot  = enclosure.edge_bottom;
@@ -268,8 +270,9 @@ function buildEnclosureShell(pts, expandedZ, enclosure, heightGrid, compList = [
             const j  = (i + 1) % N;
             const x0 = pts[i][0], y0 = pts[i][1], z0 = expandedZ[i];
             const x1 = pts[j][0], y1 = pts[j][1], z1 = expandedZ[j];
-            const profL = _edgeProfile(z0, eBot, eTop);
-            const profR = _edgeProfile(z1, eBot, eTop);
+            const b0 = expandedZBot[i], b1 = expandedZBot[j];
+            const profL = _edgeProfile(z0, eBot, eTop, b0);
+            const profR = _edgeProfile(z1, eBot, eTop, b1);
             for (let k = 0; k < profL.length - 1; k++) {
                 const { h: hLb, off: oLb } = profL[k];
                 const { h: hLt, off: oLt } = profL[k + 1];
@@ -298,7 +301,7 @@ function buildEnclosureShell(pts, expandedZ, enclosure, heightGrid, compList = [
     // ── Lid surface (wireframe) with component cutout rings ─────────────────
     {
         const lidPts = pts.map((v, i) => {
-            const prof = _edgeProfile(expandedZ[i], eBot, eTop);
+            const prof = _edgeProfile(expandedZ[i], eBot, eTop, expandedZBot[i]);
             const { off } = prof[prof.length - 1];
             return insetPt(v[0], v[1], off);
         });
@@ -397,7 +400,7 @@ function buildEnclosureShell(pts, expandedZ, enclosure, heightGrid, compList = [
 
     // Bottom loop — inset by the floor-level offset of each vertex's profile
     const botLoopPts = pts.map((v, i) => {
-        const prof = _edgeProfile(expandedZ[i], eBot, eTop);
+        const prof = _edgeProfile(expandedZ[i], eBot, eTop, expandedZBot[i]);
         const [ix, iz] = insetPt(v[0], v[1], prof[0].off);
         return new THREE.Vector3(ix, prof[0].h, iz);
     });
@@ -411,7 +414,7 @@ function buildEnclosureShell(pts, expandedZ, enclosure, heightGrid, compList = [
     // Fallback: if no cornerIndices provided, every 7th point (old behaviour)
     pts.forEach((v, i) => {
         if (pillarSet.size > 0 ? !pillarSet.has(i) : (i % 7 !== 0)) return;
-        const prof = _edgeProfile(expandedZ[i], eBot, eTop);
+        const prof = _edgeProfile(expandedZ[i], eBot, eTop, expandedZBot[i]);
         const pillarPts = prof.map(({ h, off }) => {
             const [ix, iz] = insetPt(v[0], v[1], off);
             return new THREE.Vector3(ix, h, iz);
@@ -427,7 +430,7 @@ function buildEnclosureShell(pts, expandedZ, enclosure, heightGrid, compList = [
  * Build the wall cross-section profile for one wall column.
  *
  * Returns [{h, off}, ...] where:
- *   h   = height in mm (0 = floor, z_top = ceiling)
+ *   h   = height in mm (z_bottom = floor, z_top = ceiling)
  *   off = inward offset from the polygon boundary (0 = flush, >0 = inward)
  *
  * The fillet/chamfer curves the outer face INWARD near the lid/floor edge.
@@ -441,31 +444,31 @@ function buildEnclosureShell(pts, expandedZ, enclosure, heightGrid, compList = [
  *    │           │                │
  *    │           │                │
  *
- * @param {number} z_top  Ceiling height for this wall column (mm)
- * @param {object} eBot   {type:'none'|'chamfer'|'fillet', size_mm}
- * @param {object} eTop   {type:'none'|'chamfer'|'fillet', size_mm}
+ * @param {number} z_top    Ceiling height for this wall column (mm)
+ * @param {object} eBot     {type:'none'|'chamfer'|'fillet', size_mm}
+ * @param {object} eTop     {type:'none'|'chamfer'|'fillet', size_mm}
+ * @param {number} [z_bottom=0] Floor height for this wall column (mm)
  */
-function _edgeProfile(z_top, eBot, eTop) {
+function _edgeProfile(z_top, eBot, eTop, z_bottom = 0) {
     const botType = eBot?.type ?? 'none';
     const topType = eTop?.type ?? 'none';
-    const botS = Math.min(eBot?.size_mm ?? 3.0, z_top * 0.42);
-    const topS = Math.min(eTop?.size_mm ?? 3.0, z_top * 0.42);
+    const wallH = z_top - z_bottom;
+    const botS = Math.min(eBot?.size_mm ?? 3.0, wallH * 0.42);
+    const topS = Math.min(eTop?.size_mm ?? 3.0, wallH * 0.42);
     const ARC  = 8;
     const pts  = [];
 
     // ── Bottom edge ───────────────────────────────────────────────────────────
     if (botType === 'chamfer') {
-        pts.push({ h: 0,    off: botS });   // floor: corner cut inward
-        pts.push({ h: botS, off: 0   });   // above bevel: flush
+        pts.push({ h: z_bottom,        off: botS });   // floor: corner cut inward
+        pts.push({ h: z_bottom + botS, off: 0   });    // above bevel: flush
     } else if (botType === 'fillet') {
         for (let k = 0; k <= ARC; k++) {
             const a = (k / ARC) * (Math.PI / 2);
-            // Quarter-circle: center at (botS, botS), matches layers.py convention.
-            // (h=0, off=botS) → (h=botS, off=0), curving the same direction as topType fillet.
-            pts.push({ h: botS * (1 - Math.cos(a)), off: botS * (1 - Math.sin(a)) });
+            pts.push({ h: z_bottom + botS * (1 - Math.cos(a)), off: botS * (1 - Math.sin(a)) });
         }
     } else {
-        pts.push({ h: 0, off: 0 });
+        pts.push({ h: z_bottom, off: 0 });
     }
 
     // ── Top edge ──────────────────────────────────────────────────────────────
@@ -584,16 +587,35 @@ function buildFlatLid(pts, h) {
 
 // ── PCB floor ─────────────────────────────────────────────────────────────────
 
-function buildPCBFloor(pts) {
+function buildPCBFloor(pts, expandedZBot, bottomHeightGrid) {
     const shape = new THREE.Shape(pts.map(v => new THREE.Vector2(v[0], v[1])));
     const geo   = new THREE.ShapeGeometry(shape);
     // +π/2: maps design XY → Three.js XZ with normals pointing upward.
     geo.applyMatrix4(new THREE.Matrix4().makeRotationX(Math.PI / 2));   // flat in XZ
-    geo.applyMatrix4(new THREE.Matrix4().makeTranslation(0, 0.5, 0));   // 0.5 mm above 0
+
+    // Warp floor heights if we have variable z_bottom data
+    const hasVariableBot = expandedZBot && expandedZBot.some(z => z > 0.01);
+    if (hasVariableBot) {
+        const pos = geo.attributes.position;
+        for (let i = 0; i < pos.count; i++) {
+            const x = pos.getX(i);
+            const z = pos.getZ(i);   // design y after rotation
+            const h = _floorSampleHeight(x, z, pts, expandedZBot, bottomHeightGrid);
+            pos.setY(i, h + 0.5);    // +0.5 for the PCB offset
+        }
+        pos.needsUpdate = true;
+        geo.computeVertexNormals();
+    } else {
+        geo.applyMatrix4(new THREE.Matrix4().makeTranslation(0, 0.5, 0));   // 0.5 mm above 0
+    }
+
     const mesh = new THREE.Mesh(geo, MAT.pcb());
 
     // Perimeter outline so the board edge reads clearly (muted to not compete with enclosure).
-    const rimPts = pts.map(v => new THREE.Vector3(v[0], 0.6, v[1]));
+    const rimPts = pts.map((v, i) => {
+        const bh = (expandedZBot && expandedZBot[i]) || 0;
+        return new THREE.Vector3(v[0], bh + 0.6, v[1]);
+    });
     rimPts.push(rimPts[0].clone());
     const rimLine = new THREE.Line(
         new THREE.BufferGeometry().setFromPoints(rimPts),
@@ -604,6 +626,27 @@ function buildPCBFloor(pts) {
     group.add(mesh);
     group.add(rimLine);
     return group;
+}
+
+/**
+ * Sample the floor height at design position (x, y).
+ * Priority: bilinear grid → IDW from boundary pts → 0.
+ */
+function _floorSampleHeight(x, y, boundaryPts, boundaryZBot, bottomHeightGrid) {
+    const gridZ = bottomHeightGrid ? _gridSampleHeight(x, y, bottomHeightGrid) : null;
+    if (gridZ !== null) return gridZ;
+
+    // Fall back to IDW from boundary z_bottom values
+    if (!boundaryZBot) return 0;
+    let sumW = 0, sumWZ = 0;
+    for (let i = 0; i < boundaryPts.length; i++) {
+        const d2 = (x - boundaryPts[i][0]) ** 2 + (y - boundaryPts[i][1]) ** 2;
+        if (d2 < 1e-6) return boundaryZBot[i];
+        const w = 1.0 / d2;
+        sumW  += w;
+        sumWZ += w * boundaryZBot[i];
+    }
+    return sumW > 0 ? sumWZ / sumW : 0;
 }
 
 // ── Component boxes ───────────────────────────────────────────────────────────

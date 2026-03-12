@@ -88,6 +88,7 @@ registerHandler('design', {
 function _stripEnrichment(design) {
     const d = JSON.parse(JSON.stringify(design));
     delete d.height_grid;
+    delete d.bottom_height_grid;
     for (const c of (d.components || [])) {
         delete c.body;
         delete c.pins;

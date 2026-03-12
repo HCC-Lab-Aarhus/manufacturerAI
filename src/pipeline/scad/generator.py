@@ -19,7 +19,7 @@ from src.catalog.loader import load_catalog
 from src.catalog.models import Component
 from src.pipeline.config import CAVITY_START_MM, CEILING_MM
 from src.pipeline.design.parsing import parse_design
-from src.pipeline.design.height_field import blended_height, sample_height_grid
+from src.pipeline.design.height_field import blended_height, blended_bottom_height, sample_height_grid
 from src.pipeline.placer.serialization import parse_placement
 from src.pipeline.router.models import RoutingResult
 from src.pipeline.router.serialization import parse_routing
@@ -105,8 +105,21 @@ def run_scad_step(
         z_min, z_max, variable_height,
     )
 
-    # ── 4. Compute shell body layers ──────────────────────────────
-    body_lines = shell_body_lines(outline, enclosure, flat_pts, top_zs=top_zs)
+    # ── 3b. Compute per-vertex floor heights ────────────────────
+    bottom_zs = [
+        blended_bottom_height(x, y, outline, enclosure)
+        for x, y in flat_pts
+    ]
+    bz_min = min(bottom_zs)
+    bz_max = max(bottom_zs)
+    variable_bottom = (bz_max - bz_min) >= 0.1 or bz_max >= 0.1
+    log.info(
+        "Floor heights: min=%.2f  max=%.2f mm  variable=%s",
+        bz_min, bz_max, variable_bottom,
+    )
+
+    # ── 4. Compute shell body layers ──────────────────────────
+    body_lines = shell_body_lines(outline, enclosure, flat_pts, top_zs=top_zs, bottom_zs=bottom_zs)
     log.info("Shell body: %d SCAD lines", len(body_lines))
 
     # ── 5. Resolve per-component fragments ────────────────────────
