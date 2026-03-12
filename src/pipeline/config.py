@@ -20,18 +20,16 @@ log = logging.getLogger(__name__)
 class BitmapConfig:
     """Resolution of the conductive-ink trace bitmap.
 
-    The bitmap is a text grid produced by the router.  Column count is
-    fixed; row count is derived from the printer's bed aspect ratio so
-    that bitmap cells are always square.
+    The bitmap maps 1:1 onto the inkjet print head at a fixed
+    resolution of 1536 × 1383 pixels, spanning the full build plate.
     """
 
     cols: int = 1536
+    rows: int = 1383
 
     def rows_for_bed(self, bed_width: float, bed_depth: float) -> int:
-        """Return the number of rows that gives square cells."""
-        if bed_width <= 0:
-            return self.cols
-        return max(1, round(self.cols * bed_depth / bed_width))
+        """Return the fixed row count (kept for API compatibility)."""
+        return self.rows
 
 
 BITMAP_CONFIG = BitmapConfig()
