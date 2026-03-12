@@ -204,6 +204,43 @@ class RoutingGrid:
         if self.in_bounds(gx, gy):
             self._protected.add((gx, gy))
 
+    def block_raised_floor(self, outline, enclosure) -> int:
+        """Permanently block cells where the floor is raised above the trace zone.
+
+        Any cell whose ``blended_bottom_height >= threshold`` is impassable
+        because the conductive-ink trace layer (at z = FLOOR_MM) would sit
+        inside the raised shell material.
+
+        Parameters
+        ----------
+        outline, enclosure
+            Design-spec objects passed through to ``blended_bottom_height``.
+
+        Returns
+        -------
+        int
+            Number of additionally blocked cells.
+        """
+        from src.pipeline.design.height_field import blended_bottom_height
+        from src.pipeline.config import FLOOR_MM
+
+        threshold = FLOOR_MM - 0.1   # small tolerance
+        count = 0
+        res = self.resolution
+
+        for gy in range(self.height):
+            wy = self.origin_y + (gy + 0.5) * res
+            for gx in range(self.width):
+                idx = gy * self.width + gx
+                if self._cells[idx] == PERMANENTLY_BLOCKED:
+                    continue   # already blocked (outside outline)
+                wx = self.origin_x + (gx + 0.5) * res
+                z = blended_bottom_height(wx, wy, outline, enclosure)
+                if z >= threshold:
+                    self._cells[idx] = PERMANENTLY_BLOCKED
+                    count += 1
+        return count
+
     def block_trace(
         self,
         path: list[tuple[int, int]],

@@ -101,6 +101,12 @@ def route_traces(
         trace_width_mm=config.trace_width_mm,
         trace_clearance_mm=config.trace_clearance_mm,
     )
+
+    # Block cells in raised-floor zones (z_bottom >= FLOOR_MM)
+    raised_blocked = grid.block_raised_floor(placement.outline, placement.enclosure)
+    if raised_blocked:
+        log.info("Router: blocked %d cells in raised-floor zone", raised_blocked)
+
     pad_radius = _compute_pad_radius(config)
     _block_components(grid, placement, catalog_map, pad_radius)
 

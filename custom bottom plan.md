@@ -128,3 +128,70 @@ BottomSurface:   (new dataclass, mirrors TopSurface)
 7. Update existing tests, add new tests for variable-bottom polyhedron
 8. Update web frontend 3D viewport to render bottom surface
 9. Update design parsing to read `z_bottom` / `bottom_surface` from JSON
+
+---
+
+## 10. PCB Outline — Indicating the Flat Trace Region
+
+### Problem
+
+When `z_bottom` raises parts of the floor, the silver ink trace layer (at z=2mm) only exists where the floor is still at ground level. The raised areas have no conductive surface — they're purely structural shell. But there's nothing visually showing the user *where* traces can actually go. The outline polygon still looks like one big PCB, even though a chunk of it is lifted and unusable for electronics.
+
+Without a visible PCB boundary the user (and the placer/router) can easily place components or route traces into the raised zone, which would fail physically.
+
+### Approach: Derive the "printable PCB contour" automatically
+
+The PCB contour is the sub-region of the outline where the floor is flat enough for ink deposition. Rather than asking the user to manually draw a second polygon, we derive it:
+
+1. **Threshold**: use the existing constant `FLOOR_MM` (2.0 mm) from `src/pipeline/config.py`. The trace layer sits at exactly z = `FLOOR_MM` on the ironed floor surface, and traces extend up to `FLOOR_MM + TRACE_HEIGHT_MM` (2.4 mm). Any point where `blended_bottom_height(x, y) >= FLOOR_MM` has no usable flat floor beneath the trace zone — the raised shell has pushed past where ink would be deposited. So the condition for a valid PCB cell is:
+
+   ```
+   blended_bottom_height(x, y) < FLOOR_MM   →  flat floor, traces OK
+   blended_bottom_height(x, y) >= FLOOR_MM  →  raised zone, no traces
+   ```
+
+   In practice a small tolerance (e.g., 0.1 mm) avoids edge noise: `z_bottom < FLOOR_MM - 0.1`.
+
+2. **Contour extraction**: Walk the outline edges and interpolate where `z_bottom` crosses the threshold. Between a vertex with `z_bottom = 0` and a vertex with `z_bottom = 4`, there's a crossing point at roughly 12.5% along the edge. These crossing points, connected together, form the **PCB contour** — an inner polygon that clips the outline to just the flat region.
+
+3. **Grid-based alternative** (simpler, more robust for dome/ridge bumps): Sample `blended_bottom_height` on the same grid used for the height field. Mark cells as "flat" or "raised". Extract the boundary of the flat region using marching squares or a simple flood-fill contour. This handles `bottom_surface` dome/ridge shapes that don't follow vertex edges.
+
+### Where to show it
+
+- **2D design viewport (SVG)**: Draw the PCB contour as a dashed green line inside the device outline. Components outside this line are flagged. This is the most important view since the user places components here.
+
+- **3D viewport**: Render the PCB floor mesh (green) only within the flat contour. The raised area gets a different material (e.g., same grey as the walls) so it's visually obvious that it's shell, not PCB.
+
+- **Placement viewport**: The placer already uses an "effective outline" shrunk by `edge_bottom` size. The PCB contour would replace this as the placement boundary — components must fit inside the contour, not just inside the raw outline.
+
+### Impact on placer and router
+
+- **Placer**: The keepout/clearance checks currently use the outline polygon (possibly shrunk by edge_bottom fillet). With a raised bottom, the valid placement region is the PCB contour instead. The placer should receive the contour and use it as its boundary polygon for collision/fit checks. Components placed in the raised zone would fail placement.
+
+- **Router**: The routing grid is bounded by the outline. Cells that fall in the raised zone should be marked as blocked (like walls) so traces can't route through them. This is a simple mask: if `blended_bottom_height(cell_x, cell_y) >= FLOOR_MM`, mark the cell impassable.
+
+- **Feasibility check**: The `check_placement_feasibility` endpoint should account for the reduced PCB area. A design with a large raised chin and a big battery might report `[FAIL]` because the flat region is too small.
+
+### Data flow
+
+```
+Server (_enrich_design_3d):
+  1. Compute bottom_height_grid (already done)
+  2. Derive pcb_contour: list of [x,y] polygon points where floor ≤ threshold
+  3. Attach pcb_contour to the data dict sent to frontend
+
+Frontend:
+  - 2D views: draw pcb_contour as dashed overlay
+  - 3D view: clip PCB floor mesh to pcb_contour, render raised area as shell
+
+Placer / Router:
+  - Accept pcb_contour as the effective placement/routing boundary
+  - Block grid cells in raised zones
+```
+
+### Design agent awareness
+
+The agent prompt already says components and traces must be in the flat-floor region. But concretely, the agent should:
+- Mentally note which vertices have `z_bottom > 0` and avoid placing UI components near them.
+- The `check_placement_feasibility` call would catch mistakes automatically once the placer uses the PCB contour.
+- No new JSON fields for the agent to set — the contour is derived, not authored.

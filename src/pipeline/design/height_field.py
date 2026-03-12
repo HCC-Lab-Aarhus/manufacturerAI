@@ -22,6 +22,10 @@ sample_height_grid(outline, enclosure, resolution_mm) -> dict
 surface_normal_at(x, y, grid) -> tuple[float, float, float]
     Returns the outward surface normal (nx, ny, nz) at (x, y) using
     central differences on a pre-sampled grid dict.
+
+pcb_contour_from_bottom_grid(bottom_grid, outline, ...) -> list | None
+    Derives the flat-trace PCB contour polygon from a bottom height grid.
+    Returns [x, y] vertices of the flat region, or None if entirely flat.
 """
 
 from __future__ import annotations
@@ -549,3 +553,123 @@ def _point_in_polygon(x: float, y: float, verts: list[tuple[float, float]]) -> b
             inside = not inside
         j = i
     return inside
+
+
+# ── PCB contour derivation ────────────────────────────────────────
+
+
+def pcb_contour_from_bottom_grid(
+    bottom_grid: dict,
+    outline: "Outline",
+    threshold_mm: float = 2.0,
+    tolerance_mm: float = 0.1,
+) -> list[list[float]] | None:
+    """Derive the PCB flat-trace contour from a pre-sampled bottom height grid.
+
+    The PCB contour is the sub-region of the outline where
+    ``blended_bottom_height < threshold_mm - tolerance_mm``, i.e. the floor is
+    flat enough for conductive-ink deposition.
+
+    Parameters
+    ----------
+    bottom_grid : dict
+        The grid dict produced by ``sample_bottom_height_grid``.
+    outline : Outline
+        The design outline (used for bezier-expanded clipping polygon).
+    threshold_mm : float
+        Z-height at or above which the floor is considered raised
+        (typically ``FLOOR_MM`` from config).
+    tolerance_mm : float
+        Small margin subtracted from *threshold_mm* to avoid edge noise.
+
+    Returns
+    -------
+    list[list[float]] | None
+        A list of ``[x, y]`` polygon vertices defining the flat trace region,
+        or ``None`` when the entire interior is flat (no contour needed).
+        An empty list ``[]`` means no flat region exists at all.
+    """
+    from shapely.geometry import Polygon, box as shapely_box
+    from shapely.ops import unary_union
+
+    origin_x: float = bottom_grid["origin_x"]
+    origin_y: float = bottom_grid["origin_y"]
+    step: float = bottom_grid["step_mm"]
+    cols: int = bottom_grid["cols"]
+    rows: int = bottom_grid["rows"]
+    grid_data: list[list[float | None]] = bottom_grid["grid"]
+
+    half = step / 2.0
+    eff_threshold = threshold_mm - tolerance_mm
+
+    all_flat = True
+    any_flat = False
+
+    # Build horizontal strips of consecutive flat cells for efficient union.
+    strips: list = []
+    for r in range(rows):
+        y = origin_y + r * step
+        run_start: int | None = None
+        for c in range(cols):
+            z = grid_data[r][c]
+            if z is None:
+                # Outside outline — close any open run
+                if run_start is not None:
+                    x0 = origin_x + run_start * step - half
+                    x1 = origin_x + (c - 1) * step + half
+                    strips.append(shapely_box(x0, y - half, x1, y + half))
+                    run_start = None
+                continue
+
+            is_flat = z < eff_threshold
+            if not is_flat:
+                all_flat = False
+
+            if is_flat:
+                any_flat = True
+                if run_start is None:
+                    run_start = c
+            else:
+                if run_start is not None:
+                    x0 = origin_x + run_start * step - half
+                    x1 = origin_x + (c - 1) * step + half
+                    strips.append(shapely_box(x0, y - half, x1, y + half))
+                    run_start = None
+
+        # Close any open run at end of row
+        if run_start is not None:
+            x0 = origin_x + run_start * step - half
+            x1 = origin_x + (cols - 1) * step + half
+            strips.append(shapely_box(x0, y - half, x1, y + half))
+
+    if all_flat:
+        return None  # entire floor is flat — no contour overlay needed
+    if not any_flat or not strips:
+        return []    # no flat region at all
+
+    # Union strips, clip to outline polygon, simplify staircase edges
+    flat_region = unary_union(strips)
+
+    expanded_verts = _bezier_expand_outline(outline)
+    raw_verts = outline.vertices
+    verts = expanded_verts if expanded_verts else raw_verts
+    outline_poly = Polygon(verts)
+    if not outline_poly.is_valid:
+        from shapely import make_valid
+        outline_poly = make_valid(outline_poly)
+
+    flat_region = flat_region.intersection(outline_poly)
+    flat_region = flat_region.simplify(step * 0.4)
+
+    # Extract the largest polygon if result is a MultiPolygon
+    if flat_region.geom_type == "MultiPolygon":
+        flat_region = max(flat_region.geoms, key=lambda g: g.area)
+
+    if flat_region.geom_type != "Polygon" or flat_region.is_empty:
+        return []
+
+    coords = list(flat_region.exterior.coords)
+    # Drop the closing duplicate (Shapely repeats the first point)
+    if len(coords) > 1 and coords[0] == coords[-1]:
+        coords = coords[:-1]
+    return [[round(x, 2), round(y, 2)] for x, y in coords]

@@ -77,6 +77,7 @@ def _scan_component(
     poly_bounds: tuple[float, float, float, float],
     ui_obstacles: list[_UIObstacle],
     edge_clr: float,
+    raised_floor_fn=None,
 ) -> ComponentFeasibility:
     body_w = cat.body.width_mm or cat.body.diameter_mm or 1.0
     body_h = cat.body.length_mm or cat.body.diameter_mm or 1.0
@@ -111,6 +112,22 @@ def _scan_component(
                     reasons["[outline]"] = reasons.get("[outline]", 0) + 1
                     cy += FAST_GRID_STEP
                     continue
+
+                # Hard constraint 1b: reject positions in the raised-floor zone
+                if raised_floor_fn is not None:
+                    _in_raised = False
+                    for _px, _py in (
+                        (cx, cy),
+                        (cx - ehw, cy - ehh), (cx + ehw, cy - ehh),
+                        (cx - ehw, cy + ehh), (cx + ehw, cy + ehh),
+                    ):
+                        if raised_floor_fn(_px, _py):
+                            _in_raised = True
+                            break
+                    if _in_raised:
+                        reasons["[raised_floor]"] = reasons.get("[raised_floor]", 0) + 1
+                        cy += FAST_GRID_STEP
+                        continue
 
                 # Hard constraint 2: clearance from UI obstacles
                 blocked_by: str | None = None
@@ -200,6 +217,29 @@ def run_feasibility_check(
     prep_poly = shapely_prep(poly)
     xmin, ymin, xmax, ymax = poly.bounds
 
+    # Raised-floor detection: construct a callable that returns True if
+    # a position falls in the raised zone (z_bottom >= FLOOR_MM).
+    _raised_floor_fn = None
+    if enclosure_raw:
+        try:
+            from src.pipeline.design.parsing import _parse_outline, _parse_enclosure
+            from src.pipeline.design.height_field import blended_bottom_height
+            from src.pipeline.config import FLOOR_MM
+            _out_obj = _parse_outline(outline_raw)
+            _enc_obj = _parse_enclosure(enclosure_raw)
+            _has_raised = any(
+                getattr(p, 'z_bottom', None) for p in _out_obj.points
+            ) or _enc_obj.bottom_surface is not None
+            if _has_raised:
+                _thresh = FLOOR_MM - 0.1
+
+                def _raised_floor_fn(x, y):
+                    return blended_bottom_height(
+                        x, y, _out_obj, _enc_obj,
+                    ) >= _thresh
+        except Exception:
+            pass
+
     # UI placement position lookup
     ui_pos: dict[str, tuple[float, float]] = {
         p["instance_id"]: (float(p["x_mm"]), float(p["y_mm"]))
@@ -257,6 +297,7 @@ def run_feasibility_check(
                 prep_poly, (xmin, ymin, xmax, ymax),
                 ui_obstacles,
                 edge_clr=effective_edge_clr,
+                raised_floor_fn=_raised_floor_fn,
             )
         )
 

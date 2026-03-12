@@ -593,23 +593,42 @@ function buildPCBFloor(pts, expandedZBot, bottomHeightGrid) {
     // +π/2: maps design XY → Three.js XZ with normals pointing upward.
     geo.applyMatrix4(new THREE.Matrix4().makeRotationX(Math.PI / 2));   // flat in XZ
 
+    const FLOOR_THRESHOLD = 1.9;  // FLOOR_MM (2.0) - tolerance (0.1)
+    const PCB_OFFSET = 0.5;
+
     // Warp floor heights if we have variable z_bottom data
     const hasVariableBot = expandedZBot && expandedZBot.some(z => z > 0.01);
+    let useVertexColors = false;
+
     if (hasVariableBot) {
         const pos = geo.attributes.position;
+        const colors = new Float32Array(pos.count * 3);
+        const greenCol = new THREE.Color(0x1c3824);   // PCB green
+        const greyCol  = new THREE.Color(0x4a5868);   // raised-shell grey
+
         for (let i = 0; i < pos.count; i++) {
             const x = pos.getX(i);
             const z = pos.getZ(i);   // design y after rotation
             const h = _floorSampleHeight(x, z, pts, expandedZBot, bottomHeightGrid);
-            pos.setY(i, h + 0.5);    // +0.5 for the PCB offset
+            pos.setY(i, h + PCB_OFFSET);
+
+            const col = h < FLOOR_THRESHOLD ? greenCol : greyCol;
+            colors[i * 3]     = col.r;
+            colors[i * 3 + 1] = col.g;
+            colors[i * 3 + 2] = col.b;
         }
         pos.needsUpdate = true;
+        geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
         geo.computeVertexNormals();
+        useVertexColors = true;
     } else {
-        geo.applyMatrix4(new THREE.Matrix4().makeTranslation(0, 0.5, 0));   // 0.5 mm above 0
+        geo.applyMatrix4(new THREE.Matrix4().makeTranslation(0, PCB_OFFSET, 0));
     }
 
-    const mesh = new THREE.Mesh(geo, MAT.pcb());
+    const mat = useVertexColors
+        ? new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 10, side: THREE.DoubleSide })
+        : MAT.pcb();
+    const mesh = new THREE.Mesh(geo, mat);
 
     // Perimeter outline so the board edge reads clearly (muted to not compete with enclosure).
     const rimPts = pts.map((v, i) => {

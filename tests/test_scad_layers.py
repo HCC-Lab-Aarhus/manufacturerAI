@@ -826,5 +826,94 @@ class TestVariableBottomSurface(unittest.TestCase):
         self.assertEqual(lines_none, lines_zero)
 
 
+class TestPCBContour(unittest.TestCase):
+    """Tests for pcb_contour_from_bottom_grid."""
+
+    def test_all_flat_returns_none(self):
+        """When all grid cells are below threshold, returns None."""
+        from src.pipeline.design.height_field import (
+            pcb_contour_from_bottom_grid, sample_bottom_height_grid,
+        )
+
+        outline = Outline(points=[
+            OutlineVertex(0, 0, z_bottom=0.5),
+            OutlineVertex(40, 0, z_bottom=0.5),
+            OutlineVertex(40, 40, z_bottom=0.5),
+            OutlineVertex(0, 40, z_bottom=0.5),
+        ])
+        enc = Enclosure(height_mm=25)
+        grid = sample_bottom_height_grid(outline, enc, resolution_mm=2.0)
+        self.assertIsNotNone(grid)
+        result = pcb_contour_from_bottom_grid(grid, outline, threshold_mm=2.0)
+        # z_bottom=0.5 everywhere — well below threshold, so no contour needed
+        self.assertIsNone(result)
+
+    def test_partial_raised_returns_polygon(self):
+        """When some vertices exceed the threshold, returns a non-empty contour."""
+        from src.pipeline.design.height_field import (
+            pcb_contour_from_bottom_grid, sample_bottom_height_grid,
+        )
+
+        outline = Outline(points=[
+            OutlineVertex(0, 0),
+            OutlineVertex(60, 0),
+            OutlineVertex(60, 60),
+            OutlineVertex(0, 60, z_bottom=10),  # raised corner
+        ])
+        enc = Enclosure(height_mm=25)
+        grid = sample_bottom_height_grid(outline, enc, resolution_mm=2.0)
+        self.assertIsNotNone(grid)
+        result = pcb_contour_from_bottom_grid(grid, outline, threshold_mm=2.0)
+        # Should return a polygon (list of [x, y] pairs)
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result, list)
+        self.assertGreater(len(result), 2)
+        # Each element is [x, y]
+        for pt in result:
+            self.assertEqual(len(pt), 2)
+
+    def test_all_raised_returns_empty(self):
+        """When the entire floor exceeds the threshold, returns []."""
+        from src.pipeline.design.height_field import (
+            pcb_contour_from_bottom_grid, sample_bottom_height_grid,
+        )
+
+        outline = Outline(points=[
+            OutlineVertex(0, 0, z_bottom=10),
+            OutlineVertex(40, 0, z_bottom=10),
+            OutlineVertex(40, 40, z_bottom=10),
+            OutlineVertex(0, 40, z_bottom=10),
+        ])
+        enc = Enclosure(height_mm=25)
+        grid = sample_bottom_height_grid(outline, enc, resolution_mm=2.0)
+        self.assertIsNotNone(grid)
+        result = pcb_contour_from_bottom_grid(grid, outline, threshold_mm=2.0)
+        # All raised — no flat region
+        self.assertEqual(result, [])
+
+    def test_contour_area_smaller_than_outline(self):
+        """The contour polygon area should be smaller than the full outline."""
+        from shapely.geometry import Polygon as ShapelyPolygon
+        from src.pipeline.design.height_field import (
+            pcb_contour_from_bottom_grid, sample_bottom_height_grid,
+        )
+
+        outline = Outline(points=[
+            OutlineVertex(0, 0),
+            OutlineVertex(60, 0),
+            OutlineVertex(60, 60),
+            OutlineVertex(0, 60, z_bottom=10),
+        ])
+        enc = Enclosure(height_mm=25)
+        grid = sample_bottom_height_grid(outline, enc, resolution_mm=1.0)
+        contour = pcb_contour_from_bottom_grid(grid, outline, threshold_mm=2.0)
+        self.assertIsNotNone(contour)
+        self.assertGreater(len(contour), 2)
+
+        contour_poly = ShapelyPolygon(contour)
+        outline_poly = ShapelyPolygon(outline.vertices)
+        self.assertLess(contour_poly.area, outline_poly.area)
+
+
 if __name__ == "__main__":
     unittest.main()

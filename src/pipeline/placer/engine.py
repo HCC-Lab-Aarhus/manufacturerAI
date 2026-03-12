@@ -138,6 +138,18 @@ def place_components(
         raise PlacementError("_outline", "_outline",
                              "Outline polygon is invalid or has zero area")
 
+    # ── Raised-floor detection ─────────────────────────────────────
+    # If any vertex has z_bottom that would push the floor at or above the
+    # trace-layer height (FLOOR_MM), components cannot be placed there.
+    _has_raised_bottom = any(
+        getattr(p, 'z_bottom', None) for p in design.outline.points
+    ) or design.enclosure.bottom_surface is not None
+    _floor_threshold: float = 0.0
+    if _has_raised_bottom:
+        from src.pipeline.design.height_field import blended_bottom_height
+        from src.pipeline.config import FLOOR_MM
+        _floor_threshold = FLOOR_MM - 0.1
+
     # A bottom fillet or chamfer curves the wall inward at floor level by
     # exactly size_mm.  Components placed within that zone would sit inside
     # the curved wall material, so we add it to every pass's edge clearance.
@@ -260,6 +272,22 @@ def place_components(
                         shapely_box(cx - ihw, cy - ihh, cx + ihw, cy + ihh)
                     ):
                         continue
+
+                    # Reject positions in the raised-floor zone
+                    if _has_raised_bottom:
+                        _raised = False
+                        for _px, _py in (
+                            (cx, cy),
+                            (cx - ehw, cy - ehh), (cx + ehw, cy - ehh),
+                            (cx - ehw, cy + ehh), (cx + ehw, cy + ehh),
+                        ):
+                            if blended_bottom_height(
+                                _px, _py, design.outline, design.enclosure,
+                            ) >= _floor_threshold:
+                                _raised = True
+                                break
+                        if _raised:
+                            continue
 
                     overlap = False
                     for p in placed:

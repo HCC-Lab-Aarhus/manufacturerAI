@@ -375,7 +375,9 @@ def _enrich_design_3d(data: dict) -> None:
     from src.pipeline.design.height_field import (
         sample_height_grid, sample_bottom_height_grid,
         surface_normal_at, blended_height,
+        pcb_contour_from_bottom_grid,
     )
+    from src.pipeline.config import FLOOR_MM
 
     outline_data = data.get("outline", [])
     enclosure_data = data.get("enclosure", {})
@@ -396,6 +398,13 @@ def _enrich_design_3d(data: dict) -> None:
     bottom_grid = sample_bottom_height_grid(outline, enclosure, resolution_mm=1.0)
     if bottom_grid is not None:
         data["bottom_height_grid"] = bottom_grid
+
+        # Derive the PCB flat-trace contour from the bottom grid
+        contour = pcb_contour_from_bottom_grid(
+            bottom_grid, outline, threshold_mm=FLOOR_MM,
+        )
+        if contour is not None:
+            data["pcb_contour"] = contour
 
     # Add surface_normal and z_at_position to each UI placement
     for up in data.get("ui_placements", []):
