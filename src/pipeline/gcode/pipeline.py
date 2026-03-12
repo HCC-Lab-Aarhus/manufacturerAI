@@ -52,6 +52,7 @@ def run_gcode_pipeline(
     slicer_profile: Path | None = None,
     printer: str | None = None,
     filament: str | None = None,
+    silverink_only: bool = False,
 ) -> GcodePipelineResult:
     """Run the full G-code pipeline: slice → inject pauses → output.
 
@@ -157,6 +158,7 @@ def run_gcode_pipeline(
         component_z=pauses.component_insert_z,
         trace_segments=trace_segs,
         bed_offset=bed_offset,
+        silverink_only=silverink_only,
     )
     stages.extend(pp_result.stages)
     stages.append(f"Staged G-code written: {staged_gcode}")

@@ -560,6 +560,7 @@ def postprocess_gcode(
     component_z: float,
     trace_segments: list[tuple[float, float, float, float]] | None = None,
     bed_offset: tuple[float, float] | None = None,
+    silverink_only: bool = False,
 ) -> PostProcessResult:
     """Read slicer G-code, inject pauses and ink, write result.
 
@@ -619,6 +620,12 @@ def postprocess_gcode(
     # next layer change) so we can filter ironing in that range.
     in_ink_layer = False
 
+    # silverink_only: skip all layers before the ink layer, keeping
+    # only the startup preamble (before the first ;LAYER_CHANGE) and
+    # the ink layer itself (at ink_z).
+    past_preamble = False       # True once we've seen the first ;LAYER_CHANGE
+    at_ink_layer = False        # True once we reach the ink layer (Z ≈ ink_z)
+
     stages = []
 
     track_x, track_y = 0.0, 0.0
@@ -626,6 +633,23 @@ def postprocess_gcode(
     i = 0
     while i < len(raw_lines):
         line = raw_lines[i]
+
+        # Detect when the preamble ends (first ;LAYER_CHANGE)
+        if silverink_only and not past_preamble and line.strip() == ';LAYER_CHANGE':
+            past_preamble = True
+
+        # In silverink_only mode, detect when we arrive at the ink layer
+        if silverink_only and past_preamble and not at_ink_layer:
+            z_peek = _Z_RE.match(line)
+            if z_peek:
+                z_peek_val = float(z_peek.group(1))
+                if abs(z_peek_val - ink_z) < 0.01:
+                    at_ink_layer = True
+
+        # silverink_only: skip lines between preamble and ink layer
+        if silverink_only and past_preamble and not at_ink_layer:
+            i += 1
+            continue
 
         # Track nozzle position from G0/G1 moves
         m_pos = _MOVE_RE.match(line)
@@ -678,6 +702,30 @@ def postprocess_gcode(
 
                 stages.append(f"Ink pause at Z={ink_z:.2f}")
                 stages.append(f"Ink layer: {ink_layer_num}")
+
+                if silverink_only:
+                    stages.append("Silver ink debug mode — stopping after ink pause")
+                    z_offset = ink_z - 0.2
+                    _Z_PARAM = re.compile(r'(?<=Z)([\d.]+)')
+                    shifted_out = []
+                    for ol in out:
+                        s_ol = ol.strip()
+                        if s_ol.startswith(';Z:'):
+                            old_z = float(s_ol[3:])
+                            shifted_out.append(f";Z:{max(old_z - z_offset, 0.0):.3f}")
+                        elif re.match(r'^G[01]\s', s_ol) and 'Z' in ol:
+                            shifted_out.append(_Z_PARAM.sub(
+                                lambda m: f"{max(float(m.group(1)) - z_offset, 0.0):.3f}", ol
+                            ))
+                        else:
+                            shifted_out.append(ol)
+                    out = shifted_out
+                    stages.append(f"Z-offset: shifted down by {z_offset:.2f} mm")
+                    for j in range(len(raw_lines) - 1, -1, -1):
+                        if raw_lines[j].strip() == "; prusaslicer_config = begin":
+                            out.extend(raw_lines[j:])
+                            break
+                    break
 
             # ── Component insertion pause (first Z >= component_z) ──
             if not component_injected and z_val >= component_z - 0.001:
