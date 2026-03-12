@@ -558,7 +558,6 @@ def postprocess_gcode(
     output_path: Path | None,
     ink_z: float,
     component_z: float,
-    ink_gcode_lines: list[str] | None = None,
     trace_segments: list[tuple[float, float, float, float]] | None = None,
     bed_offset: tuple[float, float] | None = None,
 ) -> PostProcessResult:
@@ -575,9 +574,6 @@ def postprocess_gcode(
         Z-height for the ink layer (top of floor).
     component_z : float
         Z-height for component insertion (top of cavity).
-    ink_gcode_lines : list[str] or None
-        Pre-generated ink deposition G-code (from ``ink_traces``).
-        If *None*, only a pause is inserted (manual ink application).
     trace_segments : list or None
         Trace path segments as ``(x1, y1, x2, y2)`` in mm.  Used to
         filter ironing moves over trace channels.
@@ -606,10 +602,6 @@ def postprocess_gcode(
     if trace_segs and (offset_x or offset_y):
         trace_segs = _offset_segments(trace_segs, offset_x, offset_y)
         log.info("Trace segments shifted by (%.3f, %.3f) to match bed", offset_x, offset_y)
-
-    if ink_gcode_lines and (offset_x or offset_y):
-        ink_gcode_lines = _offset_ink_gcode(ink_gcode_lines, offset_x, offset_y)
-        log.info("Ink G-code shifted by (%.3f, %.3f) to match bed", offset_x, offset_y)
 
     out: list[str] = []
     total_layers = 0
@@ -684,23 +676,7 @@ def postprocess_gcode(
                     display_msg="connect silver ink",
                 ))
 
-                # Insert ink G-code if provided
-                if ink_gcode_lines:
-                    out.extend(ink_gcode_lines)
-                    stages.append(f"Ink G-code injected at Z={ink_z:.2f} ({len(ink_gcode_lines)} lines)")
-                    # Second pause after ink to let it dry / cure
-                    out.extend(_ink_pause_block(
-                        "INK CURING",
-                        ink_z,
-                        [
-                            "Conductive ink has been deposited.",
-                            "Allow ink to dry / cure if needed.",
-                            "Press the knob to resume printing.",
-                        ],
-                    ))
-                else:
-                    stages.append(f"Manual ink pause at Z={ink_z:.2f}")
-
+                stages.append(f"Ink pause at Z={ink_z:.2f}")
                 stages.append(f"Ink layer: {ink_layer_num}")
 
             # ── Component insertion pause (first Z >= component_z) ──

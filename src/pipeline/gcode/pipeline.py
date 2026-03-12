@@ -20,7 +20,7 @@ from pathlib import Path
 from src.pipeline.config import get_printer
 from src.pipeline.gcode.slicer import slice_stl
 from src.pipeline.gcode.pause_points import compute_pause_points, PausePoints
-from src.pipeline.gcode.ink_traces import generate_ink_gcode, extract_trace_segments
+from src.pipeline.gcode.ink_traces import extract_trace_segments
 from src.pipeline.gcode.postprocessor import postprocess_gcode, PostProcessResult, compute_bed_offset
 from src.pipeline.gcode.bgcode import gcode_to_bgcode
 from src.pipeline.gcode.filaments import get_filament, write_filament_overrides
@@ -135,15 +135,7 @@ def run_gcode_pipeline(
         )
     stages.append(f"Slicing succeeded: {gcode_path}")
 
-    # ── 3. Generate ink G-code ────────────────────────────────────
-    log.info("Generating ink deposition G-code...")
-    ink_lines = generate_ink_gcode(
-        routing_result=routing_result,
-        ink_z=pauses.ink_layer_z,
-    )
-    stages.append(f"Ink G-code: {len(ink_lines)} lines for {len(routing_result.get('traces', []))} traces")
-
-    # ── 3b. Extract trace segments for ironing filter ──
+    # ── 3. Extract trace segments for ironing filter ──
     trace_segs = extract_trace_segments(
         routing_result=routing_result,
     )
@@ -163,7 +155,6 @@ def run_gcode_pipeline(
         output_path=staged_gcode,
         ink_z=pauses.ink_layer_z,
         component_z=pauses.component_insert_z,
-        ink_gcode_lines=ink_lines,
         trace_segments=trace_segs,
         bed_offset=bed_offset,
     )
