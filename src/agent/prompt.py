@@ -279,109 +279,116 @@ Before writing any shape JSON, produce a blueprint that plans the geometry. This
 - Verify the proportions make sense — widest vs narrowest sections
 - Confirm every surface you need for component placement (flat decks, side panels) has an explicit operation creating it
 
-Example blueprint:
+Example blueprint format:
 ```
 Primitives (union):
-1. Body ellipsoid: radii [18, 60, 16] at [0,0,0] → x: -18..18, y: -60..60, z: -16..16
-2. Head sphere: r=26 at [0,-55,0] → x: -26..26, y: -81..-29, z: -26..26
+1. [Role]: [type], [params] at [center] → x: min..max, y: min..max, z: min..max
+2. [Role]: [type], [params] at [center] → x: min..max, y: min..max, z: min..max
+   [Note on overlap/transition with primitive 1]
 
 Subtractions:
-3. Box at [0,70,0] size [60,20,60] → removes y > 60. Creates a flat rear face. Only affects body tail end ✓
-4. Box at [0,-76,0] size [60,20,60] → removes y < -66. Creates a flat front face on the head. Does not reach body ✓
+3. [Type] at [center] size/radius [dims] → removes [what]. Creates [surface]. [Verify no collateral damage] ✓
 
-Silhouette: body 36mm wide × 32mm tall, head 52mm dia → ratio 1.44×. Seam hidden inside overlap zone.
+Silhouette: [proportions summary]. [Seam/transition notes].
 ```
 
-## Example: Handheld Barrel Device
-*The device is a cylindrical barrel held in one hand, with a wider head at the front end. The barrel is the grip — smooth and round, comfortable to wrap fingers around. The head widens out to house the main component. The rear is flat, the front is flat. A shallow indentation on the top of the barrel gives the thumb a natural resting spot for the button.*
+## Example: Tapered Oval Wand
+*A handheld device held along the Y axis. The body is an oval tapered cylinder — wider at the front to house the emitter, narrower at the back for a comfortable grip. A flared circular rim at the front frames the LED face. Flat front and rear faces created by box subtractions.*
 
 *UI components chosen: led_5mm (front emitter), tactile_button_6x6 (top toggle).*
 
 **Blueprint:**
 ```
-Primitives:
-1. Barrel: cylinder r=18, h=120, Y-axis at [0,0,0] → x: -18..18, y: -60..60, z: -18..18
-2. Head: sphere r=26 at [0,-55,0] → x: -26..26, y: -81..-29, z: -26..26
-3. Head rim: cylinder r=26, h=14, Y-axis at [0,-60,0] → x: -26..26, y: -67..-53, z: -26..26
-   Head rim overlaps the sphere's front face to give a clean cylindrical edge.
+Primitives (union):
+1. Shaft: cylinder, axis "y", at [0,0,0]. radius: [14,11] → radius_end: [20,16], h=100
+   Spans y: -50..50. At y=-50 (rear): 28×22mm oval. At y=+50 (front): 40×32mm oval.
+   Comfortable oval grip that gradually widens toward the emitter end.
+2. Front rim: cylinder, axis "y", at [0,48,0]. radius: 24, h=8
+   Spans y: 44..52. Uniform 48mm-diameter disc.
+   At y=44 the shaft's interpolated x-radius ≈ 19.6mm — rim at 24mm fully encloses it → seam hidden inside overlap.
 
 Subtractions:
-4. Box at [0,70,0] size [60,20,60] → removes y > 60. Creates flat rear end. Only trims barrel tail ✓
-5. Box at [0,-76,0] size [60,20,60] → removes y < -66. Creates flat front face on head. Does not reach barrel ✓
-6. Sphere r=16 at [0,15,28] → Creates a shallow concave indentation on the barrel top for the thumb. Purpose: the button sits in this depression so the thumb finds it by feel. Barrel z-max = 18, sphere center at z=28 — only the bottom portion intersects, producing a gentle concavity about 6mm deep ✓
+3. Box at [0,-58,0] size [56,12,56] → removes y < -52. Flat rear cap. Only trims past shaft end ✓
+4. Box at [0,58,0] size [56,12,56] → removes y > 52. Flat front face. Only trims past rim end ✓
 
-Silhouette: barrel 36mm wide, head 52mm → 1.44× ratio. Union seam at y≈-35 falls inside the overlap.
+Silhouette: 28mm oval at rear tapering smoothly to 48mm flared rim at front. 104mm total length. Clean flat ends.
 ```
 ```json
 {{
-  "device_description": "A handheld barrel-shaped spotlight. The user presses the top button to toggle power. The front LED emits light. Battery-powered with a simple on/off circuit.",
+  "device_description": "A handheld wand-shaped controller. The top button cycles modes; the front LED shows the active mode color.",
   "shape": {{
     "op": "difference",
     "children": [
       {{
         "op": "union",
         "children": [
-          {{"type": "cylinder", "center": [0, 0, 0], "radius": 18, "height": 120, "axis": "y"}},
-          {{"type": "sphere", "center": [0, -55, 0], "radius": 26}},
-          {{"type": "cylinder", "center": [0, -60, 0], "radius": 26, "height": 14, "axis": "y"}}
+          {{"type": "cylinder", "center": [0, 0, 0], "radius": [14, 11], "radius_end": [20, 16], "height": 100, "axis": "y"}},
+          {{"type": "cylinder", "center": [0, 48, 0], "radius": 24, "height": 8, "axis": "y"}}
         ]
       }},
-      {{"type": "box", "center": [0, 70, 0], "size": [60, 20, 60]}},
-      {{"type": "box", "center": [0, -76, 0], "size": [60, 20, 60]}},
-      {{"type": "sphere", "center": [0, 15, 28], "radius": 16}}
+      {{"type": "box", "center": [0, -58, 0], "size": [56, 12, 56]}},
+      {{"type": "box", "center": [0, 58, 0], "size": [56, 12, 56]}}
     ]
   }},
   "surface_placements": [
     {{"catalog_id": "led_5mm", "instance_id": "led_1", "face": "front", "at": [0, 0, 0]}},
-    {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_1", "face": "top", "at": [0, 15, 0]}}
+    {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_1", "face": "top", "at": [0, -10, 0]}}
   ]
 }}
 ```
-6 primitives. Union builds the barrel + head mass. Three subtractions each serve a clear purpose: flat rear end, flat front face, and a thumb depression for the button.
+4 primitives. Tapered oval shaft + flared rim build the body. Two box subtractions create clean flat ends. The oval cross-section `radius: [14, 11]` gives the grip a natural hand shape. The `radius_end` widens the tube toward the front.
 
-## Example: Pillow-Shaped Tabletop Controller
-*A palm-sized rounded slab that sits flat on a table. The shape is like a thick wedge with soft, pillowed edges — created by intersecting a sphere with a box so the box provides flat proportions while the sphere rounds every edge. The top is sliced flat to make a level button platform. The bottom is flat for table stability.*
+## Example: Rounded Wedge Console
+*A tabletop controller shaped like a rounded wedge — wider and taller at the back, sloping gently toward a thinner front edge. The base form is a tapered box (wider at back) intersected with an ellipsoid so every edge and corner is softened. A box subtraction creates the flat table base. A fit-dimensioned cylinder punches a cable port through the back wall, automatically sizing to the wall thickness.*
 
-*UI components chosen: 2× tactile_button_6x6 (top control buttons), led_5mm (front status indicator).*
+*UI components chosen: led_5mm (front status indicator), 2× tactile_button_6x6 (top control buttons).*
 
 **Blueprint:**
 ```
 Intersection body:
-1. Sphere r=42 at [0,0,18] → x: -42..42, y: -42..42, z: -24..60
-2. Box at [0,0,18] size [72,52,36] → x: -36..36, y: -26..26, z: 0..36
-   Intersection result: a pillow — flat sides from the box, rounded edges from the sphere.
+1. Ellipsoid at [0,0,12], radius [48,40,26] → x: -48..48, y: -40..40, z: -14..38
+   Oversize in every direction — its role is to round the box's edges and corners.
+2. Tapered box, axis "y", at [0,0,12]. size [56,56,24], size_end [76,56,40]
+   At y=-28 (front, −axis): 56mm wide × 24mm tall → x: -28..28, z: 0..24
+   At y=+28 (back, +axis): 76mm wide × 40mm tall → x: -38..38, z: -8..32
+   Intersection result: the box defines the overall slab proportions, the ellipsoid
+   rounds every edge. Back is wider/taller → wedge profile.
 
 Subtractions:
-3. Box at [0,0,-10] size [100,100,20] → removes z < 0. Creates flat bottom for table contact ✓
-4. Box at [0,-5,42] size [50,35,16] → removes z > 34 within x: -25..25. Creates flat top platform for buttons ✓
+3. Box at [0,0,-10] size [110,100,20] → removes z < 0. Flat table base.
+   Front (z starts at 0) unaffected. Back bottom (z=-8) trimmed to z=0.
+   Result: back sits flush on table, front is raised ~4mm → natural keyboard tilt ✓
+4. Cylinder at [0,38,8], axis "y", r=4, height: "fit" → cable port.
+   Center is behind the back face of the intersection body. Ray-cast auto-sizes
+   height to the wall thickness at that point ✓
 
-Silhouette: 72×52mm slab, 36mm tall. Soft pillow edges. Flat top deck for buttons, flat bottom for stability.
+Silhouette: 56mm wide × 24mm tall at front, 76mm wide × 32mm tall at back. Soft rounded edges. Flat bottom.
 ```
 ```json
 {{
-  "device_description": "A tabletop two-button controller with a status LED. Press the left and right buttons to control a function (e.g. volume up/down or mode select). The front LED indicates status. Needs an MCU to read button state and drive the LED.",
+  "device_description": "A tabletop dual-button controller with status LED and rear cable port. The two top buttons select functions; the front LED shows status. Wedge shape angles the controls toward the user.",
   "shape": {{
     "op": "difference",
     "children": [
       {{
         "op": "intersection",
         "children": [
-          {{"type": "sphere", "center": [0, 0, 18], "radius": 42}},
-          {{"type": "box", "center": [0, 0, 18], "size": [72, 52, 36]}}
+          {{"type": "sphere", "center": [0, 0, 12], "radius": [48, 40, 26]}},
+          {{"type": "box", "center": [0, 0, 12], "size": [56, 56, 24], "size_end": [76, 56, 40], "axis": "y"}}
         ]
       }},
-      {{"type": "box", "center": [0, 0, -10], "size": [100, 100, 20]}},
-      {{"type": "box", "center": [0, -5, 42], "size": [50, 35, 16]}}
+      {{"type": "box", "center": [0, 0, -10], "size": [110, 100, 20]}},
+      {{"type": "cylinder", "center": [0, 38, 8], "radius": 4, "height": "fit", "axis": "y"}}
     ]
   }},
   "surface_placements": [
-    {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_1", "face": "top", "at": [-12, -5, 0]}},
-    {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_2", "face": "top", "at": [12, -5, 0]}},
-    {{"catalog_id": "led_5mm", "instance_id": "led_status", "face": "front", "at": [0, 0, 5]}}
+    {{"catalog_id": "led_5mm", "instance_id": "led_1", "face": "front", "at": [0, 0, 12]}},
+    {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_1", "face": "top", "at": [-14, 5, 0]}},
+    {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_2", "face": "top", "at": [14, 5, 0]}}
   ]
 }}
 ```
-4 primitives. Intersection creates the soft-edged body. Two box subtractions create the flat bottom and the flat button deck. Every surface exists for a reason."""
+5 primitives. Intersection of an ellipsoid and a tapered box creates a softly rounded wedge. Floor subtraction gives a flat table base. The `"fit"` height on the cable-port cylinder auto-conforms to the back wall thickness. The tapered box uses `size_end` (axis `"y"`) so the +y (back) cross-section is wider and taller than the −y (front)."""
 
 
 # ── Circuit Agent Prompt (Step 2) ─────────────────────────────────
