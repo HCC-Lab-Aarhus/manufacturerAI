@@ -19,8 +19,8 @@ from src.session import Session
 
 from .config import MODEL, MAX_TOKENS, THINKING_BUDGET, MAX_TURNS, TOKEN_BUDGET
 from .tools import CIRCUIT_TOOLS, DESIGN_TOOLS
-from .prompt import _build_circuit_prompt, _build_design_prompt, _catalog_summary
-from .messages import _serialize_content, _sanitize_messages, _prune_messages
+from .prompt import build_circuit_prompt, build_design_prompt, catalog_summary
+from .messages import serialize_content, sanitize_messages, prune_messages
 
 
 # ── Snap feedback helpers ──────────────────────────────────────────
@@ -80,7 +80,7 @@ class _BaseAgent:
         self._conversation_file = conversation_file
 
         saved = session.read_artifact(conversation_file)
-        self.messages: list[dict] = _sanitize_messages(saved) if isinstance(saved, list) else []
+        self.messages: list[dict] = sanitize_messages(saved) if isinstance(saved, list) else []
 
     def _save_conversation(self) -> None:
         self.session.write_artifact(self._conversation_file, self.messages)
@@ -116,7 +116,7 @@ class _BaseAgent:
         for turn in range(MAX_TURNS):
             content_blocks: list[dict] = []
             stop_reason = None
-            api_messages = _prune_messages(self.messages)
+            api_messages = prune_messages(self.messages)
 
             try:
                 async with self.client.messages.stream(
@@ -136,7 +136,7 @@ class _BaseAgent:
                             yield agent_event
 
                     response = await stream.get_final_message()
-                    content_blocks = _serialize_content(response.content)
+                    content_blocks = serialize_content(response.content)
                     stop_reason = response.stop_reason
 
             except anthropic.APIError as e:
@@ -262,7 +262,7 @@ class CircuitAgent(_BaseAgent):
         self.circuit_data: dict | None = None
 
     def _get_system_prompt(self) -> str:
-        return _build_circuit_prompt(self.catalog)
+        return build_circuit_prompt(self.catalog)
 
     def _get_tools(self) -> list[dict]:
         return CIRCUIT_TOOLS
@@ -278,7 +278,7 @@ class CircuitAgent(_BaseAgent):
 
     def _handle_tool(self, name: str, input_data: dict) -> tuple[str, bool]:
         if name == "list_components":
-            return _catalog_summary(self.catalog), False
+            return catalog_summary(self.catalog), False
 
         if name == "get_component":
             return self._tool_get_component(input_data), False
@@ -417,7 +417,7 @@ class DesignAgent(_BaseAgent):
 
     def _get_system_prompt(self) -> str:
         printer = get_printer(self.session.printer_id)
-        return _build_design_prompt(self.catalog, printer=printer)
+        return build_design_prompt(self.catalog, printer=printer)
 
     def _get_tools(self) -> list[dict]:
         return DESIGN_TOOLS
@@ -433,7 +433,7 @@ class DesignAgent(_BaseAgent):
 
     def _handle_tool(self, name: str, input_data: dict) -> tuple[str, bool]:
         if name == "list_components":
-            return _catalog_summary(self.catalog), False
+            return catalog_summary(self.catalog), False
 
         if name == "get_component":
             return self._tool_get_component(input_data), False

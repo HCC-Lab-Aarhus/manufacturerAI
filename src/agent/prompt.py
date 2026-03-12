@@ -6,7 +6,7 @@ from src.catalog import CatalogResult
 from src.pipeline.config import PrinterDef
 
 
-def _catalog_summary(catalog: CatalogResult) -> str:
+def catalog_summary(catalog: CatalogResult) -> str:
     """Build a compact table of all catalog components."""
     lines = [
         "| ID | Name | Pins | UI | Mounting | Description |",
@@ -26,14 +26,14 @@ def _catalog_summary(catalog: CatalogResult) -> str:
 
 # ── Design Agent Prompt (Step 1) ──────────────────────────────────
 
-def _build_design_prompt(catalog: CatalogResult, printer: PrinterDef | None = None) -> str:
+def build_design_prompt(catalog: CatalogResult, printer: PrinterDef | None = None) -> str:
     """Build the system prompt for the design agent (step 1).
 
     The design agent is the first step — it talks to the user, shapes the
     device, selects and places UI components, and writes a device description
     for the circuit engineer.
     """
-    summary = _catalog_summary(catalog)
+    summary = catalog_summary(catalog)
 
     if printer:
         build_plate_section = f"""## Build Plate & Size Constraints
@@ -393,14 +393,14 @@ Silhouette: 56mm wide × 24mm tall at front, 76mm wide × 32mm tall at back. Sof
 
 # ── Circuit Agent Prompt (Step 2) ─────────────────────────────────
 
-def _build_circuit_prompt(catalog: CatalogResult) -> str:
+def build_circuit_prompt(catalog: CatalogResult) -> str:
     """Build the system prompt for the circuit agent (step 2).
 
     The circuit agent runs autonomously — no user interaction. It receives
     design context (device_description + placed UI components) as the initial
     message and produces the complete circuit spec.
     """
-    summary = _catalog_summary(catalog)
+    summary = catalog_summary(catalog)
 
     return f"""You are an electronics engineer who designs circuits for 3D-printed electronic devices. Your circuits will be manufactured with silver ink conductive traces on a PLA enclosure.
 

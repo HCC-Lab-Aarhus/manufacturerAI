@@ -29,7 +29,7 @@ _gcode_state: dict[str, dict] = {}
 
 from src.catalog import load_catalog, catalog_to_dict, CatalogResult
 from src.session import create_session, load_session, list_sessions, Session
-from src.agent import CircuitAgent, DesignAgent, DESIGN_TOOLS, MODEL, THINKING_BUDGET, TOKEN_BUDGET, _build_design_prompt, build_circuit_user_prompt, _prune_messages
+from src.agent import CircuitAgent, DesignAgent, DESIGN_TOOLS, MODEL, THINKING_BUDGET, TOKEN_BUDGET, build_design_prompt, build_circuit_user_prompt, prune_messages
 from src.pipeline.design import parse_design, validate_design
 from src.pipeline.placer import place_components, placement_to_dict, parse_placement, PlacementError
 from src.pipeline.router import route_traces, routing_to_dict, write_trace_bitmap
@@ -823,10 +823,10 @@ def api_session_tokens(session: str = Query(...)):
     if not conversation or not isinstance(conversation, list):
         return {"input_tokens": 0, "budget": TOKEN_BUDGET}
 
-    system = _build_design_prompt(cat, printer=get_printer(s.printer_id))
+    system = build_design_prompt(cat, printer=get_printer(s.printer_id))
     tools = DESIGN_TOOLS
 
-    pruned = _prune_messages(conversation)
+    pruned = prune_messages(conversation)
     client = anthropic.Anthropic()
     try:
         result = client.messages.count_tokens(
