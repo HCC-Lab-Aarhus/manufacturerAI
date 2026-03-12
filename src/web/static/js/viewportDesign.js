@@ -142,7 +142,8 @@ let _designEditBubble = null;
 function _showDesignEditBubble() {
     const container = document.getElementById('chat-messages');
     if (!container) return;
-    if (_designEditBubble && container.contains(_designEditBubble)) {
+    // Reuse the bubble only if it's the very last child (no new messages since last edit)
+    if (_designEditBubble && container.lastElementChild === _designEditBubble) {
         _designEditBubble.textContent = '✏️ Design updated via interactive designer';
         return;
     }
