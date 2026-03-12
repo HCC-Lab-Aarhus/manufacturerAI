@@ -478,9 +478,19 @@ function appendDesignResult(design) {
 
 function scrollToBottom() {
     const container = messagesDiv();
-    const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 40;
-    if (atBottom) container.scrollTop = container.scrollHeight;
+    if (_scrollSticky) container.scrollTop = container.scrollHeight;
 }
+
+let _scrollSticky = true;
+
+(function _initScrollTracking() {
+    const container = messagesDiv();
+    if (!container) return;
+    container.addEventListener('scroll', () => {
+        const gap = container.scrollHeight - container.scrollTop - container.clientHeight;
+        _scrollSticky = gap < 60;
+    }, { passive: true });
+})();
 
 // ── Markdown renderer (lightweight, XSS-safe) ─────────────────────
 
