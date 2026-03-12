@@ -125,6 +125,10 @@ class RoutingGrid:
             return True
         return self._cells[gy * self.width + gx] == PERMANENTLY_BLOCKED
 
+    def is_protected(self, gx: int, gy: int) -> bool:
+        """Return True if the cell is a protected pin-pad position."""
+        return (gx, gy) in self._protected
+
     # ── Cell mutation ──────────────────────────────────────────────
 
     def block_cell(self, gx: int, gy: int) -> None:

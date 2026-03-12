@@ -25,6 +25,7 @@ def find_path(
     *,
     turn_penalty: int = TURN_PENALTY,
     crossing_cost: int = 0,
+    cost_map: dict[int, float] | None = None,
 ) -> list[tuple[int, int]] | None:
     """A* point-to-point Manhattan routing.
 
@@ -50,7 +51,7 @@ def find_path(
     if source == sink:
         return [source]
 
-    if crossing_cost == 0:
+    if crossing_cost == 0 and cost_map is None:
         l_path = _try_l_route(grid, source, sink)
         if l_path is not None:
             return l_path
@@ -111,6 +112,8 @@ def find_path(
 
             is_turn = direction != -1 and direction != d
             cost = 1 + (turn_penalty if is_turn else 0) + cross_extra
+            if cost_map is not None:
+                cost += cost_map.get(nkey, 0)
             tentative_g = cur_g + cost
 
             if nkey not in g_scores or tentative_g < g_scores[nkey]:
@@ -129,6 +132,7 @@ def find_path_to_tree(
     *,
     turn_penalty: int = TURN_PENALTY,
     crossing_cost: int = 0,
+    cost_map: dict[int, float] | None = None,
 ) -> list[tuple[int, int]] | None:
     """A* from source point(s) to any cell in an existing routing tree.
 
@@ -242,6 +246,8 @@ def find_path_to_tree(
 
             is_turn = direction != -1 and direction != d
             cost = 1 + (turn_penalty if is_turn else 0) + cross_extra
+            if cost_map is not None:
+                cost += cost_map.get(nkey, 0)
             tentative_g = cur_g + cost
 
             if nkey not in g_scores or tentative_g < g_scores[nkey]:

@@ -161,18 +161,130 @@ def route_traces(
              ", ".join(f"{nid}({len(net_pad_map[nid])}p/{iso_lengths[nid]}c)"
                        for nid in net_ids))
 
-    # 5. Route with retry: try different orderings if any nets fail
-    #    Strategy: first try the isolation-based order, then on failure
-    #    promote failed nets earlier (they were blocked by nets before
-    #    them), then fall back to random shuffles.
+    # 5. Negotiated congestion routing (attempt before retry fallback)
+    neg_result = _negotiate_routes(
+        net_ids, net_pad_map, grid, pad_radius, config,
+        placement, catalog, pin_voronoi,
+    )
+
+    best: dict | None = None
+    if neg_result is not None:
+        # Try committing negotiated paths with real clearance.
+        # Different commit orderings cause different clearance conflicts,
+        # so we try several and keep the best.
+        neg_paths = neg_result["routed_paths"]
+        neg_pads = neg_result["routed_pads"]
+        neg_pins = neg_result["pin_assignments"]
+        neg_nids = [nid for nid in net_ids if nid in neg_paths]
+
+        # Generate candidate commit orderings
+        orderings_to_try: list[list[str]] = [
+            # 1. Largest first (most path cells → hardest to reroute)
+            sorted(neg_nids,
+                   key=lambda nid: sum(len(p) for p in neg_paths[nid]),
+                   reverse=True),
+            # 2. Most pins first (most constrained)
+            sorted(neg_nids,
+                   key=lambda nid: len(neg_pads.get(nid, [])),
+                   reverse=True),
+            # 3. Smallest first (quick wins, then big ones reroute)
+            sorted(neg_nids,
+                   key=lambda nid: sum(len(p) for p in neg_paths[nid])),
+        ]
+        # 4-7. Random shuffles
+        for _ in range(4):
+            shuf = list(neg_nids)
+            random.shuffle(shuf)
+            orderings_to_try.append(shuf)
+
+        for oi, commit_order in enumerate(orderings_to_try):
+            committed_paths: dict[str, list[list[tuple[int, int]]]] = {}
+            committed_pads: dict[str, list[NetPad]] = {}
+            deferred: list[str] = []
+
+            for nid in commit_order:
+                can_commit = True
+                for path in neg_paths[nid]:
+                    for gx, gy in path:
+                        if not grid.is_free(gx, gy) and not grid.is_protected(gx, gy):
+                            can_commit = False
+                            break
+                    if not can_commit:
+                        break
+                if can_commit:
+                    for path in neg_paths[nid]:
+                        grid.block_trace(path, net_id=nid)
+                    committed_paths[nid] = neg_paths[nid]
+                    committed_pads[nid] = neg_pads[nid]
+                else:
+                    deferred.append(nid)
+
+            # Reroute deferred nets on the partially-filled grid
+            for nid in deferred:
+                pads = neg_pads.get(nid)
+                if pads is None or len(pads) < 2:
+                    continue
+                paths, ok, _ = _route_single_net(
+                    nid, pads, grid, pad_radius, config.turn_penalty,
+                    pin_voronoi=pin_voronoi,
+                )
+                if ok and paths:
+                    for path in paths:
+                        grid.block_trace(path, net_id=nid)
+                    committed_paths[nid] = paths
+                    committed_pads[nid] = pads
+                else:
+                    ok2 = _try_crossing_ripup(
+                        nid, pads, grid, pad_radius, config,
+                        committed_paths, committed_pads, pin_voronoi,
+                    )
+                    if not ok2:
+                        pass  # stays unrouted
+
+            cur_failed = [nid for nid in neg_nids
+                          if nid not in committed_paths]
+            log.info("Negotiation commit order %d: %d/%d routed, "
+                     "%d deferred, %d failed",
+                     oi + 1, len(committed_paths), len(neg_nids),
+                     len(deferred), len(cur_failed))
+
+            cur_result = {
+                "routed_paths": committed_paths,
+                "routed_pads": committed_pads,
+                "pin_assignments": neg_pins,
+                "failed_nets": cur_failed,
+                "failed_pads": {},
+            }
+
+            if not cur_failed:
+                best = cur_result
+                log.info("Negotiation commit order %d: all nets routed!",
+                         oi + 1)
+                break
+
+            if best is None or len(cur_failed) < len(best["failed_nets"]):
+                best = cur_result
+
+            # Clear grid for next ordering attempt
+            for cn in committed_paths:
+                for path in committed_paths[cn]:
+                    grid.free_trace(path, net_id=cn)
+
+        if best is not None and best["failed_nets"]:
+            log.info("Negotiation best: %d failures, trying retry loop",
+                     len(best["failed_nets"]))
+
+    # 5b. Retry-based routing (fallback if negotiation had no result,
+    #     or negotiation committed with some failures)
     baseline_order = list(net_ids)
     tried_orderings: set[tuple[str, ...]] = set()
-    best: dict | None = None
     last_attempt: dict | None = None
     ordering = list(baseline_order)
     prev_failed: list[str] = []
+    neg_perfect = (best is not None and not best["failed_nets"])
+    _retry_attempts = 0 if neg_perfect else (1 + config.max_retries)
 
-    for attempt in range(1 + config.max_retries):
+    for attempt in range(_retry_attempts):
         ordering_key = tuple(ordering)
         if ordering_key in tried_orderings:
             ordering = _perturb_ordering(baseline_order, prev_failed, attempt)
@@ -254,7 +366,7 @@ def route_traces(
 
     assert best is not None
 
-    if best is not last_attempt:
+    if last_attempt is not None and best is not last_attempt:
         for nid, net_paths in best["routed_paths"].items():
             for path in net_paths:
                 grid.block_trace(path, net_id=nid)
@@ -335,6 +447,198 @@ def _perturb_ordering(
                   attempt, failed_nets)
 
     return ordering
+
+
+# ── Negotiated congestion routing ──────────────────────────────────
+
+# PathFinder / McMurchie-Ebeling (1995) style.  All nets are routed on
+# a clean grid (no inter-net blocking) guided by a per-cell cost map.
+# After each iteration the history cost at cells used by more than one
+# net is increased, progressively pushing conflicting traces apart
+# until they stop overlapping.
+
+_NEG_HISTORY_FACTOR = 2.0   # multiplier for accumulated history cost
+_NEG_PRESENT_FACTOR = 20.0  # per-extra-user penalty for current overlap
+_NEG_MAX_ITERATIONS = 30    # hard cap on negotiation iterations
+
+
+def _negotiate_routes(
+    net_ids: list[str],
+    net_pad_map: dict[str, list[_PinRef]],
+    grid: RoutingGrid,
+    pad_radius: int,
+    config: RouterConfig,
+    placement: FullPlacement,
+    catalog: CatalogResult,
+    pin_voronoi: dict[int, str] | None,
+) -> dict | None:
+    """Negotiated congestion routing.
+
+    Returns a result dict (same shape as the retry loop's ``best``)
+    when negotiation converges to a conflict-free solution, or *None*
+    if it fails to converge within ``_NEG_MAX_ITERATIONS`` iterations.
+    Paths are **not** committed to the grid — the caller must do that.
+    """
+    W = grid.width
+
+    # ── Resolve pads once (pin assignments stay fixed) ─────────
+    pin_pools = build_pin_pools(placement, catalog)
+    pin_assignments: dict[str, str] = {}
+    resolved_pads: dict[str, list[NetPad]] = {}
+    unroutable: list[str] = []
+
+    for nid in net_ids:
+        refs = net_pad_map[nid]
+        pads = _resolve_pads(
+            refs, nid, placement, catalog,
+            pin_pools, grid, pin_assignments,
+        )
+        if pads is not None and len(pads) >= 2:
+            resolved_pads[nid] = pads
+        else:
+            unroutable.append(nid)
+
+    routable = [nid for nid in net_ids if nid in resolved_pads]
+    if len(routable) < 2:
+        return None
+
+    log.info("Negotiation: %d routable nets, %d unroutable",
+             len(routable), len(unroutable))
+
+    # ── Iteration state ────────────────────────────────────────
+    history_cost: dict[int, float] = {}
+    net_cells: dict[str, set[int]] = {}   # flat-index sets per net
+    cell_usage: dict[int, int] = {}       # total users per cell
+    net_paths: dict[str, list[list[tuple[int, int]]]] = {}
+
+    prev_congested = None
+    stall_count = 0
+
+    # Track the best (lowest-congestion) snapshot across iterations so we
+    # can fall back to it when negotiation stalls near convergence.
+    best_congested = float("inf")
+    best_snapshot: dict | None = None
+
+    for iteration in range(_NEG_MAX_ITERATIONS):
+        # Shuffle net order after the first iteration to avoid bias
+        order = list(routable)
+        if iteration > 0:
+            random.shuffle(order)
+
+        for nid in order:
+            pads = resolved_pads[nid]
+
+            # Remove this net's old contribution to cell_usage
+            old = net_cells.pop(nid, None)
+            if old:
+                for key in old:
+                    cell_usage[key] -= 1
+                    if cell_usage[key] == 0:
+                        del cell_usage[key]
+
+            # Build cost map: present congestion + history
+            cost_map: dict[int, float] = {}
+            for key, count in cell_usage.items():
+                cost_map[key] = (
+                    count * _NEG_PRESENT_FACTOR
+                    + history_cost.get(key, 0.0) * _NEG_HISTORY_FACTOR
+                )
+            for key, h in history_cost.items():
+                if key not in cost_map and h > 0:
+                    cost_map[key] = h * _NEG_HISTORY_FACTOR
+
+            # Route on the clean grid (only component blocks, no traces)
+            paths, ok, _ = _route_single_net(
+                nid, pads, grid, pad_radius, config.turn_penalty,
+                pin_voronoi=pin_voronoi,
+                cost_map=cost_map if cost_map else None,
+            )
+
+            if ok and paths:
+                net_paths[nid] = paths
+                cells: set[int] = set()
+                for path in paths:
+                    for gx, gy in path:
+                        cells.add(gy * W + gx)
+                net_cells[nid] = cells
+                for key in cells:
+                    cell_usage[key] = cell_usage.get(key, 0) + 1
+            else:
+                net_paths.pop(nid, None)
+
+        # ── Measure congestion ─────────────────────────────────
+        congested = sum(1 for c in cell_usage.values() if c > 1)
+        overflow = sum(max(0, c - 1) for c in cell_usage.values())
+
+        log.info("Negotiation iter %d: %d congested cells, overflow=%d, "
+                 "%d/%d nets routed",
+                 iteration + 1, congested, overflow,
+                 len(net_paths), len(routable))
+
+        # ── Snapshot best iteration ────────────────────────────
+        if (len(net_paths) == len(routable) and
+                congested < best_congested):
+            best_congested = congested
+            # Deep-copy paths so later iterations don't mutate them
+            best_snapshot = {
+                nid: [list(seg) for seg in segs]
+                for nid, segs in net_paths.items()
+            }
+
+        # ── Update history ─────────────────────────────────────
+        for key, count in list(cell_usage.items()):
+            if count > 1:
+                history_cost[key] = history_cost.get(key, 0.0) + (count - 1)
+
+        # ── Check convergence ──────────────────────────────────
+        if congested == 0 and len(net_paths) == len(routable):
+            log.info("Negotiation converged in %d iterations", iteration + 1)
+            failed = unroutable + [
+                nid for nid in routable if nid not in net_paths
+            ]
+            return {
+                "routed_paths": net_paths,
+                "routed_pads": {nid: resolved_pads[nid]
+                                for nid in net_paths},
+                "pin_assignments": pin_assignments,
+                "failed_nets": failed,
+                "failed_pads": {},
+            }
+
+        # ── Stall detection ────────────────────────────────────
+        if prev_congested is not None and congested >= prev_congested:
+            stall_count += 1
+            if stall_count >= 8:
+                log.warning("Negotiation stalled for %d iterations, "
+                            "giving up", stall_count)
+                break
+        else:
+            stall_count = 0
+        prev_congested = congested
+
+    # ── Near-convergence: return best snapshot if overlap is small ────
+    # Even if path-cell overlaps remain, the path shapes are good
+    # guidance.  The caller verifies clearance at commit time.
+    if best_snapshot is not None and best_congested <= 5:
+        log.info("Negotiation nearly converged (best=%d path overlaps), "
+                 "returning best snapshot", best_congested)
+        failed = unroutable + [
+            nid for nid in routable if nid not in best_snapshot
+        ]
+        return {
+            "routed_paths": best_snapshot,
+            "routed_pads": {nid: resolved_pads[nid]
+                            for nid in best_snapshot},
+            "pin_assignments": pin_assignments,
+            "failed_nets": failed,
+            "failed_pads": {},
+        }
+
+    log.warning("Negotiation did not converge after %d iterations "
+                "(%d congested cells remain)",
+                min(iteration + 1, _NEG_MAX_ITERATIONS),
+                congested if 'congested' in dir() else -1)
+    return None
 
 
 # ── Crossing rip-up ────────────────────────────────────────────────
@@ -758,6 +1062,7 @@ def _route_single_net(
     *,
     pin_voronoi: dict[int, str] | None = None,
     crossing_cost: int = 0,
+    cost_map: dict[int, float] | None = None,
 ) -> tuple[list[list[tuple[int, int]]], bool, list[dict]]:
     """Route a single net. Returns (grid_paths, success, debug_snapshots)."""
     if len(pads) < 2:
@@ -767,11 +1072,13 @@ def _route_single_net(
         return _route_two_pin(
             net_id, pads, grid, pad_radius, turn_penalty,
             pin_voronoi, crossing_cost=crossing_cost,
+            cost_map=cost_map,
         )
 
     return _route_multi_pin(
         net_id, pads, grid, pad_radius, turn_penalty,
         pin_voronoi, crossing_cost=crossing_cost,
+        cost_map=cost_map,
     )
 
 
@@ -784,6 +1091,7 @@ def _route_two_pin(
     pin_voronoi: dict[int, str] | None,
     *,
     crossing_cost: int = 0,
+    cost_map: dict[int, float] | None = None,
 ) -> tuple[list[list[tuple[int, int]]], bool, list[dict]]:
     src = (pads[0].gx, pads[0].gy)
     snk = (pads[1].gx, pads[1].gy)
@@ -792,7 +1100,7 @@ def _route_two_pin(
     if pin_voronoi is not None:
         blocked_v = _block_voronoi(grid, pin_voronoi, pads)
 
-    path = find_path(grid, src, snk, turn_penalty=turn_penalty, crossing_cost=crossing_cost)
+    path = find_path(grid, src, snk, turn_penalty=turn_penalty, crossing_cost=crossing_cost, cost_map=cost_map)
 
     _unblock_voronoi(grid, blocked_v)
 
@@ -810,6 +1118,7 @@ def _route_multi_pin(
     pin_voronoi: dict[int, str] | None,
     *,
     crossing_cost: int = 0,
+    cost_map: dict[int, float] | None = None,
 ) -> tuple[list[list[tuple[int, int]]], bool, list[dict]]:
     """MST-guided Steiner tree routing for multi-pin nets."""
     mst_edges = _compute_mst(pads)
@@ -878,6 +1187,7 @@ def _route_multi_pin(
             grid, src_tree, target_tree,
             turn_penalty=turn_penalty,
             crossing_cost=crossing_cost,
+            cost_map=cost_map,
         )
 
         _unblock_voronoi(grid, blocked_v)
