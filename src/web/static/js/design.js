@@ -54,12 +54,20 @@ function renderConversation(messages) {
             if (typeof msg.content === 'string') {
                 appendMessage('user', msg.content);
             }
-            // tool_result arrays — render as grouped results
             if (Array.isArray(msg.content)) {
-                const toolResults = msg.content.filter(b => b.type === 'tool_result');
-                if (toolResults.length > 0) {
-                    // Results are rendered inline with the preceding tool group
-                    // (already done via appendToolCallStatic marking ✓)
+                for (const block of msg.content) {
+                    const raw = block.type === 'tool_result' ? block.content
+                              : block.type === 'text' ? block.text
+                              : null;
+                    if (typeof raw === 'string') {
+                        try {
+                            const parsed = JSON.parse(raw);
+                            if (parsed.source === 'interactive_designer') {
+                                appendMessage('user', `✏️ ${parsed.description || 'Design updated via interactive designer'}`);
+                                continue;
+                            }
+                        } catch { /* not JSON, skip */ }
+                    }
                 }
             }
         } else if (msg.role === 'assistant') {
@@ -470,9 +478,19 @@ function appendDesignResult(design) {
 
 function scrollToBottom() {
     const container = messagesDiv();
-    const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 40;
-    if (atBottom) container.scrollTop = container.scrollHeight;
+    if (_scrollSticky) container.scrollTop = container.scrollHeight;
 }
+
+let _scrollSticky = true;
+
+(function _initScrollTracking() {
+    const container = messagesDiv();
+    if (!container) return;
+    container.addEventListener('scroll', () => {
+        const gap = container.scrollHeight - container.scrollTop - container.clientHeight;
+        _scrollSticky = gap < 60;
+    }, { passive: true });
+})();
 
 // ── Markdown renderer (lightweight, XSS-safe) ─────────────────────
 

@@ -881,6 +881,189 @@ async def api_patch_enclosure(request: Request, session: str = Query(...)):
     return data
 
 
+@app.put("/api/session/design")
+async def api_put_design(request: Request, session: str = Query(...)):
+    """Replace the full design JSON (used by the interactive designer).
+
+    Validates the design, saves it, and invalidates downstream artifacts.
+    Returns the enriched design dict.
+    """
+    body = await request.json()
+    s = _resolve_session(session)
+    cat = _get_catalog()
+
+    try:
+        spec = parse_design(body)
+    except (KeyError, TypeError, ValueError, IndexError) as e:
+        raise HTTPException(400, f"Design parsing error: {e}")
+
+    errors = validate_design(spec, cat, printer=get_printer(s.printer_id))
+    if errors:
+        raise HTTPException(422, detail={"errors": errors})
+
+    s.write_artifact("design.json", body)
+    s.pipeline_state["design"] = "complete"
+    _invalidate_downstream(s, "design")
+    s.save()
+
+    _enrich_components(body.get("components", []), cat)
+    _enrich_design_3d(body)
+    return body
+
+
+@app.post("/api/session/design/validate-ui-placement")
+async def api_validate_ui_placement(request: Request, session: str = Query(...)):
+    """Lightweight validation of a single UI placement position.
+
+    Body: { instance_id, x_mm, y_mm, edge_index? }
+    Uses the current design.json outline + catalog to check:
+      - point inside polygon (for non-side-mount)
+      - edge clearance (body + keepout)
+      - no overlap with other UI placements
+    Returns: { valid: bool, errors: [...] }
+    """
+    body = await request.json()
+    s = _resolve_session(session)
+    data = s.read_artifact("design.json")
+    if data is None:
+        raise HTTPException(404, "No design yet")
+
+    cat = _get_catalog()
+    cat_map = {c.id: c for c in cat.components}
+    errors: list[str] = []
+
+    instance_id = body.get("instance_id", "")
+    x_mm = body.get("x_mm", 0)
+    y_mm = body.get("y_mm", 0)
+    edge_index = body.get("edge_index")
+
+    # Find catalog entry for this component
+    comp_entry = next(
+        (c for c in data.get("components", []) if c["instance_id"] == instance_id),
+        None,
+    )
+    cat_comp = cat_map.get(comp_entry["catalog_id"]) if comp_entry else None
+
+    outline = data.get("outline", [])
+    if len(outline) < 3:
+        return {"valid": False, "errors": ["Outline has fewer than 3 vertices"]}
+
+    try:
+        from shapely.geometry import Polygon, Point
+        verts = [(p["x"], p["y"]) for p in outline]
+        poly = Polygon(verts)
+
+        if edge_index is not None:
+            # Side-mount: just check edge_index in range
+            if edge_index < 0 or edge_index >= len(outline):
+                errors.append(f"edge_index {edge_index} out of range")
+        else:
+            pt = Point(x_mm, y_mm)
+            if not poly.contains(pt):
+                errors.append("Position is outside the outline")
+            elif cat_comp:
+                body_c = cat_comp.body
+                half_size = max(
+                    body_c.width_mm or 0,
+                    body_c.length_mm or 0,
+                    body_c.diameter_mm or 0,
+                ) / 2
+                required_clearance = half_size + cat_comp.mounting.keepout_margin_mm
+                dist_to_edge = poly.boundary.distance(pt)
+                if dist_to_edge < required_clearance:
+                    errors.append(
+                        f"Too close to edge ({dist_to_edge:.1f}mm, "
+                        f"needs {required_clearance:.1f}mm)"
+                    )
+
+        # Check overlap with other UI placements
+        if cat_comp:
+            body_c = cat_comp.body
+            hw = max(body_c.width_mm or 0, body_c.diameter_mm or 0) / 2
+            hh = max(body_c.length_mm or 0, body_c.diameter_mm or 0) / 2
+            keepout = cat_comp.mounting.keepout_margin_mm
+
+            for other_up in data.get("ui_placements", []):
+                if other_up["instance_id"] == instance_id:
+                    continue
+                other_comp = next(
+                    (c for c in data.get("components", [])
+                     if c["instance_id"] == other_up["instance_id"]),
+                    None,
+                )
+                if not other_comp:
+                    continue
+                other_cat = cat_map.get(other_comp["catalog_id"])
+                if not other_cat:
+                    continue
+                o_body = other_cat.body
+                o_hw = max(o_body.width_mm or 0, o_body.diameter_mm or 0) / 2
+                o_hh = max(o_body.length_mm or 0, o_body.diameter_mm or 0) / 2
+                o_keepout = other_cat.mounting.keepout_margin_mm
+                gap_x = abs(x_mm - other_up["x_mm"]) - hw - o_hw
+                gap_y = abs(y_mm - other_up["y_mm"]) - hh - o_hh
+                gap = max(gap_x, gap_y)
+                required_gap = max(keepout, o_keepout, 1.0)
+                if gap < required_gap:
+                    errors.append(
+                        f"Overlaps with {other_up['instance_id']} "
+                        f"(gap {gap:.1f}mm, needs {required_gap:.1f}mm)"
+                    )
+    except ImportError:
+        pass
+
+    return {"valid": len(errors) == 0, "errors": errors}
+
+
+@app.patch("/api/session/conversation/submit-design")
+async def api_conversation_submit_design(request: Request, session: str = Query(...)):
+    """Append or replace the last user submitDesign tool call in the conversation.
+
+    If the last message is already a user submitDesign tool_result, replace it.
+    Otherwise append a new one.  This lets the agent see UI modifications the
+    user made interactively.
+
+    Body: { design: <full design JSON (without enrichment)> }
+    """
+    body = await request.json()
+    s = _resolve_session(session)
+    conversation = s.read_artifact("conversation.json")
+    if not isinstance(conversation, list):
+        conversation = []
+
+    design = body.get("design", {})
+
+    new_msg = {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": json.dumps({
+                    "source": "interactive_designer",
+                    "description": "User modified the design interactively in the UI designer. The design below reflects their changes.",
+                    "design": design,
+                }),
+            }
+        ],
+    }
+
+    # Check if the very last message is already a user interactive edit
+    if (conversation
+            and conversation[-1].get("role") == "user"
+            and isinstance(conversation[-1].get("content"), list)
+            and any(
+                b.get("type") == "text"
+                and "interactive_designer" in (b.get("text") or "")
+                for b in conversation[-1]["content"]
+            )):
+        conversation[-1] = new_msg
+    else:
+        conversation.append(new_msg)
+
+    s.write_artifact("conversation.json", conversation)
+    return {"ok": True}
+
+
 @app.post("/api/session/design")
 async def api_design(request: Request, session: str = Query(None)):
     """
