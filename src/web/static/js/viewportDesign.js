@@ -498,6 +498,16 @@ function _resolveCurrentStyle(comp) {
     return comp.mounting_style || catEntry?.mounting?.style || '—';
 }
 
+function _edgeMidpoint(verts, edgeIndex) {
+    const n = verts.length;
+    const v0 = verts[edgeIndex % n];
+    const v1 = verts[(edgeIndex + 1) % n];
+    return {
+        x: Math.round(((v0[0] + v1[0]) / 2) * 10) / 10,
+        y: Math.round(((v0[1] + v1[1]) / 2) * 10) / 10,
+    };
+}
+
 function _isUIComponent(comp) {
     if (comp.ui_placement != null) return comp.ui_placement;
     const catEntry = _getCatalogEntry(comp.catalog_id);
@@ -656,6 +666,10 @@ function _buildCompCard(comp, up, design) {
             if (up) {
                 if (select.value === 'side' && up.edge_index == null) {
                     up.edge_index = 0;
+                    const verts = normaliseOutline(design.outline).verts;
+                    const mid = _edgeMidpoint(verts, 0);
+                    up.x_mm = mid.x;
+                    up.y_mm = mid.y;
                 } else if (select.value !== 'side') {
                     delete up.edge_index;
                 }
@@ -683,14 +697,20 @@ function _buildCompCard(comp, up, design) {
         const edgeSelect = document.createElement('select');
         edgeSelect.className = 'vp-mount-select';
         for (let i = 0; i < verts.length; i++) {
+            const v0 = verts[i], v1 = verts[(i + 1) % verts.length];
+            const len = Math.hypot(v1[0] - v0[0], v1[1] - v0[1]).toFixed(1);
             const opt = document.createElement('option');
             opt.value = i;
-            opt.textContent = `Edge ${i}`;
+            opt.textContent = `Edge ${i} (${len} mm)`;
             if (i === up.edge_index) opt.selected = true;
             edgeSelect.appendChild(opt);
         }
         edgeSelect.addEventListener('change', async () => {
-            up.edge_index = parseInt(edgeSelect.value);
+            const newEdge = parseInt(edgeSelect.value);
+            up.edge_index = newEdge;
+            const mid = _edgeMidpoint(verts, newEdge);
+            up.x_mm = mid.x;
+            up.y_mm = mid.y;
             await _persistDesign(design);
             await _persistConversationSubmitDesign(design);
             setViewportData('design', _currentDesign || design);
@@ -720,7 +740,12 @@ async function _addUIComponent(catId, design) {
     const cy = verts.reduce((s, v) => s + v[1], 0) / verts.length;
 
     const newUp = { instance_id: iid, x_mm: Math.round(cx * 10) / 10, y_mm: Math.round(cy * 10) / 10 };
-    if (catEntry.mounting?.style === 'side') newUp.edge_index = 0;
+    if (catEntry.mounting?.style === 'side') {
+        newUp.edge_index = 0;
+        const mid = _edgeMidpoint(verts, 0);
+        newUp.x_mm = mid.x;
+        newUp.y_mm = mid.y;
+    }
 
     if (!design.components) design.components = [];
     if (!design.ui_placements) design.ui_placements = [];
