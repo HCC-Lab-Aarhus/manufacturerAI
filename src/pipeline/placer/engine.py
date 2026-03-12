@@ -21,9 +21,10 @@ from .models import (
     GRID_STEP_MM, VALID_ROTATIONS, MIN_EDGE_CLEARANCE_MM,
     ROUTING_CHANNEL_MM, MIN_PIN_CLEARANCE_MM,
 )
-from .nets import build_net_graph, count_shared_nets, build_placement_groups
+from .nets import build_net_graph, count_shared_nets, build_placement_groups, resolve_pin_positions
 from .models import Placed
 from .candidates import generate_candidates
+from .congestion import CongestionGrid
 from .scoring import score_candidate
 
 
@@ -149,6 +150,9 @@ def place_components(
     # Build net connectivity graph
     net_graph = build_net_graph(design.nets)
 
+    # Build coarse congestion grid for routing-aware scoring
+    cg = CongestionGrid(outline_poly)
+
     # Resolve effective mounting style for each instance
     effective_style: dict[str, str] = {}
     for ci in design.components:
@@ -186,6 +190,7 @@ def place_components(
         placed.append(p)
         placed_map[ci.instance_id] = p
         ui_ids.add(ci.instance_id)
+        cg.block_component(ci.instance_id, x, y, ehw, ehh)
         log.info("UI-placed %s at (%.1f, %.1f) rot=%d°",
                  ci.instance_id, x, y, rot)
 
@@ -309,6 +314,7 @@ def place_components(
                         ci.instance_id, cat, placed, placed_map,
                         catalog_map, net_graph,
                         outline_verts, outline_bounds, style,
+                        congestion_grid=cg,
                     )
 
                     if score > best_score:
@@ -344,6 +350,30 @@ def place_components(
         )
         placed.append(_new)
         placed_map[ci.instance_id] = _new
+
+        # Update congestion grid: block body & commit coarse routes
+        cg.block_component(ci.instance_id, best_pos[0], best_pos[1],
+                           ehw_final, ehh_final)
+        for edge in net_graph.get(ci.instance_id, []):
+            other_p = placed_map.get(edge.other_iid)
+            if other_p is None:
+                continue
+            my_pins = resolve_pin_positions(edge.my_pins, cat)
+            other_cat_c = catalog_map.get(other_p.catalog_id)
+            if not my_pins or other_cat_c is None:
+                continue
+            other_pins = resolve_pin_positions(edge.other_pins, other_cat_c)
+            if not other_pins:
+                continue
+            # Use centroid of pin positions for coarse route
+            mx = sum(pin_world_xy(p, best_pos[0], best_pos[1], best_rot)[0] for p in my_pins) / len(my_pins)
+            my = sum(pin_world_xy(p, best_pos[0], best_pos[1], best_rot)[1] for p in my_pins) / len(my_pins)
+            ox = sum(pin_world_xy(p, other_p.x, other_p.y, other_p.rotation)[0] for p in other_pins) / len(other_pins)
+            oy = sum(pin_world_xy(p, other_p.x, other_p.y, other_p.rotation)[1] for p in other_pins) / len(other_pins)
+            coarse_path = cg.route_coarse(mx, my, ox, oy)
+            if coarse_path is not None:
+                cg.commit_net(edge.net_id, coarse_path)
+
         log.info(
             "Auto-placed %s at (%.1f, %.1f) rot=%d° score=%.2f",
             ci.instance_id, best_pos[0], best_pos[1], best_rot, best_score,
