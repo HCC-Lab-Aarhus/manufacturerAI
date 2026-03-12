@@ -296,7 +296,12 @@ def _filter_ironing_at_ink_layer(
 
 
 
-def _ink_pause_block(label: str, z: float, instructions: list[str]) -> list[str]:
+def _ink_pause_block(
+    label: str,
+    z: float,
+    instructions: list[str],
+    display_msg: str | None = None,
+) -> list[str]:
     """Generate an M0 pause for ink deposition — head stays in place.
 
     ``M0`` (Unconditional Stop) halts the printer immediately without
@@ -316,12 +321,18 @@ def _ink_pause_block(label: str, z: float, instructions: list[str]) -> list[str]
     ]
     for instr in instructions:
         lines.append(f"; >> {instr}")
+    if display_msg:
+        m0_line = f"M0 {display_msg}"
+    else:
+        m0_line = "M0 ; unconditional stop — head stays in place, press knob/LCD to resume"
     lines.extend([
         "; " + "=" * 50,
         "",
-        "M0 ; unconditional stop — head stays in place, press knob/LCD to resume",
-        "",
+        m0_line,
     ])
+    if display_msg:
+        lines.append(";silverink")
+    lines.append("")
     return lines
 
 
@@ -670,6 +681,7 @@ def postprocess_gcode(
                         "Deposit conductive ink along the trace channels.",
                         "Press the knob when done to resume printing.",
                     ],
+                    display_msg="connect silver ink",
                 ))
 
                 # Insert ink G-code if provided
