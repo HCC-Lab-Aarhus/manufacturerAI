@@ -626,6 +626,14 @@ function buildComponentPanel(design) {
             row.className = 'vp-internal-row';
             row.innerHTML = `<span class="vp-mono">${esc(comp.instance_id)}</span><span class="vp-internal-cat">${esc(comp.catalog_id)}</span>`;
             internalList.appendChild(row);
+
+            const catEntry = _getCatalogEntry(comp.catalog_id);
+            if (catEntry?.configurable && Object.keys(catEntry.configurable).length > 0) {
+                const configContainer = document.createElement('div');
+                configContainer.className = 'vp-internal-config';
+                _appendConfigFields(configContainer, comp, design);
+                internalList.appendChild(configContainer);
+            }
         }
         details.appendChild(internalList);
         section.appendChild(details);
@@ -745,8 +753,53 @@ function _buildCompCard(comp, up, design) {
         props.appendChild(edgeRow);
     }
 
+    // Configurable properties
+    _appendConfigFields(props, comp, design);
+
     card.appendChild(props);
     return card;
+}
+
+function _appendConfigFields(container, comp, design) {
+    const catEntry = _getCatalogEntry(comp.catalog_id);
+    const schema = catEntry?.configurable;
+    if (!schema || Object.keys(schema).length === 0) return;
+
+    if (!comp.config) comp.config = {};
+
+    for (const [key, meta] of Object.entries(schema)) {
+        const row = document.createElement('div');
+        row.className = 'vp-comp-prop';
+
+        const label = document.createElement('span');
+        label.className = 'vp-prop-label';
+        label.textContent = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        label.title = meta.description || '';
+        row.appendChild(label);
+
+        const input = document.createElement('input');
+        input.className = 'vp-config-input';
+        input.type = 'text';
+        input.placeholder = meta.description ? meta.description.slice(0, 40) : key;
+        input.title = meta.description || '';
+        input.value = comp.config[key] ?? '';
+
+        let saveTimer = null;
+        input.addEventListener('input', () => {
+            clearTimeout(saveTimer);
+            saveTimer = setTimeout(async () => {
+                const raw = input.value.trim();
+                const num = Number(raw);
+                comp.config[key] = raw === '' ? undefined : (isNaN(num) ? raw : num);
+                if (comp.config[key] === undefined) delete comp.config[key];
+                await _persistDesign(design);
+                await _persistConversationSubmitDesign(design);
+            }, 400);
+        });
+
+        row.appendChild(input);
+        container.appendChild(row);
+    }
 }
 
 async function _addUIComponent(catId, design) {
