@@ -372,6 +372,10 @@ def _try_crossing_ripup(
             owners = grid.cell_owner_at(gx, gy)
             crossed_nets.update(owners - {net_id})
 
+    # Only rip nets that are actually routed — stale ownership or
+    # pin-protection cells may reference nets not in routed_paths.
+    crossed_nets = {cn for cn in crossed_nets if cn in routed_paths}
+
     if not crossed_nets:
         for path in paths_cross:
             grid.block_trace(path, net_id=net_id)
