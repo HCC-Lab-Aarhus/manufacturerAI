@@ -18,6 +18,11 @@ import { registerHandler, cacheData, setData as setViewportData } from './viewpo
 import { drawComponentIcon } from './componentRenderer.js';
 import { normaliseOutline, buildOutlinePath, snapToEdge, esc, SCALE, PAD, NS, attachViewToggle } from './viewportUtils.js';
 import { state, API } from './state.js';
+import { enableCircuitTab, resetCircuitPanel } from './circuit.js';
+import { resetPlacementPanel } from './placement.js';
+import { resetRoutingPanel } from './routing.js';
+import { resetScadPanel } from './scad.js';
+import { resetGcodePanel } from './gcode.js';
 
 let _currentDesign = null;
 let _catalogPromise = null;
@@ -120,6 +125,7 @@ async function _persistDesign(design) {
             const saved = await res.json();
             _currentDesign = saved;
             cacheData('design', saved);
+            _invalidateDownstreamUI();
         } else if (!res.ok) {
             console.warn('Design persist returned', res.status, await res.text().catch(() => ''));
         }
@@ -137,6 +143,29 @@ async function _persistConversationSubmitDesign(design) {
         );
         if (res.ok) _showDesignEditBubble();
     } catch (e) { console.warn('Conversation persist failed:', e); }
+}
+
+/** Reset all downstream pipeline tabs after a design edit. */
+function _invalidateDownstreamUI() {
+    // Circuit: keep enabled but flash to prompt re-run
+    enableCircuitTab(true);
+    resetCircuitPanel();
+    // Placement
+    resetPlacementPanel();
+    const pBtn = document.querySelector('#pipeline-nav .step[data-step="placement"]');
+    if (pBtn) { pBtn.disabled = true; pBtn.classList.remove('tab-flash'); }
+    // Routing
+    resetRoutingPanel();
+    const rBtn = document.querySelector('#pipeline-nav .step[data-step="routing"]');
+    if (rBtn) { rBtn.disabled = true; rBtn.classList.remove('tab-flash'); }
+    // SCAD
+    resetScadPanel();
+    const sBtn = document.querySelector('#pipeline-nav .step[data-step="scad"]');
+    if (sBtn) { sBtn.disabled = true; sBtn.classList.remove('tab-flash'); }
+    // G-code
+    resetGcodePanel();
+    const gBtn = document.querySelector('#pipeline-nav .step[data-step="gcode"]');
+    if (gBtn) { gBtn.disabled = true; gBtn.classList.remove('tab-flash'); }
 }
 
 let _designEditBubble = null;
