@@ -98,4 +98,6 @@ DONE - top and bottom wall edges inflict on each other, they are not independent
 - traces should be under the components, so pins are placed on top of the traces. 
 
 
+ # errors found
 
+ when editing the ui components in the designer, it dosent save the new component places propperly. there is also an issue with the designer agent doing side mounting for components that allow side mounting.  

@@ -95,6 +95,8 @@ _CHECK_PLACEMENT_FEASIBILITY = {
                         "instance_id": {"type": "string"},
                         "x_mm": {"type": "number"},
                         "y_mm": {"type": "number"},
+                        "edge_index": {"type": "integer"},
+                        "mounting_style": {"type": "string"},
                     },
                     "required": ["instance_id", "x_mm", "y_mm"],
                 },
@@ -274,6 +276,16 @@ DESIGN_TOOLS: list[dict[str, Any]] = [
                                     "follow the local surface curvature (default: true). "
                                     "Set to false for a vertical hole regardless of "
                                     "the ceiling angle."
+                                ),
+                            },
+                            "mounting_style": {
+                                "type": "string",
+                                "description": (
+                                    "Override the component's default mounting style. "
+                                    "Must be one of the component's allowed_styles "
+                                    "(check with get_component). Set to 'side' for "
+                                    "components that should protrude through a wall "
+                                    "(requires edge_index). Omit to use the catalog default."
                                 ),
                             },
                         },

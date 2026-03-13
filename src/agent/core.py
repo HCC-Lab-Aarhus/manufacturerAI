@@ -301,10 +301,13 @@ class DesignAgent(_BaseAgent):
         # Convert ui_placements into components for parse_design compatibility
         ui_components = []
         for p in input_data.get("ui_placements", []):
-            ui_components.append({
+            comp = {
                 "catalog_id": p.get("catalog_id", p["instance_id"]),
                 "instance_id": p["instance_id"],
-            })
+            }
+            if p.get("mounting_style"):
+                comp["mounting_style"] = p["mounting_style"]
+            ui_components.append(comp)
         full_data["components"] = ui_components
 
         try:

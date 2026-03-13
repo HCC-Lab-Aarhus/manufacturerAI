@@ -26,6 +26,7 @@ from .models import Placed
 from .candidates import generate_candidates
 from .congestion import CongestionGrid
 from .scoring import score_candidate
+from .annealing import sa_refine
 
 
 log = logging.getLogger(__name__)
@@ -184,11 +185,17 @@ def place_components(
     cg = CongestionGrid(outline_poly)
 
     # Resolve effective mounting style for each instance
+    # Priority: UIPlacement.mounting_style > ComponentInstance.mounting_style > catalog default
     effective_style: dict[str, str] = {}
+    up_style_map = {up.instance_id: up.mounting_style for up in design.ui_placements if up.mounting_style}
     for ci in design.components:
         cat = catalog_map.get(ci.catalog_id)
         if cat:
-            effective_style[ci.instance_id] = ci.mounting_style or cat.mounting.style
+            effective_style[ci.instance_id] = (
+                up_style_map.get(ci.instance_id)
+                or ci.mounting_style
+                or cat.mounting.style
+            )
 
     # ── 1. Place UI components (fixed positions) ───────────────────
 
@@ -438,6 +445,21 @@ def place_components(
             "Auto-placed %s at (%.1f, %.1f) rot=%d° score=%.2f",
             ci.instance_id, best_pos[0], best_pos[1], best_rot, best_score,
         )
+
+    # ── 3b. SA refinement ──────────────────────────────────────────
+    # The constructive loop above is greedy and order-dependent.
+    # Simulated annealing globally refines positions to reduce total
+    # wirelength and routing congestion.
+    if len(placed) - len(ui_ids) >= 2:
+        placed = sa_refine(
+            placed,
+            ui_ids,
+            design.nets,
+            catalog_map,
+            outline_poly,
+            cg,
+        )
+        placed_map = {p.instance_id: p for p in placed}
 
     # ── 4. Build output ────────────────────────────────────────────
 

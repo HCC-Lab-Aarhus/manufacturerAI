@@ -35,6 +35,7 @@ def parse_design(data: dict) -> DesignSpec:
             y_mm=float(p["y_mm"]),
             edge_index=p.get("edge_index"),
             conform_to_surface=bool(p.get("conform_to_surface", True)),
+            mounting_style=p.get("mounting_style"),
         )
         for p in data.get("ui_placements", [])
     ]

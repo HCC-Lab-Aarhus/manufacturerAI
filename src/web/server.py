@@ -1248,8 +1248,25 @@ async def api_put_design(request: Request, session: str = Query(...)):
     s = _resolve_session(session)
     cat = _get_catalog()
 
+    # design.json may lack a components array (the design agent saves only
+    # ui_placements).  Synthesize temporary components from ui_placements so
+    # parse_design / validate_design can check the placements properly.
+    validation_body = {**body}
+    if not validation_body.get("components"):
+        ui_components = []
+        for p in validation_body.get("ui_placements", []):
+            comp: dict = {
+                "catalog_id": p.get("catalog_id", p["instance_id"]),
+                "instance_id": p["instance_id"],
+            }
+            if p.get("mounting_style"):
+                comp["mounting_style"] = p["mounting_style"]
+            ui_components.append(comp)
+        validation_body["components"] = ui_components
+    validation_body.setdefault("nets", [])
+
     try:
-        spec = parse_design(body)
+        spec = parse_design(validation_body)
     except (KeyError, TypeError, ValueError, IndexError) as e:
         raise HTTPException(400, f"Design parsing error: {e}")
 

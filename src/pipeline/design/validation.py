@@ -140,9 +140,20 @@ def validate_design(
                 f"UI placement: '{up.instance_id}' ({cat.id}) has ui_placement=false"
             )
 
-        # Resolve effective mounting style
+        # Validate mounting_style override on ui_placement
+        if up.mounting_style and up.mounting_style not in cat.mounting.allowed_styles:
+            errors.append(
+                f"UI placement '{up.instance_id}': mounting_style '{up.mounting_style}' "
+                f"not in allowed_styles {cat.mounting.allowed_styles}"
+            )
+
+        # Resolve effective mounting style (ui_placement > component > catalog default)
         ci_match = next((ci for ci in spec.components if ci.instance_id == up.instance_id), None)
-        eff_style = (ci_match.mounting_style if ci_match and ci_match.mounting_style else cat.mounting.style)
+        eff_style = (
+            up.mounting_style
+            or (ci_match.mounting_style if ci_match and ci_match.mounting_style else None)
+            or cat.mounting.style
+        )
 
         if eff_style == "side":
             if up.edge_index is None:
