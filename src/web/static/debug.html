@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Calibration Debug — ManufacturerAI</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: #1e1e1e;
+            color: #ececec;
+            margin: 0;
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 { margin-bottom: 8px; color: #fff; }
+        p.subtitle { color: #888; margin-bottom: 40px; }
+        
+        .panel {
+            background: #252526;
+            border: 1px solid #3c3c3c;
+            border-radius: 8px;
+            padding: 30px;
+            width: 100%;
+            max-width: 500px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        
+        .form-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 16px;
+            align-items: center;
+        }
+        .form-row label { color: #ccc; font-size: 14px; }
+        .form-row input {
+            background: #3c3c3c;
+            border: 1px solid #555;
+            color: #fff;
+            padding: 6px 10px;
+            border-radius: 4px;
+            width: 80px;
+            text-align: right;
+            outline: none;
+        }
+        .form-row input:focus, .form-row select:focus { border-color: #007acc; }
+        
+        .form-select {
+            background: #3c3c3c;
+            border: 1px solid #555;
+            color: #fff;
+            padding: 6px 10px;
+            border-radius: 4px;
+            width: 150px;
+            outline: none;
+        }
+        
+        .actions { margin-top: 30px; }
+        button {
+            width: 100%;
+            background: #007acc;
+            color: white;
+            border: none;
+            padding: 12px;
+            font-size: 16px;
+            font-weight: 500;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:hover { background: #0098ff; }
+        button:disabled { background: #444; color: #888; cursor: not-allowed; }
+        
+        #result-area {
+            margin-top: 30px;
+            display: none;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .download-btn {
+            background: #333;
+            border: 1px solid #555;
+            color: #ddd;
+            text-decoration: none;
+            padding: 10px;
+            text-align: center;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .download-btn:hover { background: #444; color: #fff; }
+        
+        #error-msg {
+            color: #f48771;
+            margin-top: 16px;
+            font-size: 14px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Calibration Generator</h1>
+    <p class="subtitle">Generates 4 physical and projected squares to calibrate alignment.</p>
+
+    <div class="panel">
+        <div class="form-row">
+            <label title="Printer profile to use for start/end G-code">Printer</label>
+            <select id="printerSelect" class="form-select"></select>
+        </div>
+        <div class="form-row">
+            <label title="Filament profile to use for start/end G-code">Filament</label>
+            <select id="filamentSelect" class="form-select"></select>
+        </div>
+        <div class="form-row">
+            <label title="Width of the printable area">Bed Width (mm)</label>
+            <input type="number" id="bedW" value="219.0" step="1">
+        </div>
+        <div class="form-row">
+            <label title="Depth of the printable area">Bed Depth (mm)</label>
+            <input type="number" id="bedD" value="219.0" step="1">
+        </div>
+        <div class="form-row">
+            <label title="Size of the bounding box where dots will be placed">Bounding Box (mm)</label>
+            <input type="number" id="boxSize" value="100.0" step="1">
+        </div>
+        <div class="form-row">
+            <label title="Distance from the edge of the bounding box to the dot">Padding (mm)</label>
+            <input type="number" id="padding" value="5.0" step="0.5">
+        </div>
+        <div class="form-row">
+            <label title="Size of the generated dot/square">Square Size (mm)</label>
+            <input type="number" id="squareSize" value="5.0" step="0.5">
+        </div>
+
+        <div class="actions">
+            <button id="btn-generate">Generate Calibration Files</button>
+        </div>
+        <div id="error-msg"></div>
+
+        <div id="result-area">
+            <a id="dl-gcode" class="download-btn" href="#" download="debug_calibration.gcode">↓ Download G-code</a>
+            <a id="dl-bitmap" class="download-btn" href="#" download="trace_bitmap.txt">↓ Download Trace Bitmap</a>
+        </div>
+    </div>
+
+    <script>
+        // Load options on boot
+        window.addEventListener('DOMContentLoaded', async () => {
+            try {
+                const [pRes, fRes] = await Promise.all([
+                    fetch('/api/printers'), fetch('/api/filaments')
+                ]);
+                const pData = await pRes.json();
+                const fData = await fRes.json();
+                
+                const pSelect = document.getElementById('printerSelect');
+                pData.printers.forEach(p => {
+                    const opt = document.createElement('option');
+                    opt.value = p.id;
+                    opt.textContent = p.label;
+                    pSelect.appendChild(opt);
+                });
+                
+                const fSelect = document.getElementById('filamentSelect');
+                fData.filaments.forEach(f => {
+                    const opt = document.createElement('option');
+                    opt.value = f.id;
+                    opt.textContent = f.label;
+                    fSelect.appendChild(opt);
+                });
+            } catch(e) {
+                console.error("Failed to load profiles:", e);
+            }
+        });
+
+        document.getElementById('btn-generate').addEventListener('click', async () => {
+            const btn = document.getElementById('btn-generate');
+            const err = document.getElementById('error-msg');
+            const res = document.getElementById('result-area');
+            const dlGcode = document.getElementById('dl-gcode');
+            const dlBitmap = document.getElementById('dl-bitmap');
+
+            btn.disabled = true;
+            btn.textContent = 'Generating...';
+            err.textContent = '';
+            res.style.display = 'none';
+
+            // Gather inputs
+            const wp = new URLSearchParams({
+                printer: document.getElementById('printerSelect').value,
+                filament: document.getElementById('filamentSelect').value,
+                bed_width: document.getElementById('bedW').value,
+                bed_depth: document.getElementById('bedD').value,
+                box_size: document.getElementById('boxSize').value,
+                padding: document.getElementById('padding').value,
+                square_size: document.getElementById('squareSize').value
+            });
+
+            try {
+                const req = await fetch('/api/debug/calibrate?' + wp.toString(), {
+                    method: 'POST'
+                });
+
+                if (!req.ok) {
+                    throw new Error(`Generation failed: ${req.status} ${req.statusText}`);
+                }
+
+                const data = await req.json();
+
+                // Create blobs
+                const gcodeBlob = new Blob([data.gcode], { type: 'text/plain' });
+                const bitmapBlob = new Blob([data.bitmap], { type: 'text/plain' });
+
+                dlGcode.href = URL.createObjectURL(gcodeBlob);
+                dlBitmap.href = URL.createObjectURL(bitmapBlob);
+
+                res.style.display = 'flex';
+            } catch (e) {
+                err.textContent = e.message;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Generate Calibration Files';
+            }
+        });
+    </script>
+</body>
+</html>

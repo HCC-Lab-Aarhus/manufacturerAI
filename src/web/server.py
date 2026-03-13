@@ -170,7 +170,16 @@ def _invalidate_downstream(session: Session, current_step: str) -> list[str]:
 
 # ── Routes: Pages ──────────────────────────────────────────────────
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/debug", response_class=HTMLResponse)
+async def debug_page():
+    """Serve the standalone debug calibration page."""
+    html_path = STATIC_DIR / "debug.html"
+    if not html_path.exists():
+        raise HTTPException(404, "debug.html not found")
+    return html_path.read_text(encoding="utf-8")
+
+
+@app.get("/scad", response_class=HTMLResponse)
 async def index():
     """Serve the main HTML page."""
     html_path = STATIC_DIR / "index.html"
@@ -763,6 +772,239 @@ async def api_serve_stl(session: str = Query(...)):
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     return response
+
+
+# ── Routes: Debug API ─────────────────────────────────────────────
+
+
+@app.post("/api/debug/calibrate")
+async def api_debug_calibrate(
+    printer: str = Query("mk3s"),
+    filament: str = Query("prusament_pla"),
+    bed_width: float = 219.0,
+    bed_depth: float = 219.0,
+    box_size: float = 100.0,
+    padding: float = 5.0,
+    square_size: float = 5.0,
+):
+    """Generate 4 calibration dots (squares) and return G-code + Bitmap."""
+    import tempfile
+    import os
+    from pathlib import Path
+    from src.pipeline.config import TRACE_RULES, BITMAP_CONFIG, PrinterDef, get_printer
+    from src.pipeline.router.bitmap import _trace_cells
+    
+    pdef = get_printer(printer)
+    # 1. Coordinate setup
+    cx, cy = pdef.bed_width / 2, pdef.bed_depth / 2
+    half_box = box_size / 2
+    
+    # Bounding box of our virtual "board"
+    min_x = cx - half_box
+    max_x = cx + half_box
+    min_y = cy - half_box
+    max_y = cy + half_box
+    
+    # The 4 squares (padded inward from the corners)
+    # Bottom-left
+    bl_x = min_x + padding
+    bl_y = min_y + padding
+    # Bottom-right
+    br_x = max_x - padding - square_size
+    br_y = min_y + padding
+    # Top-left
+    tl_x = min_x + padding
+    tl_y = max_y - padding - square_size
+    # Top-right
+    tr_x = max_x - padding - square_size
+    tr_y = max_y - padding - square_size
+    
+    def make_square(x: float, y: float, size: float) -> list[tuple[float, float]]:
+        return [
+            (x, y),
+            (x + size, y),
+            (x + size, y + size),
+            (x, y + size),
+            (x, y) # close
+        ]
+        
+    traces = [
+        {"net_id": "debug_bl", "path": make_square(bl_x, bl_y, square_size)},
+        {"net_id": "debug_br", "path": make_square(br_x, br_y, square_size)},
+        {"net_id": "debug_tl", "path": make_square(tl_x, tl_y, square_size)},
+        {"net_id": "debug_tr", "path": make_square(tr_x, tr_y, square_size)},
+    ]
+    
+    # 2. Generate G-code via slicer
+    def make_stl_cube(x1: float, y1: float, x2: float, y2: float, z1: float, z2: float) -> str:
+        return f"""  facet normal 0.0 -1.0 0.0
+    outer loop
+      vertex {x1} {y1} {z1}
+      vertex {x2} {y1} {z1}
+      vertex {x2} {y1} {z2}
+    endloop
+  endfacet
+  facet normal 0.0 -1.0 0.0
+    outer loop
+      vertex {x1} {y1} {z1}
+      vertex {x2} {y1} {z2}
+      vertex {x1} {y1} {z2}
+    endloop
+  endfacet
+  facet normal 0.0 1.0 0.0
+    outer loop
+      vertex {x1} {y2} {z1}
+      vertex {x1} {y2} {z2}
+      vertex {x2} {y2} {z2}
+    endloop
+  endfacet
+  facet normal 0.0 1.0 0.0
+    outer loop
+      vertex {x1} {y2} {z1}
+      vertex {x2} {y2} {z2}
+      vertex {x2} {y2} {z1}
+    endloop
+  endfacet
+  facet normal 0.0 0.0 -1.0
+    outer loop
+      vertex {x1} {y1} {z1}
+      vertex {x1} {y2} {z1}
+      vertex {x2} {y2} {z1}
+    endloop
+  endfacet
+  facet normal 0.0 0.0 -1.0
+    outer loop
+      vertex {x1} {y1} {z1}
+      vertex {x2} {y2} {z1}
+      vertex {x2} {y1} {z1}
+    endloop
+  endfacet
+  facet normal 0.0 0.0 1.0
+    outer loop
+      vertex {x1} {y1} {z2}
+      vertex {x2} {y1} {z2}
+      vertex {x2} {y2} {z2}
+    endloop
+  endfacet
+  facet normal 0.0 0.0 1.0
+    outer loop
+      vertex {x1} {y1} {z2}
+      vertex {x2} {y2} {z2}
+      vertex {x1} {y2} {z2}
+    endloop
+  endfacet
+  facet normal -1.0 0.0 0.0
+    outer loop
+      vertex {x1} {y1} {z1}
+      vertex {x1} {y1} {z2}
+      vertex {x1} {y2} {z2}
+    endloop
+  endfacet
+  facet normal -1.0 0.0 0.0
+    outer loop
+      vertex {x1} {y1} {z1}
+      vertex {x1} {y2} {z2}
+      vertex {x1} {y2} {z1}
+    endloop
+  endfacet
+  facet normal 1.0 0.0 0.0
+    outer loop
+      vertex {x2} {y1} {z1}
+      vertex {x2} {y2} {z1}
+      vertex {x2} {y2} {z2}
+    endloop
+  endfacet
+  facet normal 1.0 0.0 0.0
+    outer loop
+      vertex {x2} {y1} {z1}
+      vertex {x2} {y2} {z2}
+      vertex {x2} {y1} {z2}
+    endloop
+  endfacet
+"""
+
+    from src.pipeline.gcode.slicer import slice_stl
+    from src.pipeline.gcode.postprocessor import _ink_pause_block
+    
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        dummy_stl = tdp / "dummy.stl"
+        # 4 PLA squares
+        tdstl = ["solid dummy"]
+        tdstl.append(make_stl_cube(bl_x, bl_y, bl_x+square_size, bl_y+square_size, 0, 0.2))
+        tdstl.append(make_stl_cube(br_x, br_y, br_x+square_size, br_y+square_size, 0, 0.2))
+        tdstl.append(make_stl_cube(tl_x, tl_y, tl_x+square_size, tl_y+square_size, 0, 0.2))
+        tdstl.append(make_stl_cube(tr_x, tr_y, tr_x+square_size, tr_y+square_size, 0, 0.2))
+        tdstl.append("endsolid dummy")
+        dummy_stl.write_text("\n".join(tdstl), encoding="utf-8")
+        
+        dummy_gcode = tdp / "dummy.gcode"
+        ok, msg, out_path = slice_stl(
+            dummy_stl, dummy_gcode, printer=printer, filament=filament
+        )
+        if not ok or not out_path or not out_path.exists():
+            raise HTTPException(500, f"Slicer wrapper failed: {msg}")
+            
+        sliced_lines = out_path.read_text(encoding="utf-8").splitlines()
+        
+    end_idx = len(sliced_lines)
+    
+    for i in range(len(sliced_lines)-1, -1, -1):
+        if sliced_lines[i].startswith(";TYPE:") and "Custom" not in sliced_lines[i]:
+            for j in range(i, len(sliced_lines)):
+                if sliced_lines[j].startswith("M104 ") or sliced_lines[j].startswith("M140 ") or (sliced_lines[j].startswith(";TYPE:Custom") and "end" in sliced_lines[j].lower()):
+                    end_idx = j
+                    break
+            break
+            
+    pause_lines = _ink_pause_block(
+        "CALIBRATE ALIGNMENT",
+        0.2, 
+        [
+            "Align the projected squares with the printed squares.",
+            "Press the knob when done."
+        ],
+        display_msg="align projector"
+    )
+            
+    final_gcode_lines = sliced_lines[:end_idx] + pause_lines + sliced_lines[end_idx:]
+    
+    # 3. Generate Bitmap via trace_cells directly
+    # Same as generate_trace_bitmap but without RoutingResult object
+    cols = BITMAP_CONFIG.cols
+    rows = BITMAP_CONFIG.rows_for_bed(bed_width, bed_depth)
+    ink_cells: set[tuple[int, int]] = set()
+    
+    SCALE = 1.05
+    for t in traces:
+        # Scale around bed centre
+        scaled_path = [
+            (cx + (px - cx) * SCALE, cy + (py - cy) * SCALE)
+            for px, py in t["path"]
+        ]
+        ink_cells |= _trace_cells(
+            scaled_path, TRACE_RULES.trace_width_mm,
+            bed_width, bed_depth, cols, rows
+        )
+        
+    bmp_lines: list[str] = []
+    for r in range(rows - 1, -1, -1):
+        row_chars = []
+        for c in range(cols):
+            row_chars.append('1' if (r, c) in ink_cells else '0')
+        bmp_lines.append(''.join(row_chars))
+        
+    # Return as JSON so the frontend can create Blobs and download them
+    return {
+        "gcode": "\n".join(final_gcode_lines),
+        "bitmap": "\n".join(bmp_lines),
+        "info": {
+            "bed": [bed_width, bed_depth],
+            "box_size": box_size,
+            "padding": padding,
+            "square_size": square_size
+        }
+    }
 
 
 # ── Routes: G-code API ──────────────────────────────────────────
