@@ -170,6 +170,14 @@ def _invalidate_downstream(session: Session, current_step: str) -> list[str]:
 
 # ── Routes: Pages ──────────────────────────────────────────────────
 
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    """Serve the main HTML page at root."""
+    html_path = STATIC_DIR / "index.html"
+    if not html_path.exists():
+        return HTMLResponse("<h1>ManufacturerAI</h1><p>Static files not found.</p>")
+    return FileResponse(html_path)
+
 @app.get("/debug", response_class=HTMLResponse)
 async def debug_page():
     """Serve the standalone debug calibration page."""
