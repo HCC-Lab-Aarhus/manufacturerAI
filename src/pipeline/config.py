@@ -11,17 +11,94 @@ Change a value here and both stages will stay in sync automatically.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
+
+
+# ── Printhead hardware definition ──────────────────────────────────
+
+@dataclass(frozen=True)
+class PrintheadConfig:
+    """Physical parameters of the inkjet printhead (Xaar 128).
+
+    All sweep timing, bitmap resolution, and pixel sizing are derived
+    from these hardware-given constants.
+    """
+
+    nozzle_count: int = 128
+    """Number of nozzles in the linear array."""
+
+    nozzle_pitch_mm: float = 0.13625
+    """Centre-to-centre distance between adjacent nozzles (~185 DPI)."""
+
+    lane_step_nozzles: int = 32
+    """How many nozzles the head advances between sweep lanes.
+    The overlap is (nozzle_count - lane_step_nozzles) nozzles."""
+
+    max_fire_rate_hz: float = 5500.0
+    """Maximum nozzle firing frequency (limited by READY cycle)."""
+
+    serial_baud: int = 115200
+    """Baud rate of the Pi→Arduino bitmap serial link."""
+
+    serial_packet_bytes: int = 17
+    """Bytes per row packet (1 header + 16 data)."""
+
+    @property
+    def printhead_width_mm(self) -> float:
+        return self.nozzle_count * self.nozzle_pitch_mm
+
+    @property
+    def lane_width_mm(self) -> float:
+        return self.lane_step_nozzles * self.nozzle_pitch_mm
+
+    @property
+    def pixel_size_mm(self) -> float:
+        """Square pixel size — equal to nozzle pitch for 1:1 mapping."""
+        return self.nozzle_pitch_mm
+
+    @property
+    def max_serial_row_rate_hz(self) -> float:
+        bits_per_byte = 10  # 8 data + 1 start + 1 stop
+        return self.serial_baud / (self.serial_packet_bytes * bits_per_byte)
+
+    @property
+    def bottleneck_hz(self) -> float:
+        return min(self.max_fire_rate_hz, self.max_serial_row_rate_hz)
+
+    @property
+    def max_sweep_speed_mm_per_s(self) -> float:
+        return self.bottleneck_hz * self.pixel_size_mm
+
+    def sweep_speed_for_row_rate(self, row_rate_hz: float) -> float:
+        """Return sweep speed (mm/s) for a given row fire rate."""
+        return row_rate_hz * self.pixel_size_mm
+
+    def row_rate_for_speed(self, speed_mm_per_s: float) -> float:
+        """Return the required row fire rate (Hz) for a given sweep speed."""
+        return speed_mm_per_s / self.pixel_size_mm
+
+    def bitmap_dims_for_part(
+        self, part_width_mm: float, part_depth_mm: float,
+    ) -> tuple[int, int]:
+        """Return (cols, rows) for a bitmap covering the given part at nozzle-native resolution."""
+        cols = math.ceil(part_width_mm / self.pixel_size_mm)
+        rows = math.ceil(part_depth_mm / self.pixel_size_mm)
+        return cols, rows
+
+
+PRINTHEAD = PrintheadConfig()
 
 
 @dataclass(frozen=True)
 class BitmapConfig:
     """Resolution of the conductive-ink trace bitmap.
 
-    The bitmap maps 1:1 onto the inkjet print head at a fixed
-    resolution of 1536 × 1383 pixels, spanning the full build plate.
+    Now dynamically sized to match the printhead's nozzle-native pixel
+    pitch.  ``cols`` and ``rows`` are computed from the part bounding box
+    and the printhead's pixel_size_mm.
     """
 
     cols: int = 1536
@@ -31,30 +108,33 @@ class BitmapConfig:
         """Return the fixed row count (kept for API compatibility)."""
         return self.rows
 
+    @staticmethod
+    def for_part(
+        part_width_mm: float,
+        part_depth_mm: float,
+        printhead: PrintheadConfig = PRINTHEAD,
+    ) -> "BitmapConfig":
+        """Create a BitmapConfig sized to a specific part at nozzle-native resolution."""
+        cols, rows = printhead.bitmap_dims_for_part(part_width_mm, part_depth_mm)
+        return BitmapConfig(cols=cols, rows=rows)
+
 
 BITMAP_CONFIG = BitmapConfig()
 
 
 @dataclass(frozen=True)
 class BitmapCalibration:
-    """Projection-to-print alignment offsets.
+    """Projection-to-print alignment offsets (LEGACY).
 
-    Tweak these values after running the calibration dots on ``/debug``.
-    They shift and scale the bitmap so the projected image aligns with
-    the physically printed PLA squares.
+    These empirical fudge factors exist for backward compatibility with
+    the old fixed-resolution bitmap.  New code should use geometric
+    alignment via the print-job manifest and set all offsets to zero.
     """
 
-    offset_x: float = 6.0
-    """Shift bitmap X in mm (positive = right)."""
-
-    offset_y: float = 23.0
-    """Shift bitmap Y in mm (positive = up)."""
-
-    scale_x: float = 1.05
-    """Horizontal scale (1.0 = no change)."""
-
-    scale_y: float = 1.05
-    """Vertical scale (1.0 = no change)."""
+    offset_x: float = 0.0
+    offset_y: float = 0.0
+    scale_x: float = 1.0
+    scale_y: float = 1.0
 
 
 BITMAP_CALIBRATION = BitmapCalibration()

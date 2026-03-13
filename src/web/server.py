@@ -40,7 +40,7 @@ from src.agent import (
 from src.pipeline.design import parse_design, validate_design
 from src.pipeline.placer import place_components, placement_to_dict, parse_placement, PlacementError
 from src.pipeline.router import route_traces, routing_to_dict, write_trace_bitmap
-from src.pipeline.config import TRACE_RULES, BITMAP_CONFIG, PRINTERS, get_printer
+from src.pipeline.config import TRACE_RULES, BITMAP_CONFIG, PRINTHEAD, PRINTERS, get_printer
 from src.pipeline.gcode.filaments import FILAMENTS
 from src.pipeline.scad import run_scad_step
 from src.web.naming import generate_session_name
@@ -576,18 +576,40 @@ async def api_generate_bitmap(session: str = Query(...)):
 
     pdef = get_printer(s.printer_id)
     outline_verts = design.outline.vertices
-    model_cx = (min(v[0] for v in outline_verts) + max(v[0] for v in outline_verts)) / 2
-    model_cy = (min(v[1] for v in outline_verts) + max(v[1] for v in outline_verts)) / 2
+    xs = [v[0] for v in outline_verts]
+    ys = [v[1] for v in outline_verts]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    part_width = max_x - min_x
+    part_depth = max_y - min_y
+    model_cx = (min_x + max_x) / 2
+    model_cy = (min_y + max_y) / 2
     bed_offset_x = pdef.bed_width / 2 - model_cx
     bed_offset_y = pdef.bed_depth / 2 - model_cy
+
+    part_origin_x = pdef.bed_width / 2 - (part_width / 2)
+    part_origin_y = pdef.bed_depth / 2 - (part_depth / 2)
+
     write_trace_bitmap(
         result,
         TRACE_RULES.trace_width_mm,
         s.path / "trace_bitmap.txt",
         printer=pdef,
-        origin_x=-bed_offset_x,
-        origin_y=-bed_offset_y,
+        origin_x=min_x,
+        origin_y=min_y,
+        part_width_mm=part_width,
+        part_depth_mm=part_depth,
     )
+
+    from src.pipeline.manifest import generate_manifest, write_manifest
+    manifest = generate_manifest(
+        part_origin_x_mm=part_origin_x,
+        part_origin_y_mm=part_origin_y,
+        part_width_mm=part_width,
+        part_depth_mm=part_depth,
+        printer=pdef,
+    )
+    write_manifest(manifest, s.path / "print_job.json")
 
     return {"status": "done"}
 
@@ -630,7 +652,7 @@ async def api_bitmap(session: str = Query(...)):
     rows = raw.splitlines()
 
     num_rows = len(rows)
-    cols = bitmap_cfg.cols
+    cols = len(rows[0]) if rows else bitmap_cfg.cols
     byte_cols = (cols + 7) // 8
     packed = bytearray(num_rows * byte_cols)
     for ri, line in enumerate(rows):
