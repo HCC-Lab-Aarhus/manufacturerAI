@@ -485,7 +485,7 @@ ManufacturingResult
 
 **Files:** `src/agent/` package — `config.py`, `tools.py`, `prompt.py`, `messages.py`, `core.py`, `__init__.py`
 
-**Status:** Complete. Uses Claude Sonnet 4.6 with extended thinking and the Anthropic streaming API. Yields token-level deltas for real-time UI updates.
+**Status:** Complete. Uses Claude Opus 4.6 with extended thinking and the Anthropic streaming API. Yields token-level deltas for real-time UI updates.
 
 **Package layout:**
 - `config.py` — constants: `MODEL`, `MAX_TOKENS`, `THINKING_BUDGET`, `MAX_TURNS`, `TOKEN_BUDGET`
