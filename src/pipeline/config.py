@@ -143,7 +143,7 @@ PRINTERS: dict[str, PrinterDef] = {
         bed_width=219.0, # 250 - 31 for inkjet carriage
         bed_depth=178.0, # 210 - 32 for inkjet carriage
         max_z_mm=210.0,
-        profile_filename="slicer_profile.ini",
+        profile_filename="slicer_profile_mk3s.ini",
     ),
     "mk3s_plus": PrinterDef(
         id="mk3s_plus",
