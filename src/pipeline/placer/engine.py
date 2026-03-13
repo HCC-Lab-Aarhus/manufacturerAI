@@ -26,6 +26,7 @@ from .models import Placed
 from .candidates import generate_candidates
 from .congestion import CongestionGrid
 from .scoring import score_candidate
+from .annealing import sa_refine
 
 
 log = logging.getLogger(__name__)
@@ -438,6 +439,21 @@ def place_components(
             "Auto-placed %s at (%.1f, %.1f) rot=%d° score=%.2f",
             ci.instance_id, best_pos[0], best_pos[1], best_rot, best_score,
         )
+
+    # ── 3b. SA refinement ──────────────────────────────────────────
+    # The constructive loop above is greedy and order-dependent.
+    # Simulated annealing globally refines positions to reduce total
+    # wirelength and routing congestion.
+    if len(placed) - len(ui_ids) >= 2:
+        placed = sa_refine(
+            placed,
+            ui_ids,
+            design.nets,
+            catalog_map,
+            outline_poly,
+            cg,
+        )
+        placed_map = {p.instance_id: p for p in placed}
 
     # ── 4. Build output ────────────────────────────────────────────
 
