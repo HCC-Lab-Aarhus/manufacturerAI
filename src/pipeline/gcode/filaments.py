@@ -103,10 +103,10 @@ FILAMENTS: dict[str, FilamentDef] = {
             # bond.  These overrides bring outer walls to 45 mm/s and
             # inner walls to 60 mm/s, which eliminates corner curl.
             "external_perimeter_speed":         "45",
-            "perimeter_speed":                  "60",
+            "perimeter_speed":                  "45",
             "small_perimeter_speed":            "25",
-            "infill_speed":                     "80",
-            "solid_infill_speed":               "80",
+            "infill_speed":                     "45",
+            "solid_infill_speed":               "45",
             # --- Acceleration ---
             # Lower acceleration = gentler deceleration into corners
             # so the nozzle doesn't overshoot and peel the bead.
