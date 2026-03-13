@@ -767,7 +767,11 @@ def postprocess_gcode(
         #     the ironing postamble to the next section — but replace
         #     the ironing retract (whose E value is invalid after
         #     stripping) with a clean retract.
-        if line.strip() == ';TYPE:Ironing' and abs(current_z - ink_z) > 0.05:
+        strip_ironing = (
+            line.strip() == ';TYPE:Ironing'
+            and (abs(current_z - ink_z) > 0.05 or silverink_only)
+        )
+        if strip_ironing:
             # Collect all lines in the ironing section
             section: list[str] = []
             i += 1
