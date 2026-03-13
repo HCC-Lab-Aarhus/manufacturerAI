@@ -83,7 +83,7 @@ def generate_manifest(
     """Build a manifest from design geometry and hardware config."""
     pdef = printer or get_printer()
     px = printhead.pixel_size_mm
-    cols, rows = printhead.bitmap_dims_for_part(part_width_mm, part_depth_mm)
+    out_cols, out_rows = printhead.bitmap_output_dims(part_width_mm, part_depth_mm)
 
     speed_mm_per_s = sweep_speed_mm_per_min / 60.0
     row_rate = printhead.row_rate_for_speed(speed_mm_per_s)
@@ -103,8 +103,8 @@ def generate_manifest(
         lane_step_nozzles=printhead.lane_step_nozzles,
         lane_width_mm=round(printhead.lane_width_mm, 4),
         bitmap_file=bitmap_file,
-        bitmap_cols=cols,
-        bitmap_rows=rows,
+        bitmap_cols=out_cols,
+        bitmap_rows=out_rows,
         pixel_size_x_mm=px,
         pixel_size_y_mm=px,
         ink_z_mm=FLOOR_MM,

@@ -1,7 +1,14 @@
 """Bitmap generation — renders routed traces to a nozzle-native resolution bitmap.
 
-The bitmap is a text grid (one character per cell) sized so each pixel
-maps 1:1 to the printhead's nozzle pitch in both X and Y (square pixels).
+The nozzle array is oriented parallel to the **Y axis**.  Each text
+line represents one firing position along the X sweep; each character
+within a line corresponds to one nozzle (Y position).
+
+Internally, traces are rasterized on a conventional (row=Y, col=X)
+grid, then transposed when writing the text output so that:
+  - text rows  → X positions (sweep direction)
+  - text cols  → Y positions (nozzle direction)
+
 A '1' means "deposit conductive ink here", a '0' means "no ink".
 
 The bitmap covers only the part's bounding box, not the full bed.
@@ -111,8 +118,9 @@ def generate_trace_bitmap(
     Returns
     -------
     list[str]
-        One string per row, each exactly ``cols`` characters of '0' or '1'.
-        Index 0 is the top row (highest Y).
+        Transposed for the Y-parallel printhead: each text line
+        corresponds to one X position (sweep direction), each character
+        to one Y position (nozzle direction).  Line 0 = lowest X.
     """
     pdef = printer or get_printer()
 
@@ -151,12 +159,19 @@ def generate_trace_bitmap(
             pixel_size, cols, rows,
         )
 
+    # Transpose: text lines = X positions (sweep), chars = Y positions (nozzles).
+    # Internal grid: row = Y index, col = X index.
+    # Emit from highest X to lowest X (matching the old convention of
+    # highest-coordinate-first); rasp_main.py reverses on load so the
+    # first row after flip = lowest X = start of the increasing-X sweep.
+    # Within each line, chars go from lowest Y to highest Y, matching
+    # the nozzle-index-to-Y mapping in the printhead simulator.
     lines: list[str] = []
-    for r in range(rows - 1, -1, -1):
-        row_chars = []
-        for c in range(cols):
-            row_chars.append('1' if (r, c) in ink_cells else '0')
-        lines.append(''.join(row_chars))
+    for c in range(cols - 1, -1, -1):
+        line_chars = []
+        for r in range(rows):
+            line_chars.append('1' if (r, c) in ink_cells else '0')
+        lines.append(''.join(line_chars))
 
     return lines
 
