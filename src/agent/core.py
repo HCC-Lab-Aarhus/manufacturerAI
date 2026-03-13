@@ -404,15 +404,67 @@ class CircuitAgent(_BaseAgent):
             if len(net.get("pins", [])) < 2:
                 errors.append(f"Net '{net.get('id')}' has fewer than 2 pins")
 
-        # Check pin references point to existing instances
+        # Check pin references point to existing instances and valid pins
+        catalog_map = {c.id: c for c in self.catalog.components}
+        comp_catalog_map = {}
+        for comp in components:
+            cid = comp.get("catalog_id")
+            if cid in catalog_map:
+                comp_catalog_map[comp["instance_id"]] = catalog_map[cid]
+
         for net in nets:
             for pin_ref in net.get("pins", []):
-                instance = pin_ref.split(":")[0] if ":" in pin_ref else pin_ref
+                if ":" not in pin_ref:
+                    errors.append(
+                        f"Net '{net.get('id')}': invalid pin reference '{pin_ref}' "
+                        f"(expected 'instance_id:pin_id')"
+                    )
+                    continue
+                instance, pin_id = pin_ref.split(":", 1)
                 if instance not in circuit_instance_ids:
                     errors.append(
                         f"Net '{net.get('id')}' references unknown instance "
                         f"'{instance}' in pin '{pin_ref}'"
                     )
+                    continue
+                # Check pin ID exists on the catalog component
+                cat = comp_catalog_map.get(instance)
+                if cat:
+                    pin_ids = {p.id for p in cat.pins}
+                    group_ids = {g.id for g in cat.pin_groups} if cat.pin_groups else set()
+                    if pin_id not in pin_ids and pin_id not in group_ids:
+                        errors.append(
+                            f"Net '{net.get('id')}': unknown pin '{pin_id}' on "
+                            f"'{instance}' (catalog: {cat.id}). "
+                            f"Valid pins: {', '.join(sorted(pin_ids))}"
+                        )
+
+        # Check each pin appears in at most one net
+        # (allocatable groups allow multiple net references)
+        allocatable_groups: dict[tuple[str, str], list[str]] = {}
+        for comp in components:
+            cat = comp_catalog_map.get(comp["instance_id"])
+            if cat and cat.pin_groups:
+                for g in cat.pin_groups:
+                    if g.allocatable:
+                        allocatable_groups[(comp["instance_id"], g.id)] = g.pin_ids
+
+        pin_to_net: dict[str, str] = {}
+        for net in nets:
+            for pin_ref in net.get("pins", []):
+                if ":" not in pin_ref:
+                    continue
+                iid, pid = pin_ref.split(":", 1)
+                if (iid, pid) in allocatable_groups:
+                    continue  # allocatable groups can be shared
+                if pin_ref in pin_to_net:
+                    errors.append(
+                        f"Pin '{pin_ref}' is connected to both net "
+                        f"'{pin_to_net[pin_ref]}' and net '{net.get('id')}' "
+                        f"— each pin can only belong to one net"
+                    )
+                else:
+                    pin_to_net[pin_ref] = net.get("id", "")
 
         if errors:
             error_list = "\n".join(f"  - {e}" for e in errors)
