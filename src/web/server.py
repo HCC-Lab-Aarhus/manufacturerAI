@@ -511,23 +511,6 @@ async def api_run_routing(session: str = Query(...)):
 
     s.write_artifact("routing.json", data)
 
-    # Generate trace bitmap stretched over the build plate.
-    # PrusaSlicer auto-centres the model on the bed, so the bitmap must
-    # use the same centering: model_bbox_centre → bed_centre.
-    pdef = get_printer(s.printer_id)
-    outline_verts = placement.outline.vertices
-    model_cx = (min(v[0] for v in outline_verts) + max(v[0] for v in outline_verts)) / 2
-    model_cy = (min(v[1] for v in outline_verts) + max(v[1] for v in outline_verts)) / 2
-    bed_offset_x = pdef.bed_width / 2 - model_cx
-    bed_offset_y = pdef.bed_depth / 2 - model_cy
-    write_trace_bitmap(
-        result,
-        TRACE_RULES.trace_width_mm,
-        s.path / "trace_bitmap.txt",
-        printer=pdef,
-        origin_x=-bed_offset_x,
-        origin_y=-bed_offset_y,
-    )
 
     s.pipeline_state["routing"] = "complete"
     s.save()
@@ -551,6 +534,46 @@ async def api_routing_result(session: str = Query(...)):
 
 
 # ── Routes: Bitmap API ────────────────────────────────────────────
+
+
+@app.post("/api/session/bitmap/generate")
+async def api_generate_bitmap(session: str = Query(...)):
+    """Generate (or regenerate) the trace bitmap from routing data."""
+    s = _resolve_session(session)
+    placement_data = s.read_artifact("placement.json")
+    routing_data = s.read_artifact("routing.json")
+    if placement_data is None:
+        raise HTTPException(400, "No placement.json — run the placer first")
+    if routing_data is None:
+        raise HTTPException(400, "No routing.json — run the router first")
+
+    from src.pipeline.design import parse_design
+    merged = {**placement_data}
+    merged["components"] = placement_data.get("components", [])
+    merged["nets"] = placement_data.get("nets", [])
+    cat = _get_catalog()
+    design = parse_design(merged)
+
+    from src.pipeline.router import parse_routing
+    result = parse_routing(routing_data)
+
+    pdef = get_printer(s.printer_id)
+    outline_verts = design.outline.vertices
+    model_cx = (min(v[0] for v in outline_verts) + max(v[0] for v in outline_verts)) / 2
+    model_cy = (min(v[1] for v in outline_verts) + max(v[1] for v in outline_verts)) / 2
+    bed_offset_x = pdef.bed_width / 2 - model_cx
+    bed_offset_y = pdef.bed_depth / 2 - model_cy
+    write_trace_bitmap(
+        result,
+        TRACE_RULES.trace_width_mm,
+        s.path / "trace_bitmap.txt",
+        printer=pdef,
+        origin_x=-bed_offset_x,
+        origin_y=-bed_offset_y,
+    )
+
+    return {"status": "done"}
+
 
 @app.get("/api/session/bitmap")
 async def api_bitmap(session: str = Query(...)):

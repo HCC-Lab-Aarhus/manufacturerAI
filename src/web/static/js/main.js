@@ -8,7 +8,7 @@ import { sendDesignPrompt, loadConversation } from './design.js';
 import { runCircuit, enableCircuitTab, loadCircuitConversation, loadCircuitResult } from './circuit.js';
 import { runPlacement, loadPlacementResult, enablePlacementTab } from './placement.js';
 import { runRouting, loadRoutingResult, enableRoutingTab } from './routing.js';
-import { loadBitmapResult, enableBitmapTab } from './bitmap.js';
+import { loadBitmapResult, enableBitmapTab, initBitmapTab } from './bitmap.js';
 import { runScad, loadScadResult, enableScadTab } from './scad.js';
 import { runGcode, loadGcodeResult, enableGcodeTab, resetGcodePanel } from './gcode.js';
 import { initGuide, openGuide, enableGuideBtn } from './guide.js';
@@ -137,6 +137,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Routing
     document.getElementById('btn-run-routing').addEventListener('click', runRouting);
+
+    // Bitmap
+    initBitmapTab();
 
     // SCAD
     document.getElementById('btn-run-scad').addEventListener('click', runScad);
