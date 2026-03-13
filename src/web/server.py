@@ -1600,6 +1600,48 @@ async def api_circuit_result(session: str = Query(...)):
 
 # ── Entry point ────────────────────────────────────────────────────
 
+@app.get("/api/session/manufacture/print-job")
+async def api_manufacture_print_job(session: str = Query(...)):
+    """Download the print_job.json manifest."""
+    s = _resolve_session(session)
+    path = s.path / "print_job.json"
+    if not path.exists():
+        raise HTTPException(404, "print_job.json not found")
+    return FileResponse(path, filename="print_job.json", media_type="application/json")
+
+
+@app.get("/api/session/manufacture/bundle")
+async def api_manufacture_bundle(session: str = Query(...)):
+    """Download a ZIP bundle of the 3 final manufacturing files."""
+    import io
+    import zipfile
+
+    s = _resolve_session(session)
+    files = {
+        "enclosure_staged.gcode": s.path / "enclosure_staged.gcode",
+        "trace_bitmap.txt": s.path / "trace_bitmap.txt",
+        "print_job.json": s.path / "print_job.json",
+    }
+    missing = [name for name, path in files.items() if not path.exists()]
+    if missing:
+        raise HTTPException(404, f"Missing manufacturing files: {', '.join(missing)}")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, path in files.items():
+            zf.write(path, name)
+    buf.seek(0)
+
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{s.name or s.id}_bundle.zip"',
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+        },
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
     print("Starting ManufacturerAI server on http://localhost:8000")
