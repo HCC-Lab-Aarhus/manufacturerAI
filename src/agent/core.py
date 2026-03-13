@@ -1,4 +1,4 @@
-"""Design agent — LLM-driven device designer core loop."""
+"""Agent core — shared loop, DesignAgent, and CircuitAgent."""
 
 from __future__ import annotations
 
@@ -11,13 +11,13 @@ import anthropic
 
 from src.catalog import CatalogResult, _component_to_dict
 from src.pipeline.config import get_printer
-from src.pipeline.design import DesignSpec, parse_design, validate_design, design_to_dict
+from src.pipeline.design import parse_design, validate_design, design_to_dict
 from src.session import Session
 
 from .config import MODEL, MAX_TOKENS, THINKING_BUDGET, MAX_TURNS, TOKEN_BUDGET
-from .tools import TOOLS
-from .prompt import _build_system_prompt, _catalog_summary
-from .messages import _serialize_content, _sanitize_messages, _prune_messages
+from .tools import DESIGN_TOOLS, CIRCUIT_TOOLS
+from .prompt import build_design_prompt, build_circuit_prompt, build_circuit_user_prompt, catalog_summary
+from .messages import serialize_content, sanitize_messages, prune_messages
 
 
 # ── Agent events ───────────────────────────────────────────────────
@@ -25,27 +25,23 @@ from .messages import _serialize_content, _sanitize_messages, _prune_messages
 @dataclass
 class AgentEvent:
     """Event yielded during agent execution, streamed to the UI."""
-    type: str       # thinking | message | tool_call | tool_result | design | error | done
+    type: str
     data: dict
 
     def to_dict(self) -> dict:
         return {"type": self.type, "data": self.data}
 
 
-# ── Design agent ───────────────────────────────────────────────────
+# ── Base agent ─────────────────────────────────────────────────────
 
-class DesignAgent:
+class _BaseAgent:
+    """Shared agent loop for both design and circuit agents.
+
+    Subclasses provide tools, system prompt, and tool handlers.
+    The conversation loop, streaming, and persistence are identical.
     """
-    LLM-driven device designer.
 
-    Uses Claude Sonnet 4.6 with extended thinking and the streaming API.
-    Yields token-level deltas for thinking and text blocks so the UI
-    updates in real time.
-
-    The conversation loop follows the SeedGPT pattern:
-      messages → streaming API call → yield deltas → accumulate
-      content blocks → dispatch tool calls → repeat
-    """
+    conversation_file: str = ""  # subclasses must override
 
     def __init__(self, catalog: CatalogResult, session: Session):
         api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -54,42 +50,40 @@ class DesignAgent:
         self.client = anthropic.AsyncAnthropic(api_key=api_key)
         self.catalog = catalog
         self.session = session
-        self.design: DesignSpec | None = None
 
-        # Load existing conversation from session (for multi-turn)
-        saved = session.read_artifact("conversation.json")
-        self.messages: list[dict] = _sanitize_messages(saved) if isinstance(saved, list) else []
-        self._feasibility_attempts: int = 0   # reset each run() call
+        saved = session.read_artifact(self.conversation_file)
+        self.messages: list[dict] = sanitize_messages(saved) if isinstance(saved, list) else []
 
     def _save_conversation(self) -> None:
-        """Persist the full message history to the session folder."""
-        self.session.write_artifact("conversation.json", self.messages)
+        self.session.write_artifact(self.conversation_file, self.messages)
+
+    def _get_tools(self) -> list[dict]:
+        raise NotImplementedError
+
+    def _get_system_prompt(self) -> str:
+        raise NotImplementedError
+
+    def _handle_tool(self, name: str, input_data: dict) -> tuple[str, bool]:
+        """Dispatch a tool call. Returns (result_text, is_terminal).
+
+        is_terminal=True means the agent should stop after this tool.
+        """
+        raise NotImplementedError
+
+    def _terminal_event(self, tool_name: str, input_data: dict) -> AgentEvent | None:
+        """Return the event to emit when a terminal tool succeeds, or None."""
+        return None
 
     async def run(self, user_prompt: str) -> AsyncGenerator[AgentEvent, None]:
-        """
-        Run the agent loop. Yields events for streaming to the UI.
-
-        Event types with streaming deltas:
-          thinking_start  — new thinking block begins
-          thinking_delta  — incremental thinking text
-          message_start   — new text block begins
-          message_delta   — incremental text
-          block_stop      — current block complete
-          tool_call       — tool invocation (after stream completes)
-          tool_result     — tool result
-          design          — validated design spec
-          error           — error message
-          done            — agent finished
-        """
-        printer = get_printer(self.session.printer_id)
-        system = _build_system_prompt(self.catalog, printer=printer)
+        """Run the agent loop. Yields events for streaming to the UI."""
+        system = self._get_system_prompt()
+        tools = self._get_tools()
         self.messages.append({"role": "user", "content": user_prompt})
-        self._feasibility_attempts = 0
 
         for turn in range(MAX_TURNS):
             content_blocks: list[dict] = []
             stop_reason = None
-            api_messages = _prune_messages(self.messages)
+            api_messages = prune_messages(self.messages)
 
             try:
                 async with self.client.messages.stream(
@@ -100,7 +94,7 @@ class DesignAgent:
                         "budget_tokens": THINKING_BUDGET,
                     },
                     system=system,
-                    tools=TOOLS,
+                    tools=tools,
                     messages=api_messages,
                 ) as stream:
                     async for event in stream:
@@ -108,9 +102,8 @@ class DesignAgent:
                         if agent_event:
                             yield agent_event
 
-                    # After stream completes, get the full response
                     response = await stream.get_final_message()
-                    content_blocks = _serialize_content(response.content)
+                    content_blocks = serialize_content(response.content)
                     stop_reason = response.stop_reason
 
             except anthropic.APIError as e:
@@ -118,19 +111,18 @@ class DesignAgent:
                 yield AgentEvent("error", {"message": f"API error: {e}"})
                 return
 
-            # ── Always append the assistant response to history ──
             self.messages.append({
                 "role": "assistant",
                 "content": content_blocks,
             })
 
-            # ── Count conversation tokens (free API) ──
+            # Token counting (best-effort)
             try:
                 token_count = await self.client.messages.count_tokens(
                     model=MODEL,
                     messages=api_messages,
                     system=system,
-                    tools=TOOLS,
+                    tools=tools,
                     thinking={
                         "type": "enabled",
                         "budget_tokens": THINKING_BUDGET,
@@ -141,29 +133,23 @@ class DesignAgent:
                     "budget": TOKEN_BUDGET,
                 })
             except Exception:
-                pass  # token counting is best-effort
+                pass
 
-            # ── Check stop reason ──
             if stop_reason == "max_tokens":
                 self._save_conversation()
                 yield AgentEvent("error", {
-                    "message": "Response truncated — output too long"
+                    "message": "Response truncated — output too long",
                 })
                 return
 
-            # ── Extract tool_use blocks ──
-            tool_blocks = [
-                b for b in content_blocks if b.get("type") == "tool_use"
-            ]
-
+            tool_blocks = [b for b in content_blocks if b.get("type") == "tool_use"]
             if not tool_blocks:
                 self._save_conversation()
                 yield AgentEvent("done", {})
                 return
 
-            # ── Handle each tool call ──
             tool_results: list[dict] = []
-            design_submitted = False
+            terminal_event = None
 
             for block in tool_blocks:
                 yield AgentEvent("tool_call", {
@@ -171,9 +157,7 @@ class DesignAgent:
                     "input": block["input"],
                 })
 
-                result_text, is_valid_design = self._handle_tool(
-                    block["name"], block["input"]
-                )
+                result_text, is_terminal = self._handle_tool(block["name"], block["input"])
 
                 tool_results.append({
                     "type": "tool_result",
@@ -184,35 +168,27 @@ class DesignAgent:
                 yield AgentEvent("tool_result", {
                     "name": block["name"],
                     "content": result_text,
-                    "is_error": not is_valid_design and block["name"] == "submit_design",
+                    "is_error": not is_terminal and block["name"] in ("submit_design", "submit_circuit"),
                 })
 
-                if is_valid_design:
-                    design_submitted = True
+                if is_terminal:
+                    terminal_event = self._terminal_event(block["name"], block["input"])
 
-            # ── Append tool results as user message ──
             self.messages.append({"role": "user", "content": tool_results})
 
-            # ── If valid design was submitted, we're done ──
-            if design_submitted:
+            if terminal_event:
                 self._save_conversation()
-                yield AgentEvent("design", {
-                    "design": design_to_dict(self.design),
-                })
+                yield terminal_event
                 yield AgentEvent("done", {})
                 return
 
         self._save_conversation()
         yield AgentEvent("error", {
-            "message": f"Agent exceeded maximum turns ({MAX_TURNS})"
+            "message": f"Agent exceeded maximum turns ({MAX_TURNS})",
         })
 
-    # ── Stream event handler ───────────────────────────────────────
-
     def _handle_stream_event(self, event) -> AgentEvent | None:
-        """Convert an Anthropic stream event to an AgentEvent (or None)."""
         etype = event.type
-
         if etype == "content_block_start":
             block = event.content_block
             if hasattr(block, "type"):
@@ -220,39 +196,19 @@ class DesignAgent:
                     return AgentEvent("thinking_start", {})
                 if block.type == "text":
                     return AgentEvent("message_start", {})
-            return None
-
-        if etype == "content_block_delta":
+        elif etype == "content_block_delta":
             delta = event.delta
             if hasattr(delta, "type"):
                 if delta.type == "thinking_delta":
                     return AgentEvent("thinking_delta", {"text": delta.thinking})
                 if delta.type == "text_delta":
                     return AgentEvent("message_delta", {"text": delta.text})
-            return None
-
-        if etype == "content_block_stop":
+        elif etype == "content_block_stop":
             return AgentEvent("block_stop", {})
-
         return None
 
-    # ── Tool handlers ──────────────────────────────────────────────
-
-    def _handle_tool(self, name: str, input_data: dict) -> tuple[str, bool]:
-        """Dispatch a tool call. Returns (result_text, is_valid_design)."""
-        if name == "list_components":
-            return _catalog_summary(self.catalog), False
-
-        if name == "get_component":
-            return self._tool_get_component(input_data), False
-
-        if name == "submit_design":
-            return self._tool_submit_design(input_data)
-
-        if name == "check_placement_feasibility":
-            return self._tool_check_feasibility(input_data), False
-
-        return f"Unknown tool: {name}", False
+    def _tool_list_components(self) -> str:
+        return catalog_summary(self.catalog)
 
     def _tool_get_component(self, input_data: dict) -> str:
         component_id = input_data.get("component_id", "")
@@ -264,6 +220,41 @@ class DesignAgent:
             f"Component '{component_id}' not found. "
             f"Available: {', '.join(available)}"
         )
+
+
+# ── Design agent ───────────────────────────────────────────────────
+
+class DesignAgent(_BaseAgent):
+    """Physical device designer — outline, enclosure, UI placements."""
+
+    conversation_file = "design_conversation.json"
+
+    def __init__(self, catalog: CatalogResult, session: Session):
+        super().__init__(catalog, session)
+        self._feasibility_attempts: int = 0
+
+    def _get_tools(self) -> list[dict]:
+        return DESIGN_TOOLS
+
+    def _get_system_prompt(self) -> str:
+        printer = get_printer(self.session.printer_id)
+        return build_design_prompt(self.catalog, printer=printer)
+
+    def _handle_tool(self, name: str, input_data: dict) -> tuple[str, bool]:
+        if name == "list_components":
+            return self._tool_list_components(), False
+        if name == "get_component":
+            return self._tool_get_component(input_data), False
+        if name == "submit_design":
+            return self._tool_submit_design(input_data)
+        if name == "check_placement_feasibility":
+            return self._tool_check_feasibility(input_data), False
+        return f"Unknown tool: {name}", False
+
+    def _terminal_event(self, tool_name: str, input_data: dict) -> AgentEvent | None:
+        if tool_name == "submit_design":
+            return AgentEvent("design", {"design": input_data})
+        return None
 
     _MAX_FEASIBILITY_ATTEMPTS = 3
 
@@ -300,22 +291,143 @@ class DesignAgent:
         return report
 
     def _tool_submit_design(self, input_data: dict) -> tuple[str, bool]:
-        """Parse, validate, and save a design. Returns (result, is_valid)."""
+        """Validate and save a physical design (no components/nets)."""
+        # Build a full design dict for parse_design — it expects components
+        # and nets, but the design agent doesn't provide them any more.
+        # We add empty lists so parsing doesn't fail.
+        full_data = {**input_data}
+        full_data.setdefault("components", [])
+        full_data.setdefault("nets", [])
+
+        # Convert ui_placements into components for parse_design compatibility
+        ui_components = []
+        for p in input_data.get("ui_placements", []):
+            ui_components.append({
+                "catalog_id": p.get("catalog_id", p["instance_id"]),
+                "instance_id": p["instance_id"],
+            })
+        full_data["components"] = ui_components
+
         try:
-            spec = parse_design(input_data)
+            spec = parse_design(full_data)
         except (KeyError, TypeError, ValueError, IndexError) as e:
             return f"Design parsing error: {e}", False
 
-        errors = validate_design(spec, self.catalog, printer=get_printer(self.session.printer_id))
+        printer = get_printer(self.session.printer_id)
+        errors = validate_design(spec, self.catalog, printer=printer)
         if errors:
             error_list = "\n".join(f"  - {e}" for e in errors)
             return f"Design validation failed:\n{error_list}", False
 
-        # Valid! Save to session.
-        self.design = spec
+        # Save the clean design data (without synthesized components)
         self.session.write_artifact("design.json", input_data)
         self.session.pipeline_state["design"] = "complete"
-        # Invalidate downstream: placement and routing depend on design
+
+        # Invalidate downstream: circuit, placement, and routing depend on design
+        for step in ("circuit", "placement", "routing"):
+            artifact = f"{step}.json"
+            if self.session.has_artifact(artifact):
+                self.session.delete_artifact(artifact)
+            self.session.pipeline_state.pop(step, None)
+        # Also clear circuit conversation
+        if self.session.has_artifact("circuit_conversation.json"):
+            self.session.delete_artifact("circuit_conversation.json")
+        self.session.save()
+
+        return "Design validated successfully! Saved to session.", True
+
+
+# ── Circuit agent ──────────────────────────────────────────────────
+
+class CircuitAgent(_BaseAgent):
+    """Electrical design — component selection and net topology."""
+
+    conversation_file = "circuit_conversation.json"
+
+    def _get_tools(self) -> list[dict]:
+        return CIRCUIT_TOOLS
+
+    def _get_system_prompt(self) -> str:
+        return build_circuit_prompt(self.catalog)
+
+    def _handle_tool(self, name: str, input_data: dict) -> tuple[str, bool]:
+        if name == "list_components":
+            return self._tool_list_components(), False
+        if name == "get_component":
+            return self._tool_get_component(input_data), False
+        if name == "submit_circuit":
+            return self._tool_submit_circuit(input_data)
+        return f"Unknown tool: {name}", False
+
+    def _terminal_event(self, tool_name: str, input_data: dict) -> AgentEvent | None:
+        if tool_name == "submit_circuit":
+            return AgentEvent("circuit", {"circuit": input_data})
+        return None
+
+    def _tool_submit_circuit(self, input_data: dict) -> tuple[str, bool]:
+        """Validate and save a circuit design (components + nets)."""
+        # Read the design to get UI placements for validation context
+        design_data = self.session.read_artifact("design.json")
+        if not design_data:
+            return "No design.json found — run the design agent first.", False
+
+        ui_instance_ids = {
+            p["instance_id"]
+            for p in design_data.get("ui_placements", [])
+        }
+
+        components = input_data.get("components", [])
+        nets = input_data.get("nets", [])
+
+        # Basic validation
+        errors: list[str] = []
+
+        # Check that all UI components are present
+        circuit_instance_ids = {c["instance_id"] for c in components}
+        missing_ui = ui_instance_ids - circuit_instance_ids
+        if missing_ui:
+            errors.append(
+                f"Missing UI components from design: {', '.join(sorted(missing_ui))}. "
+                f"You must include all placed UI components."
+            )
+
+        # Check all components have catalog entries
+        catalog_ids = {c.id for c in self.catalog.components}
+        for comp in components:
+            if comp.get("catalog_id") not in catalog_ids:
+                errors.append(
+                    f"Component '{comp.get('instance_id')}' references unknown "
+                    f"catalog_id '{comp.get('catalog_id')}'"
+                )
+
+        # Check nets have at least 2 pins
+        for net in nets:
+            if len(net.get("pins", [])) < 2:
+                errors.append(f"Net '{net.get('id')}' has fewer than 2 pins")
+
+        # Check pin references point to existing instances
+        for net in nets:
+            for pin_ref in net.get("pins", []):
+                instance = pin_ref.split(":")[0] if ":" in pin_ref else pin_ref
+                if instance not in circuit_instance_ids:
+                    errors.append(
+                        f"Net '{net.get('id')}' references unknown instance "
+                        f"'{instance}' in pin '{pin_ref}'"
+                    )
+
+        if errors:
+            error_list = "\n".join(f"  - {e}" for e in errors)
+            return f"Circuit validation failed:\n{error_list}", False
+
+        # Mark which components are UI-placed
+        for comp in components:
+            comp["ui_placement"] = comp["instance_id"] in ui_instance_ids
+
+        # Save circuit data
+        self.session.write_artifact("circuit.json", input_data)
+        self.session.pipeline_state["circuit"] = "complete"
+
+        # Invalidate downstream
         for step in ("placement", "routing"):
             artifact = f"{step}.json"
             if self.session.has_artifact(artifact):
@@ -323,4 +435,4 @@ class DesignAgent:
             self.session.pipeline_state.pop(step, None)
         self.session.save()
 
-        return "Design validated successfully! Saved to session.", True
+        return "Circuit validated successfully! Saved to session.", True

@@ -30,7 +30,13 @@ _gcode_state: dict[str, dict] = {}
 
 from src.catalog import load_catalog, catalog_to_dict, CatalogResult
 from src.session import create_session, load_session, list_sessions, Session
-from src.agent import DesignAgent, TOOLS, MODEL, THINKING_BUDGET, TOKEN_BUDGET, _build_system_prompt, _prune_messages
+from src.agent import (
+    DesignAgent, CircuitAgent,
+    DESIGN_TOOLS, CIRCUIT_TOOLS,
+    MODEL, THINKING_BUDGET, TOKEN_BUDGET,
+    build_design_prompt, build_circuit_prompt, build_circuit_user_prompt,
+    prune_messages,
+)
 from src.pipeline.design import parse_design, validate_design
 from src.pipeline.placer import place_components, placement_to_dict, parse_placement, PlacementError
 from src.pipeline.router import route_traces, routing_to_dict, write_trace_bitmap
@@ -140,7 +146,7 @@ def _resolve_session(session_id: str | None) -> Session:
 
 
 # Pipeline ordering — each step depends on everything before it.
-_PIPELINE_ORDER = ["design", "placement", "routing", "scad", "gcode", "firmware"]
+_PIPELINE_ORDER = ["design", "circuit", "placement", "routing", "scad", "gcode", "firmware"]
 
 
 def _invalidate_downstream(session: Session, current_step: str) -> list[str]:
@@ -207,6 +213,7 @@ async def api_get_session(session: str = Query(...)):
         "artifacts": {
             "catalog": s.has_artifact("catalog.json"),
             "design": s.has_artifact("design.json"),
+            "circuit": s.has_artifact("circuit.json"),
             "placement": s.has_artifact("placement.json"),
             "routing": s.has_artifact("routing.json"),
             "scad": s.has_artifact("enclosure.scad"),
@@ -290,14 +297,22 @@ async def api_session_catalog(session: str = Query(...)):
 
 @app.post("/api/session/placement")
 async def api_run_placement(session: str = Query(...)):
-    """Run the placer on the session's design. Saves placement.json."""
+    """Run the placer on the session's design + circuit. Saves placement.json."""
     s = _resolve_session(session)
     design_data = s.read_artifact("design.json")
     if design_data is None:
         raise HTTPException(400, "No design.json — run the design agent first")
+    circuit_data = s.read_artifact("circuit.json")
+    if circuit_data is None:
+        raise HTTPException(400, "No circuit.json — run the circuit agent first")
+
+    # Merge design (outline, enclosure) + circuit (components, nets) for the placer
+    merged = {**design_data}
+    merged["components"] = circuit_data.get("components", [])
+    merged["nets"] = circuit_data.get("nets", [])
 
     cat = _get_catalog()
-    design = parse_design(design_data)
+    design = parse_design(merged)
 
     errors = validate_design(design, cat, printer=get_printer(s.printer_id))
     if errors:
@@ -861,22 +876,22 @@ async def api_gcode_download(session: str = Query(...), format: str = Query("gco
 
 @app.get("/api/session/tokens")
 def api_session_tokens(session: str = Query(...)):
-    """Return the current input token count for the session's conversation."""
+    """Return the current input token count for the design conversation."""
     s = _resolve_session(session)
-    conversation = s.read_artifact("conversation.json")
+    conversation = s.read_artifact("design_conversation.json")
     if not conversation or not isinstance(conversation, list):
         return {"input_tokens": 0, "budget": TOKEN_BUDGET}
 
     cat = _get_catalog()
-    system = _build_system_prompt(cat, printer=get_printer(s.printer_id))
-    pruned = _prune_messages(conversation)
+    system = build_design_prompt(cat, printer=get_printer(s.printer_id))
+    pruned = prune_messages(conversation)
     client = anthropic.Anthropic()
     try:
         result = client.messages.count_tokens(
             model=MODEL,
             messages=pruned,
             system=system,
-            tools=TOOLS,
+            tools=DESIGN_TOOLS,
             thinking={"type": "enabled", "budget_tokens": THINKING_BUDGET},
         )
         return {"input_tokens": result.input_tokens, "budget": TOKEN_BUDGET}
@@ -886,9 +901,9 @@ def api_session_tokens(session: str = Query(...)):
 
 @app.get("/api/session/conversation")
 async def api_conversation(session: str = Query(...)):
-    """Return the saved conversation history for a session."""
+    """Return the saved design conversation history for a session."""
     s = _resolve_session(session)
-    data = s.read_artifact("conversation.json")
+    data = s.read_artifact("design_conversation.json")
     return data if isinstance(data, list) else []
 
 
@@ -899,9 +914,9 @@ async def api_design_result(session: str = Query(...)):
     data = s.read_artifact("design.json")
     if data is None:
         raise HTTPException(404, "No design yet")
-    # Enrich components with body + pin data for rendering
     cat = _get_catalog()
-    _enrich_components(data.get("components", []), cat)
+    # Enrich UI placement components for rendering
+    _enrich_components(data.get("ui_placements", []), cat)
     _enrich_design_3d(data)
     return data
 
@@ -927,7 +942,7 @@ async def api_patch_enclosure(request: Request, session: str = Query(...)):
 
     s.write_artifact("design.json", data)
     cat = _get_catalog()
-    _enrich_components(data.get("components", []), cat)
+    _enrich_components(data.get("ui_placements", []), cat)
     _enrich_design_3d(data)
     return data
 
@@ -957,7 +972,7 @@ async def api_put_design(request: Request, session: str = Query(...)):
     _invalidate_downstream(s, "design")
     s.save()
 
-    _enrich_components(body.get("components", []), cat)
+    _enrich_components(body.get("ui_placements", []), cat)
     _enrich_design_3d(body)
     return body
 
@@ -988,9 +1003,9 @@ async def api_validate_ui_placement(request: Request, session: str = Query(...))
     y_mm = body.get("y_mm", 0)
     edge_index = body.get("edge_index")
 
-    # Find catalog entry for this component
+    # Find catalog entry for this component from ui_placements
     comp_entry = next(
-        (c for c in data.get("components", []) if c["instance_id"] == instance_id),
+        (c for c in data.get("ui_placements", []) if c["instance_id"] == instance_id),
         None,
     )
     cat_comp = cat_map.get(comp_entry["catalog_id"]) if comp_entry else None
@@ -1038,7 +1053,7 @@ async def api_validate_ui_placement(request: Request, session: str = Query(...))
                 if other_up["instance_id"] == instance_id:
                     continue
                 other_comp = next(
-                    (c for c in data.get("components", [])
+                    (c for c in data.get("ui_placements", [])
                      if c["instance_id"] == other_up["instance_id"]),
                     None,
                 )
@@ -1078,7 +1093,7 @@ async def api_conversation_submit_design(request: Request, session: str = Query(
     """
     body = await request.json()
     s = _resolve_session(session)
-    conversation = s.read_artifact("conversation.json")
+    conversation = s.read_artifact("design_conversation.json")
     if not isinstance(conversation, list):
         conversation = []
 
@@ -1111,7 +1126,7 @@ async def api_conversation_submit_design(request: Request, session: str = Query(
     else:
         conversation.append(new_msg)
 
-    s.write_artifact("conversation.json", conversation)
+    s.write_artifact("design_conversation.json", conversation)
     return {"ok": True}
 
 
@@ -1166,12 +1181,12 @@ async def api_design(request: Request, session: str = Query(None)):
 
             agent = DesignAgent(cat, sess)
             async for event in agent.run(prompt):
-                # Enrich design components with body + pin data
+                # Enrich design UI placements for viewport
                 if event.type == "design" and event.data:
                     design = event.data.get("design")
                     if design:
                         _enrich_components(
-                            design.get("components", []), cat,
+                            design.get("ui_placements", []), cat,
                         )
                         _enrich_design_3d(design)
                 data = json.dumps(event.data) if event.data else "{}"
@@ -1194,6 +1209,83 @@ async def api_design(request: Request, session: str = Query(None)):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ── Routes: Circuit Agent API ─────────────────────────────────────
+
+@app.post("/api/session/circuit")
+async def api_circuit(session: str = Query(...)):
+    """
+    Run the circuit agent. Returns an SSE stream.
+
+    The circuit agent is autonomous — it reads design.json and produces
+    circuit.json without user prompting.
+
+    SSE event types:
+      thinking_start  — new thinking block
+      thinking_delta  — incremental thinking text
+      message_start   — new text block
+      message_delta   — incremental text
+      block_stop      — current content block finished
+      tool_call       — tool invocation
+      tool_result     — tool call result
+      circuit         — validated circuit spec
+      error           — error message
+      done            — agent finished
+    """
+    sess = _resolve_session(session)
+    design_data = sess.read_artifact("design.json")
+    if design_data is None:
+        raise HTTPException(400, "No design.json — run the design agent first")
+
+    cat = _get_catalog()
+    prompt = build_circuit_user_prompt(design_data)
+
+    async def event_stream():
+        try:
+            agent = CircuitAgent(cat, sess)
+            async for event in agent.run(prompt):
+                # Enrich circuit components for viewport
+                if event.type == "circuit" and event.data:
+                    circuit = event.data.get("circuit")
+                    if circuit:
+                        _enrich_components(
+                            circuit.get("components", []), cat,
+                        )
+                data = json.dumps(event.data) if event.data else "{}"
+                yield f"event: {event.type}\ndata: {data}\n\n"
+        except Exception as e:
+            data = json.dumps({"message": str(e)})
+            yield f"event: error\ndata: {data}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/session/circuit/conversation")
+async def api_circuit_conversation(session: str = Query(...)):
+    """Return the saved circuit conversation history for a session."""
+    s = _resolve_session(session)
+    data = s.read_artifact("circuit_conversation.json")
+    return data if isinstance(data, list) else []
+
+
+@app.get("/api/session/circuit/result")
+async def api_circuit_result(session: str = Query(...)):
+    """Return the saved circuit spec for a session, if any."""
+    s = _resolve_session(session)
+    data = s.read_artifact("circuit.json")
+    if data is None:
+        raise HTTPException(404, "No circuit yet")
+    cat = _get_catalog()
+    _enrich_components(data.get("components", []), cat)
+    return data
 
 
 # ── Entry point ────────────────────────────────────────────────────

@@ -3,7 +3,8 @@
 import { API, state } from './state.js';
 import { onSessionCreated, setSessionLabel } from './session.js';
 import { setData as setViewportData, clearData as clearViewportData } from './viewport.js';
-import { enablePlacementTab, resetPlacementPanel } from './placement.js';
+import { enableCircuitTab, resetCircuitPanel } from './circuit.js';
+import { resetPlacementPanel } from './placement.js';
 import { resetRoutingPanel } from './routing.js';
 
 const messagesDiv = () => document.getElementById('chat-messages');
@@ -137,11 +138,11 @@ async function loadDesignResult() {
         );
         if (!res.ok) return;
         const design = await res.json();
-        if (design && design.components) {
+        if (design && design.outline) {
             appendDesignResult(design);
             setViewportData('design', design);
-            // Enable placement tab since design exists
-            enablePlacementTab();
+            // Enable circuit tab since design exists
+            enableCircuitTab();
         }
     } catch {
         // No design yet — that's fine
@@ -312,9 +313,10 @@ async function consumeSSE(response) {
                     appendDesignResult(data.design);
                     setViewportData('design', data.design);
                     statusSpan().textContent = 'Design complete!';
-                    // Enable placement step now that design exists
-                    enablePlacementTab(true);
-                    // Invalidate downstream: placement + routing are stale
+                    // Enable circuit step now that design exists
+                    enableCircuitTab(true);
+                    // Invalidate downstream: circuit + placement + routing are stale
+                    resetCircuitPanel();
                     resetPlacementPanel();
                     resetRoutingPanel();
                     // Disable routing tab until new placement
@@ -458,14 +460,13 @@ function appendDesignResult(design) {
     const div = document.createElement('div');
     div.className = 'chat-bubble design-result';
 
-    const compCount = design.components?.length || 0;
-    const netCount = design.nets?.length || 0;
+    const uiCount = design.ui_placements?.length || 0;
     const vertCount = (Array.isArray(design.outline) ? design.outline : design.outline?.vertices)?.length || 0;
 
     div.innerHTML = `
         <div class="design-summary">
             <strong>✅ Design Validated</strong>
-            <span>${compCount} components · ${netCount} nets · ${vertCount}-vertex outline</span>
+            <span>${uiCount} UI placements · ${vertCount}-vertex outline</span>
         </div>
         <details>
             <summary>View design JSON</summary>

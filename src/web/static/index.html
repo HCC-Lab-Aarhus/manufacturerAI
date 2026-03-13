@@ -19,11 +19,12 @@
 
     <nav id="pipeline-nav">
         <button class="step active" data-step="design">1. Design</button>
-        <button class="step" data-step="placement" disabled>2. Placement</button>
-        <button class="step" data-step="routing" disabled>3. Routing</button>
-        <button class="step" data-step="bitmap" disabled>4. Bitmap</button>
-        <button class="step" data-step="scad" disabled>5. SCAD</button>
-        <button class="step" data-step="manufacturing" disabled>6. Manufacturing</button>
+        <button class="step" data-step="circuit" disabled>2. Circuit</button>
+        <button class="step" data-step="placement" disabled>3. Placement</button>
+        <button class="step" data-step="routing" disabled>4. Routing</button>
+        <button class="step" data-step="bitmap" disabled>5. Bitmap</button>
+        <button class="step" data-step="scad" disabled>6. SCAD</button>
+        <button class="step" data-step="manufacturing" disabled>7. Manufacturing</button>
         <div class="nav-spacer"></div>
         <button class="step" id="btn-guide" disabled>Guide</button>
         <button class="step" id="btn-catalog">Catalog</button>
@@ -66,6 +67,19 @@
                 </div>
                 <div id="catalog-errors" class="errors-panel" hidden></div>
                 <div id="catalog-grid" class="component-grid"></div>
+            </section>
+
+            <!-- Circuit step — autonomous agent log -->
+            <section id="step-circuit" class="step-panel" hidden>
+                <div id="circuit-hero" class="placement-hero">
+                    <div class="placement-hero-icon">⚡</div>
+                    <p>Automatically select components and design the circuit from your device spec</p>
+                    <button id="btn-run-circuit" class="placement-cta">Run Circuit Agent</button>
+                    <span id="circuit-status" class="design-status-inline"></span>
+                </div>
+                <div id="circuit-scroll" class="placement-scroll" hidden>
+                    <div id="circuit-log" class="chat-messages"></div>
+                </div>
             </section>
 
             <!-- Placement step -->

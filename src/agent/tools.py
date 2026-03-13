@@ -1,100 +1,140 @@
-"""Tool definitions for the Anthropic API (list_components, get_component, submit_design)."""
+"""Tool definitions for the design and circuit agents."""
 
 from __future__ import annotations
 
 from typing import Any
 
 
-TOOLS: list[dict[str, Any]] = [
-    {
-        "name": "list_components",
-        "description": (
-            "List all available components in the catalog with summary info "
-            "(ID, name, pin count, mounting style, whether it needs "
-            "UI placement). Already shown in your system prompt — use this "
-            "only if you need a refresher."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-        },
+# ── Shared tools (used by both agents) ────────────────────────────
+
+_LIST_COMPONENTS = {
+    "name": "list_components",
+    "description": (
+        "List all available components in the catalog with summary info "
+        "(ID, name, pin count, mounting style, whether it needs "
+        "UI placement). Already shown in your system prompt — use this "
+        "only if you need a refresher."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {},
     },
-    {
-        "name": "get_component",
-        "description": (
-            "Get full details for a specific component: all pins with "
-            "positions/directions/voltage/current, mounting details, "
-            "internal_nets, pin_groups, and configurable fields. "
-            "Always read component details before using it in a design."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "component_id": {
-                    "type": "string",
-                    "description": "Component ID from the catalog (e.g. 'led_5mm')",
+}
+
+_GET_COMPONENT = {
+    "name": "get_component",
+    "description": (
+        "Get full details for a specific component: all pins with "
+        "positions/directions/voltage/current, mounting details, "
+        "internal_nets, pin_groups, and configurable fields. "
+        "Always read component details before using it in a design."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "component_id": {
+                "type": "string",
+                "description": "Component ID from the catalog (e.g. 'led_5mm')",
+            },
+        },
+        "required": ["component_id"],
+    },
+}
+
+
+# ── Design agent tool: check_placement_feasibility ────────────────
+
+_CHECK_PLACEMENT_FEASIBILITY = {
+    "name": "check_placement_feasibility",
+    "description": (
+        "Run a fast pre-submit feasibility check to verify that every "
+        "auto-placed component (MCU, battery, passives) has at least one "
+        "valid position inside the outline given the proposed ui_placements. "
+        "Returns a per-component report: OK with candidate cell count, or "
+        "FAIL with the specific UI components that are blocking it and a "
+        "concrete fix suggestion. "
+        "Call this BEFORE submit_design whenever you include a large "
+        "auto-placed component (battery, MCU) so you can fix layout "
+        "conflicts without wasting a full pipeline run."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "components": {
+                "type": "array",
+                "description": "Component list for footprint checks.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "catalog_id": {"type": "string"},
+                        "instance_id": {"type": "string"},
+                        "config": {"type": "object"},
+                        "mounting_style": {"type": "string"},
+                    },
+                    "required": ["catalog_id", "instance_id"],
                 },
             },
-            "required": ["component_id"],
+            "outline": {
+                "type": "array",
+                "description": "Same outline vertex list as submit_design.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "x": {"type": "number"},
+                        "y": {"type": "number"},
+                    },
+                    "required": ["x", "y"],
+                },
+            },
+            "ui_placements": {
+                "type": "array",
+                "description": "Same ui_placements list as submit_design.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "instance_id": {"type": "string"},
+                        "x_mm": {"type": "number"},
+                        "y_mm": {"type": "number"},
+                    },
+                    "required": ["instance_id", "x_mm", "y_mm"],
+                },
+            },
+            "enclosure": {
+                "type": "object",
+                "description": (
+                    "Same enclosure object as submit_design. "
+                    "Required when edge_bottom is a fillet or chamfer so the "
+                    "feasibility scan accounts for the reduced floor space."
+                ),
+            },
         },
+        "required": ["components", "outline", "ui_placements"],
     },
+}
+
+
+# ── Design agent tools ────────────────────────────────────────────
+
+DESIGN_TOOLS: list[dict[str, Any]] = [
+    _LIST_COMPONENTS,
+    _GET_COMPONENT,
     {
         "name": "submit_design",
         "description": (
-            "Submit a complete device design for validation. If validation "
-            "fails, you'll receive error details — fix and resubmit."
+            "Submit a physical device design for validation. Includes the "
+            "device shape, enclosure, and UI component placements. If "
+            "validation fails, you'll receive error details — fix and resubmit."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "components": {
-                    "type": "array",
-                    "description": "Component instances to use.",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "catalog_id": {
-                                "type": "string",
-                                "description": "Component ID from the catalog",
-                            },
-                            "instance_id": {
-                                "type": "string",
-                                "description": "Unique instance name (e.g. 'led_1', 'r_1')",
-                            },
-                            "config": {
-                                "type": "object",
-                                "description": "Config overrides for configurable components",
-                            },
-                            "mounting_style": {
-                                "type": "string",
-                                "description": "Override from allowed_styles",
-                            },
-                        },
-                        "required": ["catalog_id", "instance_id"],
-                    },
-                },
-                "nets": {
-                    "type": "array",
-                    "description": "Electrical nets connecting component pins.",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "id": {
-                                "type": "string",
-                                "description": "Net name (e.g. 'VCC', 'GND')",
-                            },
-                            "pins": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": (
-                                    "Pin references as 'instance_id:pin_id'. "
-                                    "Use 'instance_id:group_id' for MCU dynamic "
-                                    "pin allocation."
-                                ),
-                            },
-                        },
-                        "required": ["id", "pins"],
-                    },
+                "device_description": {
+                    "type": "string",
+                    "description": (
+                        "2-4 sentence description of what the device does, "
+                        "how it is used, and what the user asked for. "
+                        "This is passed to the circuit agent."
+                    ),
                 },
                 "outline": {
                     "type": "array",
@@ -199,6 +239,10 @@ TOOLS: list[dict[str, Any]] = [
                         "type": "object",
                         "properties": {
                             "instance_id": {"type": "string"},
+                            "catalog_id": {
+                                "type": "string",
+                                "description": "Catalog component ID (e.g. 'led_5mm', 'tactile_button_6x6')",
+                            },
                             "x_mm": {
                                 "type": "number",
                                 "description": (
@@ -233,78 +277,83 @@ TOOLS: list[dict[str, Any]] = [
                                 ),
                             },
                         },
-                        "required": ["instance_id", "x_mm", "y_mm"],
+                        "required": ["instance_id", "catalog_id", "x_mm", "y_mm"],
                     },
                 },
             },
-            "required": ["components", "nets", "outline", "ui_placements"],
+            "required": ["device_description", "outline", "enclosure", "ui_placements"],
         },
     },
+    _CHECK_PLACEMENT_FEASIBILITY,
+]
+
+
+# ── Circuit agent tools ───────────────────────────────────────────
+
+CIRCUIT_TOOLS: list[dict[str, Any]] = [
+    _LIST_COMPONENTS,
+    _GET_COMPONENT,
     {
-        "name": "check_placement_feasibility",
+        "name": "submit_circuit",
         "description": (
-            "Run a fast pre-submit feasibility check to verify that every "
-            "auto-placed component (MCU, battery, passives) has at least one "
-            "valid position inside the outline given the proposed ui_placements. "
-            "Returns a per-component report: OK with candidate cell count, or "
-            "FAIL with the specific UI components that are blocking it and a "
-            "concrete fix suggestion. "
-            "Call this BEFORE submit_design whenever you include a large "
-            "auto-placed component (battery, MCU) so you can fix layout "
-            "conflicts without wasting a full pipeline run."
+            "Submit a complete circuit design for validation. Includes all "
+            "components (UI + internal) and the electrical net list. If "
+            "validation fails, you'll receive error details — fix and resubmit."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "components": {
                     "type": "array",
-                    "description": "Same component list as submit_design.",
+                    "description": "Component instances to use.",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "catalog_id": {"type": "string"},
-                            "instance_id": {"type": "string"},
-                            "config": {"type": "object"},
-                            "mounting_style": {"type": "string"},
+                            "catalog_id": {
+                                "type": "string",
+                                "description": "Component ID from the catalog",
+                            },
+                            "instance_id": {
+                                "type": "string",
+                                "description": "Unique instance name (e.g. 'led_1', 'r_1')",
+                            },
+                            "config": {
+                                "type": "object",
+                                "description": "Config overrides for configurable components",
+                            },
+                            "mounting_style": {
+                                "type": "string",
+                                "description": "Override from allowed_styles",
+                            },
                         },
                         "required": ["catalog_id", "instance_id"],
                     },
                 },
-                "outline": {
+                "nets": {
                     "type": "array",
-                    "description": "Same outline vertex list as submit_design.",
+                    "description": "Electrical nets connecting component pins.",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "x": {"type": "number"},
-                            "y": {"type": "number"},
+                            "id": {
+                                "type": "string",
+                                "description": "Net name (e.g. 'VCC', 'GND')",
+                            },
+                            "pins": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": (
+                                    "Pin references as 'instance_id:pin_id'. "
+                                    "Use 'instance_id:group_id' for MCU dynamic "
+                                    "pin allocation."
+                                ),
+                            },
                         },
-                        "required": ["x", "y"],
+                        "required": ["id", "pins"],
                     },
-                },
-                "ui_placements": {
-                    "type": "array",
-                    "description": "Same ui_placements list as submit_design.",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "instance_id": {"type": "string"},
-                            "x_mm": {"type": "number"},
-                            "y_mm": {"type": "number"},
-                        },
-                        "required": ["instance_id", "x_mm", "y_mm"],
-                    },
-                },
-                "enclosure": {
-                    "type": "object",
-                    "description": (
-                        "Same enclosure object as submit_design. "
-                        "Required when edge_bottom is a fillet or chamfer so the "
-                        "feasibility scan accounts for the reduced floor space."
-                    ),
                 },
             },
-            "required": ["components", "outline", "ui_placements"],
+            "required": ["components", "nets"],
         },
     },
 ]

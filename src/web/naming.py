@@ -11,7 +11,7 @@ def generate_session_name(sess: Session) -> str | None:
     """Generate a short name for the session from its conversation.
     Returns None on failure.
     """
-    conversation = sess.read_artifact("conversation.json")
+    conversation = sess.read_artifact("design_conversation.json")
     if not conversation or not isinstance(conversation, list):
         return None
 

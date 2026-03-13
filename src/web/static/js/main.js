@@ -5,6 +5,7 @@ import { closeModal } from './utils.js';
 import { setSessionLabel, startNewSession, showSessionsModal, setSessionUrl, initPrinterSelector, setPrinterFromSession, loadPrinters } from './session.js';
 import { loadCatalog, reloadCatalog } from './catalog.js';
 import { sendDesignPrompt, loadConversation } from './design.js';
+import { runCircuit, enableCircuitTab, loadCircuitConversation, loadCircuitResult } from './circuit.js';
 import { runPlacement, loadPlacementResult, enablePlacementTab } from './placement.js';
 import { runRouting, loadRoutingResult, enableRoutingTab } from './routing.js';
 import { loadBitmapResult, enableBitmapTab } from './bitmap.js';
@@ -25,10 +26,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (state.session) {
         setSessionLabel(state.session);
         loadConversation();
-        loadPlacementResult();    // load existing placement if present
-        loadRoutingResult();      // load existing routing if present
-        loadBitmapResult();       // load existing bitmap if present
-        loadScadResult();         // load existing SCAD if present
+        loadCircuitConversation();  // load existing circuit conversation if present
+        loadPlacementResult();      // load existing placement if present
+        loadRoutingResult();        // load existing routing if present
+        loadBitmapResult();         // load existing bitmap if present
+        loadScadResult();           // load existing SCAD if present
         // Fetch session name for the label; clear URL if session no longer exists
         fetch(`${API}/api/session?session=${encodeURIComponent(state.session)}`)
             .then(r => {
@@ -41,8 +43,12 @@ document.addEventListener('DOMContentLoaded', () => {
             .then(data => {
                 if (data?.name) setSessionLabel(state.session, data.name);
                 if (data?.printer_id) setPrinterFromSession(data.printer_id);
-                // Enable placement nav if design is complete
+                // Enable circuit nav if design is complete
                 if (data?.artifacts?.design) {
+                    enableCircuitTab(!data?.artifacts?.circuit);
+                }
+                // Enable placement nav if circuit is complete
+                if (data?.artifacts?.circuit) {
                     enablePlacementTab(!data?.artifacts?.placement);
                 }
                 // Enable routing nav if placement is complete
@@ -122,6 +128,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
     document.getElementById('btn-reload-catalog').addEventListener('click', reloadCatalog);
+
+    // Circuit
+    document.getElementById('btn-run-circuit').addEventListener('click', runCircuit);
 
     // Placement
     document.getElementById('btn-run-placement').addEventListener('click', runPlacement);

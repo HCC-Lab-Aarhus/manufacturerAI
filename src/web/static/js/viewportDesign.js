@@ -8,10 +8,9 @@
  *
  * Data shape (matches DesignSpec JSON from the backend):
  * {
- *   components: [{ catalog_id, instance_id, config?, mounting_style? }]
- *   nets:       [{ id, pins: ["instance:pin", …] }]
  *   outline:    [{ x, y, ease_in?, ease_out? }, ...]
- *   ui_placements: [{ instance_id, x_mm, y_mm }]
+ *   ui_placements: [{ instance_id, catalog_id, x_mm, y_mm, body?, pins? }]
+ *   enclosure:  { height_mm, top_surface?, edge_top?, edge_bottom? }
  * }
  */
 
@@ -90,7 +89,7 @@ function _stripEnrichment(design) {
     delete d.height_grid;
     delete d.bottom_height_grid;
     delete d.pcb_contour;
-    for (const c of (d.components || [])) {
+    for (const c of (d.ui_placements || [])) {
         delete c.body;
         delete c.pins;
         delete c.ui_placement;
@@ -186,7 +185,6 @@ async function buildPreview(design) {
 
     wrap.appendChild(buildOutlineSVG(design));
     wrap.appendChild(buildComponentPanel(design));
-    wrap.appendChild(buildNetList(design.nets));
 
     return wrap;
 }
@@ -276,7 +274,7 @@ function buildOutlineSVG(design) {
     }
 
     const compMap = {};
-    for (const c of (design.components || [])) {
+    for (const c of (design.ui_placements || [])) {
         compMap[c.instance_id] = c;
     }
 
@@ -589,11 +587,10 @@ function buildComponentPanel(design) {
     const section = document.createElement('div');
     section.className = 'vp-section';
 
-    const components = design.components || [];
-    const uiComps = components.filter(c => _isUIComponent(c));
-    const internalComps = components.filter(c => !_isUIComponent(c));
+    const allPlacements = design.ui_placements || [];
+    const uiComps = allPlacements;  // All placements are UI components now
     const uiMap = {};
-    for (const up of (design.ui_placements || [])) uiMap[up.instance_id] = up;
+    for (const up of allPlacements) uiMap[up.instance_id] = up;
 
     // ── UI Components (cards) ──
     const uiHeading = document.createElement('h4');
@@ -610,7 +607,7 @@ function buildComponentPanel(design) {
         cardList.className = 'vp-comp-cards';
 
         for (const comp of uiComps) {
-            const up = uiMap[comp.instance_id];
+            const up = uiMap[comp.instance_id] || comp;
             cardList.appendChild(_buildCompCard(comp, up, design));
         }
         section.appendChild(cardList);
@@ -638,35 +635,6 @@ function buildComponentPanel(design) {
     addRow.appendChild(addSelect);
     section.appendChild(addRow);
 
-    // ── Internal Components (collapsed) ──
-    if (internalComps.length > 0) {
-        const details = document.createElement('details');
-        details.className = 'vp-internal-details';
-        const summary = document.createElement('summary');
-        summary.className = 'vp-internal-summary';
-        summary.textContent = `Internal Components (${internalComps.length})`;
-        details.appendChild(summary);
-
-        const internalList = document.createElement('div');
-        internalList.className = 'vp-internal-list';
-        for (const comp of internalComps) {
-            const row = document.createElement('div');
-            row.className = 'vp-internal-row';
-            row.innerHTML = `<span class="vp-mono">${esc(comp.instance_id)}</span><span class="vp-internal-cat">${esc(comp.catalog_id)}</span>`;
-            internalList.appendChild(row);
-
-            const catEntry = _getCatalogEntry(comp.catalog_id);
-            if (catEntry?.configurable && Object.keys(catEntry.configurable).length > 0) {
-                const configContainer = document.createElement('div');
-                configContainer.className = 'vp-internal-config';
-                _appendConfigFields(configContainer, comp, design);
-                internalList.appendChild(configContainer);
-            }
-        }
-        details.appendChild(internalList);
-        section.appendChild(details);
-    }
-
     return section;
 }
 
@@ -693,12 +661,7 @@ function _buildCompCard(comp, up, design) {
     removeBtn.textContent = '×';
     removeBtn.title = `Remove ${comp.instance_id}`;
     removeBtn.addEventListener('click', async () => {
-        design.components = design.components.filter(c => c.instance_id !== comp.instance_id);
         design.ui_placements = (design.ui_placements || []).filter(u => u.instance_id !== comp.instance_id);
-        for (const net of (design.nets || [])) {
-            net.pins = net.pins.filter(p => !p.startsWith(comp.instance_id + ':'));
-        }
-        design.nets = (design.nets || []).filter(n => n.pins.length >= 2);
         await _persistDesign(design);
         await _persistConversationSubmitDesign(design);
         setViewportData('design', _currentDesign || design);
@@ -834,19 +797,16 @@ async function _addUIComponent(catId, design) {
     const catEntry = _getCatalogEntry(catId);
     if (!catEntry) return;
 
-    const existing = new Set((design.components || []).map(c => c.instance_id));
+    const existing = new Set((design.ui_placements || []).map(c => c.instance_id));
     let n = 1;
     let iid = `${catId.replace(/[^a-z0-9_]/gi, '_')}_${n}`;
     while (existing.has(iid)) { n++; iid = `${catId.replace(/[^a-z0-9_]/gi, '_')}_${n}`; }
-
-    const newComp = { catalog_id: catId, instance_id: iid };
-    if (catEntry.mounting?.style) newComp.mounting_style = catEntry.mounting.style;
 
     const verts = normaliseOutline(design.outline).verts;
     const cx = verts.reduce((s, v) => s + v[0], 0) / verts.length;
     const cy = verts.reduce((s, v) => s + v[1], 0) / verts.length;
 
-    const newUp = { instance_id: iid, x_mm: Math.round(cx * 10) / 10, y_mm: Math.round(cy * 10) / 10 };
+    const newUp = { instance_id: iid, catalog_id: catId, x_mm: Math.round(cx * 10) / 10, y_mm: Math.round(cy * 10) / 10 };
     if (catEntry.mounting?.style === 'side') {
         newUp.edge_index = 0;
         const mid = _edgeMidpoint(verts, 0);
@@ -854,9 +814,7 @@ async function _addUIComponent(catId, design) {
         newUp.y_mm = mid.y;
     }
 
-    if (!design.components) design.components = [];
     if (!design.ui_placements) design.ui_placements = [];
-    design.components.push(newComp);
     design.ui_placements.push(newUp);
 
     await _persistDesign(design);

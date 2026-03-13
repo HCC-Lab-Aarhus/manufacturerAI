@@ -14,8 +14,11 @@ _ALLOWED_FIELDS = {
 # Lookup tools whose results are safe to prune from old turns
 _LOOKUP_TOOLS = {"list_components", "get_component"}
 
+# Submit tools whose results must always be kept verbatim
+_KEEP_VERBATIM = {"submit_design", "submit_circuit"}
 
-def _serialize_content(content: list) -> list[dict]:
+
+def serialize_content(content: list) -> list[dict]:
     """Convert API response content blocks to serializable dicts.
 
     The Anthropic SDK returns pydantic model instances with extra fields
@@ -39,26 +42,26 @@ def _serialize_content(content: list) -> list[dict]:
     return result
 
 
-def _sanitize_messages(messages: list[dict]) -> list[dict]:
+def sanitize_messages(messages: list[dict]) -> list[dict]:
     """Clean a saved conversation so every content block only contains
     fields the Anthropic API accepts."""
     clean = []
     for msg in messages:
         content = msg.get("content")
         if isinstance(content, list):
-            msg = {**msg, "content": _serialize_content(content)}
+            msg = {**msg, "content": serialize_content(content)}
         clean.append(msg)
     return clean
 
 
-def _prune_messages(messages: list[dict], keep_recent_turns: int = 6) -> list[dict]:
+def prune_messages(messages: list[dict], keep_recent_turns: int = 6) -> list[dict]:
     """Shrink the context sent to the API by replacing old informational
     tool results with a stub, without touching the saved history on disk.
 
     For assistant turns older than `keep_recent_turns`:
     - list_components / get_component tool_result content is replaced
       with "[pruned]" (the pairing id is preserved so the API stays happy)
-    - submit_design tool calls + results are always kept verbatim
+    - submit_design / submit_circuit tool calls + results are always kept
     - All user text prompts and assistant text / thinking blocks are kept
     """
     assistant_indices = [i for i, m in enumerate(messages) if m["role"] == "assistant"]
