@@ -90,8 +90,7 @@ class _BaseAgent:
                     model=MODEL,
                     max_tokens=MAX_TOKENS,
                     thinking={
-                        "type": "enabled",
-                        "budget_tokens": THINKING_BUDGET,
+                        "type": "adaptive",
                     },
                     system=system,
                     tools=tools,
