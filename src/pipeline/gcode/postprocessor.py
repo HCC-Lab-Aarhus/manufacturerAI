@@ -767,8 +767,103 @@ def postprocess_gcode(
         #     the ironing postamble to the next section — but replace
         #     the ironing retract (whose E value is invalid after
         #     stripping) with a clean retract.
+        # ── Strip infill in silverink_only debug mode ────────
+        # In debug mode we only care about perimeters and ink
+        # pauses — infill wastes time and filament.
+        stripped_line = line.strip()
+        strip_infill = (
+            silverink_only
+            and stripped_line == ';TYPE:Internal infill'
+        )
+        if strip_infill:
+            # Collect all lines in the infill section
+            section_inf: list[str] = []
+            i += 1
+            while i < len(raw_lines):
+                nxt = raw_lines[i].strip()
+                if nxt.startswith(';TYPE:') or nxt.startswith(';LAYER_CHANGE'):
+                    break
+                section_inf.append(raw_lines[i])
+                i += 1
+
+            # Remove preamble (retract / G92 E0) already appended to `out`
+            preamble_start_inf = None
+            for k in range(len(out) - 1, max(0, len(out) - 20), -1):
+                if out[k].strip() == 'G92 E0':
+                    preamble_start_inf = k
+                    if k > 0 and re.match(
+                        r'^G1\s+E[\d.]+\s+F\d+', out[k - 1].strip()
+                    ):
+                        preamble_start_inf = k - 1
+                    break
+            if preamble_start_inf is None:
+                for k in range(len(out) - 1, max(0, len(out) - 15), -1):
+                    s = out[k].strip()
+                    if re.match(r'^G1\s+E-[\d.]+\s+F\d+$', s):
+                        preamble_start_inf = k
+                        break
+                    if re.match(r'^G1\s+.*[XY].*E[\d.]', s):
+                        break
+            if preamble_start_inf is not None:
+                del out[preamble_start_inf:]
+
+            # ── Preserve postamble travel to the next section ──
+            # Without this, the nozzle jumps between pads with no
+            # retraction, causing stringing.
+            next_is_print = (
+                i < len(raw_lines)
+                and raw_lines[i].strip().startswith(';TYPE:')
+                and not raw_lines[i].strip().startswith(';TYPE:Custom')
+            )
+            if next_is_print and section_inf:
+                # Method 1: G92 E0 (MK3S absolute-E mode)
+                g92_idx = None
+                for k in range(len(section_inf) - 1, -1, -1):
+                    if section_inf[k].strip() == 'G92 E0':
+                        g92_idx = k
+                        break
+
+                if g92_idx is not None:
+                    kept = section_inf[g92_idx:]
+                    for kl in kept:
+                        out.append(kl)
+                        m_k = _MOVE_RE.match(kl)
+                        if m_k:
+                            if m_k.group("x"):
+                                track_x = float(m_k.group("x"))
+                            if m_k.group("y"):
+                                track_y = float(m_k.group("y"))
+                else:
+                    # Method 2: Core One M83 — emit corrective travel
+                    target_x, target_y, target_z = track_x, track_y, current_z
+                    for line_s in section_inf:
+                        m_k = _MOVE_RE.match(line_s)
+                        if m_k:
+                            if m_k.group("x"):
+                                target_x = float(m_k.group("x"))
+                            if m_k.group("y"):
+                                target_y = float(m_k.group("y"))
+                        z_m = re.match(r'^G[01]\s+Z([\d.]+)', line_s.strip())
+                        if z_m:
+                            target_z = float(z_m.group(1))
+
+                    dist = math.hypot(target_x - track_x, target_y - track_y)
+                    if dist > 0.5:
+                        out.append(f"G1 E-0.8 F2700 ; retract (infill stripped)")
+                        out.append(f"G0 Z{target_z + 0.6:.3f} F720 ; Z-hop")
+                        out.append(f"G0 X{target_x:.3f} Y{target_y:.3f} F21000 ; travel (infill stripped)")
+                        out.append(f"G0 Z{target_z:.3f} F720 ; lower")
+                        out.append(f"G1 E0.8 F1500 ; unretract")
+                    track_x, track_y = target_x, target_y
+
+            log.debug(
+                "Stripped infill section '%s' at Z=%.2f (%d lines)",
+                stripped_line, current_z, len(section_inf),
+            )
+            continue  # don't append the ;TYPE:…infill line itself
+
         strip_ironing = (
-            line.strip() == ';TYPE:Ironing'
+            stripped_line == ';TYPE:Ironing'
             and (abs(current_z - ink_z) > 0.05 or silverink_only)
         )
         if strip_ironing:
