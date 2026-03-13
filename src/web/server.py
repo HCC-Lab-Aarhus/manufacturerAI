@@ -154,18 +154,7 @@ def _invalidate_downstream(session: Session, current_step: str) -> list[str]:
 
     Returns the list of step names that were invalidated.
     """
-    idx = _PIPELINE_ORDER.index(current_step) if current_step in _PIPELINE_ORDER else -1
-    invalidated: list[str] = []
-    for later in _PIPELINE_ORDER[idx + 1:]:
-        artifact = f"{later}.json"
-        if session.has_artifact(artifact):
-            session.delete_artifact(artifact)
-        if later in session.pipeline_state:
-            del session.pipeline_state[later]
-            invalidated.append(later)
-        if later == "routing":
-            session.delete_artifact("trace_bitmap.txt")
-    return invalidated
+    return session.invalidate_downstream(current_step)
 
 
 # ── Routes: Pages ──────────────────────────────────────────────────
@@ -765,6 +754,9 @@ async def api_compile_stl(session: str = Query(...), force: bool = Query(False))
             "message": msg,
             "cancel": cancel,
         }
+        if ok:
+            s.pipeline_state["scad"] = "done"
+            s.save()
 
     threading.Thread(target=_do_compile, daemon=True).start()
     return {"status": "compiling"}
@@ -1538,6 +1530,9 @@ async def api_circuit(session: str = Query(...)):
 
     cat = _get_catalog()
     prompt = build_circuit_user_prompt(design_data)
+
+    _invalidate_downstream(sess, "design")
+    sess.save()
 
     async def event_stream():
         try:

@@ -321,16 +321,7 @@ class DesignAgent(_BaseAgent):
         # Save the clean design data (without synthesized components)
         self.session.write_artifact("design.json", input_data)
         self.session.pipeline_state["design"] = "complete"
-
-        # Invalidate downstream: circuit, placement, and routing depend on design
-        for step in ("circuit", "placement", "routing"):
-            artifact = f"{step}.json"
-            if self.session.has_artifact(artifact):
-                self.session.delete_artifact(artifact)
-            self.session.pipeline_state.pop(step, None)
-        # Also clear circuit conversation
-        if self.session.has_artifact("circuit_conversation.json"):
-            self.session.delete_artifact("circuit_conversation.json")
+        self.session.invalidate_downstream("design")
         self.session.save()
 
         return "Design validated successfully! Saved to session.", True
@@ -477,13 +468,7 @@ class CircuitAgent(_BaseAgent):
         # Save circuit data
         self.session.write_artifact("circuit.json", input_data)
         self.session.pipeline_state["circuit"] = "complete"
-
-        # Invalidate downstream
-        for step in ("placement", "routing"):
-            artifact = f"{step}.json"
-            if self.session.has_artifact(artifact):
-                self.session.delete_artifact(artifact)
-            self.session.pipeline_state.pop(step, None)
+        self.session.invalidate_downstream("circuit")
         self.session.save()
 
         return "Circuit validated successfully! Saved to session.", True

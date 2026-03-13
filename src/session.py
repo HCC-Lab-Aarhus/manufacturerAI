@@ -24,7 +24,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from src.pipeline.config import DEFAULT_PRINTER
 
@@ -85,6 +85,29 @@ class Session:
             p.unlink()
             return True
         return False
+
+    _PIPELINE_ORDER: ClassVar[list[str]] = ["design", "circuit", "placement", "routing", "scad", "gcode", "firmware"]
+    _STAGE_ARTIFACTS: ClassVar[dict[str, list[str]]] = {
+        "design": ["design.json", "design_conversation.json"],
+        "circuit": ["circuit.json", "circuit_conversation.json"],
+        "placement": ["placement.json"],
+        "routing": ["routing.json", "trace_bitmap.txt", "print_job.json"],
+        "scad": ["enclosure.scad", "enclosure.stl"],
+        "gcode": ["enclosure_raw.gcode", "enclosure_staged.gcode", "enclosure_staged.bgcode"],
+        "firmware": ["firmware.ino"],
+    }
+
+    def invalidate_downstream(self, current_step: str) -> list[str]:
+        """Delete artifacts and pipeline_state for all stages after *current_step*."""
+        idx = self._PIPELINE_ORDER.index(current_step) if current_step in self._PIPELINE_ORDER else -1
+        invalidated: list[str] = []
+        for later in self._PIPELINE_ORDER[idx + 1:]:
+            for artifact in self._STAGE_ARTIFACTS.get(later, [f"{later}.json"]):
+                self.delete_artifact(artifact)
+            if later in self.pipeline_state:
+                del self.pipeline_state[later]
+                invalidated.append(later)
+        return invalidated
 
 
 def _generate_session_id() -> str:
