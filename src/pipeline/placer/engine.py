@@ -185,11 +185,17 @@ def place_components(
     cg = CongestionGrid(outline_poly)
 
     # Resolve effective mounting style for each instance
+    # Priority: UIPlacement.mounting_style > ComponentInstance.mounting_style > catalog default
     effective_style: dict[str, str] = {}
+    up_style_map = {up.instance_id: up.mounting_style for up in design.ui_placements if up.mounting_style}
     for ci in design.components:
         cat = catalog_map.get(ci.catalog_id)
         if cat:
-            effective_style[ci.instance_id] = ci.mounting_style or cat.mounting.style
+            effective_style[ci.instance_id] = (
+                up_style_map.get(ci.instance_id)
+                or ci.mounting_style
+                or cat.mounting.style
+            )
 
     # ── 1. Place UI components (fixed positions) ───────────────────
 

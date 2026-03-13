@@ -120,8 +120,10 @@ async function _persistDesign(design) {
             const saved = await res.json();
             _currentDesign = saved;
             cacheData('design', saved);
+        } else if (!res.ok) {
+            console.warn('Design persist returned', res.status, await res.text().catch(() => ''));
         }
-    } catch { /* non-fatal */ }
+    } catch (e) { console.warn('Design persist failed:', e); }
 }
 
 async function _persistConversationSubmitDesign(design) {
@@ -134,7 +136,7 @@ async function _persistConversationSubmitDesign(design) {
             { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ design: stripped }) },
         );
         if (res.ok) _showDesignEditBubble();
-    } catch { /* non-fatal */ }
+    } catch (e) { console.warn('Conversation persist failed:', e); }
 }
 
 let _designEditBubble = null;
@@ -170,7 +172,7 @@ async function _validatePlacement(instanceId, xMm, yMm, edgeIndex) {
             { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
         );
         if (res.ok && seq === _validateSeq) return await res.json();
-    } catch { /* non-fatal */ }
+    } catch (e) { console.warn('Placement validation failed:', e); }
     return { valid: true, errors: [] };
 }
 

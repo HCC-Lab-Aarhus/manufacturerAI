@@ -124,8 +124,9 @@ Before placing UI components:
 - Reserve a contiguous rectangle large enough for the biggest likely internal component plus keepout margins
 - If `edge_bottom` is a fillet or chamfer, remember it reduces usable floor area near the walls
 - Areas where `z_bottom > 0` cannot be used for components. Ensure the flat (0.0) floor region is large enough.
-- Side-mount components must include `edge_index`
+- Side-mount components must include `edge_index` and set `mounting_style` to `"side"`
 - `edge_index` is 0-based: edge `i` runs from `outline[i]` to `outline[(i + 1) % n]`
+- To override a component's default mounting style, set `mounting_style` in the ui_placement (must be one of the component's `allowed_styles`)
 - Non-side-mount components must not specify `edge_index`
 - Respect body size and keepout margins from `get_component`
 - The placement should make ergonomic sense for the intended use
