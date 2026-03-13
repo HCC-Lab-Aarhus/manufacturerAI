@@ -100,12 +100,24 @@ def generate_trace_bitmap(
     rows = bitmap.rows_for_bed(pdef.bed_width, pdef.bed_depth)
     ink_cells: set[tuple[int, int]] = set()
 
+    # Scale factor: enlarge traces by 5% around the bed centre
+    # so the printed bitmap slightly oversizes for alignment margin.
+    SCALE = 1.05
+    bed_cx = pdef.bed_width / 2
+    bed_cy = pdef.bed_depth / 2
+
     for trace in result.traces:
         shifted_path = [
             (x - origin_x, y - origin_y) for x, y in trace.path
         ]
+        # Scale around bed centre
+        scaled_path = [
+            (bed_cx + (x - bed_cx) * SCALE,
+             bed_cy + (y - bed_cy) * SCALE)
+            for x, y in shifted_path
+        ]
         ink_cells |= _trace_cells(
-            shifted_path, trace_width_mm,
+            scaled_path, trace_width_mm,
             pdef.bed_width, pdef.bed_depth,
             cols, rows,
         )

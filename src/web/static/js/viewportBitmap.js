@@ -223,15 +223,10 @@ function buildBitmapView(data) {
         ctx.putImageData(img, 0, 0);
 
         const bitmapImage = document.createElementNS(NS, 'image');
-        const bmpScale = 1.05;  // 5% oversize for projection alignment
-        const bmpW = bed_width * SCALE * bmpScale;
-        const bmpH = bed_depth * SCALE * bmpScale;
-        const bmpX = PLATE_PAD + (bed_width * SCALE - bmpW) / 2;
-        const bmpY = PLATE_PAD + (bed_depth * SCALE - bmpH) / 2;
-        bitmapImage.setAttribute('x', bmpX);
-        bitmapImage.setAttribute('y', bmpY);
-        bitmapImage.setAttribute('width', bmpW);
-        bitmapImage.setAttribute('height', bmpH);
+        bitmapImage.setAttribute('x', PLATE_PAD);
+        bitmapImage.setAttribute('y', PLATE_PAD);
+        bitmapImage.setAttribute('width', bed_width * SCALE);
+        bitmapImage.setAttribute('height', bed_depth * SCALE);
         bitmapImage.setAttribute('preserveAspectRatio', 'none');
         bitmapImage.setAttribute('image-rendering', 'pixelated');
         bitmapImage.setAttributeNS('http://www.w3.org/1999/xlink', 'href', canvas.toDataURL());
