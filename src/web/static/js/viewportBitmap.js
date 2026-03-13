@@ -234,9 +234,6 @@ function buildBitmapView(data) {
         bitmapImage.setAttribute('height', bmpH);
         bitmapImage.setAttribute('preserveAspectRatio', 'none');
         bitmapImage.setAttribute('image-rendering', 'pixelated');
-        // Flip vertically: scale(1,-1) around the image's vertical center
-        const bmpCenterY = bmpY + bmpH / 2;
-        bitmapImage.setAttribute('transform', `translate(0, ${2 * bmpCenterY}) scale(1, -1)`);
         bitmapImage.setAttributeNS('http://www.w3.org/1999/xlink', 'href', canvas.toDataURL());
         svg.appendChild(bitmapImage);
     }
