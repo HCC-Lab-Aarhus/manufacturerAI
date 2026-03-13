@@ -791,7 +791,7 @@ async def api_debug_calibrate(
     import tempfile
     import os
     from pathlib import Path
-    from src.pipeline.config import TRACE_RULES, BITMAP_CONFIG, PrinterDef, get_printer
+    from src.pipeline.config import TRACE_RULES, BITMAP_CONFIG, BITMAP_CALIBRATION, PrinterDef, get_printer
     from src.pipeline.router.bitmap import _trace_cells
     
     pdef = get_printer(printer)
@@ -975,11 +975,14 @@ async def api_debug_calibrate(
     rows = BITMAP_CONFIG.rows_for_bed(bed_width, bed_depth)
     ink_cells: set[tuple[int, int]] = set()
     
-    SCALE = 1.05
+    cal = BITMAP_CALIBRATION
     for t in traces:
-        # Scale around bed centre
+        # Scale around bed centre, then apply calibration offsets from config
         scaled_path = [
-            (cx + (px - cx) * SCALE, cy + (py - cy) * SCALE)
+            (
+                cx + ((px - cx) + cal.offset_x) * cal.scale_x,
+                cy + ((py - cy) + cal.offset_y) * cal.scale_y,
+            )
             for px, py in t["path"]
         ]
         ink_cells |= _trace_cells(

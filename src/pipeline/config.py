@@ -36,6 +36,31 @@ BITMAP_CONFIG = BitmapConfig()
 
 
 @dataclass(frozen=True)
+class BitmapCalibration:
+    """Projection-to-print alignment offsets.
+
+    Tweak these values after running the calibration dots on ``/debug``.
+    They shift and scale the bitmap so the projected image aligns with
+    the physically printed PLA squares.
+    """
+
+    offset_x: float = 6.0
+    """Shift bitmap X in mm (positive = right)."""
+
+    offset_y: float = 23.0
+    """Shift bitmap Y in mm (positive = up)."""
+
+    scale_x: float = 1.05
+    """Horizontal scale (1.0 = no change)."""
+
+    scale_y: float = 1.05
+    """Vertical scale (1.0 = no change)."""
+
+
+BITMAP_CALIBRATION = BitmapCalibration()
+
+
+@dataclass(frozen=True)
 class TraceRules:
     """Physical design rules for conductive-ink traces.
 

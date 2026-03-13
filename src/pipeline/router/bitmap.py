@@ -12,7 +12,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from src.pipeline.config import BITMAP_CONFIG, BitmapConfig, PrinterDef, get_printer
+from src.pipeline.config import BITMAP_CONFIG, BITMAP_CALIBRATION, BitmapConfig, PrinterDef, get_printer
 from .models import RoutingResult
 
 
@@ -100,20 +100,19 @@ def generate_trace_bitmap(
     rows = bitmap.rows_for_bed(pdef.bed_width, pdef.bed_depth)
     ink_cells: set[tuple[int, int]] = set()
 
-    # Scale factor: enlarge traces by 5% around the bed centre
-    # so the printed bitmap slightly oversizes for alignment margin.
-    SCALE = 1.05
     bed_cx = pdef.bed_width / 2
     bed_cy = pdef.bed_depth / 2
+
+    cal = BITMAP_CALIBRATION
 
     for trace in result.traces:
         shifted_path = [
             (x - origin_x, y - origin_y) for x, y in trace.path
         ]
-        # Scale around bed centre
+        # Scale around bed centre, then apply calibration offsets
         scaled_path = [
-            (bed_cx + (x - bed_cx) * SCALE,
-             bed_cy + (y - bed_cy) * SCALE)
+            (bed_cx + ((x - bed_cx) + cal.offset_x) * cal.scale_x,
+             bed_cy + ((y - bed_cy) + cal.offset_y) * cal.scale_y)
             for x, y in shifted_path
         ]
         ink_cells |= _trace_cells(
