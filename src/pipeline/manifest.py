@@ -1,8 +1,13 @@
-"""Print-job manifest generator.
+"""Print-job manifest generator (optional).
 
-Produces ``print_job.json`` — the contract between manufacturerAI (design)
-and silver3dprinter (execution).  The manifest contains every physical
-parameter needed to align the bitmap, gcode, and printhead sweeps.
+Produces ``print_job.json`` — a convenience file that bundles the
+physical parameters of a print job.  silver3dprinter does **not**
+require this file; it only needs the trace bitmap and the embedded
+``;silverink`` pause marker in the G-code.
+
+The manifest is still generated when explicitly requested (e.g. by the
+calibration debug endpoint) but is no longer part of the mandatory
+manufacturing pipeline.
 """
 
 from __future__ import annotations
@@ -18,23 +23,23 @@ from src.pipeline.config import (
     PRINTHEAD,
     FLOOR_MM,
     TRACE_HEIGHT_MM,
+    BITMAP_DATA_COLS,
+    BITMAP_DATA_ROWS,
     get_printer,
 )
 
 
 @dataclass
 class PrintJobManifest:
-    """All physical parameters for a single print job."""
+    """Physical parameters for a single print job."""
 
-    # Bed (usable area)
+    # Bed
     bed_width_mm: float
     bed_depth_mm: float
-
-    # Nominal bed (PrusaSlicer bed_shape)
     nominal_bed_width_mm: float
     nominal_bed_depth_mm: float
 
-    # Inkjet mechanical offset (PLA nozzle → inkjet array centre)
+    # Inkjet offset
     inkjet_offset_x_mm: float
     inkjet_offset_y_mm: float
 
@@ -44,7 +49,7 @@ class PrintJobManifest:
     part_width_mm: float
     part_depth_mm: float
 
-    # Printhead
+    # Printhead geometry
     printhead_name: str
     nozzle_count: int
     nozzle_pitch_mm: float
@@ -62,11 +67,6 @@ class PrintJobManifest:
     # Ink layer
     ink_z_mm: float
     trace_height_mm: float
-
-    # Sweep (recommended parameters)
-    recommended_speed_mm_per_min: float
-    row_fire_rate_hz: float
-    time_per_row_ms: float
 
     # Gcode
     gcode_file: str
@@ -86,16 +86,10 @@ def generate_manifest(
     bitmap_file: str = "trace_bitmap.txt",
     printer: PrinterDef | None = None,
     printhead: PrintheadConfig = PRINTHEAD,
-    sweep_speed_mm_per_min: float = 2100.0,
 ) -> PrintJobManifest:
     """Build a manifest from design geometry and hardware config."""
     pdef = printer or get_printer()
     px = printhead.pixel_size_mm
-    out_cols, out_rows = printhead.bitmap_output_dims(part_width_mm, part_depth_mm)
-
-    speed_mm_per_s = sweep_speed_mm_per_min / 60.0
-    row_rate = printhead.row_rate_for_speed(speed_mm_per_s)
-    time_per_row_ms = 1000.0 / row_rate if row_rate > 0 else 0.0
 
     return PrintJobManifest(
         bed_width_mm=pdef.bed_width,
@@ -115,15 +109,12 @@ def generate_manifest(
         lane_step_nozzles=printhead.lane_step_nozzles,
         lane_width_mm=round(printhead.lane_width_mm, 4),
         bitmap_file=bitmap_file,
-        bitmap_cols=out_cols,
-        bitmap_rows=out_rows,
+        bitmap_cols=BITMAP_DATA_COLS,
+        bitmap_rows=BITMAP_DATA_ROWS,
         pixel_size_x_mm=px,
         pixel_size_y_mm=px,
         ink_z_mm=FLOOR_MM,
         trace_height_mm=TRACE_HEIGHT_MM,
-        recommended_speed_mm_per_min=sweep_speed_mm_per_min,
-        row_fire_rate_hz=round(row_rate, 2),
-        time_per_row_ms=round(time_per_row_ms, 4),
         gcode_file=gcode_file,
         ink_pause_marker=";silverink",
     )

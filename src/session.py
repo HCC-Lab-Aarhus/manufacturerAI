@@ -91,7 +91,7 @@ class Session:
         "design": ["design.json", "design_conversation.json"],
         "circuit": ["circuit.json", "circuit_conversation.json"],
         "placement": ["placement.json"],
-        "routing": ["routing.json", "trace_bitmap.txt", "print_job.json"],
+        "routing": ["routing.json", "trace_bitmap.txt"],
         "scad": ["enclosure.scad", "enclosure.stl"],
         "gcode": ["enclosure_raw.gcode", "enclosure_staged.gcode", "enclosure_staged.bgcode"],
         "firmware": ["firmware.ino"],

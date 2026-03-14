@@ -159,6 +159,11 @@ async def generate_bitmap(sid: str):
     part_width = max_x - min_x
     part_depth = max_y - min_y
 
+    model_cx = (min_x + max_x) / 2
+    model_cy = (min_y + max_y) / 2
+    bed_offset_x = pdef.nominal_bed_width / 2 - model_cx
+    bed_offset_y = pdef.nominal_bed_depth / 2 - model_cy
+
     part_origin_x = pdef.nominal_bed_width / 2 - (part_width / 2)
     part_origin_y = pdef.nominal_bed_depth / 2 - (part_depth / 2)
 
@@ -171,17 +176,8 @@ async def generate_bitmap(sid: str):
         origin_y=min_y,
         part_width_mm=part_width,
         part_depth_mm=part_depth,
+        bed_offset=(part_origin_x, part_origin_y),
     )
-
-    from src.pipeline.manifest import generate_manifest, write_manifest
-    manifest = generate_manifest(
-        part_origin_x_mm=part_origin_x,
-        part_origin_y_mm=part_origin_y,
-        part_width_mm=part_width,
-        part_depth_mm=part_depth,
-        printer=pdef,
-    )
-    write_manifest(manifest, s.path / "print_job.json")
 
     return {"status": "done"}
 
@@ -489,7 +485,6 @@ async def download_bundle(sid: str):
     files = {
         "enclosure_staged.gcode": s.path / "enclosure_staged.gcode",
         "trace_bitmap.txt": s.path / "trace_bitmap.txt",
-        "print_job.json": s.path / "print_job.json",
     }
     missing = [name for name, path in files.items() if not path.exists()]
     if missing:

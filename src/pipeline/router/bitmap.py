@@ -1,19 +1,17 @@
 """Bitmap generation — renders routed traces to a nozzle-native resolution bitmap.
 
-The nozzle array is oriented parallel to the **X axis**.  Each text
-line represents one firing position along the Y sweep; each character
-within a line corresponds to one nozzle (X position).
+The bitmap covers the full sweep grid of the silver3dprinter so that
+the sliding-window slicing in ``rasp_main.py`` produces combined
+slices aligned 1:1 with the physical sweep lanes.
 
-Internally, traces are rasterized on a conventional (row=Y, col=X)
-grid, then written so that:
+Pixel size is exactly the nozzle pitch (square pixels).  One character
+in the text file = one nozzle position on the X axis; one text line =
+one firing position along the Y sweep.
+
   - text rows  → Y positions (sweep direction, high→low in file)
   - text cols  → X positions (nozzle direction, low→high)
 
 A '1' means "deposit conductive ink here", a '0' means "no ink".
-
-The bitmap covers only the part's bounding box, not the full bed.
-Part placement on the bed is recorded in the print-job manifest so
-the printer can position the sweeps correctly.
 """
 
 from __future__ import annotations
@@ -24,6 +22,8 @@ from pathlib import Path
 from src.pipeline.config import (
     BITMAP_CONFIG, BITMAP_CALIBRATION, BitmapConfig,
     PrinterDef, PrintheadConfig, PRINTHEAD, get_printer,
+    BITMAP_DATA_X_START_MM, BITMAP_DATA_COLS, BITMAP_DATA_ROWS,
+    SWEEP_Y_START_MM,
 )
 from .models import RoutingResult
 
@@ -87,13 +87,18 @@ def generate_trace_bitmap(
     printhead: PrintheadConfig = PRINTHEAD,
     part_width_mm: float | None = None,
     part_depth_mm: float | None = None,
+    bed_offset: tuple[float, float] | None = None,
 ) -> list[str]:
-    """Render all traces into a list of text rows (top row = max Y).
+    """Render all traces into a sweep-grid-aligned bitmap.
 
-    When ``part_width_mm`` and ``part_depth_mm`` are provided, the bitmap
-    is dynamically sized at nozzle-native resolution (one pixel per
-    nozzle pitch in both axes).  The ``bitmap`` parameter is ignored
-    in that case.
+    The bitmap spans the full sweep area (X: SWEEP_X_START → SWEEP_X_END,
+    Y: SWEEP_Y_START → SWEEP_Y_END) at nozzle-native resolution so that
+    silver3dprinter's sliding-window slicing maps columns directly to
+    physical nozzle positions during each sweep lane.
+
+    Pixel size is exactly the nozzle pitch in both axes (square pixels).
+    Width is rounded up to a multiple of 32 so the bitmap can be evenly
+    sliced into 32-pixel strips by ``rasp_main.py``.
 
     Parameters
     ----------
@@ -104,68 +109,53 @@ def generate_trace_bitmap(
     printer : PrinterDef, optional
         Printer definition (bed dimensions).  Falls back to default.
     bitmap : BitmapConfig
-        Bitmap resolution (cols × rows).  Used only when part dimensions
-        are not provided (legacy mode).
+        Legacy parameter — ignored when part dimensions are provided.
     origin_x, origin_y : float
         World-space origin of the board outline's bounding-box lower-left
-        corner.  Trace coordinates are shifted to part-local coords.
+        corner.  Trace coordinates are shifted relative to this.
     printhead : PrintheadConfig
         Printhead hardware parameters (nozzle pitch, count).
     part_width_mm, part_depth_mm : float, optional
-        Part bounding-box dimensions.  When given, bitmap is sized at
-        nozzle-native resolution and calibration offsets are bypassed.
+        Part bounding-box dimensions.
+    bed_offset : tuple[float, float], optional
+        ``(dx, dy)`` from model-local coordinates to absolute bed
+        coordinates.  PrusaSlicer centres the STL on the bed, so
+        ``bed_pos = model_pos + bed_offset``.  When provided, traces
+        are placed at their correct absolute bed position within the
+        sweep grid.
 
     Returns
     -------
     list[str]
         Each text line corresponds to one Y position (sweep direction),
-        each character to one X position (nozzle direction).  Lines
-        emit from highest Y to lowest Y; rasp_main.py reverses on
+        emitted from highest Y to lowest Y.  rasp_main.py reverses on
         load so row 0 = lowest Y = start of increasing-Y sweep.
     """
     pdef = printer or get_printer()
+    pixel_size = printhead.pixel_size_mm
 
-    native_mode = part_width_mm is not None and part_depth_mm is not None
+    cols = BITMAP_DATA_COLS
+    rows = BITMAP_DATA_ROWS
 
-    if native_mode:
-        pixel_size = printhead.pixel_size_mm
-        cols, rows = printhead.bitmap_dims_for_part(part_width_mm, part_depth_mm)
-        part_w = part_width_mm
-        part_d = part_depth_mm
-    else:
-        cols = bitmap.cols
-        rows = bitmap.rows_for_bed(pdef.bed_width, pdef.bed_depth)
-        part_w = pdef.bed_width
-        part_d = pdef.bed_depth
-        pixel_size = part_w / cols
+    offset_x = bed_offset[0] if bed_offset else 0.0
+    offset_y = bed_offset[1] if bed_offset else 0.0
 
     ink_cells: set[tuple[int, int]] = set()
 
-    cal = BITMAP_CALIBRATION
-
     for trace in result.traces:
-        shifted_path = [
-            (x - origin_x, y - origin_y) for x, y in trace.path
+        bed_path = [
+            (x - origin_x + offset_x, y - origin_y + offset_y)
+            for x, y in trace.path
         ]
-        if not native_mode:
-            bed_cx = part_w / 2
-            bed_cy = part_d / 2
-            shifted_path = [
-                (bed_cx + ((x - bed_cx) + cal.offset_x) * cal.scale_x,
-                 bed_cy + ((y - bed_cy) + cal.offset_y) * cal.scale_y)
-                for x, y in shifted_path
-            ]
+        bitmap_path = [
+            (x - BITMAP_DATA_X_START_MM, y - SWEEP_Y_START_MM)
+            for x, y in bed_path
+        ]
         ink_cells |= _trace_cells(
-            shifted_path, trace_width_mm,
+            bitmap_path, trace_width_mm,
             pixel_size, cols, rows,
         )
 
-    # Text lines = Y positions (sweep), chars = X positions (nozzles).
-    # Internal grid: row = Y index, col = X index.
-    # Emit from highest Y to lowest Y; rasp_main.py reverses on load
-    # so row 0 after flip = lowest Y = start of the increasing-Y sweep.
-    # Within each line, chars go from lowest X to highest X, matching
-    # the nozzle-index-to-X mapping of the X-parallel printhead.
     lines: list[str] = []
     for r in range(rows - 1, -1, -1):
         line_chars = []
@@ -188,6 +178,7 @@ def write_trace_bitmap(
     printhead: PrintheadConfig = PRINTHEAD,
     part_width_mm: float | None = None,
     part_depth_mm: float | None = None,
+    bed_offset: tuple[float, float] | None = None,
 ) -> Path:
     """Generate the trace bitmap and write it to a text file."""
     output_path = Path(output_path)
@@ -200,6 +191,7 @@ def write_trace_bitmap(
         printhead=printhead,
         part_width_mm=part_width_mm,
         part_depth_mm=part_depth_mm,
+        bed_offset=bed_offset,
     )
     output_path.write_text('\n'.join(lines), encoding='utf-8')
     return output_path
