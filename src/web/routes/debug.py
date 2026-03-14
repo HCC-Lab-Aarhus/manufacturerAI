@@ -136,6 +136,9 @@ def _calibration_gcode(
 
     lines += [
         "",
+        "G91 ; relative positioning",
+        "G1 Z30 F1000 ; lift head before pause",
+        "G90 ; absolute positioning",
         "M0 ; pause before silver ink",
         ";silverink",
         "",
