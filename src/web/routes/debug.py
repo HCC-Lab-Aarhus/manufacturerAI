@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import APIRouter, Query
 
 from src.pipeline.config import get_printer, PRINTHEAD
+from src.pipeline.manifest import generate_manifest
 
 router = APIRouter(prefix="/debug", tags=["debug"])
 
@@ -122,9 +123,23 @@ async def generate_calibration(
     gcode = _calibration_gcode(bw, bd, box_size, padding, square_size)
     bitmap = _calibration_bitmap(bw, bd, box_size, padding, square_size)
 
+    # Contract: manifest for the calibration print job
+    cx, cy = bw / 2, bd / 2
+    half = box_size / 2
+    manifest = generate_manifest(
+        part_origin_x_mm=cx - half,
+        part_origin_y_mm=cy - half,
+        part_width_mm=box_size,
+        part_depth_mm=box_size,
+        gcode_file="debug_calibration.gcode",
+        bitmap_file="trace_bitmap.txt",
+        printer=pdef,
+    )
+
     return {
         "gcode": gcode,
         "bitmap": bitmap,
+        "contract": manifest.to_dict(),
         "nominal_bed_width": pdef.nominal_bed_width,
         "nominal_bed_depth": pdef.nominal_bed_depth,
         "inkjet_offset_x": pdef.inkjet_offset_x,

@@ -141,6 +141,7 @@
         <div id="result-area">
             <a id="dl-gcode" class="download-btn" href="#" download="debug_calibration.gcode">↓ Download G-code</a>
             <a id="dl-bitmap" class="download-btn" href="#" download="trace_bitmap.txt">↓ Download Trace Bitmap</a>
+            <a id="dl-contract" class="download-btn" href="#" download="print_job.json">↓ Download Contract (print_job.json)</a>
         </div>
     </div>
 
@@ -211,9 +212,11 @@
                 // Create blobs
                 const gcodeBlob = new Blob([data.gcode], { type: 'text/plain' });
                 const bitmapBlob = new Blob([data.bitmap], { type: 'text/plain' });
+                const contractBlob = new Blob([JSON.stringify(data.contract, null, 2)], { type: 'application/json' });
 
                 dlGcode.href = URL.createObjectURL(gcodeBlob);
                 dlBitmap.href = URL.createObjectURL(bitmapBlob);
+                document.getElementById('dl-contract').href = URL.createObjectURL(contractBlob);
 
                 res.style.display = 'flex';
             } catch (e) {
