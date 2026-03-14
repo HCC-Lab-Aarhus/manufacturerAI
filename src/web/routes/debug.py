@@ -6,7 +6,7 @@ the inkjet-to-PLA nozzle offset.
 Follows the exact same coordinate conventions as the real pipeline:
 - G-code is in nominal-bed coordinates (PrusaSlicer bed_shape).
 - Part (calibration box) is centred on the nominal bed.
-- Bitmap covers only the part bounding box, in part-local coordinates.
+- Bitmap spans the full sweep grid in absolute bed coordinates.
 - Bitmap transposition matches bitmap.py: lines = X sweep (high→low),
   chars = Y nozzle (low→high).
 - Manifest records part_origin in absolute nominal-bed coordinates.
@@ -19,7 +19,11 @@ from typing import Any
 
 from fastapi import APIRouter, Query
 
-from src.pipeline.config import get_printer, PrinterDef, PRINTHEAD
+from src.pipeline.config import (
+    get_printer, PrinterDef, PRINTHEAD,
+    BITMAP_DATA_X_START_MM, BITMAP_DATA_COLS, BITMAP_DATA_ROWS,
+    SWEEP_Y_START_MM,
+)
 from src.pipeline.gcode.filaments import get_filament, FilamentDef
 from src.pipeline.manifest import generate_manifest
 
@@ -157,37 +161,45 @@ def _calibration_gcode(
 
 
 def _calibration_bitmap(
+    pdef: PrinterDef,
     box: float,
     pad: float,
     sq: float,
 ) -> str:
-    """Generate a text bitmap with three filled squares and a ruler.
+    """Generate a full sweep-grid bitmap with three filled squares.
 
     Top-right corner is omitted for orientation.
 
-    Follows the real pipeline (bitmap.py) conventions:
-    - Bitmap covers only the part bounding box (box × box).
-    - Coordinates are part-local (0,0 = lower-left of the box).
-    - Internal grid: (row=Y, col=X) matching _trace_cells.
-    - Output: lines = Y positions (sweep, high→low),
-              chars = X positions (nozzle, low→high).
-    - rasp_main.py reverses on load so first row after flip = lowest Y.
+    The bitmap spans the entire sweep grid (BITMAP_DATA_COLS × BITMAP_DATA_ROWS)
+    so that rasp_main.py's sliding-window slicing maps columns 1:1 to physical
+    sweep lanes — exactly like the real pipeline's bitmap.py.
+
+    Square positions are in absolute bed coordinates, converted to bitmap
+    pixels by subtracting the sweep-grid origin.
     """
     px = PRINTHEAD.pixel_size_mm
-    cols, rows = PRINTHEAD.bitmap_dims_for_part(box, box)
+    cols = BITMAP_DATA_COLS
+    rows = BITMAP_DATA_ROWS
 
-    corners = [
-        (pad, pad),
-        (box - pad - sq, pad),
-        (pad, box - pad - sq),
+    nom_w = pdef.nominal_bed_width
+    nom_d = pdef.nominal_bed_depth
+    cx, cy = nom_w / 2, nom_d / 2
+    half = box / 2
+
+    corners_bed = [
+        (cx - half + pad, cy - half + pad),
+        (cx + half - pad - sq, cy - half + pad),
+        (cx - half + pad, cy + half - pad - sq),
     ]
 
     ink_cells: set[tuple[int, int]] = set()
-    for ox, oy in corners:
-        c0 = max(0, int(math.floor(ox / px)))
-        c1 = min(cols - 1, int(math.floor((ox + sq) / px)))
-        r0 = max(0, int(math.floor(oy / px)))
-        r1 = min(rows - 1, int(math.floor((oy + sq) / px)))
+    for bed_x, bed_y in corners_bed:
+        bx0 = bed_x - BITMAP_DATA_X_START_MM
+        by0 = bed_y - SWEEP_Y_START_MM
+        c0 = max(0, int(math.floor(bx0 / px)))
+        c1 = min(cols - 1, int(math.floor((bx0 + sq) / px)))
+        r0 = max(0, int(math.floor(by0 / px)))
+        r1 = min(rows - 1, int(math.floor((by0 + sq) / px)))
         for c in range(c0, c1 + 1):
             for r in range(r0, r1 + 1):
                 ink_cells.add((r, c))
@@ -215,7 +227,7 @@ async def generate_calibration(
     fdef = get_filament(filament)
 
     gcode = _calibration_gcode(pdef, fdef, box_size, padding, square_size)
-    bitmap = _calibration_bitmap(box_size, padding, square_size)
+    bitmap = _calibration_bitmap(pdef, box_size, padding, square_size)
 
     part_origin_x = pdef.nominal_bed_width / 2 - box_size / 2
     part_origin_y = pdef.nominal_bed_depth / 2 - box_size / 2
