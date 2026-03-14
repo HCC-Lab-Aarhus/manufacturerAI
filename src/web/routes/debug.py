@@ -35,7 +35,10 @@ def _calibration_gcode(
     z: float = 0.3,
     feed: float = 1200,
 ) -> str:
-    """Generate G-code that prints four alignment squares as PLA outlines.
+    """Generate G-code that prints three alignment squares plus a ruler.
+
+    Three corners have squares; the top-right is intentionally missing so
+    the operator can verify print orientation.
 
     Squares are centred on the **nominal** bed (matching PrusaSlicer
     bed_shape), just like the real pipeline centres parts.
@@ -60,7 +63,6 @@ def _calibration_gcode(
         (cx - half + pad, cy - half + pad),
         (cx + half - pad - sq, cy - half + pad),
         (cx - half + pad, cy + half - pad - sq),
-        (cx + half - pad - sq, cy + half - pad - sq),
     ]
 
     bw_i, bd_i = int(nom_w), int(nom_d)
@@ -159,7 +161,9 @@ def _calibration_bitmap(
     pad: float,
     sq: float,
 ) -> str:
-    """Generate a text bitmap with four filled squares matching the G-code.
+    """Generate a text bitmap with three filled squares and a ruler.
+
+    Top-right corner is omitted for orientation.
 
     Follows the real pipeline (bitmap.py) conventions:
     - Bitmap covers only the part bounding box (box × box).
@@ -176,7 +180,6 @@ def _calibration_bitmap(
         (pad, pad),
         (box - pad - sq, pad),
         (pad, box - pad - sq),
-        (box - pad - sq, box - pad - sq),
     ]
 
     ink_cells: set[tuple[int, int]] = set()
