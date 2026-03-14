@@ -122,8 +122,8 @@ class BitmapCalibration:
     Positive offset_x shifts ink in +X, positive offset_y shifts ink in +Y.
     """
 
-    offset_x: float = 1.8
-    offset_y: float = 0.0
+    offset_x: float = -1.8
+    offset_y: float = 2.7
 
 
 BITMAP_CALIBRATION = BitmapCalibration()
