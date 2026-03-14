@@ -197,8 +197,8 @@ def _calibration_bitmap(
 
     ink_cells: set[tuple[int, int]] = set()
     for bed_x, bed_y in corners_bed:
-        bx0 = bed_x - BITMAP_DATA_X_START_MM
-        by0 = bed_y - SWEEP_Y_START_MM
+        bx0 = bed_x - BITMAP_DATA_X_START_MM - pdef.inkjet_offset_x
+        by0 = bed_y - SWEEP_Y_START_MM - pdef.inkjet_offset_y
         c0 = max(0, int(math.floor(bx0 / px)))
         c1 = min(cols - 1, int(math.floor((bx0 + sq) / px)))
         r0 = max(0, int(math.floor(by0 / px)))

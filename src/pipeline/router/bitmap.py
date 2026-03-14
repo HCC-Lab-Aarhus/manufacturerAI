@@ -148,7 +148,8 @@ def generate_trace_bitmap(
             for x, y in trace.path
         ]
         bitmap_path = [
-            (x - BITMAP_DATA_X_START_MM, y - SWEEP_Y_START_MM)
+            (x - BITMAP_DATA_X_START_MM - pdef.inkjet_offset_x,
+             y - SWEEP_Y_START_MM - pdef.inkjet_offset_y)
             for x, y in bed_path
         ]
         ink_cells |= _trace_cells(
