@@ -136,6 +136,7 @@ def _calibration_gcode(
 
     lines += [
         "",
+        "M0 ; pause before silver ink",
         ";silverink",
         "",
         "; --- End sequence ---",
