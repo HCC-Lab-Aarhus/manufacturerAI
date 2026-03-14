@@ -1,13 +1,13 @@
 """Bitmap generation — renders routed traces to a nozzle-native resolution bitmap.
 
-The nozzle array is oriented parallel to the **Y axis**.  Each text
-line represents one firing position along the X sweep; each character
-within a line corresponds to one nozzle (Y position).
+The nozzle array is oriented parallel to the **X axis**.  Each text
+line represents one firing position along the Y sweep; each character
+within a line corresponds to one nozzle (X position).
 
 Internally, traces are rasterized on a conventional (row=Y, col=X)
-grid, then transposed when writing the text output so that:
-  - text rows  → X positions (sweep direction)
-  - text cols  → Y positions (nozzle direction)
+grid, then written so that:
+  - text rows  → Y positions (sweep direction, high→low in file)
+  - text cols  → X positions (nozzle direction, low→high)
 
 A '1' means "deposit conductive ink here", a '0' means "no ink".
 
@@ -118,9 +118,10 @@ def generate_trace_bitmap(
     Returns
     -------
     list[str]
-        Transposed for the Y-parallel printhead: each text line
-        corresponds to one X position (sweep direction), each character
-        to one Y position (nozzle direction).  Line 0 = lowest X.
+        Each text line corresponds to one Y position (sweep direction),
+        each character to one X position (nozzle direction).  Lines
+        emit from highest Y to lowest Y; rasp_main.py reverses on
+        load so row 0 = lowest Y = start of increasing-Y sweep.
     """
     pdef = printer or get_printer()
 
@@ -159,17 +160,16 @@ def generate_trace_bitmap(
             pixel_size, cols, rows,
         )
 
-    # Transpose: text lines = X positions (sweep), chars = Y positions (nozzles).
+    # Text lines = Y positions (sweep), chars = X positions (nozzles).
     # Internal grid: row = Y index, col = X index.
-    # Emit from highest X to lowest X (matching the old convention of
-    # highest-coordinate-first); rasp_main.py reverses on load so the
-    # first row after flip = lowest X = start of the increasing-X sweep.
-    # Within each line, chars go from lowest Y to highest Y, matching
-    # the nozzle-index-to-Y mapping in the printhead simulator.
+    # Emit from highest Y to lowest Y; rasp_main.py reverses on load
+    # so row 0 after flip = lowest Y = start of the increasing-Y sweep.
+    # Within each line, chars go from lowest X to highest X, matching
+    # the nozzle-index-to-X mapping of the X-parallel printhead.
     lines: list[str] = []
-    for c in range(cols - 1, -1, -1):
+    for r in range(rows - 1, -1, -1):
         line_chars = []
-        for r in range(rows):
+        for c in range(cols):
             line_chars.append('1' if (r, c) in ink_cells else '0')
         lines.append(''.join(line_chars))
 

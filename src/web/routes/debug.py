@@ -161,9 +161,9 @@ def _calibration_bitmap(
     - Bitmap covers only the part bounding box (box × box).
     - Coordinates are part-local (0,0 = lower-left of the box).
     - Internal grid: (row=Y, col=X) matching _trace_cells.
-    - Output: lines = X positions (sweep, high→low),
-              chars = Y positions (nozzle, low→high).
-    - rasp_main.py reverses on load so first row after flip = lowest X.
+    - Output: lines = Y positions (sweep, high→low),
+              chars = X positions (nozzle, low→high).
+    - rasp_main.py reverses on load so first row after flip = lowest Y.
     """
     px = PRINTHEAD.pixel_size_mm
     cols, rows = PRINTHEAD.bitmap_dims_for_part(box, box)
@@ -186,9 +186,9 @@ def _calibration_bitmap(
                 ink_cells.add((r, c))
 
     lines: list[str] = []
-    for c in range(cols - 1, -1, -1):
+    for r in range(rows - 1, -1, -1):
         line_chars = []
-        for r in range(rows):
+        for c in range(cols):
             line_chars.append('1' if (r, c) in ink_cells else '0')
         lines.append(''.join(line_chars))
 

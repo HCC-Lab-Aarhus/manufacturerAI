@@ -86,10 +86,10 @@ class PrintheadConfig:
         """Return (cols, rows) of the *internal* rasterization grid.
 
         Internally:  cols = X extent (width),  rows = Y extent (depth).
-        The text-file output is transposed (see bitmap.py) so that
-        text-lines = X positions (sweep) and characters = Y positions
-        (nozzle array).  The caller should use ``bitmap_output_dims``
-        to get the file-level dimensions.
+        The text-file output maps text-lines = Y positions (sweep)
+        and characters = X positions (nozzle array).  The caller
+        should use ``bitmap_output_dims`` to get the file-level
+        dimensions.
         """
         cols = math.ceil(part_width_mm / self.pixel_size_mm)
         rows = math.ceil(part_depth_mm / self.pixel_size_mm)
@@ -100,14 +100,14 @@ class PrintheadConfig:
     ) -> tuple[int, int]:
         """Return (out_cols, out_rows) as they appear in the text file.
 
-        The nozzle array is parallel to Y, so:
-          - out_cols = Y extent (depth)  — characters per line = nozzle axis
-          - out_rows = X extent (width)  — lines in file = sweep axis
+        The nozzle array is parallel to X, so:
+          - out_cols = X extent (width)  — characters per line = nozzle axis
+          - out_rows = Y extent (depth)  — lines in file = sweep axis
         """
         internal_cols, internal_rows = self.bitmap_dims_for_part(
             part_width_mm, part_depth_mm,
         )
-        return internal_rows, internal_cols
+        return internal_cols, internal_rows
 
 
 PRINTHEAD = PrintheadConfig()
