@@ -249,41 +249,66 @@ CEILING_MM: float = 2.0
 
 @dataclass(frozen=True)
 class PrinterDef:
-    """Static definition of a supported 3D printer."""
+    """Static definition of a supported 3D printer.
+
+    ``nominal_bed_width/depth`` are the physical bed dimensions matching
+    PrusaSlicer's ``bed_shape``.  ``inkjet_offset_x/y`` describe the
+    mechanical offset from the PLA nozzle to the inkjet nozzle array
+    centre.  The usable area (``bed_width/depth``) is derived —
+    existing code continues to work unchanged.
+    """
     id: str
     label: str
-    bed_width: float      # mm
-    bed_depth: float      # mm
-    max_z_mm: float       # mm — maximum build height
+    nominal_bed_width: float   # mm — full bed (matches PrusaSlicer bed_shape)
+    nominal_bed_depth: float   # mm
+    inkjet_offset_x: float     # mm — PLA nozzle → inkjet array centre, +X = right
+    inkjet_offset_y: float     # mm — PLA nozzle → inkjet array centre, +Y = back
+    max_z_mm: float            # mm — maximum build height
     profile_filename: str
     native_printer: str | None = None
     native_print: str | None = None
     native_material: str | None = None
     thumbnails: str | None = None
 
+    @property
+    def bed_width(self) -> float:
+        """Usable print area width (nominal minus inkjet X offset)."""
+        return self.nominal_bed_width - abs(self.inkjet_offset_x)
+
+    @property
+    def bed_depth(self) -> float:
+        """Usable print area depth (nominal minus inkjet Y offset)."""
+        return self.nominal_bed_depth - abs(self.inkjet_offset_y)
+
 
 PRINTERS: dict[str, PrinterDef] = {
     "mk3s": PrinterDef(
         id="mk3s",
         label="Prusa MK3S",
-        bed_width=219.0, # 250 - 31 for inkjet carriage
-        bed_depth=178.0, # 210 - 32 for inkjet carriage
+        nominal_bed_width=250.0,
+        nominal_bed_depth=210.0,
+        inkjet_offset_x=31.0,
+        inkjet_offset_y=32.0,
         max_z_mm=210.0,
         profile_filename="slicer_profile_mk3s.ini",
     ),
     "mk3s_plus": PrinterDef(
         id="mk3s_plus",
         label="Prusa i3 MK3S+",
-        bed_width=219.0, # 250 - 31 for inkjet carriage
-        bed_depth=178.0, # 210 - 32 for inkjet carriage
+        nominal_bed_width=250.0,
+        nominal_bed_depth=210.0,
+        inkjet_offset_x=31.0,
+        inkjet_offset_y=32.0,
         max_z_mm=210.0,
         profile_filename="slicer_profile_mk3s_plus.ini",
     ),
     "coreone": PrinterDef(
         id="coreone",
         label="Prusa Core One+",
-        bed_width=219.0, # 250 - 31 for inkjet carriage
-        bed_depth=219.0, # 250 - 31 for inkjet carriage
+        nominal_bed_width=250.0,
+        nominal_bed_depth=250.0,
+        inkjet_offset_x=31.0,
+        inkjet_offset_y=31.0,
         max_z_mm=220.0,
         profile_filename="slicer_profile_coreone.ini",
         native_printer="Prusa CORE One HF0.4 nozzle",

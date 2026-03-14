@@ -26,9 +26,17 @@ from src.pipeline.config import (
 class PrintJobManifest:
     """All physical parameters for a single print job."""
 
-    # Bed
+    # Bed (usable area)
     bed_width_mm: float
     bed_depth_mm: float
+
+    # Nominal bed (PrusaSlicer bed_shape)
+    nominal_bed_width_mm: float
+    nominal_bed_depth_mm: float
+
+    # Inkjet mechanical offset (PLA nozzle → inkjet array centre)
+    inkjet_offset_x_mm: float
+    inkjet_offset_y_mm: float
 
     # Part bounding box on the bed (absolute bed coordinates)
     part_origin_x_mm: float
@@ -92,6 +100,10 @@ def generate_manifest(
     return PrintJobManifest(
         bed_width_mm=pdef.bed_width,
         bed_depth_mm=pdef.bed_depth,
+        nominal_bed_width_mm=pdef.nominal_bed_width,
+        nominal_bed_depth_mm=pdef.nominal_bed_depth,
+        inkjet_offset_x_mm=pdef.inkjet_offset_x,
+        inkjet_offset_y_mm=pdef.inkjet_offset_y,
         part_origin_x_mm=round(part_origin_x_mm, 4),
         part_origin_y_mm=round(part_origin_y_mm, 4),
         part_width_mm=round(part_width_mm, 4),

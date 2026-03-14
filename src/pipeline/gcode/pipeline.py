@@ -143,8 +143,8 @@ def run_gcode_pipeline(
     if trace_segs:
         stages.append(f"Trace segments: {len(trace_segs)} segments for ironing filter")
 
-    # ── 3c. Compute bed offset (PrusaSlicer centres model on bed) ──
-    bed_offset = compute_bed_offset(stl_path, bed_size=(pdef.bed_width, pdef.bed_depth))
+    # ── 3c. Compute bed offset (PrusaSlicer centres model on nominal bed) ──
+    bed_offset = compute_bed_offset(stl_path, bed_size=(pdef.nominal_bed_width, pdef.nominal_bed_depth))
     stages.append(f"Bed offset: ({bed_offset[0]:.1f}, {bed_offset[1]:.1f}) mm")
 
     # ── 4. Post-process ───────────────────────────────────────────

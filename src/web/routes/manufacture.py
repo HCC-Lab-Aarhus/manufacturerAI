@@ -159,8 +159,8 @@ async def generate_bitmap(sid: str):
     part_width = max_x - min_x
     part_depth = max_y - min_y
 
-    part_origin_x = pdef.bed_width / 2 - (part_width / 2)
-    part_origin_y = pdef.bed_depth / 2 - (part_depth / 2)
+    part_origin_x = pdef.nominal_bed_width / 2 - (part_width / 2)
+    part_origin_y = pdef.nominal_bed_depth / 2 - (part_depth / 2)
 
     write_trace_bitmap(
         result,
@@ -210,8 +210,8 @@ async def get_bitmap(sid: str):
     if outline_verts:
         model_cx = (min(v[0] for v in outline_verts) + max(v[0] for v in outline_verts)) / 2
         model_cy = (min(v[1] for v in outline_verts) + max(v[1] for v in outline_verts)) / 2
-        bed_offset_x = pdef.bed_width / 2 - model_cx
-        bed_offset_y = pdef.bed_depth / 2 - model_cy
+        bed_offset_x = pdef.nominal_bed_width / 2 - model_cx
+        bed_offset_y = pdef.nominal_bed_depth / 2 - model_cy
     else:
         bed_offset_x = 0.0
         bed_offset_y = 0.0
@@ -237,6 +237,10 @@ async def get_bitmap(sid: str):
         "bitmap_b64": bitmap_b64,
         "bed_width": pdef.bed_width,
         "bed_depth": pdef.bed_depth,
+        "nominal_bed_width": pdef.nominal_bed_width,
+        "nominal_bed_depth": pdef.nominal_bed_depth,
+        "inkjet_offset_x": pdef.inkjet_offset_x,
+        "inkjet_offset_y": pdef.inkjet_offset_y,
         "bed_offset_x": bed_offset_x,
         "bed_offset_y": bed_offset_y,
         "outline": outline,
