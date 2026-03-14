@@ -115,17 +115,15 @@ BITMAP_CONFIG = BitmapConfig()
 
 @dataclass(frozen=True)
 class BitmapCalibration:
-    """Projection-to-print alignment offsets (LEGACY).
+    """Fine-tuning offsets applied on top of the computed inkjet offset.
 
-    These empirical fudge factors exist for backward compatibility with
-    the old fixed-resolution bitmap.  New code should use geometric
-    alignment via the print-job manifest and set all offsets to zero.
+    After measuring a calibration print, set these to the residual error
+    (in mm) so the bitmap projection lands precisely on the PLA features.
+    Positive offset_x shifts ink in +X, positive offset_y shifts ink in +Y.
     """
 
-    offset_x: float = 0.0
+    offset_x: float = 1.8
     offset_y: float = 0.0
-    scale_x: float = 1.0
-    scale_y: float = 1.0
 
 
 BITMAP_CALIBRATION = BitmapCalibration()
