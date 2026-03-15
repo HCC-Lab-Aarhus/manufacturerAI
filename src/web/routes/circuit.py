@@ -27,6 +27,7 @@ async def run_circuit(sid: str, request: Request):
     except Exception:
         pass
     feedback = body.get("feedback")
+    outline = body.get("outline")
 
     cat = get_catalog()
 
@@ -38,6 +39,9 @@ async def run_circuit(sid: str, request: Request):
             "Please fix the issue and resubmit the circuit."
         )
         invalidate_downstream(sess, "circuit")
+    elif outline:
+        prompt = outline
+        invalidate_downstream(sess, "design")
     else:
         prompt = build_circuit_user_prompt(design_data)
         invalidate_downstream(sess, "design")
