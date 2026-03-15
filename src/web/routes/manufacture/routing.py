@@ -30,19 +30,25 @@ async def run_routing(sid: str):
     try:
         result = route_traces(full_placement, cat)
     except Exception as e:
-        raise HTTPException(422, detail={
+        detail = {
             "error": "routing_failed",
             "reason": str(e),
             "responsible_agent": "circuit",
-        })
+        }
+        s.set_step_error("routing", detail)
+        raise HTTPException(422, detail=detail)
 
     if not result.ok:
         total = len({t.net_id for t in result.traces} | set(result.failed_nets))
-        raise HTTPException(422, detail={
+        detail = {
             "error": "routing_failed",
             "reason": f"Failed to route {len(result.failed_nets)}/{total} nets: {', '.join(result.failed_nets)}",
             "responsible_agent": "circuit",
-        })
+        }
+        s.set_step_error("routing", detail)
+        raise HTTPException(422, detail=detail)
+
+    s.clear_step_error("routing")
 
     s.write_artifact("routing.json", routing_to_dict(result))
     if result.debug_grids:

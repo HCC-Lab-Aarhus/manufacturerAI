@@ -37,6 +37,7 @@ async def get_session(sid: str):
         "name": s.name,
         "printer_id": s.printer_id,
         "pipeline_state": s.pipeline_state,
+        "pipeline_errors": s.pipeline_errors,
         "artifacts": {
             "catalog": True,
             "design": s.has_artifact("design.json"),

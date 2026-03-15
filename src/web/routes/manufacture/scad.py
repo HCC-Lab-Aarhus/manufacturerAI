@@ -16,11 +16,15 @@ async def run_scad(sid: str):
     try:
         scad_path = run_scad_step(s)
     except Exception as exc:
-        raise HTTPException(422, detail={
+        detail = {
             "error": "scad_failed",
             "reason": str(exc),
             "responsible_agent": "design",
-        })
+        }
+        s.set_step_error("scad", detail)
+        raise HTTPException(422, detail=detail)
+
+    s.clear_step_error("scad")
 
     scad_text = scad_path.read_text(encoding="utf-8")
     return {

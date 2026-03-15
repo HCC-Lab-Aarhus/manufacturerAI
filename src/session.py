@@ -42,6 +42,16 @@ class Session:
     name: str = ""                       # LLM-generated friendly name
     printer_id: str = DEFAULT_PRINTER
     pipeline_state: dict = field(default_factory=dict)  # stage -> status
+    pipeline_errors: dict = field(default_factory=dict)  # stage -> {error, reason, responsible_agent}
+
+    def set_step_error(self, step: str, detail: dict) -> None:
+        """Persist an error for a pipeline step."""
+        self.pipeline_errors[step] = detail
+        self.save()
+
+    def clear_step_error(self, step: str) -> None:
+        """Remove a persisted error for a pipeline step."""
+        self.pipeline_errors.pop(step, None)
 
     def save(self) -> None:
         """Persist session metadata to session.json."""
@@ -55,6 +65,7 @@ class Session:
             "name": self.name,
             "printer_id": self.printer_id,
             "pipeline_state": self.pipeline_state,
+            "pipeline_errors": self.pipeline_errors,
         }
         (self.path / "session.json").write_text(
             json.dumps(meta, indent=2), encoding="utf-8")
@@ -106,6 +117,7 @@ class Session:
             if later in self.pipeline_state:
                 del self.pipeline_state[later]
                 invalidated.append(later)
+            self.pipeline_errors.pop(later, None)
         return invalidated
 
 
@@ -156,6 +168,7 @@ def load_session(session_id: str) -> Session | None:
         name=meta.get("name", ""),
         printer_id=meta.get("printer_id", DEFAULT_PRINTER),
         pipeline_state=meta.get("pipeline_state", {}),
+        pipeline_errors=meta.get("pipeline_errors", {}),
     )
 
 
