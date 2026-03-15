@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -96,6 +98,14 @@ def enrich_components(components: list, cat) -> None:
             comp["cap_clearance_mm"] = c.mounting.cap.hole_clearance_mm
 
 
+_design_3d_cache: dict[str, dict] = {}
+
+
+def _design_3d_cache_key(outline_data, enclosure_data) -> str:
+    raw = json.dumps({"o": outline_data, "e": enclosure_data}, sort_keys=True)
+    return hashlib.md5(raw.encode()).hexdigest()
+
+
 def enrich_design_3d(data: dict) -> None:
     from src.pipeline.design.parsing import _parse_outline, _parse_enclosure
     from src.pipeline.design.height_field import (
@@ -116,17 +126,32 @@ def enrich_design_3d(data: dict) -> None:
     except Exception:
         return
 
-    grid = sample_height_grid(outline, enclosure, resolution_mm=1.0)
-    data["height_grid"] = grid
+    cache_key = _design_3d_cache_key(outline_data, enclosure_data)
+    cached = _design_3d_cache.get(cache_key)
+    if cached is not None:
+        grid = cached["height_grid"]
+        data["height_grid"] = grid
+        if "bottom_height_grid" in cached:
+            data["bottom_height_grid"] = cached["bottom_height_grid"]
+        if "pcb_contour" in cached:
+            data["pcb_contour"] = cached["pcb_contour"]
+    else:
+        grid = sample_height_grid(outline, enclosure, resolution_mm=1.0)
+        data["height_grid"] = grid
+        to_cache: dict = {"height_grid": grid}
 
-    bottom_grid = sample_bottom_height_grid(outline, enclosure, resolution_mm=1.0)
-    if bottom_grid is not None:
-        data["bottom_height_grid"] = bottom_grid
-        contour = pcb_contour_from_bottom_grid(
-            bottom_grid, outline, threshold_mm=FLOOR_MM,
-        )
-        if contour is not None:
-            data["pcb_contour"] = contour
+        bottom_grid = sample_bottom_height_grid(outline, enclosure, resolution_mm=1.0)
+        if bottom_grid is not None:
+            data["bottom_height_grid"] = bottom_grid
+            to_cache["bottom_height_grid"] = bottom_grid
+            contour = pcb_contour_from_bottom_grid(
+                bottom_grid, outline, threshold_mm=FLOOR_MM,
+            )
+            if contour is not None:
+                data["pcb_contour"] = contour
+                to_cache["pcb_contour"] = contour
+
+        _design_3d_cache[cache_key] = to_cache
 
     for up in data.get("ui_placements", []):
         x, y = up.get("x_mm", 0), up.get("y_mm", 0)
