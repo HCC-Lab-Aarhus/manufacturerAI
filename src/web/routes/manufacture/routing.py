@@ -36,6 +36,14 @@ async def run_routing(sid: str):
             "responsible_agent": "circuit",
         })
 
+    if not result.ok:
+        total = len({t.net_id for t in result.traces} | set(result.failed_nets))
+        raise HTTPException(422, detail={
+            "error": "routing_failed",
+            "reason": f"Failed to route {len(result.failed_nets)}/{total} nets: {', '.join(result.failed_nets)}",
+            "responsible_agent": "circuit",
+        })
+
     s.write_artifact("routing.json", routing_to_dict(result))
     if result.debug_grids:
         s.write_artifact("routing_debug.json", {"debug_grids": result.debug_grids})
