@@ -30,7 +30,11 @@ async def run_routing(sid: str):
     try:
         result = route_traces(full_placement, cat)
     except Exception as e:
-        raise HTTPException(422, detail={"error": "routing_failed", "reason": str(e)})
+        raise HTTPException(422, detail={
+            "error": "routing_failed",
+            "reason": str(e),
+            "responsible_agent": "circuit",
+        })
 
     s.write_artifact("routing.json", routing_to_dict(result))
     s.pipeline_state["routing"] = "complete"

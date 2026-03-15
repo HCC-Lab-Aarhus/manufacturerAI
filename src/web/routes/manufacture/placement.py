@@ -27,7 +27,11 @@ async def run_placement(sid: str):
 
     errors = validate_design(design, cat, printer=get_printer(s.printer_id))
     if errors:
-        raise HTTPException(400, f"Design validation failed: {'; '.join(errors)}")
+        raise HTTPException(400, detail={
+            "error": "design_validation_failed",
+            "reason": "; ".join(errors),
+            "responsible_agent": "design",
+        })
 
     try:
         result = place_components(design, cat)
@@ -37,6 +41,7 @@ async def run_placement(sid: str):
             "instance_id": e.instance_id,
             "catalog_id": e.catalog_id,
             "reason": e.reason,
+            "responsible_agent": "design",
         })
 
     s.write_artifact("placement.json", placement_to_dict(result))

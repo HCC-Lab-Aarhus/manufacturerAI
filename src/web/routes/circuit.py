@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from src.agent import CircuitAgent, build_circuit_user_prompt
@@ -15,16 +15,32 @@ router = APIRouter(tags=["circuit"])
 
 
 @router.post("/sessions/{sid}/circuit")
-async def run_circuit(sid: str):
+async def run_circuit(sid: str, request: Request):
     sess = load_session_or_404(sid)
     design_data = sess.read_artifact("design.json")
     if design_data is None:
         raise HTTPException(400, "No design.json — run the design agent first")
 
-    cat = get_catalog()
-    prompt = build_circuit_user_prompt(design_data)
+    body: dict = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    feedback = body.get("feedback")
 
-    invalidate_downstream(sess, "design")
+    cat = get_catalog()
+
+    if feedback:
+        prompt = (
+            "The manufacturing pipeline failed after your circuit was submitted. "
+            "Here is the error:\n\n"
+            f"{feedback}\n\n"
+            "Please fix the issue and resubmit the circuit."
+        )
+        invalidate_downstream(sess, "circuit")
+    else:
+        prompt = build_circuit_user_prompt(design_data)
+        invalidate_downstream(sess, "design")
     sess.save()
 
     async def event_stream():
