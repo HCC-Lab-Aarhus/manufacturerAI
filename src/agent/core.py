@@ -11,7 +11,12 @@ import anthropic
 
 from src.catalog import CatalogResult, _component_to_dict
 from src.pipeline.config import get_printer
-from src.pipeline.design import parse_design, validate_design, design_to_dict
+from src.pipeline.design import (
+    parse_design, validate_design, design_to_dict,
+    parse_physical_design, validate_physical_design,
+    parse_circuit, build_design_spec,
+)
+from src.pipeline.circuit import validate_circuit
 from src.session import Session
 
 from .config import MODEL, MAX_TOKENS, THINKING_BUDGET, MAX_TURNS, TOKEN_BUDGET
@@ -228,10 +233,6 @@ class DesignAgent(_BaseAgent):
 
     conversation_file = "design_conversation.json"
 
-    def __init__(self, catalog: CatalogResult, session: Session):
-        super().__init__(catalog, session)
-        self._feasibility_attempts: int = 0
-
     def _get_tools(self) -> list[dict]:
         return DESIGN_TOOLS
 
@@ -246,8 +247,6 @@ class DesignAgent(_BaseAgent):
             return self._tool_get_component(input_data), False
         if name == "submit_design":
             return self._tool_submit_design(input_data)
-        if name == "check_placement_feasibility":
-            return self._tool_check_feasibility(input_data), False
         return f"Unknown tool: {name}", False
 
     def _terminal_event(self, tool_name: str, input_data: dict) -> AgentEvent | None:
@@ -255,73 +254,19 @@ class DesignAgent(_BaseAgent):
             return AgentEvent("design", {"design": input_data})
         return None
 
-    _MAX_FEASIBILITY_ATTEMPTS = 3
-
-    def _tool_check_feasibility(self, input_data: dict) -> str:
-        from src.pipeline.placer.feasibility import run_feasibility_check
-        self._feasibility_attempts += 1
-        if self._feasibility_attempts > self._MAX_FEASIBILITY_ATTEMPTS:
-            return (
-                f"FEASIBILITY CHECK LIMIT REACHED ({self._MAX_FEASIBILITY_ATTEMPTS} attempts). "
-                f"You have been unable to find a valid layout automatically. "
-                f"Do NOT call check_placement_feasibility or submit_design again. "
-                f"Instead, respond to the user explaining: which component(s) cannot "
-                f"be placed, why (which UI components are blocking them), and what "
-                f"the user should change (e.g. larger outline, fewer UI components, "
-                f"different arrangement). Ask the user for guidance before retrying."
-            )
-        remaining = self._MAX_FEASIBILITY_ATTEMPTS - self._feasibility_attempts
-        report = run_feasibility_check(
-            self.catalog,
-            input_data.get("components", []),
-            input_data.get("outline", []),
-            input_data.get("ui_placements", []),
-            enclosure_raw=input_data.get("enclosure"),
-        )
-        if remaining == 0:
-            report += (
-                f"\n\nWARNING: This was your last allowed feasibility check. "
-                f"If any component still shows [FAIL], do NOT call this tool again. "
-                f"Either fix the issue and call submit_design directly, or stop "
-                f"and explain the problem to the user."
-            )
-        else:
-            report += f"\n\n({remaining} feasibility check(s) remaining before limit)"
-        return report
-
     def _tool_submit_design(self, input_data: dict) -> tuple[str, bool]:
         """Validate and save a physical design (no components/nets)."""
-        # Build a full design dict for parse_design — it expects components
-        # and nets, but the design agent doesn't provide them any more.
-        # We add empty lists so parsing doesn't fail.
-        full_data = {**input_data}
-        full_data.setdefault("components", [])
-        full_data.setdefault("nets", [])
-
-        # Convert ui_placements into components for parse_design compatibility
-        ui_components = []
-        for p in input_data.get("ui_placements", []):
-            comp = {
-                "catalog_id": p.get("catalog_id", p["instance_id"]),
-                "instance_id": p["instance_id"],
-            }
-            if p.get("mounting_style"):
-                comp["mounting_style"] = p["mounting_style"]
-            ui_components.append(comp)
-        full_data["components"] = ui_components
-
         try:
-            spec = parse_design(full_data)
+            physical = parse_physical_design(input_data)
         except (KeyError, TypeError, ValueError, IndexError) as e:
             return f"Design parsing error: {e}", False
 
         printer = get_printer(self.session.printer_id)
-        errors = validate_design(spec, self.catalog, printer=printer)
+        errors = validate_physical_design(physical, self.catalog, printer=printer)
         if errors:
             error_list = "\n".join(f"  - {e}" for e in errors)
             return f"Design validation failed:\n{error_list}", False
 
-        # Save the clean design data (without synthesized components)
         self.session.write_artifact("design.json", input_data)
         self.session.pipeline_state["design"] = "complete"
         self.session.invalidate_downstream("design")
@@ -359,7 +304,6 @@ class CircuitAgent(_BaseAgent):
 
     def _tool_submit_circuit(self, input_data: dict) -> tuple[str, bool]:
         """Validate and save a circuit design (components + nets)."""
-        # Read the design to get UI placements for validation context
         design_data = self.session.read_artifact("design.json")
         if not design_data:
             return "No design.json found — run the design agent first.", False
@@ -369,106 +313,28 @@ class CircuitAgent(_BaseAgent):
             for p in design_data.get("ui_placements", [])
         }
 
-        components = input_data.get("components", [])
-        nets = input_data.get("nets", [])
+        try:
+            circuit = parse_circuit(input_data)
+        except (KeyError, TypeError, ValueError, IndexError) as e:
+            return f"Circuit parsing error: {e}", False
 
-        # Basic validation
-        errors: list[str] = []
-
-        # Check that all UI components are present
-        circuit_instance_ids = {c["instance_id"] for c in components}
-        missing_ui = ui_instance_ids - circuit_instance_ids
-        if missing_ui:
-            errors.append(
-                f"Missing UI components from design: {', '.join(sorted(missing_ui))}. "
-                f"You must include all placed UI components."
-            )
-
-        # Check all components have catalog entries
-        catalog_ids = {c.id for c in self.catalog.components}
-        for comp in components:
-            if comp.get("catalog_id") not in catalog_ids:
-                errors.append(
-                    f"Component '{comp.get('instance_id')}' references unknown "
-                    f"catalog_id '{comp.get('catalog_id')}'"
-                )
-
-        # Check nets have at least 2 pins
-        for net in nets:
-            if len(net.get("pins", [])) < 2:
-                errors.append(f"Net '{net.get('id')}' has fewer than 2 pins")
-
-        # Check pin references point to existing instances and valid pins
-        catalog_map = {c.id: c for c in self.catalog.components}
-        comp_catalog_map = {}
-        for comp in components:
-            cid = comp.get("catalog_id")
-            if cid in catalog_map:
-                comp_catalog_map[comp["instance_id"]] = catalog_map[cid]
-
-        for net in nets:
-            for pin_ref in net.get("pins", []):
-                if ":" not in pin_ref:
-                    errors.append(
-                        f"Net '{net.get('id')}': invalid pin reference '{pin_ref}' "
-                        f"(expected 'instance_id:pin_id')"
-                    )
-                    continue
-                instance, pin_id = pin_ref.split(":", 1)
-                if instance not in circuit_instance_ids:
-                    errors.append(
-                        f"Net '{net.get('id')}' references unknown instance "
-                        f"'{instance}' in pin '{pin_ref}'"
-                    )
-                    continue
-                # Check pin ID exists on the catalog component
-                cat = comp_catalog_map.get(instance)
-                if cat:
-                    pin_ids = {p.id for p in cat.pins}
-                    group_ids = {g.id for g in cat.pin_groups} if cat.pin_groups else set()
-                    if pin_id not in pin_ids and pin_id not in group_ids:
-                        errors.append(
-                            f"Net '{net.get('id')}': unknown pin '{pin_id}' on "
-                            f"'{instance}' (catalog: {cat.id}). "
-                            f"Valid pins: {', '.join(sorted(pin_ids))}"
-                        )
-
-        # Check each pin appears in at most one net
-        # (allocatable groups allow multiple net references)
-        allocatable_groups: dict[tuple[str, str], list[str]] = {}
-        for comp in components:
-            cat = comp_catalog_map.get(comp["instance_id"])
-            if cat and cat.pin_groups:
-                for g in cat.pin_groups:
-                    if g.allocatable:
-                        allocatable_groups[(comp["instance_id"], g.id)] = g.pin_ids
-
-        pin_to_net: dict[str, str] = {}
-        for net in nets:
-            for pin_ref in net.get("pins", []):
-                if ":" not in pin_ref:
-                    continue
-                iid, pid = pin_ref.split(":", 1)
-                if (iid, pid) in allocatable_groups:
-                    continue  # allocatable groups can be shared
-                if pin_ref in pin_to_net:
-                    errors.append(
-                        f"Pin '{pin_ref}' is connected to both net "
-                        f"'{pin_to_net[pin_ref]}' and net '{net.get('id')}' "
-                        f"— each pin can only belong to one net"
-                    )
-                else:
-                    pin_to_net[pin_ref] = net.get("id", "")
-
+        errors = validate_circuit(circuit, self.catalog, ui_instance_ids=ui_instance_ids)
         if errors:
             error_list = "\n".join(f"  - {e}" for e in errors)
             return f"Circuit validation failed:\n{error_list}", False
 
-        # Mark which components are UI-placed
-        for comp in components:
-            comp["ui_placement"] = comp["instance_id"] in ui_instance_ids
+        # Also validate the full merged design (enclosure height vs tallest component, etc.)
+        try:
+            physical = parse_physical_design(design_data)
+            full_spec = build_design_spec(physical, circuit)
+            printer = get_printer(self.session.printer_id)
+            full_errors = validate_design(full_spec, self.catalog, printer=printer)
+            if full_errors:
+                error_list = "\n".join(f"  - {e}" for e in full_errors)
+                return f"Circuit validation failed (cross-check with design):\n{error_list}", False
+        except Exception:
+            pass
 
-        # Save circuit data
         self.session.write_artifact("circuit.json", input_data)
         self.session.pipeline_state["circuit"] = "complete"
         self.session.invalidate_downstream("circuit")

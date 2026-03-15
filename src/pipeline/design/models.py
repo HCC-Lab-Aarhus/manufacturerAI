@@ -228,13 +228,41 @@ class UIPlacement:
     instance_id: str
     x_mm: float
     y_mm: float
+    catalog_id: str | None = None       # which catalog component
     edge_index: int | None = None       # side-mount: which outline edge (0-based)
     conform_to_surface: bool = True     # angle cutout to follow local surface normal
     mounting_style: str | None = None   # override from allowed_styles
 
 
 @dataclass
+class PhysicalDesign:
+    """What design.json stores — the physical shape and UI component placements.
+
+    This is the output of the design agent. No electrical components or nets.
+    """
+    outline: Outline
+    enclosure: Enclosure = field(default_factory=Enclosure)
+    ui_placements: list[UIPlacement] = field(default_factory=list)
+    device_description: str = ""
+
+
+@dataclass
+class CircuitDesign:
+    """What circuit.json stores — component instances and electrical nets.
+
+    This is the output of the circuit agent.
+    """
+    components: list[ComponentInstance] = field(default_factory=list)
+    nets: list[Net] = field(default_factory=list)
+
+
+@dataclass
 class DesignSpec:
+    """Full merged design — physical + circuit combined.
+
+    Constructed via build_design_spec(physical, circuit) for downstream
+    pipeline steps (placer, router, validator) that need everything.
+    """
     components: list[ComponentInstance]
     nets: list[Net]
     outline: Outline

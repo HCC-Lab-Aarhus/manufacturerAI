@@ -10,7 +10,7 @@ from src.agent import (
     MODEL, THINKING_BUDGET, TOKEN_BUDGET,
     build_design_prompt, prune_messages,
 )
-from src.pipeline.design import parse_design, validate_design
+from src.pipeline.design import parse_design, validate_design, parse_physical_design, validate_physical_design
 from src.pipeline.config import get_printer
 from src.web.naming import generate_session_name
 from fastapi.responses import StreamingResponse
@@ -19,7 +19,7 @@ import anthropic
 
 from src.web.routes._deps import (
     get_catalog, load_session_or_404, invalidate_downstream,
-    enrich_components, enrich_design_3d,
+    enrich_design,
 )
 
 router = APIRouter(tags=["design"])
@@ -42,8 +42,7 @@ async def run_design(sid: str, request: Request):
                 if event.type == "design" and event.data:
                     design = event.data.get("design")
                     if design:
-                        enrich_components(design.get("ui_placements", []), cat)
-                        enrich_design_3d(design)
+                        enrich_design(design, cat)
                 data = json.dumps(event.data) if event.data else "{}"
                 yield f"event: {event.type}\ndata: {data}\n\n"
 
@@ -69,8 +68,7 @@ async def get_design(sid: str):
     if data is None:
         raise HTTPException(404, "No design yet")
     cat = get_catalog()
-    enrich_components(data.get("ui_placements", []), cat)
-    enrich_design_3d(data)
+    enrich_design(data, cat)
     return data
 
 
@@ -80,26 +78,12 @@ async def put_design(sid: str, request: Request):
     s = load_session_or_404(sid)
     cat = get_catalog()
 
-    validation_body = {**body}
-    if not validation_body.get("components"):
-        ui_components = []
-        for p in validation_body.get("ui_placements", []):
-            comp: dict = {
-                "catalog_id": p.get("catalog_id", p["instance_id"]),
-                "instance_id": p["instance_id"],
-            }
-            if p.get("mounting_style"):
-                comp["mounting_style"] = p["mounting_style"]
-            ui_components.append(comp)
-        validation_body["components"] = ui_components
-    validation_body.setdefault("nets", [])
-
     try:
-        spec = parse_design(validation_body)
+        physical = parse_physical_design(body)
     except (KeyError, TypeError, ValueError, IndexError) as e:
         raise HTTPException(400, f"Design parsing error: {e}")
 
-    errors = validate_design(spec, cat, printer=get_printer(s.printer_id))
+    errors = validate_physical_design(physical, cat, printer=get_printer(s.printer_id))
     if errors:
         raise HTTPException(422, detail={"errors": errors})
 
@@ -108,8 +92,7 @@ async def put_design(sid: str, request: Request):
     invalidate_downstream(s, "design")
     s.save()
 
-    enrich_components(body.get("ui_placements", []), cat)
-    enrich_design_3d(body)
+    enrich_design(body, cat)
     return body
 
 
@@ -135,8 +118,7 @@ async def patch_enclosure(sid: str, request: Request):
 
     s.write_artifact("design.json", data)
     cat = get_catalog()
-    enrich_components(data.get("ui_placements", []), cat)
-    enrich_design_3d(data)
+    enrich_design(data, cat)
     return data
 
 

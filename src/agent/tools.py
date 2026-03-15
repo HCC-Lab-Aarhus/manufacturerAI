@@ -42,79 +42,6 @@ _GET_COMPONENT = {
 }
 
 
-# ── Design agent tool: check_placement_feasibility ────────────────
-
-_CHECK_PLACEMENT_FEASIBILITY = {
-    "name": "check_placement_feasibility",
-    "description": (
-        "Run a fast pre-submit feasibility check to verify that every "
-        "auto-placed component (MCU, battery, passives) has at least one "
-        "valid position inside the outline given the proposed ui_placements. "
-        "Returns a per-component report: OK with candidate cell count, or "
-        "FAIL with the specific UI components that are blocking it and a "
-        "concrete fix suggestion. "
-        "Call this BEFORE submit_design whenever you include a large "
-        "auto-placed component (battery, MCU) so you can fix layout "
-        "conflicts without wasting a full pipeline run."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "components": {
-                "type": "array",
-                "description": "Component list for footprint checks.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "catalog_id": {"type": "string"},
-                        "instance_id": {"type": "string"},
-                        "config": {"type": "object"},
-                        "mounting_style": {"type": "string"},
-                    },
-                    "required": ["catalog_id", "instance_id"],
-                },
-            },
-            "outline": {
-                "type": "array",
-                "description": "Same outline vertex list as submit_design.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "x": {"type": "number"},
-                        "y": {"type": "number"},
-                    },
-                    "required": ["x", "y"],
-                },
-            },
-            "ui_placements": {
-                "type": "array",
-                "description": "Same ui_placements list as submit_design.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "instance_id": {"type": "string"},
-                        "x_mm": {"type": "number"},
-                        "y_mm": {"type": "number"},
-                        "edge_index": {"type": "integer"},
-                        "mounting_style": {"type": "string"},
-                    },
-                    "required": ["instance_id", "x_mm", "y_mm"],
-                },
-            },
-            "enclosure": {
-                "type": "object",
-                "description": (
-                    "Same enclosure object as submit_design. "
-                    "Required when edge_bottom is a fillet or chamfer so the "
-                    "feasibility scan accounts for the reduced floor space."
-                ),
-            },
-        },
-        "required": ["components", "outline", "ui_placements"],
-    },
-}
-
-
 # ── Design agent tools ────────────────────────────────────────────
 
 DESIGN_TOOLS: list[dict[str, Any]] = [
@@ -186,6 +113,15 @@ DESIGN_TOOLS: list[dict[str, Any]] = [
                                     "Must be >= floor(2mm) + tallest component + ceiling(2mm)."
                                 ),
                             },
+                            "z_bottom": {
+                                "type": "number",
+                                "description": (
+                                    "Floor height (mm) at this vertex. "
+                                    "Omit or 0 for flat on build plate. "
+                                    "Raises the floor locally — areas with z_bottom > 0 "
+                                    "cannot hold traces or components."
+                                ),
+                            },
                         },
                         "required": ["x", "y"],
                     },
@@ -209,7 +145,7 @@ DESIGN_TOOLS: list[dict[str, Any]] = [
                         },
                         "top_surface": {
                             "type": "object",
-                            "description": "Optional smooth bump added over the per-vertex interpolation.",
+                            "description": "Optional smooth bump added over the per-vertex ceiling interpolation.",
                             "properties": {
                                 "type": {
                                     "type": "string",
@@ -225,6 +161,63 @@ DESIGN_TOOLS: list[dict[str, Any]] = [
                                 "y2": {"type": "number", "description": "Ridge: crest line end Y"},
                                 "crest_height_mm": {"type": "number", "description": "Ridge: absolute Z at the crest"},
                                 "falloff_mm": {"type": "number", "description": "Ridge: distance from crest where surface reaches base_height_mm"},
+                            },
+                            "required": ["type"],
+                        },
+                        "bottom_surface": {
+                            "type": "object",
+                            "description": (
+                                "Optional smooth bump that raises the floor. Same structure as top_surface. "
+                                "Raised floor areas cannot hold traces or components."
+                            ),
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "description": "Shape type: 'flat' (default), 'dome', or 'ridge'.",
+                                },
+                                "peak_x_mm": {"type": "number", "description": "Dome: X of peak"},
+                                "peak_y_mm": {"type": "number", "description": "Dome: Y of peak"},
+                                "peak_height_mm": {"type": "number", "description": "Dome: absolute Z of raised floor peak"},
+                                "base_height_mm": {"type": "number", "description": "Dome/ridge: Z level the bump rises from"},
+                                "x1": {"type": "number", "description": "Ridge: crest line start X"},
+                                "y1": {"type": "number", "description": "Ridge: crest line start Y"},
+                                "x2": {"type": "number", "description": "Ridge: crest line end X"},
+                                "y2": {"type": "number", "description": "Ridge: crest line end Y"},
+                                "crest_height_mm": {"type": "number", "description": "Ridge: absolute Z of raised floor crest"},
+                                "falloff_mm": {"type": "number", "description": "Ridge: distance from crest where floor returns to base"},
+                            },
+                            "required": ["type"],
+                        },
+                        "edge_top": {
+                            "type": "object",
+                            "description": "Profile at the wall-to-ceiling junction.",
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "description": "'none' (default), 'chamfer', or 'fillet'.",
+                                },
+                                "size_mm": {
+                                    "type": "number",
+                                    "description": "Profile radius/depth in mm (default 2). Clamped to ≤ 45% of wall height.",
+                                },
+                            },
+                            "required": ["type"],
+                        },
+                        "edge_bottom": {
+                            "type": "object",
+                            "description": (
+                                "Profile at the wall-to-floor junction. "
+                                "Reduces usable internal floor area near the walls."
+                            ),
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "description": "'none' (default), 'chamfer', or 'fillet'.",
+                                },
+                                "size_mm": {
+                                    "type": "number",
+                                    "description": "Profile radius/depth in mm (default 2). Clamped to ≤ 45% of wall height.",
+                                },
                             },
                             "required": ["type"],
                         },
@@ -296,7 +289,6 @@ DESIGN_TOOLS: list[dict[str, Any]] = [
             "required": ["device_description", "outline", "enclosure", "ui_placements"],
         },
     },
-    _CHECK_PLACEMENT_FEASIBILITY,
 ]
 
 

@@ -18,9 +18,9 @@ from pathlib import Path
 from src.catalog.loader import load_catalog
 from src.catalog.models import Component
 from src.pipeline.config import CAVITY_START_MM, CEILING_MM
-from src.pipeline.design.parsing import parse_design
+from src.pipeline.design.parsing import parse_physical_design, parse_circuit, build_design_spec
 from src.pipeline.design.height_field import blended_height, blended_bottom_height, sample_height_grid
-from src.pipeline.placer.serialization import parse_placement
+from src.pipeline.placer.serialization import assemble_full_placement
 from src.pipeline.router.models import RoutingResult
 from src.pipeline.router.serialization import parse_routing
 from src.session import Session
@@ -58,14 +58,20 @@ def run_scad_step(
     placement_raw = session.read_artifact("placement.json")
     routing_raw   = session.read_artifact("routing.json")
     design_raw    = session.read_artifact("design.json")
+    circuit_raw   = session.read_artifact("circuit.json")
 
     if placement_raw is None:
         raise RuntimeError("placement.json not found — run the placer step first.")
     if design_raw is None:
         raise RuntimeError("design.json not found — run the design step first.")
 
-    placement = parse_placement(placement_raw)
-    design    = parse_design(design_raw)
+    physical  = parse_physical_design(design_raw)
+    circuit   = parse_circuit(circuit_raw or {})
+    design    = build_design_spec(physical, circuit)
+
+    outline   = physical.outline
+    enclosure = physical.enclosure
+    placement = assemble_full_placement(placement_raw, outline, circuit.nets, enclosure)
 
     if routing_raw is not None:
         routing = parse_routing(routing_raw)
@@ -79,9 +85,6 @@ def run_scad_step(
     if not catalog.ok:
         for err in catalog.errors:
             log.warning("Catalog validation: %s", err)
-
-    outline   = placement.outline
-    enclosure = design.enclosure
 
     log.info(
         "SCAD step: %d components  %d nets  base_height=%.1f mm",

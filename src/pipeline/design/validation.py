@@ -4,7 +4,181 @@ from __future__ import annotations
 
 from src.catalog import CatalogResult
 from src.pipeline.config import PrinterDef
-from .models import DesignSpec
+from .models import DesignSpec, PhysicalDesign
+
+
+def validate_physical_design(
+    physical: PhysicalDesign,
+    catalog: CatalogResult,
+    printer: PrinterDef | None = None,
+) -> list[str]:
+    """Validate a PhysicalDesign (outline, enclosure, ui_placements) without components/nets.
+
+    This is what the design agent calls — it can validate the physical shape
+    before any circuit data exists. Height checks use only the UI-placed
+    components (the only ones known at design time).
+    """
+    from src.pipeline.config import get_printer, FLOOR_MM, CEILING_MM
+    pdef = printer or get_printer()
+    errors: list[str] = []
+    catalog_map = {c.id: c for c in catalog.components}
+
+    # ── Outline validation ──
+    if len(physical.outline.points) < 3:
+        errors.append("Outline must have at least 3 vertices")
+
+    for i, pt in enumerate(physical.outline.points):
+        if pt.ease_in < 0:
+            errors.append(f"Vertex {i}: ease_in must be >= 0")
+        if pt.ease_out < 0:
+            errors.append(f"Vertex {i}: ease_out must be >= 0")
+
+    # ── Outline must fit within the printer bed ──
+    if len(physical.outline.points) >= 3:
+        xs = [pt.x for pt in physical.outline.points]
+        ys = [pt.y for pt in physical.outline.points]
+        outline_w = max(xs) - min(xs)
+        outline_h = max(ys) - min(ys)
+        if outline_w > pdef.bed_width or outline_h > pdef.bed_depth:
+            errors.append(
+                f"Outline bounding box ({outline_w:.1f}×{outline_h:.1f} mm) "
+                f"exceeds printer bed ({pdef.bed_width:.0f}×{pdef.bed_depth:.0f} mm)"
+            )
+
+    # ── Enclosure height validation (using UI-placed components) ──
+    MIN_CAVITY_MM = 4.0
+    tallest_mm = MIN_CAVITY_MM
+    for up in physical.ui_placements:
+        if up.catalog_id and up.catalog_id in catalog_map:
+            cat = catalog_map[up.catalog_id]
+            comp_height = cat.body.height_mm if cat.body.height_mm else 0.0
+            if comp_height > tallest_mm:
+                tallest_mm = comp_height
+
+    min_required_z = FLOOR_MM + tallest_mm + CEILING_MM
+
+    if physical.enclosure.height_mm < min_required_z:
+        errors.append(
+            f"Enclosure height_mm ({physical.enclosure.height_mm:.1f}mm) is too short — "
+            f"needs at least {min_required_z:.1f}mm "
+            f"(floor {FLOOR_MM}mm + tallest component {tallest_mm:.1f}mm + ceiling {CEILING_MM}mm)"
+        )
+
+    for i, pt in enumerate(physical.outline.points):
+        eff_z = pt.z_top if pt.z_top is not None else physical.enclosure.height_mm
+        if eff_z < min_required_z:
+            errors.append(
+                f"Vertex {i} z_top ({eff_z:.1f}mm) is too short — "
+                f"needs at least {min_required_z:.1f}mm"
+            )
+        if eff_z > pdef.max_z_mm:
+            errors.append(
+                f"Vertex {i} z_top ({eff_z:.1f}mm) exceeds printer max Z "
+                f"({pdef.max_z_mm:.0f}mm)"
+            )
+
+    if physical.enclosure.height_mm > pdef.max_z_mm:
+        errors.append(
+            f"Enclosure height_mm ({physical.enclosure.height_mm:.1f}mm) exceeds "
+            f"printer max Z ({pdef.max_z_mm:.0f}mm)"
+        )
+
+    # ── top_surface validation ──
+    ts = physical.enclosure.top_surface
+    if ts is not None and ts.type != "flat":
+        if ts.type == "dome":
+            missing = [f for f in ("peak_x_mm", "peak_y_mm", "peak_height_mm", "base_height_mm")
+                       if getattr(ts, f) is None]
+            if missing:
+                errors.append(f"top_surface dome is missing required fields: {', '.join(missing)}")
+            else:
+                if ts.peak_height_mm < ts.base_height_mm:
+                    errors.append(
+                        f"top_surface dome peak_height_mm ({ts.peak_height_mm}) must be >= "
+                        f"base_height_mm ({ts.base_height_mm})"
+                    )
+                if ts.peak_height_mm > pdef.max_z_mm:
+                    errors.append(
+                        f"top_surface dome peak_height_mm ({ts.peak_height_mm}mm) exceeds "
+                        f"printer max Z ({pdef.max_z_mm:.0f}mm)"
+                    )
+        elif ts.type == "ridge":
+            missing = [f for f in ("x1", "y1", "x2", "y2", "crest_height_mm", "base_height_mm", "falloff_mm")
+                       if getattr(ts, f) is None]
+            if missing:
+                errors.append(f"top_surface ridge is missing required fields: {', '.join(missing)}")
+            else:
+                if ts.crest_height_mm < ts.base_height_mm:
+                    errors.append(
+                        f"top_surface ridge crest_height_mm ({ts.crest_height_mm}) must be >= "
+                        f"base_height_mm ({ts.base_height_mm})"
+                    )
+                if ts.crest_height_mm > pdef.max_z_mm:
+                    errors.append(
+                        f"top_surface ridge crest_height_mm ({ts.crest_height_mm}mm) exceeds "
+                        f"printer max Z ({pdef.max_z_mm:.0f}mm)"
+                    )
+        else:
+            errors.append(f"top_surface type '{ts.type}' is unknown (expected: flat, dome, ridge)")
+
+    # ── Outline polygon validity & UI placement checks ──
+    if len(physical.outline.vertices) >= 3:
+        try:
+            from shapely.geometry import Polygon, Point
+            poly = Polygon(physical.outline.vertices)
+            if not poly.is_valid:
+                errors.append("Outline polygon is self-intersecting or invalid")
+            elif poly.area <= 0:
+                errors.append("Outline polygon has zero or negative area")
+            else:
+                for up in physical.ui_placements:
+                    if up.edge_index is not None:
+                        continue
+                    pt = Point(up.x_mm, up.y_mm)
+                    if not poly.contains(pt):
+                        errors.append(
+                            f"UI placement '{up.instance_id}' at "
+                            f"({up.x_mm}, {up.y_mm}) is outside the outline"
+                        )
+        except Exception:
+            pass
+
+    # ── UI placement validation ──
+    for up in physical.ui_placements:
+        cat = catalog_map.get(up.catalog_id) if up.catalog_id else None
+
+        if cat:
+            if not cat.ui_placement:
+                errors.append(
+                    f"UI placement: '{up.instance_id}' ({cat.id}) has ui_placement=false"
+                )
+            if up.mounting_style and up.mounting_style not in cat.mounting.allowed_styles:
+                errors.append(
+                    f"UI placement '{up.instance_id}': mounting_style '{up.mounting_style}' "
+                    f"not in allowed_styles {cat.mounting.allowed_styles}"
+                )
+
+            eff_style = up.mounting_style or cat.mounting.style
+            if eff_style == "side":
+                if up.edge_index is None:
+                    errors.append(
+                        f"UI placement '{up.instance_id}': side-mount components "
+                        f"require edge_index (which outline edge to mount on)"
+                    )
+            elif up.edge_index is not None:
+                errors.append(
+                    f"UI placement '{up.instance_id}': edge_index is only for "
+                    f"side-mount components (mounting style is '{eff_style}')"
+                )
+
+        if up.edge_index is not None:
+            if up.edge_index < 0 or up.edge_index >= len(physical.outline.points):
+                errors.append(
+                    f"UI placement '{up.instance_id}': edge_index {up.edge_index} "
+                    f"out of range (0–{len(physical.outline.points) - 1})"
+                )
+
+    return errors
 
 
 def validate_design(
@@ -209,7 +383,7 @@ def validate_design(
                 f"exceeds printer bed ({pdef.bed_width:.0f}×{pdef.bed_depth:.0f} mm)"
             )
 
-    # Tallest internal component determines minimum required cavity height
+    # Tallest component across ALL instances (for overall enclosure height)
     tallest_mm = MIN_CAVITY_MM
     for ci in spec.components:
         if ci.catalog_id in catalog_map:
@@ -218,7 +392,20 @@ def validate_design(
             if comp_height > tallest_mm:
                 tallest_mm = comp_height
 
+    # Tallest UI-placed component only (for per-vertex checks — internal
+    # components are auto-placed and the placer picks locations with enough
+    # headroom, so thin extremities like ears/tails don't need to fit a battery)
+    ui_ids = {up.instance_id for up in spec.ui_placements}
+    tallest_ui_mm = MIN_CAVITY_MM
+    for ci in spec.components:
+        if ci.instance_id in ui_ids and ci.catalog_id in catalog_map:
+            cat = catalog_map[ci.catalog_id]
+            comp_height = cat.body.height_mm if cat.body.height_mm else 0.0
+            if comp_height > tallest_ui_mm:
+                tallest_ui_mm = comp_height
+
     min_required_z = FLOOR_MM + tallest_mm + CEILING_MM
+    min_required_z_vertex = FLOOR_MM + tallest_ui_mm + CEILING_MM
 
     if spec.enclosure.height_mm < min_required_z:
         errors.append(
@@ -229,10 +416,10 @@ def validate_design(
 
     for i, pt in enumerate(spec.outline.points):
         eff_z = pt.z_top if pt.z_top is not None else spec.enclosure.height_mm
-        if eff_z < min_required_z:
+        if eff_z < min_required_z_vertex:
             errors.append(
                 f"Vertex {i} z_top ({eff_z:.1f}mm) is too short — "
-                f"needs at least {min_required_z:.1f}mm to fit the tallest component"
+                f"needs at least {min_required_z_vertex:.1f}mm to fit the tallest component"
             )
         if eff_z > pdef.max_z_mm:
             errors.append(

@@ -1,22 +1,44 @@
-"""Shared state and helpers used by both v1 and v2 route modules."""
+"""Shared state and helpers used by route modules."""
 
 from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
+import threading
 
 from fastapi import HTTPException
 
-from src.catalog import load_catalog, catalog_to_dict, CatalogResult
-from src.session import load_session, create_session, Session
+from src.catalog import load_catalog, CatalogResult
+from src.session import load_session, Session
 
 
-# compile state: session_id -> {status, message, cancel}
-stl_compile: dict[str, dict] = {}
+# ── Thread-safe background-task state ──
 
-# gcode pipeline state: session_id -> {status, message, stages, ...}
-gcode_state: dict[str, dict] = {}
+_compile_lock = threading.Lock()
+_gcode_lock = threading.Lock()
+
+_stl_compile: dict[str, dict] = {}
+_gcode_state: dict[str, dict] = {}
+
+
+def get_compile_state(sid: str) -> dict | None:
+    with _compile_lock:
+        return _stl_compile.get(sid)
+
+
+def set_compile_state(sid: str, state: dict) -> None:
+    with _compile_lock:
+        _stl_compile[sid] = state
+
+
+def get_gcode_state(sid: str) -> dict | None:
+    with _gcode_lock:
+        return _gcode_state.get(sid)
+
+
+def set_gcode_state(sid: str, state: dict) -> None:
+    with _gcode_lock:
+        _gcode_state[sid] = state
 
 
 # ── Catalog (auto-reloads when any catalog/*.json changes on disk) ──
@@ -58,17 +80,41 @@ def load_session_or_404(sid: str) -> Session:
     return s
 
 
-def resolve_session(session_id: str | None) -> Session:
-    if session_id:
-        return load_session_or_404(session_id)
-    return create_session()
-
-
 def invalidate_downstream(session: Session, current_step: str) -> list[str]:
     return session.invalidate_downstream(current_step)
 
 
-# ── Enrichment helpers ──
+# ── Session artifact readers (raw dicts) ──
+
+def require_design(session: Session) -> dict:
+    data = session.read_artifact("design.json")
+    if data is None:
+        raise HTTPException(400, "No design.json — run the design agent first")
+    return data
+
+
+def require_circuit(session: Session) -> dict:
+    data = session.read_artifact("circuit.json")
+    if data is None:
+        raise HTTPException(400, "No circuit.json — run the circuit agent first")
+    return data
+
+
+def require_placement(session: Session) -> dict:
+    data = session.read_artifact("placement.json")
+    if data is None:
+        raise HTTPException(400, "No placement.json — run the placer first")
+    return data
+
+
+def require_routing(session: Session) -> dict:
+    data = session.read_artifact("routing.json")
+    if data is None:
+        raise HTTPException(400, "No routing.json — run the router first")
+    return data
+
+
+# ── Enrichment ──
 
 def enrich_components(components: list, cat) -> None:
     cat_map = {c.id: c for c in cat.components}
@@ -98,101 +144,126 @@ def enrich_components(components: list, cat) -> None:
             comp["cap_clearance_mm"] = c.mounting.cap.hole_clearance_mm
 
 
-_design_3d_cache: dict[str, dict] = {}
+_shape_cache: dict[str, dict] = {}
 
 
-def _design_3d_cache_key(outline_data, enclosure_data) -> str:
+def _shape_cache_key(outline_data, enclosure_data) -> str:
     raw = json.dumps({"o": outline_data, "e": enclosure_data}, sort_keys=True)
     return hashlib.md5(raw.encode()).hexdigest()
 
 
-def enrich_design_3d(data: dict) -> None:
+def _get_shape_fields(outline_data, enclosure_data) -> dict | None:
+    """Compute or retrieve cached height grids and PCB contour."""
+    if not outline_data:
+        return None
+
+    key = _shape_cache_key(outline_data, enclosure_data)
+    cached = _shape_cache.get(key)
+    if cached is not None:
+        return cached
+
     from src.pipeline.design.parsing import _parse_outline, _parse_enclosure
     from src.pipeline.design.height_field import (
         sample_height_grid, sample_bottom_height_grid,
-        surface_normal_at, blended_height,
         pcb_contour_from_bottom_grid,
     )
     from src.pipeline.config import FLOOR_MM
 
+    try:
+        outline = _parse_outline(outline_data)
+        enclosure = _parse_enclosure(enclosure_data)
+    except Exception:
+        return None
+
+    result: dict = {
+        "height_grid": sample_height_grid(outline, enclosure, resolution_mm=1.0),
+    }
+    bottom_grid = sample_bottom_height_grid(outline, enclosure, resolution_mm=1.0)
+    if bottom_grid is not None:
+        result["bottom_height_grid"] = bottom_grid
+        contour = pcb_contour_from_bottom_grid(bottom_grid, outline, threshold_mm=FLOOR_MM)
+        if contour is not None:
+            result["pcb_contour"] = contour
+
+    _shape_cache[key] = result
+    return result
+
+
+def _add_shape_fields(data: dict, outline_data, enclosure_data) -> None:
+    """Add cached height grids and pcb_contour to a response dict."""
+    fields = _get_shape_fields(outline_data, enclosure_data)
+    if fields:
+        for k in ("height_grid", "bottom_height_grid", "pcb_contour"):
+            if k in fields:
+                data[k] = fields[k]
+
+
+def enrich_design(data: dict, cat) -> None:
+    """Enrich a design dict: component bodies/pins + 3D height fields + surface data."""
+    enrich_components(data.get("ui_placements", []), cat)
     outline_data = data.get("outline", [])
     enclosure_data = data.get("enclosure", {})
-    if not outline_data:
+    _add_shape_fields(data, outline_data, enclosure_data)
+
+    fields = _get_shape_fields(outline_data, enclosure_data)
+    if fields is None:
         return
 
+    from src.pipeline.design.parsing import _parse_outline, _parse_enclosure
+    from src.pipeline.design.height_field import blended_height, surface_normal_at
     try:
         outline = _parse_outline(outline_data)
         enclosure = _parse_enclosure(enclosure_data)
     except Exception:
         return
 
-    cache_key = _design_3d_cache_key(outline_data, enclosure_data)
-    cached = _design_3d_cache.get(cache_key)
-    if cached is not None:
-        grid = cached["height_grid"]
-        data["height_grid"] = grid
-        if "bottom_height_grid" in cached:
-            data["bottom_height_grid"] = cached["bottom_height_grid"]
-        if "pcb_contour" in cached:
-            data["pcb_contour"] = cached["pcb_contour"]
-    else:
-        grid = sample_height_grid(outline, enclosure, resolution_mm=1.0)
-        data["height_grid"] = grid
-        to_cache: dict = {"height_grid": grid}
-
-        bottom_grid = sample_bottom_height_grid(outline, enclosure, resolution_mm=1.0)
-        if bottom_grid is not None:
-            data["bottom_height_grid"] = bottom_grid
-            to_cache["bottom_height_grid"] = bottom_grid
-            contour = pcb_contour_from_bottom_grid(
-                bottom_grid, outline, threshold_mm=FLOOR_MM,
-            )
-            if contour is not None:
-                data["pcb_contour"] = contour
-                to_cache["pcb_contour"] = contour
-
-        _design_3d_cache[cache_key] = to_cache
-
+    grid = fields["height_grid"]
     for up in data.get("ui_placements", []):
         x, y = up.get("x_mm", 0), up.get("y_mm", 0)
         try:
-            z = blended_height(x, y, outline, enclosure)
-            normal = surface_normal_at(x, y, grid)
-            up["z_at_position"] = round(z, 3)
-            up["surface_normal"] = [round(n, 4) for n in normal]
+            up["z_at_position"] = round(blended_height(x, y, outline, enclosure), 3)
+            up["surface_normal"] = [round(n, 4) for n in surface_normal_at(x, y, grid)]
         except Exception:
             pass
 
 
-def attach_pcb_contour(data: dict) -> None:
-    if "pcb_contour" in data:
-        return
-    outline_data = data.get("outline", [])
-    enclosure_data = data.get("enclosure", {})
-    if not outline_data:
-        return
-    try:
-        from src.pipeline.design.parsing import _parse_outline, _parse_enclosure
-        from src.pipeline.design.height_field import (
-            sample_bottom_height_grid, pcb_contour_from_bottom_grid,
-        )
-        from src.pipeline.config import FLOOR_MM
+# ── Response assembly ──
+#
+# Each artifact stores only what its pipeline step produces.
+# These functions assemble the full picture for API responses
+# by combining upstream artifacts.
 
-        outline = _parse_outline(outline_data)
-        enclosure = _parse_enclosure(enclosure_data)
-        bottom_grid = sample_bottom_height_grid(outline, enclosure, resolution_mm=1.0)
-        if bottom_grid is None:
-            return
-        contour = pcb_contour_from_bottom_grid(
-            bottom_grid, outline, threshold_mm=FLOOR_MM,
-        )
-        if contour is not None:
-            data["pcb_contour"] = contour
-    except Exception:
-        pass
+def build_placement_response(session: Session, cat) -> dict:
+    """Assemble a full placement response from design + circuit + placement artifacts."""
+    design = require_design(session)
+    placement = require_placement(session)
+
+    response = {
+        "outline": design.get("outline", []),
+        "enclosure": design.get("enclosure", {}),
+        "components": placement["components"],
+    }
+    enrich_components(response["components"], cat)
+    _add_shape_fields(response, response["outline"], response["enclosure"])
+    return response
 
 
-def enrich_placement(data: dict, cat) -> dict:
-    enrich_components(data.get("components", []), cat)
-    attach_pcb_contour(data)
-    return data
+def build_routing_response(session: Session, cat) -> dict:
+    """Assemble a full routing response from design + placement + routing artifacts."""
+    design = require_design(session)
+    placement = require_placement(session)
+    routing = require_routing(session)
+
+    from src.pipeline.config import TRACE_RULES
+    response = {
+        "outline": design.get("outline", []),
+        "enclosure": design.get("enclosure", {}),
+        "components": placement["components"],
+        "traces": routing.get("traces", []),
+        "pin_assignments": routing.get("pin_assignments", {}),
+        "failed_nets": routing.get("failed_nets", []),
+        "trace_width_mm": TRACE_RULES.trace_width_mm,
+    }
+    enrich_components(response["components"], cat)
+    _add_shape_fields(response, response["outline"], response["enclosure"])
+    return response

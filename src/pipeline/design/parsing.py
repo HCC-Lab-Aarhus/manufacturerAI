@@ -5,49 +5,23 @@ from __future__ import annotations
 from .models import (
     ComponentInstance, Net, OutlineVertex, Outline, UIPlacement, DesignSpec,
     Enclosure, TopSurface, BottomSurface, EdgeProfile,
+    PhysicalDesign, CircuitDesign,
 )
 
 
 def parse_design(data: dict) -> DesignSpec:
-    """Parse a raw dict (from JSON / tool input) into a DesignSpec."""
-    components = [
-        ComponentInstance(
-            catalog_id=c["catalog_id"],
-            instance_id=c["instance_id"],
-            config=c.get("config"),
-            mounting_style=c.get("mounting_style"),
-        )
-        for c in data.get("components", [])
-    ]
+    """Parse a raw dict (from JSON / tool input) into a full DesignSpec.
 
-    nets = [
-        Net(id=n["id"], pins=list(n["pins"]))
-        for n in data.get("nets", [])
-    ]
-
-    outline_data = data["outline"]
-    outline = _parse_outline(outline_data)
-
-    ui_placements = [
-        UIPlacement(
-            instance_id=p["instance_id"],
-            x_mm=float(p["x_mm"]),
-            y_mm=float(p["y_mm"]),
-            edge_index=p.get("edge_index"),
-            conform_to_surface=bool(p.get("conform_to_surface", True)),
-            mounting_style=p.get("mounting_style"),
-        )
-        for p in data.get("ui_placements", [])
-    ]
-
-    enclosure = _parse_enclosure(data.get("enclosure") or {})
-
+    Expects a dict with both physical (outline/enclosure/ui_placements)
+    and circuit (components/nets) fields. For parsing just one side,
+    use parse_physical_design() or parse_circuit().
+    """
     return DesignSpec(
-        components=components,
-        nets=nets,
-        outline=outline,
-        ui_placements=ui_placements,
-        enclosure=enclosure,
+        components=_parse_components(data.get("components", [])),
+        nets=_parse_nets(data.get("nets", [])),
+        outline=_parse_outline(data["outline"]),
+        ui_placements=_parse_ui_placements(data.get("ui_placements", [])),
+        enclosure=_parse_enclosure(data.get("enclosure") or {}),
     )
 
 
@@ -144,4 +118,71 @@ def _parse_enclosure(data: dict) -> Enclosure:
         bottom_surface=bottom_surface,
         edge_top=edge_top,
         edge_bottom=edge_bottom,
+    )
+
+
+def _parse_ui_placements(data: list) -> list[UIPlacement]:
+    return [
+        UIPlacement(
+            instance_id=p["instance_id"],
+            x_mm=float(p["x_mm"]),
+            y_mm=float(p["y_mm"]),
+            catalog_id=p.get("catalog_id"),
+            edge_index=p.get("edge_index"),
+            conform_to_surface=bool(p.get("conform_to_surface", True)),
+            mounting_style=p.get("mounting_style"),
+        )
+        for p in data
+    ]
+
+
+def _parse_components(data: list) -> list[ComponentInstance]:
+    return [
+        ComponentInstance(
+            catalog_id=c["catalog_id"],
+            instance_id=c["instance_id"],
+            config=c.get("config"),
+            mounting_style=c.get("mounting_style"),
+        )
+        for c in data
+    ]
+
+
+def _parse_nets(data: list) -> list[Net]:
+    return [Net(id=n["id"], pins=list(n["pins"])) for n in data]
+
+
+def parse_physical_design(data: dict) -> PhysicalDesign:
+    """Parse a design.json dict into a PhysicalDesign (no components/nets)."""
+    return PhysicalDesign(
+        outline=_parse_outline(data["outline"]),
+        enclosure=_parse_enclosure(data.get("enclosure") or {}),
+        ui_placements=_parse_ui_placements(data.get("ui_placements", [])),
+        device_description=data.get("device_description", ""),
+    )
+
+
+def parse_circuit(data: dict) -> CircuitDesign:
+    """Parse a circuit.json dict into a CircuitDesign."""
+    return CircuitDesign(
+        components=_parse_components(data.get("components", [])),
+        nets=_parse_nets(data.get("nets", [])),
+    )
+
+
+def build_design_spec(
+    physical: PhysicalDesign,
+    circuit: CircuitDesign,
+) -> DesignSpec:
+    """Merge a PhysicalDesign and CircuitDesign into a full DesignSpec.
+
+    This is the explicit merge point for downstream pipeline steps
+    (placer, router, validator) that need the complete picture.
+    """
+    return DesignSpec(
+        components=circuit.components,
+        nets=circuit.nets,
+        outline=physical.outline,
+        ui_placements=physical.ui_placements,
+        enclosure=physical.enclosure,
     )
