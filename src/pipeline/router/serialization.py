@@ -20,8 +20,6 @@ def routing_to_dict(result: RoutingResult) -> dict:
         "pin_assignments": dict(result.pin_assignments),
         "failed_nets": list(result.failed_nets),
     }
-    if result.debug_grids:
-        d["debug_grids"] = result.debug_grids
     return d
 
 

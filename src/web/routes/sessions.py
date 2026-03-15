@@ -9,6 +9,7 @@ from src.web.routes._deps import (
     get_catalog, load_session_or_404, invalidate_downstream,
 )
 
+
 router = APIRouter(tags=["sessions"])
 
 
@@ -21,9 +22,6 @@ async def list_sessions():
 @router.post("/sessions")
 async def create_new_session(description: str = ""):
     session = create_session(description)
-    cat = get_catalog()
-    session.write_artifact("catalog.json", catalog_to_dict(cat))
-    session.pipeline_state["catalog"] = "loaded"
     session.save()
     return {"session_id": session.id, "created": session.created}
 
@@ -40,15 +38,15 @@ async def get_session(sid: str):
         "printer_id": s.printer_id,
         "pipeline_state": s.pipeline_state,
         "artifacts": {
-            "catalog": s.has_artifact("catalog.json"),
+            "catalog": True,
             "design": s.has_artifact("design.json"),
             "circuit": s.has_artifact("circuit.json"),
             "placement": s.has_artifact("placement.json"),
             "routing": s.has_artifact("routing.json"),
-            "bitmap": (s.path / "trace_bitmap.txt").exists(),
+            "bitmap": s.pipeline_state.get("bitmap") == "complete",
             "scad": s.has_artifact("enclosure.scad"),
             "compile": (s.path / "enclosure.stl").exists(),
-            "gcode": s.has_artifact("enclosure_staged.gcode"),
+            "gcode": s.has_artifact("enclosure.gcode"),
             "firmware": s.has_artifact("firmware.ino"),
         },
     }
@@ -68,12 +66,6 @@ async def set_printer(sid: str, printer_id: str = Query(...)):
 
 @router.get("/sessions/{sid}/catalog")
 async def get_session_catalog(sid: str):
-    s = load_session_or_404(sid)
-    data = s.read_artifact("catalog.json")
-    if data is None:
-        cat = get_catalog()
-        data = catalog_to_dict(cat)
-        s.write_artifact("catalog.json", data)
-        s.pipeline_state["catalog"] = "loaded"
-        s.save()
-    return data
+    load_session_or_404(sid)
+    cat = get_catalog()
+    return catalog_to_dict(cat)

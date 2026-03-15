@@ -7,7 +7,6 @@ Sessions are identified by a short ID (timestamp-based) and stored under
 
 A session folder contains:
   session.json   — metadata (created, last_modified, description, pipeline_state)
-  catalog.json   — snapshot of the catalog result at session creation time
   design.json    — agent's DesignSpec (once created)
   placement.json — placer output
   routing.json   — router output
@@ -91,9 +90,9 @@ class Session:
         "design": ["design.json", "design_conversation.json"],
         "circuit": ["circuit.json", "circuit_conversation.json"],
         "placement": ["placement.json"],
-        "routing": ["routing.json", "trace_bitmap.txt"],
+        "routing": ["routing.json", "routing_debug.json", "trace_bitmap.txt"],
         "scad": ["enclosure.scad", "enclosure.stl"],
-        "gcode": ["enclosure_raw.gcode", "enclosure_staged.gcode", "enclosure_staged.bgcode"],
+        "gcode": ["enclosure.gcode"],
         "firmware": ["firmware.ino"],
     }
 

@@ -37,6 +37,8 @@ async def run_routing(sid: str):
         })
 
     s.write_artifact("routing.json", routing_to_dict(result))
+    if result.debug_grids:
+        s.write_artifact("routing_debug.json", {"debug_grids": result.debug_grids})
     s.pipeline_state["routing"] = "complete"
     s.save()
     return build_routing_response(s, cat)

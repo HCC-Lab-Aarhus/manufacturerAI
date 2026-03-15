@@ -22,7 +22,6 @@ from src.pipeline.gcode.slicer import slice_stl
 from src.pipeline.gcode.pause_points import compute_pause_points, PausePoints
 from src.pipeline.gcode.ink_traces import extract_trace_segments
 from src.pipeline.gcode.postprocessor import postprocess_gcode, PostProcessResult, compute_bed_offset
-from src.pipeline.gcode.bgcode import gcode_to_bgcode
 from src.pipeline.gcode.filaments import get_filament, write_filament_overrides
 
 log = logging.getLogger(__name__)
@@ -34,9 +33,7 @@ class GcodePipelineResult:
 
     success: bool
     message: str
-    raw_gcode_path: Path | None = None
-    staged_gcode_path: Path | None = None
-    bgcode_path: Path | None = None
+    gcode_path: Path | None = None
     pause_points: PausePoints | None = None
     postprocess: PostProcessResult | None = None
     stages: list[str] = field(default_factory=list)
@@ -115,17 +112,22 @@ def run_gcode_pipeline(
         stages.append("Using print_plate.stl (enclosure + battery hatch)")
 
     # ── 2. Slice STL ──────────────────────────────────────────────
-    raw_gcode = output_dir / "enclosure_raw.gcode"
-    log.info("Slicing %s → %s", stl_path, raw_gcode)
+    slicer_output = output_dir / "_slicer_output.gcode"
+    log.info("Slicing %s → %s", stl_path, slicer_output)
     stages.append(f"Slicing {stl_path.name} with PrusaSlicer...")
 
-    ok, msg, gcode_path = slice_stl(
+    ok, msg, slicer_gcode_path = slice_stl(
         stl_path,
-        output_gcode=raw_gcode,
+        output_gcode=slicer_output,
         profile_path=slicer_profile,
         printer=printer,
         filament_override_path=filament_ini,
     )
+
+    # Clean up filament override .ini (no longer needed after slicing)
+    if filament_ini and filament_ini.exists():
+        filament_ini.unlink()
+
     if not ok:
         log.error("Slicing failed: %s", msg)
         return GcodePipelineResult(
@@ -134,7 +136,7 @@ def run_gcode_pipeline(
             pause_points=pauses,
             stages=stages,
         )
-    stages.append(f"Slicing succeeded: {gcode_path}")
+    stages.append(f"Slicing succeeded: {slicer_gcode_path}")
 
     # ── 3. Extract trace segments for ironing filter ──
     trace_segs = extract_trace_segments(
@@ -148,12 +150,12 @@ def run_gcode_pipeline(
     stages.append(f"Bed offset: ({bed_offset[0]:.1f}, {bed_offset[1]:.1f}) mm")
 
     # ── 4. Post-process ───────────────────────────────────────────
-    staged_gcode = output_dir / "enclosure_staged.gcode"
+    final_gcode = output_dir / "enclosure.gcode"
     log.info("Post-processing G-code...")
 
     pp_result = postprocess_gcode(
-        gcode_path=gcode_path,
-        output_path=staged_gcode,
+        gcode_path=slicer_gcode_path,
+        output_path=final_gcode,
         ink_z=pauses.ink_layer_z,
         component_z=pauses.component_insert_z,
         trace_segments=trace_segs,
@@ -161,27 +163,18 @@ def run_gcode_pipeline(
         silverink_only=silverink_only,
     )
     stages.extend(pp_result.stages)
-    stages.append(f"Staged G-code written: {staged_gcode}")
+    stages.append(f"G-code written: {final_gcode}")
 
-    # ── 5. Convert to binary G-code (.bgcode) ──────────────────────
-    bgcode_out = output_dir / "enclosure_staged.bgcode"
-    try:
-        gcode_to_bgcode(staged_gcode, bgcode_out, stl_path=stl_path)
-        stages.append(f"Binary G-code written: {bgcode_out}")
-        log.info("Binary G-code written: %s", bgcode_out)
-    except Exception as exc:
-        log.warning("bgcode conversion failed (ASCII .gcode still usable): %s", exc)
-        bgcode_out = None
-        stages.append(f"bgcode conversion skipped: {exc}")
+    # Clean up slicer temp file
+    if slicer_gcode_path.exists():
+        slicer_gcode_path.unlink()
 
-    log.info("G-code pipeline complete: %s", staged_gcode)
+    log.info("G-code pipeline complete: %s", final_gcode)
 
     return GcodePipelineResult(
         success=True,
         message="G-code pipeline completed successfully.",
-        raw_gcode_path=gcode_path,
-        staged_gcode_path=staged_gcode,
-        bgcode_path=bgcode_out,
+        gcode_path=final_gcode,
         pause_points=pauses,
         postprocess=pp_result,
         stages=stages,

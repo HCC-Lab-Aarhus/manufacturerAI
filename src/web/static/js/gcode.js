@@ -185,7 +185,6 @@ function renderResult(data) {
     showStatus('');
 
     const bytes     = data.gcode_bytes  ?? 0;
-    const hasBgcode = data.has_bgcode   ?? false;
     const stages    = data.stages       ?? [];
 
     el.innerHTML = '';
@@ -225,36 +224,23 @@ function renderResult(data) {
     dlRow.style.cssText = 'display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;';
 
     const dlGcode = document.createElement('a');
-    dlGcode.href = `${API}/api/session/gcode/download?session=${encodeURIComponent(state.session)}&format=gcode`;
-    dlGcode.download = 'enclosure_staged.gcode';
+    dlGcode.href = `${API}/api/session/gcode/download?session=${encodeURIComponent(state.session)}`;
+    dlGcode.download = 'enclosure.gcode';
     dlGcode.className = 'placement-toolbar-rerun';
     dlGcode.style.textDecoration = 'none';
     dlGcode.textContent = '⬇ Download .gcode';
     dlRow.appendChild(dlGcode);
-
-    if (hasBgcode) {
-        const dlBg = document.createElement('a');
-        dlBg.href = `${API}/api/session/gcode/download?session=${encodeURIComponent(state.session)}&format=bgcode`;
-        dlBg.download = 'enclosure_staged.bgcode';
-        dlBg.className = 'placement-toolbar-rerun';
-        dlBg.style.textDecoration = 'none';
-        dlBg.textContent = '⬇ Download .bgcode';
-        dlRow.appendChild(dlBg);
-    }
 
     el.appendChild(dlRow);
 
     // Stats cards
     const cards = document.createElement('div');
     cards.style.cssText = 'margin-top:14px; display:grid; grid-template-columns:1fr 1fr; gap:8px;';
+    cards.style.gridTemplateColumns = '1fr';
     cards.innerHTML = `
         <div style="background:var(--surface-raised,#2a2a2a); border-radius:6px; padding:10px 14px;">
             <div style="font-size:11px; color:var(--text-muted); margin-bottom:2px;">G-code size</div>
             <div style="font-size:20px; font-weight:600;">${(bytes / 1024).toFixed(0)} kB</div>
-        </div>
-        <div style="background:var(--surface-raised,#2a2a2a); border-radius:6px; padding:10px 14px;">
-            <div style="font-size:11px; color:var(--text-muted); margin-bottom:2px;">Binary (.bgcode)</div>
-            <div style="font-size:20px; font-weight:600;">${hasBgcode ? '✅' : '—'}</div>
         </div>
     `;
     el.appendChild(cards);

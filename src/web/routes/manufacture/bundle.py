@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 
 from src.web.routes._deps import load_session_or_404
+from src.web.routes.manufacture.bitmap import _generate_bitmap_lines
 
 router = APIRouter()
 
@@ -14,18 +15,16 @@ router = APIRouter()
 @router.get("/sessions/{sid}/manufacture/bundle")
 async def download_bundle(sid: str):
     s = load_session_or_404(sid)
-    files = {
-        "enclosure_staged.gcode": s.path / "enclosure_staged.gcode",
-        "trace_bitmap.txt": s.path / "trace_bitmap.txt",
-    }
-    missing = [name for name, path in files.items() if not path.exists()]
-    if missing:
-        raise HTTPException(404, f"Missing manufacturing files: {', '.join(missing)}")
+    gcode_path = s.path / "enclosure.gcode"
+    if not gcode_path.exists():
+        raise HTTPException(404, "Missing manufacturing file: enclosure_staged.gcode")
+
+    bitmap_text = '\n'.join(_generate_bitmap_lines(s))
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for name, path in files.items():
-            zf.write(path, name)
+        zf.write(gcode_path, "enclosure.gcode")
+        zf.writestr("trace_bitmap.txt", bitmap_text)
     buf.seek(0)
 
     return StreamingResponse(

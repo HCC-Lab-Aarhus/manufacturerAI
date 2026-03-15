@@ -65,10 +65,9 @@ async def start_gcode(
                     "status": "done",
                     "message": result.message,
                     "stages": result.stages,
-                    "has_bgcode": result.bgcode_path is not None and Path(result.bgcode_path).exists(),
                     "gcode_bytes": (
-                        Path(result.staged_gcode_path).stat().st_size
-                        if result.staged_gcode_path and Path(result.staged_gcode_path).exists()
+                        Path(result.gcode_path).stat().st_size
+                        if result.gcode_path and Path(result.gcode_path).exists()
                         else 0
                     ),
                 })
@@ -88,31 +87,22 @@ async def poll_gcode(sid: str):
     cur = get_gcode_state(sid)
     if cur:
         return cur
-    staged = s.path / "enclosure_staged.gcode"
-    bgcode = s.path / "enclosure_staged.bgcode"
-    if staged.exists():
+    gcode = s.path / "enclosure.gcode"
+    if gcode.exists():
         return {
             "status": "done",
             "message": "G-code pipeline completed successfully.",
             "stages": [],
-            "has_bgcode": bgcode.exists(),
-            "gcode_bytes": staged.stat().st_size,
+            "gcode_bytes": gcode.stat().st_size,
         }
     return {"status": "pending"}
 
 
 @router.get("/sessions/{sid}/manufacture/gcode/download")
-async def download_gcode(sid: str, format: str = Query("gcode")):
+async def download_gcode(sid: str):
     s = load_session_or_404(sid)
-    if format == "bgcode":
-        path = s.path / "enclosure_staged.bgcode"
-        fname = "enclosure_staged.bgcode"
-        mime = "application/octet-stream"
-    else:
-        path = s.path / "enclosure_staged.gcode"
-        fname = "enclosure_staged.gcode"
-        mime = "text/plain"
+    path = s.path / "enclosure.gcode"
     if not path.exists():
-        raise HTTPException(404, f"No {fname} — run the G-code pipeline first")
-    return FileResponse(path, media_type=mime, filename=fname,
+        raise HTTPException(404, "No enclosure.gcode — run the G-code pipeline first")
+    return FileResponse(path, media_type="text/plain", filename="enclosure.gcode",
                         headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
