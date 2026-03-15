@@ -16,16 +16,14 @@ A '1' means "deposit conductive ink here", a '0' means "no ink".
 
 from __future__ import annotations
 
+import logging
 import math
 from pathlib import Path
 
-from src.pipeline.config import (
-    BITMAP_CONFIG, BITMAP_CALIBRATION, BitmapConfig,
-    PrinterDef, PrintheadConfig, PRINTHEAD, get_printer,
-    BITMAP_DATA_X_START_MM, BITMAP_DATA_COLS, BITMAP_DATA_ROWS,
-    SWEEP_Y_START_MM,
-)
+from src.pipeline.config import SweepGrid
 from .models import RoutingResult
+
+log = logging.getLogger(__name__)
 
 
 def _trace_cells(
@@ -37,8 +35,8 @@ def _trace_cells(
 ) -> set[tuple[int, int]]:
     """Rasterize a Manhattan trace path into bitmap cell coordinates.
 
-    Coordinates are relative to the part origin (0, 0 = lower-left of
-    the part bounding box).  Each cell is ``pixel_size`` mm square.
+    Coordinates are in bitmap-local mm (already transformed via
+    ``SweepGrid.bed_to_bitmap``).  Each cell is ``pixel_size`` mm square.
     """
     half_w = trace_width_mm / 2.0
 
@@ -80,49 +78,22 @@ def generate_trace_bitmap(
     result: RoutingResult,
     trace_width_mm: float,
     *,
-    printer: PrinterDef | None = None,
-    bitmap: BitmapConfig = BITMAP_CONFIG,
-    origin_x: float = 0.0,
-    origin_y: float = 0.0,
-    printhead: PrintheadConfig = PRINTHEAD,
-    part_width_mm: float | None = None,
-    part_depth_mm: float | None = None,
-    bed_offset: tuple[float, float] | None = None,
+    grid: SweepGrid,
+    model_to_bed: tuple[float, float] = (0.0, 0.0),
 ) -> list[str]:
     """Render all traces into a sweep-grid-aligned bitmap.
-
-    The bitmap spans the full sweep area (X: SWEEP_X_START → SWEEP_X_END,
-    Y: SWEEP_Y_START → SWEEP_Y_END) at nozzle-native resolution so that
-    silver3dprinter's sliding-window slicing maps columns directly to
-    physical nozzle positions during each sweep lane.
-
-    Pixel size is exactly the nozzle pitch in both axes (square pixels).
-    Width is rounded up to a multiple of 32 so the bitmap can be evenly
-    sliced into 32-pixel strips by ``rasp_main.py``.
 
     Parameters
     ----------
     result : RoutingResult
-        The completed routing result with trace paths in world mm.
+        Completed routing result with trace paths in model-local mm.
     trace_width_mm : float
         Physical width of a conductive-ink trace.
-    printer : PrinterDef, optional
-        Printer definition (bed dimensions).  Falls back to default.
-    bitmap : BitmapConfig
-        Legacy parameter — ignored when part dimensions are provided.
-    origin_x, origin_y : float
-        World-space origin of the board outline's bounding-box lower-left
-        corner.  Trace coordinates are shifted relative to this.
-    printhead : PrintheadConfig
-        Printhead hardware parameters (nozzle pitch, count).
-    part_width_mm, part_depth_mm : float, optional
-        Part bounding-box dimensions.
-    bed_offset : tuple[float, float], optional
-        ``(dx, dy)`` from model-local coordinates to absolute bed
-        coordinates.  PrusaSlicer centres the STL on the bed, so
-        ``bed_pos = model_pos + bed_offset``.  When provided, traces
-        are placed at their correct absolute bed position within the
-        sweep grid.
+    grid : SweepGrid
+        Sweep-grid geometry (from ``sweep_grid(printer_def)``).
+    model_to_bed : (float, float)
+        Translation from model-local coordinates to absolute bed
+        coordinates: ``bed_pos = model_pos + model_to_bed``.
 
     Returns
     -------
@@ -131,31 +102,27 @@ def generate_trace_bitmap(
         emitted from highest Y to lowest Y.  rasp_main.py reverses on
         load so row 0 = lowest Y = start of increasing-Y sweep.
     """
-    pdef = printer or get_printer()
-    pixel_size = printhead.pixel_size_mm
-
-    cols = BITMAP_DATA_COLS
-    rows = BITMAP_DATA_ROWS
-
-    offset_x = bed_offset[0] if bed_offset else 0.0
-    offset_y = bed_offset[1] if bed_offset else 0.0
+    pixel_size = grid.pixel_size_mm
+    cols = grid.data_cols
+    rows = grid.data_rows
+    dx, dy = model_to_bed
 
     ink_cells: set[tuple[int, int]] = set()
 
     for trace in result.traces:
-        bed_path = [
-            (x - origin_x + offset_x, y - origin_y + offset_y)
-            for x, y in trace.path
-        ]
-        bitmap_path = [
-            (x - BITMAP_DATA_X_START_MM - pdef.inkjet_offset_x + BITMAP_CALIBRATION.offset_x,
-             y - SWEEP_Y_START_MM - pdef.inkjet_offset_y + BITMAP_CALIBRATION.offset_y)
-            for x, y in bed_path
-        ]
-        ink_cells |= _trace_cells(
+        bed_path = [(x + dx, y + dy) for x, y in trace.path]
+        bitmap_path = [grid.bed_to_bitmap(bx, by) for bx, by in bed_path]
+
+        new_cells = _trace_cells(
             bitmap_path, trace_width_mm,
             pixel_size, cols, rows,
         )
+        if not new_cells and bed_path:
+            log.warning(
+                "Trace net=%s clipped to zero pixels — may be outside sweep grid",
+                trace.net_id,
+            )
+        ink_cells |= new_cells
 
     lines: list[str] = []
     for r in range(rows - 1, -1, -1):
@@ -172,27 +139,15 @@ def write_trace_bitmap(
     trace_width_mm: float,
     output_path: Path | str,
     *,
-    printer: PrinterDef | None = None,
-    bitmap: BitmapConfig = BITMAP_CONFIG,
-    origin_x: float = 0.0,
-    origin_y: float = 0.0,
-    printhead: PrintheadConfig = PRINTHEAD,
-    part_width_mm: float | None = None,
-    part_depth_mm: float | None = None,
-    bed_offset: tuple[float, float] | None = None,
+    grid: SweepGrid,
+    model_to_bed: tuple[float, float] = (0.0, 0.0),
 ) -> Path:
     """Generate the trace bitmap and write it to a text file."""
     output_path = Path(output_path)
     lines = generate_trace_bitmap(
         result, trace_width_mm,
-        printer=printer,
-        bitmap=bitmap,
-        origin_x=origin_x,
-        origin_y=origin_y,
-        printhead=printhead,
-        part_width_mm=part_width_mm,
-        part_depth_mm=part_depth_mm,
-        bed_offset=bed_offset,
+        grid=grid,
+        model_to_bed=model_to_bed,
     )
     output_path.write_text('\n'.join(lines), encoding='utf-8')
     return output_path

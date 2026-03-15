@@ -20,9 +20,8 @@ from typing import Any
 from fastapi import APIRouter, Query
 
 from src.pipeline.config import (
-    get_printer, PrinterDef, PRINTHEAD,
-    BITMAP_DATA_X_START_MM, BITMAP_DATA_COLS, BITMAP_DATA_ROWS,
-    SWEEP_Y_START_MM, BITMAP_CALIBRATION,
+    get_printer, PrinterDef,
+    SweepGrid, sweep_grid,
 )
 from src.pipeline.gcode.filaments import get_filament, FilamentDef
 from src.pipeline.manifest import generate_manifest
@@ -165,6 +164,7 @@ def _calibration_gcode(
 
 def _calibration_bitmap(
     pdef: PrinterDef,
+    grid: SweepGrid,
     box: float,
     pad: float,
     sq: float,
@@ -173,16 +173,16 @@ def _calibration_bitmap(
 
     Top-right corner is omitted for orientation.
 
-    The bitmap spans the entire sweep grid (BITMAP_DATA_COLS × BITMAP_DATA_ROWS)
-    so that rasp_main.py's sliding-window slicing maps columns 1:1 to physical
-    sweep lanes — exactly like the real pipeline's bitmap.py.
+    The bitmap spans the entire sweep grid so that rasp_main.py's
+    sliding-window slicing maps columns 1:1 to physical sweep lanes —
+    exactly like the real pipeline's bitmap.py.
 
     Square positions are in absolute bed coordinates, converted to bitmap
-    pixels by subtracting the sweep-grid origin.
+    pixels via ``grid.bed_to_bitmap()``.
     """
-    px = PRINTHEAD.pixel_size_mm
-    cols = BITMAP_DATA_COLS
-    rows = BITMAP_DATA_ROWS
+    px = grid.pixel_size_mm
+    cols = grid.data_cols
+    rows = grid.data_rows
 
     nom_w = pdef.nominal_bed_width
     nom_d = pdef.nominal_bed_depth
@@ -197,8 +197,7 @@ def _calibration_bitmap(
 
     ink_cells: set[tuple[int, int]] = set()
     for bed_x, bed_y in corners_bed:
-        bx0 = bed_x - BITMAP_DATA_X_START_MM - pdef.inkjet_offset_x + BITMAP_CALIBRATION.offset_x
-        by0 = bed_y - SWEEP_Y_START_MM - pdef.inkjet_offset_y + BITMAP_CALIBRATION.offset_y
+        bx0, by0 = grid.bed_to_bitmap(bed_x, bed_y)
         c0 = max(0, int(math.floor(bx0 / px)))
         c1 = min(cols - 1, int(math.floor((bx0 + sq) / px)))
         r0 = max(0, int(math.floor(by0 / px)))
@@ -228,14 +227,16 @@ async def generate_calibration(
     """Generate alignment G-code + bitmap for inkjet offset calibration."""
     pdef = get_printer(printer)
     fdef = get_filament(filament)
+    grid = sweep_grid(pdef)
 
     gcode = _calibration_gcode(pdef, fdef, box_size, padding, square_size)
-    bitmap = _calibration_bitmap(pdef, box_size, padding, square_size)
+    bitmap = _calibration_bitmap(pdef, grid, box_size, padding, square_size)
 
     part_origin_x = pdef.nominal_bed_width / 2 - box_size / 2
     part_origin_y = pdef.nominal_bed_depth / 2 - box_size / 2
 
     manifest = generate_manifest(
+        grid=grid,
         part_origin_x_mm=part_origin_x,
         part_origin_y_mm=part_origin_y,
         part_width_mm=box_size,

@@ -50,83 +50,9 @@ class PrintheadConfig:
         """Square pixel size — equal to nozzle pitch for 1:1 mapping."""
         return self.nozzle_pitch_mm
 
-    def bitmap_dims_for_part(
-        self, part_width_mm: float, part_depth_mm: float,
-    ) -> tuple[int, int]:
-        """Return (cols, rows) of the *internal* rasterization grid.
-
-        Internally:  cols = X extent (width),  rows = Y extent (depth).
-        The text-file output maps text-lines = Y positions (sweep)
-        and characters = X positions (nozzle array).  The caller
-        should use ``bitmap_output_dims`` to get the file-level
-        dimensions.
-        """
-        cols = math.ceil(part_width_mm / self.pixel_size_mm)
-        rows = math.ceil(part_depth_mm / self.pixel_size_mm)
-        return cols, rows
-
-    def bitmap_output_dims(
-        self, part_width_mm: float, part_depth_mm: float,
-    ) -> tuple[int, int]:
-        """Return (out_cols, out_rows) as they appear in the text file.
-
-        The nozzle array is parallel to X, so:
-          - out_cols = X extent (width)  — characters per line = nozzle axis
-          - out_rows = Y extent (depth)  — lines in file = sweep axis
-        """
-        internal_cols, internal_rows = self.bitmap_dims_for_part(
-            part_width_mm, part_depth_mm,
-        )
-        return internal_cols, internal_rows
-
 
 PRINTHEAD = PrintheadConfig()
 
-
-@dataclass(frozen=True)
-class BitmapConfig:
-    """Resolution of the conductive-ink trace bitmap.
-
-    Now dynamically sized to match the printhead's nozzle-native pixel
-    pitch.  ``cols`` and ``rows`` are computed from the part bounding box
-    and the printhead's pixel_size_mm.
-    """
-
-    cols: int = 1536
-    rows: int = 1383
-
-    def rows_for_bed(self, bed_width: float, bed_depth: float) -> int:
-        """Return the fixed row count (kept for API compatibility)."""
-        return self.rows
-
-    @staticmethod
-    def for_part(
-        part_width_mm: float,
-        part_depth_mm: float,
-        printhead: PrintheadConfig = PRINTHEAD,
-    ) -> "BitmapConfig":
-        """Create a BitmapConfig sized to a specific part at nozzle-native resolution."""
-        cols, rows = printhead.bitmap_dims_for_part(part_width_mm, part_depth_mm)
-        return BitmapConfig(cols=cols, rows=rows)
-
-
-BITMAP_CONFIG = BitmapConfig()
-
-
-@dataclass(frozen=True)
-class BitmapCalibration:
-    """Fine-tuning offsets applied on top of the computed inkjet offset.
-
-    After measuring a calibration print, set these to the residual error
-    (in mm) so the bitmap projection lands precisely on the PLA features.
-    Positive offset_x shifts ink in +X, positive offset_y shifts ink in +Y.
-    """
-
-    offset_x: float = -1.8
-    offset_y: float = 2.7
-
-
-BITMAP_CALIBRATION = BitmapCalibration()
 
 
 @dataclass(frozen=True)
@@ -190,67 +116,81 @@ class TraceRules:
 TRACE_RULES = TraceRules()
 
 
-# ── Sweep grid constants (must match silver3dprinter) ─────────────
-#
-# These define the physical sweep area on the MK3S bed.  The bitmap
-# must cover this grid so that silver3dprinter's sliding-window
-# slicing and lane stepping align with the pixel data.
-#
-# X axis: printhead lanes (stepping by lane_step_nozzles × pitch)
-# Y axis: continuous sweep within each lane
-#
-# All values are derived from PRINTHEAD to stay in sync.
+# ── Sweep grid ────────────────────────────────────────────────────
 #
 # rasp_main.py adds 3 × 32-pixel padding strips before the bitmap
-# data in its sliding-window slicing.  This means bitmap column 0
-# maps to physical X = X_START + 3 × 32 × pixel_pitch, NOT X_START.
+# data in its sliding-window slicing.  Bitmap column 0 maps to
+# physical X = X_START + 3 × lane_width, NOT X_START.
 
-SWEEP_X_START_MM: float = 57.6
-"""X position of the first sweep lane (mm, absolute bed coords)."""
-
-SWEEP_X_END_MM: float = 250.0
-"""X position of the last sweep lane (mm, absolute bed coords)."""
-
-SWEEP_X_INCREMENT_MM: float = PRINTHEAD.lane_width_mm
-"""Distance between consecutive sweep lanes = 32 × nozzle_pitch."""
-
-SWEEP_Y_START_MM: float = 32.0
-"""Y start of each sweep lane (mm, absolute bed coords)."""
-
-SWEEP_Y_END_MM: float = 210.0
-"""Y end of each sweep lane (mm, absolute bed coords)."""
+_PADDING_STRIPS: int = 3
 
 
+@dataclass(frozen=True)
+class SweepGrid:
+    """Derived sweep-grid geometry for a specific printer + printhead.
+
+    Consumers use ``data_cols``, ``data_rows``, ``pixel_size_mm``,
+    and ``bed_to_bitmap()`` to produce bitmaps.  Internal sweep
+    parameters (lane count, offsets, etc.) are baked into the
+    coordinate transform and don't need to be accessed directly.
+    """
+
+    data_cols: int
+    data_rows: int
+    pixel_size_mm: float
+
+    _data_x_start_mm: float
+    _y_start_mm: float
+    _inkjet_offset_x: float
+    _inkjet_offset_y: float
+    _calibration_offset_x: float
+    _calibration_offset_y: float
+
+    def bed_to_bitmap(self, bed_x: float, bed_y: float) -> tuple[float, float]:
+        """Convert absolute bed coordinates to bitmap-local coordinates (mm)."""
+        bx = (bed_x
+              - self._data_x_start_mm
+              - self._inkjet_offset_x
+              + self._calibration_offset_x)
+        by = (bed_y
+              - self._y_start_mm
+              - self._inkjet_offset_y
+              + self._calibration_offset_y)
+        return bx, by
 
 
-def _sweep_lane_count() -> int:
-    x = SWEEP_X_START_MM
-    n = 0
-    while x <= SWEEP_X_END_MM + 1e-6:
-        n += 1
-        x += SWEEP_X_INCREMENT_MM
-    return n
+def sweep_grid(pdef: PrinterDef, printhead: PrintheadConfig = PRINTHEAD) -> SweepGrid:
+    """Compute the sweep grid for a printer + printhead combination.
 
+    X_START = abs(inkjet_offset_x)  — first lane where nozzle 0 reaches bed X=0
+    Y_START = abs(inkjet_offset_y)  — Y position where the nozzle array starts
+    X_END   = nominal_bed_width     — last reachable X position
+    Y_END   = nominal_bed_depth     — last reachable Y position
+    """
+    x_start = abs(pdef.inkjet_offset_x)
+    y_start = abs(pdef.inkjet_offset_y)
+    x_end = pdef.nominal_bed_width
+    increment = printhead.lane_width_mm
+    pixel = printhead.pixel_size_mm
+    step = printhead.lane_step_nozzles
 
-SWEEP_NUM_LANES: int = _sweep_lane_count()
-"""Number of sweep lanes generated by sweep_generator.py."""
+    num_lanes = 1 + int((x_end - x_start + 1e-9) / increment)
+    data_cols = (num_lanes - _PADDING_STRIPS) * step
+    data_rows = math.ceil((pdef.nominal_bed_depth - y_start) / pixel)
+    data_x_start = x_start + _PADDING_STRIPS * step * pixel
 
-SWEEP_PADDING_STRIPS: int = 3
-"""Number of blank 32-pixel strips rasp_main.py prepends/appends."""
+    return SweepGrid(
+        data_cols=data_cols,
+        data_rows=data_rows,
+        pixel_size_mm=pixel,
+        _data_x_start_mm=data_x_start,
+        _y_start_mm=y_start,
+        _inkjet_offset_x=pdef.inkjet_offset_x,
+        _inkjet_offset_y=pdef.inkjet_offset_y,
+        _calibration_offset_x=pdef.calibration_offset_x,
+        _calibration_offset_y=pdef.calibration_offset_y,
+    )
 
-BITMAP_DATA_X_START_MM: float = (
-    SWEEP_X_START_MM
-    + SWEEP_PADDING_STRIPS * PRINTHEAD.lane_step_nozzles * PRINTHEAD.pixel_size_mm
-)
-"""Physical X of bitmap column 0, accounting for rasp_main.py's 3-strip left padding."""
-
-BITMAP_DATA_COLS: int = (SWEEP_NUM_LANES - SWEEP_PADDING_STRIPS) * PRINTHEAD.lane_step_nozzles
-"""Bitmap width in pixels — ensures combined_slices count matches sweep lanes."""
-
-BITMAP_DATA_ROWS: int = math.ceil(
-    (SWEEP_Y_END_MM - SWEEP_Y_START_MM) / PRINTHEAD.pixel_size_mm
-)
-"""Bitmap height in pixels — one row per pixel pitch along the Y sweep."""
 
 
 # ── Enclosure Z-layer constants (mm) ──────────────────────────────
@@ -294,8 +234,10 @@ class PrinterDef:
     nominal_bed_depth: float   # mm
     inkjet_offset_x: float     # mm — PLA nozzle → inkjet array centre, +X = right
     inkjet_offset_y: float     # mm — PLA nozzle → inkjet array centre, +Y = back
-    max_z_mm: float            # mm — maximum build height
-    profile_filename: str
+    calibration_offset_x: float = 0.0  # mm — residual X correction from calibration prints
+    calibration_offset_y: float = 0.0  # mm — residual Y correction from calibration prints
+    max_z_mm: float = 210.0    # mm — maximum build height
+    profile_filename: str = ""
     native_printer: str | None = None
     native_print: str | None = None
     native_material: str | None = None
@@ -320,6 +262,8 @@ PRINTERS: dict[str, PrinterDef] = {
         nominal_bed_depth=210.0,
         inkjet_offset_x=-57.6,
         inkjet_offset_y=-32.0,
+        calibration_offset_x=-1.8,
+        calibration_offset_y=2.7,
         max_z_mm=210.0,
         profile_filename="slicer_profile_mk3s.ini",
     ),
@@ -330,6 +274,8 @@ PRINTERS: dict[str, PrinterDef] = {
         nominal_bed_depth=210.0,
         inkjet_offset_x=-57.6,
         inkjet_offset_y=-32.0,
+        calibration_offset_x=-1.8,
+        calibration_offset_y=2.7,
         max_z_mm=210.0,
         profile_filename="slicer_profile_mk3s_plus.ini",
     ),
@@ -340,6 +286,8 @@ PRINTERS: dict[str, PrinterDef] = {
         nominal_bed_depth=250.0,
         inkjet_offset_x=-57.6,
         inkjet_offset_y=-32.0,
+        calibration_offset_x=-1.8,
+        calibration_offset_y=2.7,
         max_z_mm=220.0,
         profile_filename="slicer_profile_coreone.ini",
         native_printer="Prusa CORE One HF0.4 nozzle",

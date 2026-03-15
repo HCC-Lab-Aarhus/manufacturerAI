@@ -23,8 +23,7 @@ from src.pipeline.config import (
     PRINTHEAD,
     FLOOR_MM,
     TRACE_HEIGHT_MM,
-    BITMAP_DATA_COLS,
-    BITMAP_DATA_ROWS,
+    SweepGrid,
     get_printer,
 )
 
@@ -78,6 +77,7 @@ class PrintJobManifest:
 
 def generate_manifest(
     *,
+    grid: SweepGrid,
     part_origin_x_mm: float,
     part_origin_y_mm: float,
     part_width_mm: float,
@@ -109,8 +109,8 @@ def generate_manifest(
         lane_step_nozzles=printhead.lane_step_nozzles,
         lane_width_mm=round(printhead.lane_width_mm, 4),
         bitmap_file=bitmap_file,
-        bitmap_cols=BITMAP_DATA_COLS,
-        bitmap_rows=BITMAP_DATA_ROWS,
+        bitmap_cols=grid.data_cols,
+        bitmap_rows=grid.data_rows,
         pixel_size_x_mm=px,
         pixel_size_y_mm=px,
         ink_z_mm=FLOOR_MM,

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import io
-import json
 import logging
 import threading
 import zipfile
@@ -14,7 +13,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from src.pipeline.design import parse_design, validate_design
 from src.pipeline.placer import place_components, placement_to_dict, parse_placement, PlacementError
 from src.pipeline.router import route_traces, routing_to_dict, write_trace_bitmap
-from src.pipeline.config import TRACE_RULES, BITMAP_CONFIG, get_printer
+from src.pipeline.config import TRACE_RULES, sweep_grid, get_printer
 from src.pipeline.scad import run_scad_step
 from src.web.routes._deps import (
     stl_compile, gcode_state,
@@ -151,32 +150,26 @@ async def generate_bitmap(sid: str):
     result = parse_routing(routing_data)
 
     pdef = get_printer(s.printer_id)
+    grid = sweep_grid(pdef)
     outline_verts = design.outline.vertices
     xs = [v[0] for v in outline_verts]
     ys = [v[1] for v in outline_verts]
     min_x, max_x = min(xs), max(xs)
     min_y, max_y = min(ys), max(ys)
-    part_width = max_x - min_x
-    part_depth = max_y - min_y
 
     model_cx = (min_x + max_x) / 2
     model_cy = (min_y + max_y) / 2
-    bed_offset_x = pdef.nominal_bed_width / 2 - model_cx
-    bed_offset_y = pdef.nominal_bed_depth / 2 - model_cy
-
-    part_origin_x = pdef.nominal_bed_width / 2 - (part_width / 2)
-    part_origin_y = pdef.nominal_bed_depth / 2 - (part_depth / 2)
+    model_to_bed = (
+        pdef.nominal_bed_width / 2 - model_cx,
+        pdef.nominal_bed_depth / 2 - model_cy,
+    )
 
     write_trace_bitmap(
         result,
         TRACE_RULES.trace_width_mm,
         s.path / "trace_bitmap.txt",
-        printer=pdef,
-        origin_x=min_x,
-        origin_y=min_y,
-        part_width_mm=part_width,
-        part_depth_mm=part_depth,
-        bed_offset=(part_origin_x, part_origin_y),
+        grid=grid,
+        model_to_bed=model_to_bed,
     )
 
     return {"status": "done"}
@@ -212,12 +205,11 @@ async def get_bitmap(sid: str):
         bed_offset_x = 0.0
         bed_offset_y = 0.0
 
-    bitmap_cfg = BITMAP_CONFIG
     raw = bitmap_path.read_text(encoding="utf-8")
     rows = raw.splitlines()
 
     num_rows = len(rows)
-    cols = len(rows[0]) if rows else bitmap_cfg.cols
+    cols = len(rows[0]) if rows else 0
     byte_cols = (cols + 7) // 8
     packed = bytearray(num_rows * byte_cols)
     for ri, line in enumerate(rows):
