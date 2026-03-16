@@ -60,7 +60,9 @@ def build_pin_pools(
     """Build dynamic pin pools for all instances with allocatable pin groups.
 
     Returns a map: instance_id -> PinPool.
-    Only instances that have at least one allocatable PinGroup are included.
+    Only instances that have at least one allocatable or fixed_net
+    PinGroup are included.  Fixed-net groups (e.g. power, ground)
+    need pool entries so the router can pick specific physical pins.
     """
     catalog_map = {c.id: c for c in catalog.components}
     placed_map = {p.instance_id: p for p in placement.components}
@@ -73,7 +75,7 @@ def build_pin_pools(
 
         inst_pools: dict[str, list[str]] = {}
         for pg in cat.pin_groups:
-            if pg.allocatable:
+            if pg.allocatable or pg.fixed_net:
                 inst_pools[pg.id] = list(pg.pin_ids)
 
         if inst_pools:

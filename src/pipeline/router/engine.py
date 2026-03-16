@@ -115,7 +115,18 @@ def route_traces(
     pin_clearance_cells = _compute_pin_clearance_cells(config)
     pin_voronoi = _build_pin_voronoi(all_pin_cells, grid, pin_clearance_cells)
 
-    # 3. Parse net pin references
+    # 3. Parse net pin references — expand fixed_net groups into
+    #    individual pin refs so all pins in the group get routed.
+    catalog_map_groups: dict[str, dict[str, list[str]]] = {}
+    for cat_comp in catalog.components:
+        if cat_comp.pin_groups:
+            fixed: dict[str, list[str]] = {}
+            for pg in cat_comp.pin_groups:
+                if pg.fixed_net:
+                    fixed[pg.id] = list(pg.pin_ids)
+            if fixed:
+                catalog_map_groups[cat_comp.id] = fixed
+
     net_pad_map: dict[str, list[_PinRef]] = {}
     for net in placement.nets:
         refs: list[_PinRef] = []
@@ -123,6 +134,20 @@ def route_traces(
             iid, pid, is_group = resolve_pin_ref(
                 pin_ref_str, placement, catalog,
             )
+            # Expand fixed_net group refs into individual pin refs
+            if is_group:
+                pc = next((p for p in placement.components if p.instance_id == iid), None)
+                cat_id = pc.catalog_id if pc else None
+                fixed_pins = catalog_map_groups.get(cat_id, {}).get(pid)
+                if fixed_pins:
+                    for fpin in fixed_pins:
+                        refs.append(_PinRef(
+                            raw=f"{iid}:{fpin}",
+                            instance_id=iid,
+                            pin_or_group=fpin,
+                            is_group=False,
+                        ))
+                    continue
             refs.append(_PinRef(
                 raw=pin_ref_str, instance_id=iid,
                 pin_or_group=pid, is_group=is_group,
@@ -182,6 +207,7 @@ def route_traces(
         neg_pads = neg_result["routed_pads"]
         neg_pins = neg_result["pin_assignments"]
         neg_nids = [nid for nid in net_ids if nid in neg_paths]
+        neg_unroutable = neg_result.get("failed_nets", [])
 
         # Generate candidate commit orderings
         orderings_to_try: list[list[str]] = [
@@ -249,6 +275,7 @@ def route_traces(
 
             cur_failed = [nid for nid in neg_nids
                           if nid not in committed_paths]
+            all_failed = neg_unroutable + cur_failed
             log.info("Negotiation commit order %d: %d/%d routed, "
                      "%d deferred, %d failed",
                      oi + 1, len(committed_paths), len(neg_nids),
@@ -258,11 +285,11 @@ def route_traces(
                 "routed_paths": committed_paths,
                 "routed_pads": committed_pads,
                 "pin_assignments": neg_pins,
-                "failed_nets": cur_failed,
+                "failed_nets": all_failed,
                 "failed_pads": {},
             }
 
-            if not cur_failed:
+            if not all_failed:
                 best = cur_result
                 log.info("Negotiation commit order %d: all nets routed!",
                          oi + 1)
