@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import threading
 
 from fastapi import APIRouter, HTTPException
 
@@ -12,6 +13,7 @@ from src.web.routes._deps import (
     require_design, require_placement, require_routing,
     enrich_components,
 )
+from src.web.tasks import PipelineTask, get_pipeline_task, set_pipeline_task
 
 router = APIRouter()
 
@@ -39,12 +41,37 @@ def _generate_bitmap_lines(session) -> list[str]:
 @router.post("/sessions/{sid}/manufacture/bitmap")
 async def run_bitmap(sid: str):
     s = load_session_or_404(sid)
-    require_placement(s)
-    require_routing(s)
-    _generate_bitmap_lines(s)
-    s.pipeline_state["bitmap"] = "complete"
-    s.save()
-    return {"status": "done"}
+
+    existing = get_pipeline_task(sid, "bitmap")
+    if existing and existing.status == "running":
+        return {"status": "running"}
+
+    set_pipeline_task(sid, "bitmap", PipelineTask(status="running"))
+
+    def _do():
+        try:
+            require_placement(s)
+            require_routing(s)
+            _generate_bitmap_lines(s)
+            s.pipeline_state["bitmap"] = "complete"
+            s.save()
+            set_pipeline_task(sid, "bitmap", PipelineTask(status="done"))
+        except Exception as e:
+            set_pipeline_task(sid, "bitmap", PipelineTask(status="error", error=str(e)))
+
+    threading.Thread(target=_do, daemon=True).start()
+    return {"status": "running"}
+
+
+@router.get("/sessions/{sid}/manufacture/bitmap/status")
+async def poll_bitmap(sid: str):
+    task = get_pipeline_task(sid, "bitmap")
+    if task:
+        return {"status": task.status, "message": task.error or ""}
+    s = load_session_or_404(sid)
+    if s.pipeline_state.get("bitmap") == "complete":
+        return {"status": "done"}
+    return {"status": "idle"}
 
 
 @router.get("/sessions/{sid}/manufacture/bitmap")

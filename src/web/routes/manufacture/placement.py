@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 from fastapi import APIRouter, HTTPException
 
 from src.pipeline.design import (
@@ -12,6 +14,7 @@ from src.web.routes._deps import (
     require_design, require_circuit,
     build_placement_response,
 )
+from src.web.tasks import PipelineTask, get_pipeline_task, set_pipeline_task
 
 router = APIRouter()
 
@@ -19,44 +22,67 @@ router = APIRouter()
 @router.post("/sessions/{sid}/manufacture/placement")
 async def run_placement(sid: str):
     s = load_session_or_404(sid)
-    cat = get_catalog()
 
-    physical = parse_physical_design(require_design(s))
-    circuit = parse_circuit(require_circuit(s))
-    design = build_design_spec(physical, circuit)
+    existing = get_pipeline_task(sid, "placement")
+    if existing and existing.status == "running":
+        return {"status": "running"}
 
-    errors = validate_design(design, cat, printer=get_printer(s.printer_id))
-    if errors:
-        detail = {
-            "error": "design_validation_failed",
-            "reason": "; ".join(errors),
-            "responsible_agent": "design",
-        }
-        s.set_step_error("placement", detail)
-        raise HTTPException(400, detail=detail)
+    set_pipeline_task(sid, "placement", PipelineTask(status="running"))
 
-    try:
-        result = place_components(design, cat)
-    except PlacementError as e:
-        detail = {
-            "error": "placement_failed",
-            "instance_id": e.instance_id,
-            "catalog_id": e.catalog_id,
-            "reason": e.reason,
-            "responsible_agent": "design",
-        }
-        s.set_step_error("placement", detail)
-        raise HTTPException(422, detail=detail)
+    def _do():
+        try:
+            cat = get_catalog()
+            physical = parse_physical_design(require_design(s))
+            circuit = parse_circuit(require_circuit(s))
+            design = build_design_spec(physical, circuit)
 
-    s.clear_step_error("placement")
+            errors = validate_design(design, cat, printer=get_printer(s.printer_id))
+            if errors:
+                detail = {
+                    "error": "design_validation_failed",
+                    "reason": "; ".join(errors),
+                    "responsible_agent": "design",
+                }
+                s.set_step_error("placement", detail)
+                set_pipeline_task(sid, "placement", PipelineTask(status="error", error=detail["reason"], detail=detail))
+                return
 
-    s.write_artifact("placement.json", placement_to_dict(result))
-    s.pipeline_state["placement"] = "complete"
-    invalidated = invalidate_downstream(s, "placement")
-    s.save()
-    response = build_placement_response(s, cat)
-    response["invalidated_steps"] = invalidated
-    return response
+            result = place_components(design, cat)
+            s.clear_step_error("placement")
+            s.write_artifact("placement.json", placement_to_dict(result))
+            s.pipeline_state["placement"] = "complete"
+            invalidate_downstream(s, "placement")
+            s.save()
+            set_pipeline_task(sid, "placement", PipelineTask(status="done"))
+        except PlacementError as e:
+            detail = {
+                "error": "placement_failed",
+                "instance_id": e.instance_id,
+                "catalog_id": e.catalog_id,
+                "reason": e.reason,
+                "responsible_agent": "design",
+            }
+            s.set_step_error("placement", detail)
+            set_pipeline_task(sid, "placement", PipelineTask(status="error", error=e.reason, detail=detail))
+        except Exception as e:
+            set_pipeline_task(sid, "placement", PipelineTask(status="error", error=str(e)))
+
+    threading.Thread(target=_do, daemon=True).start()
+    return {"status": "running"}
+
+
+@router.get("/sessions/{sid}/manufacture/placement/status")
+async def poll_placement(sid: str):
+    task = get_pipeline_task(sid, "placement")
+    if task:
+        resp = {"status": task.status, "message": task.error or ""}
+        if task.detail:
+            resp["detail"] = task.detail
+        return resp
+    s = load_session_or_404(sid)
+    if s.read_artifact("placement.json") is not None:
+        return {"status": "done"}
+    return {"status": "idle"}
 
 
 @router.get("/sessions/{sid}/manufacture/placement")

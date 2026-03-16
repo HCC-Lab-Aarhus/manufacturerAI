@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 
 from src.session import load_session
 from src.agent import (
@@ -13,7 +16,6 @@ from src.agent import (
 from src.pipeline.design import parse_design, validate_design, parse_physical_design, validate_physical_design
 from src.pipeline.config import get_printer
 from src.web.naming import generate_session_name
-from fastapi.responses import StreamingResponse
 
 import anthropic
 
@@ -21,8 +23,40 @@ from src.web.routes._deps import (
     get_catalog, load_session_or_404, invalidate_downstream,
     enrich_design,
 )
+from src.web.tasks import AgentTask, get_agent_task, set_agent_task
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["design"])
+
+
+async def _run_design_background(sid: str, prompt: str, task: AgentTask):
+    """Run the design agent in the background, accumulating events in *task*."""
+    try:
+        from src.web.routes._deps import get_catalog, load_session_or_404, enrich_design
+        sess = load_session_or_404(sid)
+        cat = get_catalog()
+        agent = DesignAgent(cat, sess)
+        async for event in agent.run(prompt, cancel_event=task.cancel_event):
+            if event.type == "checkpoint":
+                task.last_save_cursor = len(task.events)
+                continue
+            if event.type == "design" and event.data:
+                design = event.data.get("design")
+                if design:
+                    enrich_design(design, cat)
+            task.append_event(event.type, event.data or {})
+            if event.type == "design":
+                name = generate_session_name(sess)
+                if name:
+                    task.append_event("session_named", {"name": name})
+        task.finish("done")
+    except asyncio.CancelledError:
+        task.finish("done", error="Cancelled")
+    except Exception as e:
+        log.exception("Design agent background error")
+        task.append_event("error", {"message": str(e)})
+        task.finish("error", error=str(e))
 
 
 @router.post("/sessions/{sid}/design")
@@ -33,32 +67,64 @@ async def run_design(sid: str, request: Request):
         raise HTTPException(400, "Missing 'prompt' in request body")
 
     sess = load_session_or_404(sid)
-    cat = get_catalog()
+
+    existing = get_agent_task(sid, "design")
+    if existing and existing.status == "running":
+        raise HTTPException(409, "Design agent is already running")
+
+    task = AgentTask()
+    set_agent_task(sid, "design", task)
+    task.asyncio_task = asyncio.create_task(_run_design_background(sid, prompt, task))
+    return {"status": "running"}
+
+
+@router.post("/sessions/{sid}/design/stop")
+async def stop_design(sid: str):
+    task = get_agent_task(sid, "design")
+    if not task or task.status != "running":
+        raise HTTPException(404, "No running design agent")
+    task.cancel_event.set()
+    return {"status": "stopping"}
+
+
+@router.get("/sessions/{sid}/design/stream")
+async def stream_design_events(sid: str, after: int = Query(0)):
+    """SSE endpoint: yields buffered events starting at *after*, then waits for new ones."""
+    task = get_agent_task(sid, "design")
+    if not task:
+        raise HTTPException(404, "No design agent task")
 
     async def event_stream():
-        try:
-            agent = DesignAgent(cat, sess)
-            async for event in agent.run(prompt):
-                if event.type == "design" and event.data:
-                    design = event.data.get("design")
-                    if design:
-                        enrich_design(design, cat)
-                data = json.dumps(event.data) if event.data else "{}"
-                yield f"event: {event.type}\ndata: {data}\n\n"
+        cursor = after
+        while True:
+            while cursor < len(task.events):
+                ev = task.events[cursor]
+                data = json.dumps(ev["data"]) if ev["data"] else "{}"
+                yield f"event: {ev['type']}\ndata: {data}\n\n"
+                cursor += 1
 
-                if event.type == "design":
-                    name = generate_session_name(sess)
-                    if name:
-                        yield f"event: session_named\ndata: {json.dumps({'name': name})}\n\n"
-        except Exception as e:
-            data = json.dumps({"message": str(e)})
-            yield f"event: error\ndata: {data}\n\n"
+            if task.status != "running":
+                break
+            await asyncio.sleep(0.15)
 
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get("/sessions/{sid}/design/status")
+async def design_agent_status(sid: str):
+    task = get_agent_task(sid, "design")
+    if not task:
+        return {"status": "idle", "event_count": 0}
+    return {
+        "status": task.status,
+        "event_count": len(task.events),
+        "last_save_cursor": task.last_save_cursor,
+        "error": task.error,
+    }
 
 
 @router.get("/sessions/{sid}/design")

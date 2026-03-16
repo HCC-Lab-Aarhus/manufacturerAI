@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from src.agent import CircuitAgent, build_circuit_user_prompt
@@ -10,8 +12,43 @@ from src.web.routes._deps import (
     get_catalog, load_session_or_404, invalidate_downstream,
     enrich_components,
 )
+from src.web.tasks import AgentTask, get_agent_task, set_agent_task
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["circuit"])
+
+
+async def _run_circuit_background(sid: str, prompt: str, task: AgentTask, invalidated: list[str]):
+    """Run the circuit agent in the background, accumulating events in *task*."""
+    try:
+        sess = load_session_or_404(sid)
+        cat = get_catalog()
+
+        if invalidated:
+            task.append_event("invalidated", {
+                "invalidated_steps": invalidated,
+                "artifacts": sess.artifacts,
+                "pipeline_errors": sess.pipeline_errors,
+            })
+
+        agent = CircuitAgent(cat, sess)
+        async for event in agent.run(prompt, cancel_event=task.cancel_event):
+            if event.type == "checkpoint":
+                task.last_save_cursor = len(task.events)
+                continue
+            if event.type == "circuit" and event.data:
+                circuit = event.data.get("circuit")
+                if circuit:
+                    enrich_components(circuit.get("components", []), cat)
+            task.append_event(event.type, event.data or {})
+        task.finish("done")
+    except asyncio.CancelledError:
+        task.finish("done", error="Cancelled")
+    except Exception as e:
+        log.exception("Circuit agent background error")
+        task.append_event("error", {"message": str(e)})
+        task.finish("error", error=str(e))
 
 
 @router.post("/sessions/{sid}/circuit")
@@ -21,6 +58,10 @@ async def run_circuit(sid: str, request: Request):
     if design_data is None:
         raise HTTPException(400, "No design.json — run the design agent first")
 
+    existing = get_agent_task(sid, "circuit")
+    if existing and existing.status == "running":
+        raise HTTPException(409, "Circuit agent is already running")
+
     body: dict = {}
     try:
         body = await request.json()
@@ -28,8 +69,6 @@ async def run_circuit(sid: str, request: Request):
         pass
     feedback = body.get("feedback")
     outline = body.get("outline")
-
-    cat = get_catalog()
 
     if feedback:
         prompt = (
@@ -47,33 +86,61 @@ async def run_circuit(sid: str, request: Request):
         invalidated = invalidate_downstream(sess, "design")
     sess.save()
 
-    async def event_stream():
-        try:
-            if invalidated:
-                inv_data = json.dumps({
-                    "invalidated_steps": invalidated,
-                    "artifacts": sess.artifacts,
-                    "pipeline_errors": sess.pipeline_errors,
-                })
-                yield f"event: invalidated\ndata: {inv_data}\n\n"
+    task = AgentTask()
+    set_agent_task(sid, "circuit", task)
+    task.asyncio_task = asyncio.create_task(
+        _run_circuit_background(sid, prompt, task, invalidated)
+    )
+    return {"status": "running"}
 
-            agent = CircuitAgent(cat, sess)
-            async for event in agent.run(prompt):
-                if event.type == "circuit" and event.data:
-                    circuit = event.data.get("circuit")
-                    if circuit:
-                        enrich_components(circuit.get("components", []), cat)
-                data = json.dumps(event.data) if event.data else "{}"
-                yield f"event: {event.type}\ndata: {data}\n\n"
-        except Exception as e:
-            data = json.dumps({"message": str(e)})
-            yield f"event: error\ndata: {data}\n\n"
+
+@router.post("/sessions/{sid}/circuit/stop")
+async def stop_circuit(sid: str):
+    task = get_agent_task(sid, "circuit")
+    if not task or task.status != "running":
+        raise HTTPException(404, "No running circuit agent")
+    task.cancel_event.set()
+    return {"status": "stopping"}
+
+
+@router.get("/sessions/{sid}/circuit/stream")
+async def stream_circuit_events(sid: str, after: int = Query(0)):
+    """SSE endpoint: yields buffered events starting at *after*, then waits for new ones."""
+    task = get_agent_task(sid, "circuit")
+    if not task:
+        raise HTTPException(404, "No circuit agent task")
+
+    async def event_stream():
+        cursor = after
+        while True:
+            while cursor < len(task.events):
+                ev = task.events[cursor]
+                data = json.dumps(ev["data"]) if ev["data"] else "{}"
+                yield f"event: {ev['type']}\ndata: {data}\n\n"
+                cursor += 1
+
+            if task.status != "running":
+                break
+            await asyncio.sleep(0.15)
 
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get("/sessions/{sid}/circuit/status")
+async def circuit_agent_status(sid: str):
+    task = get_agent_task(sid, "circuit")
+    if not task:
+        return {"status": "idle", "event_count": 0}
+    return {
+        "status": task.status,
+        "event_count": len(task.events),
+        "last_save_cursor": task.last_save_cursor,
+        "error": task.error,
+    }
 
 
 @router.get("/sessions/{sid}/circuit")

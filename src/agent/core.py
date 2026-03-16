@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from dataclasses import dataclass
@@ -80,13 +81,29 @@ class _BaseAgent:
         """Return the event to emit when a terminal tool succeeds, or None."""
         return None
 
-    async def run(self, user_prompt: str) -> AsyncGenerator[AgentEvent, None]:
-        """Run the agent loop. Yields events for streaming to the UI."""
+    async def run(
+        self,
+        user_prompt: str,
+        cancel_event: asyncio.Event | None = None,
+    ) -> AsyncGenerator[AgentEvent, None]:
+        """Run the agent loop. Yields events for streaming to the UI.
+
+        If *cancel_event* is set, the loop will stop at the next safe point.
+        Messages are saved incrementally after each turn so that clients
+        can reconnect and pick up where they left off.
+        """
         system = self._get_system_prompt()
         tools = self._get_tools()
         self.messages.append({"role": "user", "content": user_prompt})
+        self._save_conversation()
+        yield AgentEvent("checkpoint", {})
 
         for turn in range(MAX_TURNS):
+            if cancel_event and cancel_event.is_set():
+                self._save_conversation()
+                yield AgentEvent("error", {"message": "Cancelled"})
+                return
+
             content_blocks: list[dict] = []
             stop_reason = None
             api_messages = prune_messages(self.messages)
@@ -103,6 +120,11 @@ class _BaseAgent:
                     messages=api_messages,
                 ) as stream:
                     async for event in stream:
+                        if cancel_event and cancel_event.is_set():
+                            stream.close()
+                            self._save_conversation()
+                            yield AgentEvent("error", {"message": "Cancelled"})
+                            return
                         agent_event = self._handle_stream_event(event)
                         if agent_event:
                             yield agent_event
@@ -120,6 +142,8 @@ class _BaseAgent:
                 "role": "assistant",
                 "content": content_blocks,
             })
+            self._save_conversation()
+            yield AgentEvent("checkpoint", {})
 
             # Token counting (best-effort)
             try:
@@ -180,9 +204,10 @@ class _BaseAgent:
                     terminal_event = self._terminal_event(block["name"], block["input"])
 
             self.messages.append({"role": "user", "content": tool_results})
+            self._save_conversation()
+            yield AgentEvent("checkpoint", {})
 
             if terminal_event:
-                self._save_conversation()
                 if self._last_invalidated:
                     yield AgentEvent("invalidated", {
                         "invalidated_steps": self._last_invalidated,
