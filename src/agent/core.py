@@ -182,6 +182,7 @@ class _BaseAgent:
 
             for block in tool_blocks:
                 yield AgentEvent("tool_call", {
+                    "id": block["id"],
                     "name": block["name"],
                     "input": block["input"],
                 })
@@ -195,6 +196,7 @@ class _BaseAgent:
                 })
 
                 yield AgentEvent("tool_result", {
+                    "id": block["id"],
                     "name": block["name"],
                     "content": result_text,
                     "is_error": not is_terminal and block["name"] in ("submit_design", "submit_circuit"),
