@@ -1,0 +1,72 @@
+microswitch:
+
+Always Connected pins (center to center):
+7 mm apart
+
+Conditionally connected pins (center to center):
+4.41mm apart
+
+Pin dimentions:
+0.75mm x 0.3mm (rectangle)
+
+Body:
+6mm w x 6mm l x 3mm h (rectangle)
+
+
+
+
+Diode:
+
+pins (center to center):
+2mm apart
+
+pin dimentions:
+0.5mm (cylinder)
+
+body:
+4.8mm w x 4.8mm l x 8.5mm h (cylinder)
+
+
+
+
+resistor:
+
+pins (center to center):
+7.4mm apart
+
+pin dimentions:
+0.6mm (cylinder)
+
+body:
+2.3 mm w x 8.3mm l x 2.3 mm h (cylinder)
+
+
+
+
+atmega:
+
+pins (center to center):
+3mm - 0.5mm = 2.5mm apart
+
+pin dimentions:
+0.3mm x 0.5mm (rectangle)
+
+body:
+3.3mm h x 8.7mm w x 35.3 mm l (rectangle)
+
+
+
+
+battery 2xAAA:
+
+These are a bit special. The battery hodler is just a printed plastic cavity, while the pins with springs are flat metal sheets we need to insert on either side. On one side, we have two disconnected pins (the negative and positive), while the other side has a flat plane, no pin connections, which connects the first battery to the second in series.
+
+We have three components:
+on the pin side, we have two. One with a bump against the positive terminal of battery one, and one with spring for the negative terminal of the second battery.
+These two dimentions are as follows:
+plate: 0.3mm thick, 12mm wide, 12mm tall (rectangle). Center of plate has a pin which is 7.5mm tall, same 0.3mm thickness, 3mm wide (rectangle).
+
+On the other side, we have one wide, with both a spring and a bump.
+This is 0.3mm thick, 27mm wide, 12mm tall (rectangle). Similarly, the center of this plate has a pin which is 7.5mm tall, 0.3mm thick, and 3mm wide (rectangle).
+
+We need cutouts on the battery holder which fits these snugly, with a small square in the center of the bump and spring side to interface with the batteries, and a pin hole to connect to the tracings.
