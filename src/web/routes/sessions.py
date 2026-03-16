@@ -38,18 +38,7 @@ async def get_session(sid: str):
         "printer_id": s.printer_id,
         "pipeline_state": s.pipeline_state,
         "pipeline_errors": s.pipeline_errors,
-        "artifacts": {
-            "catalog": True,
-            "design": s.has_artifact("design.json"),
-            "circuit": s.has_artifact("circuit.json"),
-            "placement": s.has_artifact("placement.json"),
-            "routing": s.has_artifact("routing.json"),
-            "bitmap": s.pipeline_state.get("bitmap") == "complete",
-            "scad": s.has_artifact("enclosure.scad"),
-            "compile": (s.path / "enclosure.stl").exists(),
-            "gcode": s.has_artifact("enclosure.gcode"),
-            "firmware": s.has_artifact("firmware.ino"),
-        },
+        "artifacts": s.artifacts,
     }
 
 
@@ -59,10 +48,17 @@ async def set_printer(sid: str, printer_id: str = Query(...)):
     pdef = get_printer(printer_id)
     old_id = s.printer_id
     s.printer_id = pdef.id
+    invalidated: list[str] = []
     if old_id != pdef.id:
-        invalidate_downstream(s, "placement")
+        invalidated = invalidate_downstream(s, "placement")
     s.save()
-    return {"printer_id": pdef.id, "label": pdef.label}
+    return {
+        "printer_id": pdef.id,
+        "label": pdef.label,
+        "invalidated_steps": invalidated,
+        "artifacts": s.artifacts,
+        "pipeline_errors": s.pipeline_errors,
+    }
 
 
 @router.get("/sessions/{sid}/catalog")

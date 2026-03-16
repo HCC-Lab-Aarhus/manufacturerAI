@@ -89,10 +89,13 @@ async def put_design(sid: str, request: Request):
 
     s.write_artifact("design.json", body)
     s.pipeline_state["design"] = "complete"
-    invalidate_downstream(s, "design")
+    invalidated = invalidate_downstream(s, "design")
     s.save()
 
     enrich_design(body, cat)
+    body["invalidated_steps"] = invalidated
+    body["artifacts"] = s.artifacts
+    body["pipeline_errors"] = s.pipeline_errors
     return body
 
 

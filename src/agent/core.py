@@ -55,6 +55,7 @@ class _BaseAgent:
         self.client = anthropic.AsyncAnthropic(api_key=api_key)
         self.catalog = catalog
         self.session = session
+        self._last_invalidated: list[str] = []
 
         saved = session.read_artifact(self.conversation_file)
         self.messages: list[dict] = sanitize_messages(saved) if isinstance(saved, list) else []
@@ -182,6 +183,12 @@ class _BaseAgent:
 
             if terminal_event:
                 self._save_conversation()
+                if self._last_invalidated:
+                    yield AgentEvent("invalidated", {
+                        "invalidated_steps": self._last_invalidated,
+                        "artifacts": self.session.artifacts,
+                        "pipeline_errors": self.session.pipeline_errors,
+                    })
                 yield terminal_event
                 yield AgentEvent("done", {})
                 return
@@ -269,7 +276,7 @@ class DesignAgent(_BaseAgent):
 
         self.session.write_artifact("design.json", input_data)
         self.session.pipeline_state["design"] = "complete"
-        self.session.invalidate_downstream("design")
+        self._last_invalidated = self.session.invalidate_downstream("design")
         self.session.save()
 
         return "Design validated successfully! Saved to session.", True
@@ -337,7 +344,7 @@ class CircuitAgent(_BaseAgent):
 
         self.session.write_artifact("circuit.json", input_data)
         self.session.pipeline_state["circuit"] = "complete"
-        self.session.invalidate_downstream("circuit")
+        self._last_invalidated = self.session.invalidate_downstream("circuit")
         self.session.save()
 
         return "Circuit validated successfully! Saved to session.", True

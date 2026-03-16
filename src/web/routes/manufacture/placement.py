@@ -52,9 +52,11 @@ async def run_placement(sid: str):
 
     s.write_artifact("placement.json", placement_to_dict(result))
     s.pipeline_state["placement"] = "complete"
-    invalidate_downstream(s, "placement")
+    invalidated = invalidate_downstream(s, "placement")
     s.save()
-    return build_placement_response(s, cat)
+    response = build_placement_response(s, cat)
+    response["invalidated_steps"] = invalidated
+    return response
 
 
 @router.get("/sessions/{sid}/manufacture/placement")

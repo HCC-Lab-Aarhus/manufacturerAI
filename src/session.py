@@ -96,6 +96,21 @@ class Session:
             return True
         return False
 
+    @property
+    def artifacts(self) -> dict[str, bool]:
+        return {
+            "catalog": True,
+            "design": self.has_artifact("design.json"),
+            "circuit": self.has_artifact("circuit.json"),
+            "placement": self.has_artifact("placement.json"),
+            "routing": self.has_artifact("routing.json"),
+            "bitmap": self.pipeline_state.get("bitmap") == "complete",
+            "scad": self.has_artifact("enclosure.scad"),
+            "compile": (self.path / "enclosure.stl").exists(),
+            "gcode": self.has_artifact("enclosure.gcode"),
+            "firmware": self.has_artifact("firmware.ino"),
+        }
+
     _PIPELINE_ORDER: ClassVar[list[str]] = ["design", "circuit", "placement", "routing", "scad", "gcode", "firmware"]
     _STAGE_ARTIFACTS: ClassVar[dict[str, list[str]]] = {
         "design": ["design.json", "design_conversation.json"],

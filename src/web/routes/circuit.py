@@ -38,17 +38,25 @@ async def run_circuit(sid: str, request: Request):
             f"{feedback}\n\n"
             "Please fix the issue and resubmit the circuit."
         )
-        invalidate_downstream(sess, "circuit")
+        invalidated = invalidate_downstream(sess, "circuit")
     elif outline:
         prompt = outline
-        invalidate_downstream(sess, "design")
+        invalidated = invalidate_downstream(sess, "design")
     else:
         prompt = build_circuit_user_prompt(design_data)
-        invalidate_downstream(sess, "design")
+        invalidated = invalidate_downstream(sess, "design")
     sess.save()
 
     async def event_stream():
         try:
+            if invalidated:
+                inv_data = json.dumps({
+                    "invalidated_steps": invalidated,
+                    "artifacts": sess.artifacts,
+                    "pipeline_errors": sess.pipeline_errors,
+                })
+                yield f"event: invalidated\ndata: {inv_data}\n\n"
+
             agent = CircuitAgent(cat, sess)
             async for event in agent.run(prompt):
                 if event.type == "circuit" and event.data:
