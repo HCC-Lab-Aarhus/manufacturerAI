@@ -19,7 +19,7 @@ import math
 import logging
 from dataclasses import dataclass
 
-from src.catalog.models import Component, SwitchActuator
+from src.catalog.models import Body, Component, SwitchActuator
 from src.pipeline.config import CAVITY_START_MM, CEILING_MM
 from src.pipeline.design.models import Outline, Enclosure
 from src.pipeline.design.height_field import blended_height, sample_height_grid, surface_normal_at
@@ -79,6 +79,38 @@ def _offset_polygon(pts: list[list[float]], offset: float) -> list[list[float]]:
     return [[x, y] for x, y in list(buffered.exterior.coords)[:-1]]
 
 
+def _body_polygon(body: Body) -> list[list[float]]:
+    """Return the 2-D footprint of a component body as a point list."""
+    if body.shape == "circle" and body.diameter_mm is not None:
+        return _circle_polygon(body.diameter_mm / 2)
+    w = body.width_mm or 0
+    l = body.length_mm or 0
+    hw, hl = w / 2, l / 2
+    return [[-hw, -hl], [hw, -hl], [hw, hl], [-hw, hl]]
+
+
+def _clamp_to_body(stem_pts: list[list[float]], body: Body) -> list[list[float]]:
+    """Intersect *stem_pts* with the component body footprint.
+
+    If the stem already fits inside the body, it is returned unchanged.
+    Otherwise the intersection is returned so the stem never exceeds
+    the body opening.
+    """
+    from shapely.geometry import Polygon as SPoly
+    stem_poly = SPoly(stem_pts)
+    body_poly = SPoly(_body_polygon(body))
+    if body_poly.contains(stem_poly):
+        return stem_pts
+    clipped = stem_poly.intersection(body_poly)
+    if clipped.is_empty:
+        return _offset_polygon(_body_polygon(body), -BUTTON_CLEARANCE_MM)
+    if clipped.geom_type == "MultiPolygon":
+        clipped = max(clipped.geoms, key=lambda g: g.area)
+    if hasattr(clipped, "exterior"):
+        return [[x, y] for x, y in list(clipped.exterior.coords)[:-1]]
+    return _offset_polygon(_body_polygon(body), -BUTTON_CLEARANCE_MM)
+
+
 def build_button_configs(
     components: list[PlacedComponent],
     catalog_index: dict[str, Component],
@@ -108,8 +140,8 @@ def build_button_configs(
             # Default: circle from cap diameter
             cap_outline = _circle_polygon(cap.diameter_mm / 2)
 
-        # Shrink cap outline by lip_width to get the stem outline
-        stem_outline = _offset_polygon(cap_outline, -LIP_WIDTH_MM)
+        # Stem must fit through the switch body opening
+        stem_outline = _offset_polygon(_body_polygon(cat.body), -BUTTON_CLEARANCE_MM)
 
         # Surface height & gradient at button position
         surface_z = blended_height(comp.x_mm, comp.y_mm, outline, enclosure)
