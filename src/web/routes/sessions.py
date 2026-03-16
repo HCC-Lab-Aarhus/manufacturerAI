@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import shutil
+
 from fastapi import APIRouter, Query
+from pydantic import BaseModel
 
 from src.catalog import catalog_to_dict
 from src.session import create_session
@@ -59,6 +62,25 @@ async def set_printer(sid: str, printer_id: str = Query(...)):
         "artifacts": s.artifacts,
         "pipeline_errors": s.pipeline_errors,
     }
+
+
+class RenameBody(BaseModel):
+    name: str
+
+
+@router.patch("/sessions/{sid}")
+async def rename_session(sid: str, body: RenameBody):
+    s = load_session_or_404(sid)
+    s.name = body.name
+    s.save()
+    return {"id": s.id, "name": s.name}
+
+
+@router.delete("/sessions/{sid}")
+async def delete_session(sid: str):
+    s = load_session_or_404(sid)
+    shutil.rmtree(s.path, ignore_errors=True)
+    return {"deleted": True}
 
 
 @router.get("/sessions/{sid}/catalog")
