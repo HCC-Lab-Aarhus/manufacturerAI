@@ -62,7 +62,7 @@ class TraceRules:
     All distances are in millimetres.
     """
 
-    trace_width_mm: float = 0.5
+    trace_width_mm: float = 1.0
     """Width of a single conductive-ink trace."""
 
     trace_clearance_mm: float = 1.0
