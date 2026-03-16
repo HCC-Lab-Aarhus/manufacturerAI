@@ -841,11 +841,15 @@ def _try_jumper_route(
         crossing_cost=config.crossing_cost,
     )
     if not ok or not paths_cross:
-        return False
+        return _commit_full_span_jumper(
+            net_id, pads, grid, routed_paths, routed_pads, jumpers_out,
+        )
 
     cross_path = paths_cross[0]
     if len(cross_path) < 3:
-        return False
+        return _commit_full_span_jumper(
+            net_id, pads, grid, routed_paths, routed_pads, jumpers_out,
+        )
 
     crossing_segments = _find_crossing_segments(cross_path, grid)
     if not crossing_segments:
@@ -887,7 +891,37 @@ def _try_jumper_route(
             log.info("  %-20s OK — jumper wire (%.1f mm)", net_id, length_mm)
             return True
 
-    return False
+    return _commit_full_span_jumper(
+        net_id, pads, grid, routed_paths, routed_pads, jumpers_out,
+    )
+
+
+def _commit_full_span_jumper(
+    net_id: str,
+    pads: list[NetPad],
+    grid: RoutingGrid,
+    routed_paths: dict[str, list[list[tuple[int, int]]]],
+    routed_pads: dict[str, list[NetPad]],
+    jumpers_out: list[dict],
+) -> bool:
+    """Absolute last resort: bridge the entire 2-pin net with a jumper wire.
+
+    No traces are committed to the grid — the connection is entirely
+    a physical wire soldered on top of the board.
+    """
+    src_wx, src_wy = grid.grid_to_world(pads[0].gx, pads[0].gy)
+    snk_wx, snk_wy = grid.grid_to_world(pads[1].gx, pads[1].gy)
+    length_mm = math.hypot(snk_wx - src_wx, snk_wy - src_wy)
+    jumpers_out.append({
+        "net_id": net_id,
+        "start": (src_wx, src_wy),
+        "end": (snk_wx, snk_wy),
+        "length_mm": length_mm,
+    })
+    routed_paths[net_id] = []
+    routed_pads[net_id] = pads
+    log.info("  %-20s OK — full-span jumper (%.1f mm)", net_id, length_mm)
+    return True
 
 
 def _find_crossing_segments(
@@ -971,6 +1005,23 @@ def _route_jumper_subsegments(
 
 
 # ── Multi-pin jumper fallback ──────────────────────────────────────
+
+
+def _make_edge_jumper(
+    net_id: str,
+    pad_a: NetPad,
+    pad_b: NetPad,
+    grid: RoutingGrid,
+) -> dict:
+    """Build a full-span jumper dict for a single MST edge."""
+    wa_x, wa_y = grid.grid_to_world(pad_a.gx, pad_a.gy)
+    wb_x, wb_y = grid.grid_to_world(pad_b.gx, pad_b.gy)
+    return {
+        "net_id": net_id,
+        "start": (wa_x, wa_y),
+        "end": (wb_x, wb_y),
+        "length_mm": math.hypot(wb_x - wa_x, wb_y - wa_y),
+    }
 
 
 def _try_jumper_route_multi(
@@ -1073,9 +1124,11 @@ def _try_jumper_route_multi(
         _unblock_voronoi(grid, blocked_v2)
 
         if cross_path is None or len(cross_path) < 3:
-            for p in all_paths:
-                grid.free_trace(p, net_id=net_id)
-            return False
+            edge_jumpers.append(_make_edge_jumper(
+                net_id, pads[pa], pads[pb], grid,
+            ))
+            _merge(pa, pb, [])
+            continue
 
         # 3. Identify crossing segments
         crossing_segments = _find_crossing_segments(cross_path, grid)
@@ -1130,9 +1183,10 @@ def _try_jumper_route_multi(
                 break
 
         if not jumper_placed:
-            for p in all_paths:
-                grid.free_trace(p, net_id=net_id)
-            return False
+            edge_jumpers.append(_make_edge_jumper(
+                net_id, pads[pa], pads[pb], grid,
+            ))
+            _merge(pa, pb, [])
 
     routed_paths[net_id] = all_paths
     routed_pads[net_id] = pads
@@ -1203,19 +1257,22 @@ def _route_jumper_subsegments_multi(
 # ── Candidate scoring ──────────────────────────────────────────────
 
 
-def _candidate_score(result: dict) -> tuple[int, int, int]:
+def _candidate_score(result: dict) -> tuple[int, int, float, int]:
     """Lexicographic score for comparing routing candidates.
 
-    Lower is better: (failed_nets, jumper_count, total_path_length).
+    Lower is better:
+      (failed_nets, jumper_count, total_jumper_length_mm, total_path_length).
     """
     failed = len(result["failed_nets"])
-    jumpers = len(result.get("jumpers", []))
+    jumper_list = result.get("jumpers", [])
+    jumper_count = len(jumper_list)
+    jumper_length = sum(j.get("length_mm", 0.0) for j in jumper_list)
     total_len = sum(
         len(p)
         for paths in result["routed_paths"].values()
         for p in paths
     )
-    return (failed, jumpers, total_len)
+    return (failed, jumper_count, jumper_length, total_len)
 
 
 # ── Component blocking ─────────────────────────────────────────────
