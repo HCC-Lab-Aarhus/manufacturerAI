@@ -29,7 +29,7 @@ from .outline import tessellate_outline
 from .layers import shell_body_lines
 from .emit import generate_scad
 from .compiler import compile_scad
-from .traces import build_trace_fragments
+from .traces import build_trace_fragments, build_jumper_fragments
 from .resolver import resolve_component, ResolverContext
 from .fragment import ScadFragment
 
@@ -154,8 +154,14 @@ def run_scad_step(
     # ── 6. Trace channel fragments ────────────────────────────────
     trace_frags = build_trace_fragments(routing, ceil_start)
     all_fragments.extend(trace_frags)
-    log.info("Fragments: %d component + %d trace = %d total",
-             len(all_fragments) - len(trace_frags), len(trace_frags), len(all_fragments))
+
+    # ── 6b. Jumper wire pinhole fragments ─────────────────────────
+    jumper_frags = build_jumper_fragments(routing, ceil_start)
+    all_fragments.extend(jumper_frags)
+
+    log.info("Fragments: %d component + %d trace + %d jumper = %d total",
+             len(all_fragments) - len(trace_frags) - len(jumper_frags),
+             len(trace_frags), len(jumper_frags), len(all_fragments))
 
     # ── 7. Compute metadata for header comment ────────────────────
     height_grid = sample_height_grid(outline, enclosure, resolution_mm=2.0)

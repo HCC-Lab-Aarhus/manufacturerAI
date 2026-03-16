@@ -262,6 +262,7 @@ def build_routing_response(session: Session, cat) -> dict:
         "traces": routing.get("traces", []),
         "pin_assignments": routing.get("pin_assignments", {}),
         "failed_nets": routing.get("failed_nets", []),
+        "jumpers": routing.get("jumpers", []),
         "trace_width_mm": TRACE_RULES.trace_width_mm,
     }
     enrich_components(response["components"], cat)

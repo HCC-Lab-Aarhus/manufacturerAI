@@ -19,12 +19,27 @@ class Trace:
 
 
 @dataclass
+class JumperWire:
+    """A physical jumper wire bridging a planarity conflict.
+
+    The wire arches over existing traces through the air.  Each endpoint
+    is a solder point that occupies real grid space (pad + clearance).
+    """
+
+    net_id: str
+    start: tuple[float, float]          # world mm (solder point 1)
+    end: tuple[float, float]            # world mm (solder point 2)
+    length_mm: float                    # Euclidean distance between endpoints
+
+
+@dataclass
 class RoutingResult:
     """Complete routing result, ready for the SCAD generator."""
 
     traces: list[Trace]
     pin_assignments: dict[str, str]     # "mcu_1:gpio" -> "mcu_1:PD2"
     failed_nets: list[str]
+    jumpers: list[JumperWire] = field(default_factory=list)
     debug_grids: list[dict] = field(default_factory=list)
 
     @property

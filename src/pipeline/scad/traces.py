@@ -12,9 +12,10 @@ import math
 from src.pipeline.config import FLOOR_MM, TRACE_HEIGHT_MM
 from src.pipeline.router.models import RoutingResult
 
-from .fragment import ScadFragment, SegmentGeometry
+from .fragment import ScadFragment, SegmentGeometry, RectGeometry
 
 TRACE_WIDTH: float = 1.2
+JUMPER_PAD_SIZE: float = 1.0
 
 
 def build_trace_fragments(
@@ -54,6 +55,31 @@ def build_trace_fragments(
                 z_base=FLOOR_MM,
                 depth=channel_depth,
                 label=f"trace {trace.net_id}",
+            ))
+
+    return frags
+
+
+def build_jumper_fragments(
+    routing: RoutingResult,
+    ceil_start: float,
+) -> list[ScadFragment]:
+    """Build pinhole cutouts at each jumper wire endpoint.
+
+    Each endpoint gets a square shaft from FLOOR_MM up to ceil_start,
+    matching the pin shaft depth of regular components.
+    """
+    shaft_h = ceil_start - FLOOR_MM
+    frags: list[ScadFragment] = []
+
+    for j in routing.jumpers:
+        for label, (px, py) in [("start", j.start), ("end", j.end)]:
+            frags.append(ScadFragment(
+                type="cutout",
+                geometry=RectGeometry(px, py, JUMPER_PAD_SIZE, JUMPER_PAD_SIZE),
+                z_base=FLOOR_MM,
+                depth=shaft_h,
+                label=f"jumper {j.net_id} {label}",
             ))
 
     return frags

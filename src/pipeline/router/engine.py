@@ -27,7 +27,7 @@ from src.pipeline.placer.geometry import footprint_halfdims
 from .debug import build_debug_grids
 from .grid import RoutingGrid, FREE, BLOCKED, PERMANENTLY_BLOCKED, TRACE_PATH
 from .models import (
-    Trace, RoutingResult, RouterConfig,
+    Trace, JumperWire, RoutingResult, RouterConfig,
     TURN_PENALTY,
 )
 from .pathfinder import find_path, find_path_to_tree
@@ -252,6 +252,7 @@ def route_traces(
                     deferred.append(nid)
 
             # Reroute deferred nets on the partially-filled grid
+            neg_jumpers: list[dict] = []
             for nid in deferred:
                 pads = neg_pads.get(nid)
                 if pads is None or len(pads) < 2:
@@ -271,15 +272,21 @@ def route_traces(
                         committed_paths, committed_pads, pin_voronoi,
                     )
                     if not ok2:
-                        pass  # stays unrouted
+                        ok3 = _try_jumper_route(
+                            nid, pads, grid, pad_radius, config,
+                            committed_paths, committed_pads, pin_voronoi,
+                            neg_jumpers,
+                        )
+                        if not ok3:
+                            pass  # stays unrouted
 
             cur_failed = [nid for nid in neg_nids
                           if nid not in committed_paths]
             all_failed = neg_unroutable + cur_failed
             log.info("Negotiation commit order %d: %d/%d routed, "
-                     "%d deferred, %d failed",
+                     "%d deferred, %d failed, %d jumpers",
                      oi + 1, len(committed_paths), len(neg_nids),
-                     len(deferred), len(cur_failed))
+                     len(deferred), len(cur_failed), len(neg_jumpers))
 
             cur_result = {
                 "routed_paths": committed_paths,
@@ -287,15 +294,16 @@ def route_traces(
                 "pin_assignments": neg_pins,
                 "failed_nets": all_failed,
                 "failed_pads": {},
+                "jumpers": list(neg_jumpers),
             }
 
-            if not all_failed:
+            if not all_failed and not neg_jumpers:
                 best = cur_result
                 log.info("Negotiation commit order %d: all nets routed!",
                          oi + 1)
                 break
 
-            if best is None or len(cur_failed) < len(best["failed_nets"]):
+            if best is None or _candidate_score(cur_result) < _candidate_score(best):
                 best = cur_result
 
             # Clear grid for next ordering attempt
@@ -314,7 +322,8 @@ def route_traces(
     last_attempt: dict | None = None
     ordering = list(baseline_order)
     prev_failed: list[str] = []
-    neg_perfect = (best is not None and not best["failed_nets"])
+    neg_perfect = (best is not None and not best["failed_nets"]
+                   and not best.get("jumpers"))
     _retry_attempts = 0 if neg_perfect else (1 + config.max_retries)
 
     for attempt in range(_retry_attempts):
@@ -333,6 +342,7 @@ def route_traces(
         pin_assignments: dict[str, str] = {}
         failed_nets: list[str] = []
         failed_pads_map: dict[str, list[NetPad]] = {}
+        attempt_jumpers: list[dict] = []
 
         for nid in ordering:
             refs = net_pad_map[nid]
@@ -364,9 +374,15 @@ def route_traces(
                 if ok2:
                     log.info("  %-20s OK — rip-up resolved", nid)
                 else:
-                    failed_nets.append(nid)
-                    failed_pads_map[nid] = pads
-                    log.info("  %-20s FAIL — no route", nid)
+                    ok3 = _try_jumper_route(
+                        nid, pads, grid, pad_radius, config,
+                        routed_paths, routed_pads, pin_voronoi,
+                        attempt_jumpers,
+                    )
+                    if not ok3:
+                        failed_nets.append(nid)
+                        failed_pads_map[nid] = pads
+                        log.info("  %-20s FAIL — no route", nid)
 
         last_attempt = {
             "routed_paths": routed_paths,
@@ -374,21 +390,22 @@ def route_traces(
             "pin_assignments": pin_assignments,
             "failed_nets": failed_nets,
             "failed_pads": failed_pads_map,
+            "jumpers": list(attempt_jumpers),
         }
 
-        if not failed_nets:
+        if not failed_nets and not attempt_jumpers:
             log.info("Router: all nets routed on attempt %d", attempt + 1)
             best = last_attempt
             break
 
-        if best is None or len(failed_nets) < len(best["failed_nets"]):
+        if best is None or _candidate_score(last_attempt) < _candidate_score(best):
             best = last_attempt
-            log.debug("Attempt %d: new best (%d failed)",
-                      attempt + 1, len(failed_nets))
+            log.debug("Attempt %d: new best (%d failed, %d jumpers)",
+                      attempt + 1, len(failed_nets), len(attempt_jumpers))
 
-        log.info("Router attempt %d: %d/%d failed [%s]",
+        log.info("Router attempt %d: %d/%d failed, %d jumpers [%s]",
                  attempt + 1, len(failed_nets), len(ordering),
-                 ", ".join(failed_nets))
+                 len(attempt_jumpers), ", ".join(failed_nets))
 
         for nid, net_paths in routed_paths.items():
             for path in net_paths:
@@ -408,6 +425,7 @@ def route_traces(
     routed_pads = best["routed_pads"]
     pin_assignments = best["pin_assignments"]
     failed_nets = best["failed_nets"]
+    best_jumpers = best.get("jumpers", [])
 
     # 5b. Capture debug snapshots (self-contained, does not use the live grid)
     debug_grids = build_debug_grids(
@@ -417,9 +435,22 @@ def route_traces(
     # 6. Convert grid paths to world-coordinate traces
     traces = _grid_paths_to_traces(routed_paths, grid)
 
+    jumper_wires = [
+        JumperWire(
+            net_id=j["net_id"],
+            start=j["start"],
+            end=j["end"],
+            length_mm=j["length_mm"],
+        )
+        for j in best_jumpers
+    ]
+
     if failed_nets:
         log.warning("Router: %d/%d nets failed: %s",
                     len(failed_nets), len(net_ids), failed_nets)
+    elif jumper_wires:
+        log.info("Router: all %d nets routed (%d jumper wires)",
+                 len(net_ids), len(jumper_wires))
     else:
         log.info("Router: all %d nets routed", len(net_ids))
 
@@ -427,6 +458,7 @@ def route_traces(
         traces=traces,
         pin_assignments=pin_assignments,
         failed_nets=failed_nets,
+        jumpers=jumper_wires,
         debug_grids=debug_grids,
     )
 
@@ -767,6 +799,187 @@ def _try_crossing_ripup(
                 grid.block_trace(path, net_id=rn)
 
     return False
+
+
+# ── Jumper wire fallback ───────────────────────────────────────────
+
+
+def _try_jumper_route(
+    net_id: str,
+    pads: list[NetPad],
+    grid: RoutingGrid,
+    pad_radius: int,
+    config: RouterConfig,
+    routed_paths: dict[str, list[list[tuple[int, int]]]],
+    routed_pads: dict[str, list[NetPad]],
+    pin_voronoi: dict[int, str] | None,
+    jumpers_out: list[dict],
+) -> bool:
+    """Last-resort fallback: insert a jumper wire to bridge a planarity conflict.
+
+    1. Route with crossing_cost to find the cheapest crossing path.
+    2. Identify contiguous segments of blocked/trace cells on that path
+       (these are the planarity conflicts).
+    3. For the shortest conflict segment, place a jumper wire that
+       bridges the gap — the two endpoints become virtual pins.
+    4. Route the sub-segments (pad→jumper_start, jumper_end→pad)
+       on the real grid.
+    5. Record the jumper in jumpers_out for the caller.
+    """
+    if len(pads) != 2:
+        return False
+
+    paths_cross, ok, _ = _route_single_net(
+        net_id, pads, grid, pad_radius, config.turn_penalty,
+        pin_voronoi=pin_voronoi,
+        crossing_cost=config.crossing_cost,
+    )
+    if not ok or not paths_cross:
+        return False
+
+    cross_path = paths_cross[0]
+    if len(cross_path) < 3:
+        return False
+
+    crossing_segments = _find_crossing_segments(cross_path, grid)
+    if not crossing_segments:
+        for path in paths_cross:
+            grid.block_trace(path, net_id=net_id)
+        routed_paths[net_id] = paths_cross
+        routed_pads[net_id] = pads
+        return True
+
+    crossing_segments.sort(key=lambda seg: seg[1] - seg[0])
+
+    for seg_start, seg_end in crossing_segments:
+        jstart_idx = max(0, seg_start)
+        jend_idx = min(len(cross_path) - 1, seg_end)
+
+        jstart_cell = cross_path[jstart_idx]
+        jend_cell = cross_path[jend_idx]
+
+        if jstart_cell == jend_cell:
+            continue
+
+        jstart_wx, jstart_wy = grid.grid_to_world(*jstart_cell)
+        jend_wx, jend_wy = grid.grid_to_world(*jend_cell)
+
+        sub_ok = _route_jumper_subsegments(
+            net_id, pads, jstart_cell, jend_cell,
+            grid, pad_radius, config.turn_penalty,
+            pin_voronoi, routed_paths, routed_pads,
+        )
+
+        if sub_ok:
+            length_mm = math.hypot(jend_wx - jstart_wx, jend_wy - jstart_wy)
+            jumpers_out.append({
+                "net_id": net_id,
+                "start": (jstart_wx, jstart_wy),
+                "end": (jend_wx, jend_wy),
+                "length_mm": length_mm,
+            })
+            log.info("  %-20s OK — jumper wire (%.1f mm)", net_id, length_mm)
+            return True
+
+    return False
+
+
+def _find_crossing_segments(
+    path: list[tuple[int, int]],
+    grid: RoutingGrid,
+) -> list[tuple[int, int]]:
+    """Identify contiguous runs of non-free cells in a crossing path.
+
+    Returns a list of (last_free_before, first_free_after) index pairs.
+    """
+    segments: list[tuple[int, int]] = []
+    in_crossing = False
+    seg_start = 0
+
+    for i, (gx, gy) in enumerate(path):
+        cell_blocked = not grid.is_free(gx, gy) and not grid.is_protected(gx, gy)
+        if cell_blocked and not in_crossing:
+            seg_start = max(0, i - 1)
+            in_crossing = True
+        elif not cell_blocked and in_crossing:
+            segments.append((seg_start, i))
+            in_crossing = False
+
+    if in_crossing:
+        segments.append((seg_start, len(path) - 1))
+
+    return segments
+
+
+def _route_jumper_subsegments(
+    net_id: str,
+    pads: list[NetPad],
+    jstart: tuple[int, int],
+    jend: tuple[int, int],
+    grid: RoutingGrid,
+    pad_radius: int,
+    turn_penalty: int,
+    pin_voronoi: dict[int, str] | None,
+    routed_paths: dict[str, list[list[tuple[int, int]]]],
+    routed_pads: dict[str, list[NetPad]],
+) -> bool:
+    """Route the two sub-segments around a jumper and commit them."""
+    src = (pads[0].gx, pads[0].gy)
+    snk = (pads[1].gx, pads[1].gy)
+
+    grid.force_free_cell(jstart[0], jstart[1])
+    grid.protect_cell(jstart[0], jstart[1])
+    grid.force_free_cell(jend[0], jend[1])
+    grid.protect_cell(jend[0], jend[1])
+
+    blocked_v: list[tuple[int, int]] = []
+    if pin_voronoi is not None:
+        blocked_v = _block_voronoi(grid, pin_voronoi, pads)
+
+    path_a = find_path(grid, src, jstart, turn_penalty=turn_penalty)
+    path_b = find_path(grid, snk, jend, turn_penalty=turn_penalty)
+
+    _unblock_voronoi(grid, blocked_v)
+
+    if path_a is None or path_b is None:
+        blocked_v2: list[tuple[int, int]] = []
+        if pin_voronoi is not None:
+            blocked_v2 = _block_voronoi(grid, pin_voronoi, pads)
+
+        path_a2 = find_path(grid, src, jend, turn_penalty=turn_penalty)
+        path_b2 = find_path(grid, snk, jstart, turn_penalty=turn_penalty)
+
+        _unblock_voronoi(grid, blocked_v2)
+
+        if path_a2 is not None and path_b2 is not None:
+            path_a, path_b = path_a2, path_b2
+        else:
+            return False
+
+    all_paths = [path_a, path_b]
+    for path in all_paths:
+        grid.block_trace(path, net_id=net_id)
+    routed_paths[net_id] = all_paths
+    routed_pads[net_id] = pads
+    return True
+
+
+# ── Candidate scoring ──────────────────────────────────────────────
+
+
+def _candidate_score(result: dict) -> tuple[int, int, int]:
+    """Lexicographic score for comparing routing candidates.
+
+    Lower is better: (failed_nets, jumper_count, total_path_length).
+    """
+    failed = len(result["failed_nets"])
+    jumpers = len(result.get("jumpers", []))
+    total_len = sum(
+        len(p)
+        for paths in result["routed_paths"].values()
+        for p in paths
+    )
+    return (failed, jumpers, total_len)
 
 
 # ── Component blocking ─────────────────────────────────────────────

@@ -10,14 +10,14 @@ Submodules:
   bitmap        Trace bitmap generation (sweep-grid-aligned txt file).
 """
 
-from .models import Trace, RoutingResult, RouterConfig
+from .models import Trace, JumperWire, RoutingResult, RouterConfig
 from .engine import route_traces
 from .serialization import routing_to_dict, parse_routing
 from .bitmap import generate_trace_bitmap, write_trace_bitmap
 
 __all__ = [
     # Models
-    "Trace", "RoutingResult", "RouterConfig",
+    "Trace", "JumperWire", "RoutingResult", "RouterConfig",
     # Engine
     "route_traces",
     # Serialization
