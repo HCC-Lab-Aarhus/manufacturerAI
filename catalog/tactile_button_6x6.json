@@ -7,7 +7,7 @@
         "shape": "rect",
         "width_mm": 6.0,
         "length_mm": 6.0,
-        "height_mm": 3.5
+        "height_mm": 3.0
     },
     "mounting": {
         "style": "top",
@@ -27,8 +27,8 @@
             "id": "1",
             "label": "A1",
             "position_mm": [
-                -3.25,
-                -2.5
+                -3.5,
+                -2.205
             ],
             "direction": "bidirectional",
             "voltage_v": null,
@@ -40,8 +40,8 @@
             "id": "2",
             "label": "A2",
             "position_mm": [
-                3.25,
-                -2.5
+                3.5,
+                -2.205
             ],
             "direction": "bidirectional",
             "voltage_v": null,
@@ -53,8 +53,8 @@
             "id": "3",
             "label": "B1",
             "position_mm": [
-                -3.25,
-                2.5
+                -3.5,
+                2.205
             ],
             "direction": "bidirectional",
             "voltage_v": null,
@@ -66,8 +66,8 @@
             "id": "4",
             "label": "B2",
             "position_mm": [
-                3.25,
-                2.5
+                3.5,
+                2.205
             ],
             "direction": "bidirectional",
             "voltage_v": null,

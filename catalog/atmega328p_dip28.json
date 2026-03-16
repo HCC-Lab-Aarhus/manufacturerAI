@@ -5,9 +5,9 @@
     "ui_placement": false,
     "body": {
         "shape": "rect",
-        "width_mm": 10.0,
-        "length_mm": 36.0,
-        "height_mm": 4.5
+        "width_mm": 8.7,
+        "length_mm": 35.3,
+        "height_mm": 3.3
     },
     "mounting": {
         "style": "internal",
@@ -23,7 +23,7 @@
             "label": "PC6/RESET",
             "position_mm": [
                 -3.81,
-                -16.51
+                -16.25
             ],
             "direction": "in",
             "voltage_v": 5.0,
@@ -36,7 +36,7 @@
             "label": "PD0/RXD",
             "position_mm": [
                 -3.81,
-                -13.97
+                -13.75
             ],
             "direction": "bidirectional",
             "voltage_v": 5.0,
@@ -49,7 +49,7 @@
             "label": "PD1/TXD",
             "position_mm": [
                 -3.81,
-                -11.43
+                -11.25
             ],
             "direction": "bidirectional",
             "voltage_v": 5.0,
@@ -62,7 +62,7 @@
             "label": "PD2/INT0",
             "position_mm": [
                 -3.81,
-                -8.89
+                -8.75
             ],
             "direction": "bidirectional",
             "voltage_v": 5.0,
@@ -75,7 +75,7 @@
             "label": "PD3/INT1/OC2B",
             "position_mm": [
                 -3.81,
-                -6.35
+                -6.25
             ],
             "direction": "bidirectional",
             "voltage_v": 5.0,
@@ -88,7 +88,7 @@
             "label": "PD4/T0",
             "position_mm": [
                 -3.81,
-                -3.81
+                -3.75
             ],
             "direction": "bidirectional",
             "voltage_v": 5.0,
@@ -101,7 +101,7 @@
             "label": "VCC",
             "position_mm": [
                 -3.81,
-                -1.27
+                -1.25
             ],
             "direction": "in",
             "voltage_v": 5.0,
@@ -114,7 +114,7 @@
             "label": "GND",
             "position_mm": [
                 -3.81,
-                1.27
+                1.25
             ],
             "direction": "in",
             "voltage_v": 0,
@@ -127,7 +127,7 @@
             "label": "PB6/XTAL1",
             "position_mm": [
                 -3.81,
-                3.81
+                3.75
             ],
             "direction": "in",
             "voltage_v": 5.0,
@@ -140,7 +140,7 @@
             "label": "PB7/XTAL2",
             "position_mm": [
                 -3.81,
-                6.35
+                6.25
             ],
             "direction": "out",
             "voltage_v": 5.0,
@@ -153,7 +153,7 @@
             "label": "PD5/OC0B/T1",
             "position_mm": [
                 -3.81,
-                8.89
+                8.75
             ],
             "direction": "bidirectional",
             "voltage_v": 5.0,
@@ -166,7 +166,7 @@
             "label": "PD6/OC0A",
             "position_mm": [
                 -3.81,
-                11.43
+                11.25
             ],
             "direction": "bidirectional",
             "voltage_v": 5.0,
@@ -179,7 +179,7 @@
             "label": "PD7",
             "position_mm": [
                 -3.81,
-                13.97
+                13.75
             ],
             "direction": "bidirectional",
             "voltage_v": 5.0,
@@ -192,7 +192,7 @@
             "label": "PB0/ICP1",
             "position_mm": [
                 -3.81,
-                16.51
+                16.25
             ],
             "direction": "bidirectional",
             "voltage_v": 5.0,
@@ -205,7 +205,7 @@
             "label": "PB1/OC1A",
             "position_mm": [
                 3.81,
-                16.51
+                16.25
             ],
             "direction": "bidirectional",
             "voltage_v": 5.0,
@@ -218,7 +218,7 @@
             "label": "PB2/OC1B/SS",
             "position_mm": [
                 3.81,
-                13.97
+                13.75
             ],
             "direction": "bidirectional",
             "voltage_v": 5.0,
@@ -231,7 +231,7 @@
             "label": "PB3/MOSI/OC2A",
             "position_mm": [
                 3.81,
-                11.43
+                11.25
             ],
             "direction": "bidirectional",
             "voltage_v": 5.0,
@@ -244,7 +244,7 @@
             "label": "PB4/MISO",
             "position_mm": [
                 3.81,
-                8.89
+                8.75
             ],
             "direction": "bidirectional",
             "voltage_v": 5.0,
@@ -257,7 +257,7 @@
             "label": "PB5/SCK",
             "position_mm": [
                 3.81,
-                6.35
+                6.25
             ],
             "direction": "bidirectional",
             "voltage_v": 5.0,
@@ -270,7 +270,7 @@
             "label": "AVCC",
             "position_mm": [
                 3.81,
-                3.81
+                3.75
             ],
             "direction": "in",
             "voltage_v": 5.0,
@@ -283,7 +283,7 @@
             "label": "AREF",
             "position_mm": [
                 3.81,
-                1.27
+                1.25
             ],
             "direction": "in",
             "voltage_v": 5.0,
@@ -296,7 +296,7 @@
             "label": "GND",
             "position_mm": [
                 3.81,
-                -1.27
+                -1.25
             ],
             "direction": "in",
             "voltage_v": 0,
@@ -309,7 +309,7 @@
             "label": "PC0/ADC0",
             "position_mm": [
                 3.81,
-                -3.81
+                -3.75
             ],
             "direction": "bidirectional",
             "voltage_v": 5.0,
@@ -322,7 +322,7 @@
             "label": "PC1/ADC1",
             "position_mm": [
                 3.81,
-                -6.35
+                -6.25
             ],
             "direction": "bidirectional",
             "voltage_v": 5.0,
@@ -335,7 +335,7 @@
             "label": "PC2/ADC2",
             "position_mm": [
                 3.81,
-                -8.89
+                -8.75
             ],
             "direction": "bidirectional",
             "voltage_v": 5.0,
@@ -348,7 +348,7 @@
             "label": "PC3/ADC3",
             "position_mm": [
                 3.81,
-                -11.43
+                -11.25
             ],
             "direction": "bidirectional",
             "voltage_v": 5.0,
@@ -361,7 +361,7 @@
             "label": "PC4/ADC4/SDA",
             "position_mm": [
                 3.81,
-                -13.97
+                -13.75
             ],
             "direction": "bidirectional",
             "voltage_v": 5.0,
@@ -374,7 +374,7 @@
             "label": "PC5/ADC5/SCL",
             "position_mm": [
                 3.81,
-                -16.51
+                -16.25
             ],
             "direction": "bidirectional",
             "voltage_v": 5.0,

@@ -1,13 +1,13 @@
 {
     "id": "resistor_axial",
     "name": "Axial Resistor",
-    "description": "Standard through-hole axial resistor. Value is chosen by the agent at design time based on circuit needs (e.g., current limiting for LEDs: R = (Vsupply - Vled) / Iled). Body length varies with power rating but pin spacing is fixed at 10mm.",
+    "description": "Standard through-hole axial resistor. Value is chosen by the agent at design time based on circuit needs (e.g., current limiting for LEDs: R = (Vsupply - Vled) / Iled). Body length varies with power rating but pin spacing is fixed at 7.4mm.",
     "ui_placement": false,
     "body": {
         "shape": "rect",
-        "width_mm": 6.5,
-        "length_mm": 2.5,
-        "height_mm": 2.5
+        "width_mm": 8.3,
+        "length_mm": 2.3,
+        "height_mm": 2.3
     },
     "mounting": {
         "style": "internal",
@@ -22,7 +22,7 @@
             "id": "1",
             "label": "Lead 1",
             "position_mm": [
-                -5.0,
+                -3.7,
                 0
             ],
             "direction": "bidirectional",
@@ -35,7 +35,7 @@
             "id": "2",
             "label": "Lead 2",
             "position_mm": [
-                5.0,
+                3.7,
                 0
             ],
             "direction": "bidirectional",

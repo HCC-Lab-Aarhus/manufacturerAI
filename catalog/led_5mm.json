@@ -5,7 +5,7 @@
     "ui_placement": true,
     "body": {
         "shape": "circle",
-        "diameter_mm": 5.0,
+        "diameter_mm": 4.8,
         "height_mm": 8.5
     },
     "mounting": {
@@ -22,7 +22,7 @@
             "id": "anode",
             "label": "Anode (+)",
             "position_mm": [
-                1.27,
+                1.0,
                 0
             ],
             "direction": "in",
@@ -35,7 +35,7 @@
             "id": "cathode",
             "label": "Cathode (-)",
             "position_mm": [
-                -1.27,
+                -1.0,
                 0
             ],
             "direction": "in",
