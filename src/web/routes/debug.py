@@ -22,6 +22,7 @@ from fastapi import APIRouter, Query
 from src.pipeline.config import (
     get_printer, PrinterDef,
     SweepGrid, sweep_grid,
+    TRACE_RULES,
 )
 from src.pipeline.gcode.filaments import get_filament, FilamentDef
 from src.pipeline.manifest import generate_manifest
@@ -464,7 +465,6 @@ def _silverink_test_bitmap(
     pad: float,
     rect_w: float,
     rect_h: float,
-    trace_width_nozzles: int = 3,
 ) -> str:
     """Generate a bitmap with a single trace through each rectangle's centre.
 
@@ -475,6 +475,8 @@ def _silverink_test_bitmap(
     px = grid.pixel_size_mm
     cols = grid.data_cols
     rows = grid.data_rows
+
+    trace_width_nozzles = max(1, int(round(TRACE_RULES.trace_width_mm / px)))
 
     nom_d = pdef.nominal_bed_depth
 
