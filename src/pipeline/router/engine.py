@@ -826,8 +826,14 @@ def _try_jumper_route(
        on the real grid.
     5. Record the jumper in jumpers_out for the caller.
     """
-    if len(pads) != 2:
+    if len(pads) < 2:
         return False
+
+    if len(pads) > 2:
+        return _try_jumper_route_multi(
+            net_id, pads, grid, pad_radius, config,
+            routed_paths, routed_pads, pin_voronoi, jumpers_out,
+        )
 
     paths_cross, ok, _ = _route_single_net(
         net_id, pads, grid, pad_radius, config.turn_penalty,
@@ -962,6 +968,236 @@ def _route_jumper_subsegments(
     routed_paths[net_id] = all_paths
     routed_pads[net_id] = pads
     return True
+
+
+# ── Multi-pin jumper fallback ──────────────────────────────────────
+
+
+def _try_jumper_route_multi(
+    net_id: str,
+    pads: list[NetPad],
+    grid: RoutingGrid,
+    pad_radius: int,
+    config: RouterConfig,
+    routed_paths: dict[str, list[list[tuple[int, int]]]],
+    routed_pads: dict[str, list[NetPad]],
+    pin_voronoi: dict[int, str] | None,
+    jumpers_out: list[dict],
+) -> bool:
+    """Jumper fallback for multi-pin nets using MST decomposition.
+
+    Routes each MST edge normally; when an edge cannot be routed, it
+    applies the crossing-cost + jumper wire technique to bridge that
+    single edge, then continues with remaining edges.
+    """
+    mst_edges = _compute_mst(pads)
+    all_paths: list[list[tuple[int, int]]] = []
+    edge_jumpers: list[dict] = []
+
+    uf_parent = list(range(len(pads)))
+    uf_rank = [0] * len(pads)
+
+    def _find(x: int) -> int:
+        while uf_parent[x] != x:
+            uf_parent[x] = uf_parent[uf_parent[x]]
+            x = uf_parent[x]
+        return x
+
+    def _union(a: int, b: int) -> None:
+        ra, rb = _find(a), _find(b)
+        if ra == rb:
+            return
+        if uf_rank[ra] < uf_rank[rb]:
+            ra, rb = rb, ra
+        uf_parent[rb] = ra
+        if uf_rank[ra] == uf_rank[rb]:
+            uf_rank[ra] += 1
+
+    comp_trees: dict[int, set[tuple[int, int]]] = {
+        i: {(pads[i].gx, pads[i].gy)} for i in range(len(pads))
+    }
+
+    def _get_tree(idx: int) -> set[tuple[int, int]]:
+        return comp_trees[_find(idx)]
+
+    def _merge(a: int, b: int, path_cells: list[tuple[int, int]]) -> None:
+        ra, rb = _find(a), _find(b)
+        if ra == rb:
+            comp_trees[ra].update(path_cells)
+            return
+        tree_a = comp_trees.pop(ra)
+        tree_b = comp_trees.pop(rb)
+        _union(a, b)
+        new_root = _find(a)
+        combined = tree_a | tree_b | set(path_cells)
+        comp_trees[new_root] = combined
+
+    for pa, pb in mst_edges:
+        if _find(pa) == _find(pb):
+            continue
+
+        tree_a = _get_tree(pa)
+        tree_b = _get_tree(pb)
+        if len(tree_a) >= len(tree_b):
+            src_tree, target_tree = tree_b, tree_a
+        else:
+            src_tree, target_tree = tree_a, tree_b
+
+        # 1. Try normal routing
+        blocked_v: list[tuple[int, int]] = []
+        if pin_voronoi is not None:
+            blocked_v = _block_voronoi(grid, pin_voronoi, pads)
+
+        path = find_path_to_tree(
+            grid, src_tree, target_tree,
+            turn_penalty=config.turn_penalty,
+        )
+        _unblock_voronoi(grid, blocked_v)
+
+        if path is not None:
+            all_paths.append(path)
+            grid.block_trace(path, net_id=net_id)
+            _merge(pa, pb, path)
+            continue
+
+        # 2. Normal failed — try crossing-cost to locate the conflict
+        blocked_v2: list[tuple[int, int]] = []
+        if pin_voronoi is not None:
+            blocked_v2 = _block_voronoi(grid, pin_voronoi, pads)
+
+        cross_path = find_path_to_tree(
+            grid, src_tree, target_tree,
+            turn_penalty=config.turn_penalty,
+            crossing_cost=config.crossing_cost,
+        )
+        _unblock_voronoi(grid, blocked_v2)
+
+        if cross_path is None or len(cross_path) < 3:
+            for p in all_paths:
+                grid.free_trace(p, net_id=net_id)
+            return False
+
+        # 3. Identify crossing segments
+        crossing_segments = _find_crossing_segments(cross_path, grid)
+
+        if not crossing_segments:
+            all_paths.append(cross_path)
+            grid.block_trace(cross_path, net_id=net_id)
+            _merge(pa, pb, cross_path)
+            continue
+
+        # 4. Try each crossing segment as a jumper candidate
+        crossing_segments.sort(key=lambda seg: seg[1] - seg[0])
+        jumper_placed = False
+
+        for seg_start, seg_end in crossing_segments:
+            jstart_idx = max(0, seg_start)
+            jend_idx = min(len(cross_path) - 1, seg_end)
+            jstart_cell = cross_path[jstart_idx]
+            jend_cell = cross_path[jend_idx]
+
+            if jstart_cell == jend_cell:
+                continue
+
+            sub_paths = _route_jumper_subsegments_multi(
+                net_id, src_tree, target_tree,
+                jstart_cell, jend_cell,
+                grid, config.turn_penalty, pin_voronoi, pads,
+            )
+
+            if sub_paths is not None:
+                for sp in sub_paths:
+                    all_paths.append(sp)
+                    grid.block_trace(sp, net_id=net_id)
+
+                jstart_wx, jstart_wy = grid.grid_to_world(*jstart_cell)
+                jend_wx, jend_wy = grid.grid_to_world(*jend_cell)
+                length_mm = math.hypot(
+                    jend_wx - jstart_wx, jend_wy - jstart_wy,
+                )
+                edge_jumpers.append({
+                    "net_id": net_id,
+                    "start": (jstart_wx, jstart_wy),
+                    "end": (jend_wx, jend_wy),
+                    "length_mm": length_mm,
+                })
+
+                merged_cells: list[tuple[int, int]] = []
+                for sp in sub_paths:
+                    merged_cells.extend(sp)
+                _merge(pa, pb, merged_cells)
+                jumper_placed = True
+                break
+
+        if not jumper_placed:
+            for p in all_paths:
+                grid.free_trace(p, net_id=net_id)
+            return False
+
+    routed_paths[net_id] = all_paths
+    routed_pads[net_id] = pads
+    jumpers_out.extend(edge_jumpers)
+
+    desc = ", ".join(f"{j['length_mm']:.1f} mm" for j in edge_jumpers)
+    log.info(
+        "  %-20s OK — %d jumper wire%s (%s)",
+        net_id, len(edge_jumpers),
+        "s" if len(edge_jumpers) != 1 else "", desc,
+    )
+    return True
+
+
+def _route_jumper_subsegments_multi(
+    net_id: str,
+    src_tree: set[tuple[int, int]],
+    target_tree: set[tuple[int, int]],
+    jstart: tuple[int, int],
+    jend: tuple[int, int],
+    grid: RoutingGrid,
+    turn_penalty: int,
+    pin_voronoi: dict[int, str] | None,
+    pads: list[NetPad],
+) -> list[list[tuple[int, int]]] | None:
+    """Route tree→jumper_start and tree→jumper_end for multi-pin nets.
+
+    Returns the two sub-paths on success, or None on failure.
+    """
+    grid.force_free_cell(jstart[0], jstart[1])
+    grid.protect_cell(jstart[0], jstart[1])
+    grid.force_free_cell(jend[0], jend[1])
+    grid.protect_cell(jend[0], jend[1])
+
+    blocked_v: list[tuple[int, int]] = []
+    if pin_voronoi is not None:
+        blocked_v = _block_voronoi(grid, pin_voronoi, pads)
+
+    path_a = find_path_to_tree(
+        grid, src_tree, {jstart}, turn_penalty=turn_penalty,
+    )
+    path_b = find_path_to_tree(
+        grid, target_tree, {jend}, turn_penalty=turn_penalty,
+    )
+    _unblock_voronoi(grid, blocked_v)
+
+    if path_a is None or path_b is None:
+        blocked_v2: list[tuple[int, int]] = []
+        if pin_voronoi is not None:
+            blocked_v2 = _block_voronoi(grid, pin_voronoi, pads)
+
+        path_a2 = find_path_to_tree(
+            grid, src_tree, {jend}, turn_penalty=turn_penalty,
+        )
+        path_b2 = find_path_to_tree(
+            grid, target_tree, {jstart}, turn_penalty=turn_penalty,
+        )
+        _unblock_voronoi(grid, blocked_v2)
+
+        if path_a2 is not None and path_b2 is not None:
+            path_a, path_b = path_a2, path_b2
+        else:
+            return None
+
+    return [path_a, path_b]
 
 
 # ── Candidate scoring ──────────────────────────────────────────────
