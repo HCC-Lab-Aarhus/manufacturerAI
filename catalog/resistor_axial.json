@@ -28,7 +28,7 @@
             "direction": "bidirectional",
             "voltage_v": null,
             "current_max_ma": 250,
-            "hole_diameter_mm": 0.8,
+            "hole_diameter_mm": 0.6,
             "description": "Non-polarized. Either lead can be input or output."
         },
         {
@@ -41,7 +41,7 @@
             "direction": "bidirectional",
             "voltage_v": null,
             "current_max_ma": 250,
-            "hole_diameter_mm": 0.8,
+            "hole_diameter_mm": 0.6,
             "description": "Non-polarized. Either lead can be input or output."
         }
     ],
