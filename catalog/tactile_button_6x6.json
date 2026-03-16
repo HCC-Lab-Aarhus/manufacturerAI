@@ -19,7 +19,13 @@
         "cap": {
             "diameter_mm": 9.0,
             "height_mm": 4.0,
-            "hole_clearance_mm": 0.4
+            "hole_clearance_mm": 0.4,
+            "actuator": {
+                "total_height_mm": 4.7,
+                "base_height_mm": 3.49,
+                "cylinder_height_mm": 1.21,
+                "cylinder_diameter_mm": 3.40
+            }
         }
     },
     "pins": [

@@ -281,6 +281,26 @@ DESIGN_TOOLS: list[dict[str, Any]] = [
                                     "(requires edge_index). Omit to use the catalog default."
                                 ),
                             },
+                            "button_outline": {
+                                "type": "array",
+                                "description": (
+                                    "Custom button shape as a list of [x, y] points "
+                                    "(mm) relative to the button centre. When provided, "
+                                    "a matching printable button cap is generated alongside "
+                                    "the enclosure, and the ceiling hole is shaped to this "
+                                    "outline. The button's top surface follows the enclosure "
+                                    "curvature. Only applies to components with a switch "
+                                    "actuator (e.g. tactile_button_6x6). Omit for the "
+                                    "default circular button."
+                                ),
+                                "items": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                    "minItems": 2,
+                                    "maxItems": 2,
+                                    "description": "[x, y] point in mm relative to button centre",
+                                },
+                            },
                         },
                         "required": ["instance_id", "catalog_id", "x_mm", "y_mm"],
                     },

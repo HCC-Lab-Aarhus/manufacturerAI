@@ -15,10 +15,20 @@ class Body:
 
 
 @dataclass
+class SwitchActuator:
+    """Dimensions of the switch actuator the custom button snaps onto."""
+    total_height_mm: float          # total switch height from PCB surface
+    base_height_mm: float           # height of the square base portion
+    cylinder_height_mm: float       # height of the cylinder on top of the base
+    cylinder_diameter_mm: float     # outer diameter of the top cylinder
+
+
+@dataclass
 class Cap:
     diameter_mm: float
     height_mm: float
     hole_clearance_mm: float
+    actuator: SwitchActuator | None = None
 
 
 @dataclass

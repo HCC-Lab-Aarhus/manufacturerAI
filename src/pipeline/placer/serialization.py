@@ -21,6 +21,8 @@ def placement_to_dict(fp: FullPlacement) -> dict:
                     pid: list(pos) for pid, pos in c.pin_positions.items()
                 },
                 "mounting_style": c.mounting_style,
+                **({"button_outline": c.button_outline}
+                   if c.button_outline is not None else {}),
             }
             for c in fp.components
         ],
@@ -41,6 +43,7 @@ def parse_placed_components(data: dict) -> list[PlacedComponent]:
                 for pid, pos in c.get("pin_positions", {}).items()
             },
             mounting_style=c.get("mounting_style", "top"),
+            button_outline=c.get("button_outline"),
         )
         for c in data["components"]
     ]

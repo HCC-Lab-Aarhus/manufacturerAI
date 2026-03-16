@@ -38,6 +38,9 @@ def design_to_dict(spec: DesignSpec) -> dict:
                 **({
                     "conform_to_surface": p.conform_to_surface}
                    if not p.conform_to_surface else {}),  # only write if non-default
+                **({
+                    "button_outline": p.button_outline}
+                   if p.button_outline is not None else {}),
             }
             for p in spec.ui_placements
         ],
