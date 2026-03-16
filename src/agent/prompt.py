@@ -288,6 +288,7 @@ Each placement positions a UI component on the device.
 | `edge_index` | integer | side-mount only | Which outline edge (0-based: edge i runs from vertex i to vertex i+1) |
 | `mounting_style` | string | no | Override default mounting (must be in component's `allowed_styles`) |
 | `conform_to_surface` | boolean | no | Whether the component conforms to the curved top surface (default: true) |
+| `button_outline` | array | no | Custom button cap shape as `[[x,y], ...]` points (mm) relative to button centre. Only for switch-type components. Omit for default circular cap. |
 
 ### Top-Mount Placement
 ```json
@@ -312,12 +313,50 @@ Each placement positions a UI component on the device.
 ]
 ```
 
+### Custom Button Shape
+*Tactile buttons support a `button_outline` field — a polygon defining the visible button cap shape. The system generates a printable button cap that is printed next to the enclosure, with a matching ceiling hole. The button snaps onto the switch actuator and its top surface follows the enclosure curvature (dome, slope, etc.).*
+
+**When to use:** When the default circular button doesn't suit the device's design language — for instance, a rectangular rocker, a triangular play button, or an organic pebble shape.
+
+**How it works:**
+- `button_outline` is a list of `[x, y]` points in mm, relative to the button centre (0, 0)
+- The outline defines the visible cap shape. A 1mm lip extends beyond the ceiling hole to prevent the button from falling through
+- The button's internal stem (cap outline shrunk by 1mm) passes through the ceiling hole with 0.3mm clearance
+- At the bottom, a ring socket snaps onto the switch's cylindrical actuator
+- The top surface of the button tilts to match the local enclosure ceiling curvature
+- If omitted, a default circular button matching the component's cap diameter is generated
+
+```json
+"ui_placements": [
+    {{
+        "instance_id": "btn_1",
+        "catalog_id": "tactile_button_6x6",
+        "x_mm": 25, "y_mm": 40,
+        "button_outline": [[-5, -4], [5, -4], [5, 4], [-5, 4]]
+    }}
+]
+```
+*This creates a 10×8mm rectangular button centred on the switch.*
+
+**More outline examples:**
+- **Circle (default):** Omit `button_outline` entirely
+- **Rounded rectangle:** `[[-5,-3], [5,-3], [5,3], [-5,3]]` with Shapely buffering applied internally
+- **Triangle (play):** `[[0,-5], [5,4], [-5,4]]`
+- **Organic blob:** Use more points for smooth curves, e.g. 8-12 vertices
+
+**Size guidelines:**
+- The outline must be large enough to cover the switch actuator (Ø3.4mm cylinder)
+- Minimum ~8mm across for comfortable finger contact
+- Maximum ~15mm across for single-finger buttons
+- Keep at least 3mm between adjacent button outlines
+
 Placement rules:
 - Side-mount components **must** include `edge_index` and set `mounting_style` to `"side"`
 - Non-side-mount components **must not** specify `edge_index`
 - Top-mount positions must be inside the outline polygon
 - Respect body size and keepout margins from `get_component`
 - **IR transmitter LEDs** (`led_5mm` with wavelength 940nm) on remote controls **must** use `mounting_style: "side"` so the LED faces the device being controlled; pick the front edge for `edge_index`
+- Buttons with `button_outline` get a custom printable cap; without it they get a default circular cap
 
 ---
 
@@ -419,7 +458,7 @@ Before writing the final design JSON, produce a short blueprint covering:
 
 **Enclosure:** Default height, any z_top variation (thin tips, sloped sections), surface treatments (dome, ridge), edge profiles.
 
-**UI placements:** Where each component goes and why that location fits the user's hand or eye.
+**UI placements:** Where each component goes and why that location fits the user's hand or eye. For buttons, consider whether a custom shape (rectangular, triangular, organic) better suits the device's design language than the default circular cap.
 
 When you are ready, call `submit_design` with `device_description`, `outline`, `enclosure`, and `ui_placements`."""
 

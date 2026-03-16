@@ -131,6 +131,7 @@ def _parse_ui_placements(data: list) -> list[UIPlacement]:
             edge_index=p.get("edge_index"),
             conform_to_surface=bool(p.get("conform_to_surface", True)),
             mounting_style=p.get("mounting_style"),
+            button_outline=p.get("button_outline"),
         )
         for p in data
     ]

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from .models import (
-    Body, Cap, Hatch, Mounting,
+    Body, Cap, Hatch, Mounting, SwitchActuator,
     Pin, PinShape, PinGroup, ScadPattern, ScadFeature, Component,
     ValidationError, CatalogResult,
 )
@@ -98,10 +98,20 @@ def _parse_body(data: dict) -> Body:
 def _parse_cap(data: dict | None) -> Cap | None:
     if data is None:
         return None
+    actuator_raw = data.get("actuator")
+    actuator = None
+    if actuator_raw is not None:
+        actuator = SwitchActuator(
+            total_height_mm=actuator_raw["total_height_mm"],
+            base_height_mm=actuator_raw["base_height_mm"],
+            cylinder_height_mm=actuator_raw["cylinder_height_mm"],
+            cylinder_diameter_mm=actuator_raw["cylinder_diameter_mm"],
+        )
     return Cap(
         diameter_mm=data["diameter_mm"],
         height_mm=data["height_mm"],
         hole_clearance_mm=data["hole_clearance_mm"],
+        actuator=actuator,
     )
 
 

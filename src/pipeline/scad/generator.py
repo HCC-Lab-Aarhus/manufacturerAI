@@ -32,6 +32,7 @@ from .compiler import compile_scad
 from .traces import build_trace_fragments, build_jumper_fragments
 from .resolver import resolve_component, ResolverContext
 from .fragment import ScadFragment
+from .buttons import build_button_configs, generate_all_buttons_scad
 
 log = logging.getLogger(__name__)
 
@@ -142,6 +143,16 @@ def run_scad_step(
     cat_index: dict[str, Component] = {c.id: c for c in catalog.components}
     all_fragments: list[ScadFragment] = []
 
+    # Copy button outlines from UI placements to placed components
+    ui_outline_map = {
+        up.instance_id: up.button_outline
+        for up in physical.ui_placements
+        if up.button_outline is not None
+    }
+    for comp in placement.components:
+        if comp.instance_id in ui_outline_map:
+            comp.button_outline = ui_outline_map[comp.instance_id]
+
     for comp in placement.components:
         cat = cat_index.get(comp.catalog_id)
         if cat is None:
@@ -188,6 +199,20 @@ def run_scad_step(
         metadata=metadata,
         outline_pts=flat_pts,
     )
+
+    # ── 8b. Generate custom buttons (printed next to enclosure) ───
+    button_configs = build_button_configs(
+        placement.components, cat_index, outline, enclosure, ceil_start,
+    )
+    if button_configs:
+        # Compute enclosure bounding box for button placement
+        enc_max_x = max(p[0] for p in flat_pts)
+        enc_min_y = min(p[1] for p in flat_pts)
+        buttons_scad = generate_all_buttons_scad(
+            button_configs, enc_max_x, enc_min_y,
+        )
+        scad_str += buttons_scad
+        log.info("Custom buttons: %d generated", len(button_configs))
 
     # ── 9. Write to session folder ────────────────────────────────
     scad_path: Path = session.path / "enclosure.scad"

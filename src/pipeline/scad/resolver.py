@@ -83,16 +83,43 @@ class ComponentResolver:
         mounting = self.catalog.mounting
         s_depth = max(self._surface_depth(), 1.0)
 
-        if mounting.cap is not None:
-            cap = mounting.cap
-            cap_r = (cap.diameter_mm + 2 * cap.hole_clearance_mm) / 2
+        # Custom button outline: the ceiling hole matches the cap outline
+        # (+ clearance) so the button top slides freely.
+        if self.placed.button_outline is not None and mounting.cap is not None and mounting.cap.actuator is not None:
+            from .buttons import _offset_polygon, BUTTON_CLEARANCE_MM
+            hole = _offset_polygon(self.placed.button_outline, BUTTON_CLEARANCE_MM)
+            # Translate to world position
+            world_pts = [[p[0] + self.cx, p[1] + self.cy] for p in hole]
             frags.append(ScadFragment(
                 type="cutout",
-                geometry=CylinderGeometry(self.cx, self.cy, cap_r),
+                geometry=PolygonGeometry(world_pts),
                 z_base=self.ctx.ceil_start,
                 depth=s_depth,
-                label=f"cap hole — {self.cid}",
+                label=f"button hole — {self.cid}",
             ))
+        elif mounting.cap is not None:
+            cap = mounting.cap
+            cap_r = (cap.diameter_mm + 2 * cap.hole_clearance_mm) / 2
+            # When an actuator is defined but no custom outline, the hole
+            # matches the default cap circle so the button top slides freely.
+            if cap.actuator is not None:
+                from .buttons import _offset_polygon, BUTTON_CLEARANCE_MM
+                cap_r = cap.diameter_mm / 2 + BUTTON_CLEARANCE_MM
+                frags.append(ScadFragment(
+                    type="cutout",
+                    geometry=CylinderGeometry(self.cx, self.cy, cap_r),
+                    z_base=self.ctx.ceil_start,
+                    depth=s_depth,
+                    label=f"button hole — {self.cid}",
+                ))
+            else:
+                frags.append(ScadFragment(
+                    type="cutout",
+                    geometry=CylinderGeometry(self.cx, self.cy, cap_r),
+                    z_base=self.ctx.ceil_start,
+                    depth=s_depth,
+                    label=f"cap hole — {self.cid}",
+                ))
         elif body.shape == "circle":
             frags.append(ScadFragment(
                 type="cutout",

@@ -21,6 +21,7 @@ class PlacedComponent:
     rotation_deg: float   # degrees, arbitrary for side-mount; 0/90/180/270 for internal
     pin_positions: dict[str, tuple[float, float]] = field(default_factory=dict)
     mounting_style: str = "top"
+    button_outline: list[list[float]] | None = None  # custom button shape [[x,y], ...]
 
 
 @dataclass
