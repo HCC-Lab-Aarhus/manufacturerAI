@@ -49,6 +49,8 @@ Given a user's device description:
 
 You select and place only **UI components** — the ones users interact with directly (buttons, LEDs, switches, speakers, etc.). Internal components (MCU, resistors, batteries, capacitors) are handled automatically in later pipeline steps — do NOT look them up or think about them. Focus entirely on shape and interaction.
 
+**Only place components the user has explicitly requested or that are clearly implied by the device function.** Do NOT add status LEDs or other indicator components unless the user specifically asks for them.
+
 ## Available Components
 {summary}
 
@@ -306,7 +308,7 @@ Each placement positions a UI component on the device.
 *Force a component to a different allowed mounting style.*
 ```json
 "ui_placements": [
-    {{"instance_id": "ir_1", "catalog_id": "ir_receiver_tsop", "x_mm": 20, "y_mm": 5, "mounting_style": "top"}}
+    {{"instance_id": "led_1", "catalog_id": "led_5mm", "x_mm": 40, "y_mm": 30, "edge_index": 2, "mounting_style": "side"}}
 ]
 ```
 
@@ -315,6 +317,7 @@ Placement rules:
 - Non-side-mount components **must not** specify `edge_index`
 - Top-mount positions must be inside the outline polygon
 - Respect body size and keepout margins from `get_component`
+- **IR transmitter LEDs** (`led_5mm` with wavelength 940nm) on remote controls **must** use `mounting_style: "side"` so the LED faces the device being controlled; pick the front edge for `edge_index`
 
 ---
 
