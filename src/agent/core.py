@@ -57,6 +57,7 @@ class _BaseAgent:
         self.catalog = catalog
         self.session = session
         self._last_invalidated: list[str] = []
+        self._design_feedback: str | None = None
 
         saved = session.read_artifact(self.conversation_file)
         self.messages: list[dict] = sanitize_messages(saved) if isinstance(saved, list) else []
@@ -217,6 +218,10 @@ class _BaseAgent:
                         "pipeline_errors": self.session.pipeline_errors,
                     })
                 yield terminal_event
+                if self._design_feedback:
+                    yield AgentEvent("design_feedback", {
+                        "message": self._design_feedback,
+                    })
                 yield AgentEvent("done", {})
                 return
 
@@ -365,7 +370,15 @@ class CircuitAgent(_BaseAgent):
             full_errors = validate_design(full_spec, self.catalog, printer=printer)
             if full_errors:
                 error_list = "\n".join(f"  - {e}" for e in full_errors)
-                return f"Circuit validation failed (cross-check with design):\n{error_list}", False
+                self.session.write_artifact("circuit_pending.json", input_data)
+                self.session.save()
+                self._design_feedback = error_list
+                return (
+                    "Circuit is electrically valid and saved, but the enclosure "
+                    "design needs adjustment. Feedback has been sent to the "
+                    "design agent.",
+                    True,
+                )
         except Exception:
             pass
 

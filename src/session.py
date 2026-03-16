@@ -102,6 +102,7 @@ class Session:
             "catalog": True,
             "design": self.has_artifact("design.json"),
             "circuit": self.has_artifact("circuit.json"),
+            "circuit_pending": self.has_artifact("circuit_pending.json"),
             "placement": self.has_artifact("placement.json"),
             "routing": self.has_artifact("routing.json"),
             "bitmap": self.pipeline_state.get("bitmap") == "complete",

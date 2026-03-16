@@ -10,6 +10,10 @@ from fastapi.responses import StreamingResponse
 import anthropic
 
 from src.agent import CircuitAgent, build_circuit_user_prompt, build_circuit_prompt, CIRCUIT_TOOLS, MODEL, THINKING_BUDGET, TOKEN_BUDGET, prune_messages
+from src.pipeline.config import get_printer
+from src.pipeline.design import (
+    parse_physical_design, parse_circuit, build_design_spec, validate_design,
+)
 from src.web.routes._deps import (
     get_catalog, load_session_or_404, invalidate_downstream,
     enrich_components,
@@ -103,6 +107,56 @@ async def stop_circuit(sid: str):
         raise HTTPException(404, "No running circuit agent")
     task.cancel_event.set()
     return {"status": "stopping"}
+
+
+@router.post("/sessions/{sid}/circuit/revalidate")
+async def revalidate_circuit(sid: str):
+    """Re-run the cross-check of a pending circuit against current design.json.
+
+    No LLM is involved — this just re-validates and marks the circuit complete
+    if the design now satisfies the constraints.
+    """
+    sess = load_session_or_404(sid)
+    cat = get_catalog()
+
+    design_data = sess.read_artifact("design.json")
+    if not design_data:
+        raise HTTPException(400, "No design.json")
+
+    circuit_data = sess.read_artifact("circuit_pending.json")
+    if not circuit_data:
+        raise HTTPException(400, "No pending circuit to revalidate")
+
+    try:
+        physical = parse_physical_design(design_data)
+        circuit = parse_circuit(circuit_data)
+        full_spec = build_design_spec(physical, circuit)
+        printer = get_printer(sess.printer_id)
+        errors = validate_design(full_spec, cat, printer=printer)
+    except Exception as e:
+        raise HTTPException(500, f"Validation error: {e}")
+
+    if errors:
+        error_list = "\n".join(f"  - {e}" for e in errors)
+        return {
+            "valid": False,
+            "errors": error_list,
+        }
+
+    sess.write_artifact("circuit.json", circuit_data)
+    sess.delete_artifact("circuit_pending.json")
+    sess.pipeline_state["circuit"] = "complete"
+    invalidated = sess.invalidate_downstream("circuit")
+    sess.save()
+
+    enrich_components(circuit_data.get("components", []), cat)
+    return {
+        "valid": True,
+        "circuit": circuit_data,
+        "invalidated_steps": invalidated,
+        "artifacts": sess.artifacts,
+        "pipeline_errors": sess.pipeline_errors,
+    }
 
 
 @router.get("/sessions/{sid}/circuit/stream")
