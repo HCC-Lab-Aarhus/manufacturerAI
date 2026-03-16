@@ -7,7 +7,9 @@ import logging
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-from src.agent import CircuitAgent, build_circuit_user_prompt
+import anthropic
+
+from src.agent import CircuitAgent, build_circuit_user_prompt, build_circuit_prompt, CIRCUIT_TOOLS, MODEL, THINKING_BUDGET, TOKEN_BUDGET, prune_messages
 from src.web.routes._deps import (
     get_catalog, load_session_or_404, invalidate_downstream,
     enrich_components,
@@ -159,3 +161,27 @@ async def get_circuit_conversation(sid: str):
     s = load_session_or_404(sid)
     data = s.read_artifact("circuit_conversation.json")
     return data if isinstance(data, list) else []
+
+
+@router.get("/sessions/{sid}/circuit/tokens")
+def get_circuit_tokens(sid: str):
+    s = load_session_or_404(sid)
+    conversation = s.read_artifact("circuit_conversation.json")
+    if not conversation or not isinstance(conversation, list):
+        return {"input_tokens": 0, "budget": TOKEN_BUDGET}
+
+    cat = get_catalog()
+    system = build_circuit_prompt(cat)
+    pruned = prune_messages(conversation)
+    client = anthropic.Anthropic()
+    try:
+        result = client.messages.count_tokens(
+            model=MODEL,
+            messages=pruned,
+            system=system,
+            tools=CIRCUIT_TOOLS,
+            thinking={"type": "enabled", "budget_tokens": THINKING_BUDGET},
+        )
+        return {"input_tokens": result.input_tokens, "budget": TOKEN_BUDGET}
+    except Exception:
+        return {"input_tokens": 0, "budget": TOKEN_BUDGET}
