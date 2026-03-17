@@ -42,6 +42,50 @@ from .geometry import (
 )
 from .models import Placed, VALID_ROTATIONS, MIN_PIN_CLEARANCE_MM
 
+
+def _crossing_count(
+    nets: list[Net],
+    positions: dict[str, Placed],
+    catalog_map: dict[str, Component],
+    _pin_cache: dict[str, dict[str, tuple[float, float]]],
+) -> int:
+    """Count bounding-box crossings among all net-segment pairs."""
+    segments: list[tuple[str, tuple[float, float], tuple[float, float]]] = []
+    for net in nets:
+        points: list[tuple[float, float]] = []
+        for ref in net.pins:
+            if ":" not in ref:
+                continue
+            iid, pid = ref.split(":", 1)
+            p = positions.get(iid)
+            if p is None:
+                continue
+            local = _pin_cache.get(p.catalog_id, {}).get(pid)
+            if local is not None:
+                rad = math.radians(p.rotation)
+                cos_r = math.cos(rad)
+                sin_r = math.sin(rad)
+                wx = p.x + local[0] * cos_r - local[1] * sin_r
+                wy = p.y + local[0] * sin_r + local[1] * cos_r
+            else:
+                wx, wy = p.x, p.y
+            points.append((wx, wy))
+        for i in range(len(points)):
+            for j in range(i + 1, len(points)):
+                segments.append((net.id, points[i], points[j]))
+
+    crossings = 0
+    for i, (id_a, a1, a2) in enumerate(segments):
+        for id_b, b1, b2 in segments[i + 1:]:
+            if id_a == id_b:
+                continue
+            if (max(a1[0], a2[0]) > min(b1[0], b2[0])
+                and max(b1[0], b2[0]) > min(a1[0], a2[0])
+                and max(a1[1], a2[1]) > min(b1[1], b2[1])
+                and max(b1[1], b2[1]) > min(a1[1], a2[1])):
+                crossings += 1
+    return crossings
+
 log = logging.getLogger(__name__)
 
 
@@ -322,6 +366,7 @@ def sa_refine(
     W_OUTLINE = 200.0
     W_PIN_CLR = 100.0
     W_EDGE_PREF = 1.0
+    W_CROSSING = 50.0
 
     # Identify large components that should prefer edges (>5% of outline area)
     outline_area = board_w * board_h
@@ -357,6 +402,7 @@ def sa_refine(
             + W_OUTLINE * _outline_penalty_fast(movable, positions, prep_poly, edge_clearance)
             + W_PIN_CLR * _pin_clearance_penalty(all_ids, positions, catalog_map)
             + W_EDGE_PREF * _edge_pref_cost()
+            + W_CROSSING * _crossing_count(nets, positions, catalog_map, pin_cache)
         )
 
     current_cost = fast_cost()
