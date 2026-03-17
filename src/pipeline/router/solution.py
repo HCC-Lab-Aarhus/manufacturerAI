@@ -783,9 +783,14 @@ class Solution:
             )
 
             if cross_path is None or len(cross_path) < 3:
-                edge_jumpers.append(_make_edge_jumper(
-                    net_id, pads[pa], pads[pb], self.grid,
-                ))
+                j = _make_edge_jumper(net_id, pads[pa], pads[pb], self.grid)
+                if not self.jumper_checker.is_wire_clear(j["start"], j["end"]):
+                    log.warning(
+                        "  %-20s edge jumper crosses pin keepout",
+                        net_id,
+                    )
+                self.jumper_checker.commit(j["start"], j["end"])
+                edge_jumpers.append(j)
                 _merge(pa, pb, [])
                 continue
 
@@ -844,9 +849,14 @@ class Solution:
                     break
 
             if not jumper_placed:
-                edge_jumpers.append(_make_edge_jumper(
-                    net_id, pads[pa], pads[pb], self.grid,
-                ))
+                j = _make_edge_jumper(net_id, pads[pa], pads[pb], self.grid)
+                if not self.jumper_checker.is_wire_clear(j["start"], j["end"]):
+                    log.warning(
+                        "  %-20s edge jumper crosses pin keepout",
+                        net_id,
+                    )
+                self.jumper_checker.commit(j["start"], j["end"])
+                edge_jumpers.append(j)
                 _merge(pa, pb, [])
 
         self._unblock_voronoi(blocked_v)
@@ -931,23 +941,35 @@ class Solution:
         if len(pads) == 2:
             src_wx, src_wy = self.grid.grid_to_world(pads[0].gx, pads[0].gy)
             snk_wx, snk_wy = self.grid.grid_to_world(pads[1].gx, pads[1].gy)
+            start = (src_wx, src_wy)
+            end = (snk_wx, snk_wy)
+            if not self.jumper_checker.is_wire_clear(start, end):
+                log.warning(
+                    "  %-20s full-span jumper crosses pin keepout",
+                    net_id,
+                )
             jumper = {
                 "net_id": net_id,
-                "start": (src_wx, src_wy),
-                "end": (snk_wx, snk_wy),
+                "start": start,
+                "end": end,
                 "length_mm": math.hypot(snk_wx - src_wx, snk_wy - src_wy),
             }
+            self.jumper_checker.commit(start, end)
             self.routes[net_id] = NetRoute(paths=[], pads=pads, jumpers=[jumper])
             log.info("  %-20s OK — full-span jumper (%.1f mm)", net_id, jumper["length_mm"])
         else:
-            # Multi-pin: try jumper-based multi-pin routing, which always succeeds
             if not self._try_jumper_multi(net_id, pads):
-                # Absolute fallback: bridge every MST edge with a jumper
                 mst_edges = _compute_mst(pads)
-                jumpers = [
-                    _make_edge_jumper(net_id, pads[a], pads[b], self.grid)
-                    for a, b in mst_edges
-                ]
+                jumpers = []
+                for a, b in mst_edges:
+                    j = _make_edge_jumper(net_id, pads[a], pads[b], self.grid)
+                    if not self.jumper_checker.is_wire_clear(j["start"], j["end"]):
+                        log.warning(
+                            "  %-20s MST-edge jumper crosses pin keepout",
+                            net_id,
+                        )
+                    self.jumper_checker.commit(j["start"], j["end"])
+                    jumpers.append(j)
                 self.routes[net_id] = NetRoute(paths=[], pads=pads, jumpers=jumpers)
 
     # ── Internal: Voronoi pin blocking ─────────────────────────
