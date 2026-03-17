@@ -1,7 +1,7 @@
 {
     "id": "battery_holder_2xAAA",
     "name": "2xAAA Battery Holder",
-    "description": "Holds two AAA batteries in series, providing 3.0V nominal (2x 1.5V). Spring contacts and snap-fit lid. Requires bottom access for battery replacement. Heavy component — placer should position near bottom of device for balance.",
+    "description": "Holds two AAA batteries in series, providing 3.0V nominal (2x 1.5V). The holder is a printed plastic cavity. Three flat metal plates with springs/dome contacts are inserted into channels in the walls. Pin side (+Y) has two small plates (V+ and GND), connector side (-Y) has one wide plate bridging the cells in series. Heavy component — placer should position near bottom of device for balance.",
 
     "ui_placement": false,
     "body": {
@@ -33,7 +33,7 @@
             "current_max_ma": 1000,
             "hole_diameter_mm": 3.0,
             "shape": { "type": "rect", "width_mm": 3.0, "length_mm": 0.3 },
-            "description": "Positive solder tab. Flat rectangular pin extending from plate channel."
+            "description": "Positive tab extension from small plate. 7.5mm long, 0.3mm thick, 3mm wide rectangle passing through floor to ink traces."
         },
         {
             "id": "GND",
@@ -44,7 +44,7 @@
             "current_max_ma": 1000,
             "hole_diameter_mm": 3.0,
             "shape": { "type": "rect", "width_mm": 3.0, "length_mm": 0.3 },
-            "description": "Negative solder tab. Flat rectangular pin extending from plate channel."
+            "description": "Negative tab extension from small plate. 7.5mm long, 0.3mm thick, 3mm wide rectangle passing through floor to ink traces."
         }
     ],
     "internal_nets": [],
@@ -54,64 +54,71 @@
                 "shape": "rect",
                 "label": "positive plate channel",
                 "position_mm": [6.25, 25.0],
-                "width_mm": 12.0,
-                "length_mm": 0.3,
-                "depth_mm": 12.0,
-                "z_anchor": "cavity_start"
+                "width_mm": 12.03,
+                "length_mm": 1.46,
+                "depth_mm": 12.1,
+                "z_anchor": "cavity_start",
+                "description": "Channel for small V+ plate (12.03mm wide, 1.46mm thick, 12.1mm tall)."
             },
             {
                 "shape": "rect",
                 "label": "negative plate channel",
                 "position_mm": [-6.25, 25.0],
-                "width_mm": 12.0,
-                "length_mm": 0.3,
-                "depth_mm": 12.0,
-                "z_anchor": "cavity_start"
+                "width_mm": 12.03,
+                "length_mm": 1.46,
+                "depth_mm": 12.1,
+                "z_anchor": "cavity_start",
+                "description": "Channel for small GND plate (12.03mm wide, 1.46mm thick, 12.1mm tall)."
             },
             {
                 "shape": "rect",
-                "label": "inter-cell contact plate",
+                "label": "inter-cell contact plate channel",
                 "position_mm": [0, -25.0],
-                "width_mm": 27.0,
-                "length_mm": 0.3,
+                "width_mm": 27.2,
+                "length_mm": 1.46,
                 "depth_mm": 12.0,
-                "z_anchor": "cavity_start"
+                "z_anchor": "cavity_start",
+                "description": "Channel for wide connector plate (27.2mm wide, 1.46mm thick, 12mm tall). Bridges cells in series."
             },
             {
                 "shape": "rect",
-                "label": "V+ battery contact window",
+                "label": "V+ dome contact window",
                 "position_mm": [6.25, 25.0],
-                "width_mm": 4.0,
-                "length_mm": 3.0,
-                "depth_mm": 12.0,
-                "z_anchor": "cavity_start"
+                "width_mm": 7.5,
+                "length_mm": 7.5,
+                "depth_mm": 12.1,
+                "z_anchor": "cavity_start",
+                "description": "Window for 7.5mm dome contact on V+ plate to reach battery."
             },
             {
                 "shape": "rect",
-                "label": "GND battery contact window",
+                "label": "GND dome contact window",
                 "position_mm": [-6.25, 25.0],
-                "width_mm": 4.0,
-                "length_mm": 3.0,
-                "depth_mm": 12.0,
-                "z_anchor": "cavity_start"
+                "width_mm": 7.5,
+                "length_mm": 7.5,
+                "depth_mm": 12.1,
+                "z_anchor": "cavity_start",
+                "description": "Window for 7.5mm dome contact on GND plate to reach battery."
             },
             {
                 "shape": "rect",
-                "label": "inter-cell contact window (+)",
-                "position_mm": [6.25, -25.0],
-                "width_mm": 4.0,
-                "length_mm": 3.0,
+                "label": "inter-cell dome contact window (+)",
+                "position_mm": [4.35, -25.0],
+                "width_mm": 7.5,
+                "length_mm": 7.5,
                 "depth_mm": 12.0,
-                "z_anchor": "cavity_start"
+                "z_anchor": "cavity_start",
+                "description": "Window for first 7.5mm dome on wide plate. Two domes are 8.7mm apart center-to-center."
             },
             {
                 "shape": "rect",
-                "label": "inter-cell contact window (-)",
-                "position_mm": [-6.25, -25.0],
-                "width_mm": 4.0,
-                "length_mm": 3.0,
+                "label": "inter-cell dome contact window (-)",
+                "position_mm": [-4.35, -25.0],
+                "width_mm": 7.5,
+                "length_mm": 7.5,
                 "depth_mm": 12.0,
-                "z_anchor": "cavity_start"
+                "z_anchor": "cavity_start",
+                "description": "Window for second 7.5mm dome on wide plate. Two domes are 8.7mm apart center-to-center."
             },
             {
                 "shape": "rect",
@@ -120,7 +127,8 @@
                 "width_mm": 3.0,
                 "length_mm": 0.3,
                 "through_surface": true,
-                "z_anchor": "floor"
+                "z_anchor": "floor",
+                "description": "Floor slot for V+ plate tab extension to reach ink traces."
             },
             {
                 "shape": "rect",
@@ -129,7 +137,8 @@
                 "width_mm": 3.0,
                 "length_mm": 0.3,
                 "through_surface": true,
-                "z_anchor": "floor"
+                "z_anchor": "floor",
+                "description": "Floor slot for GND plate tab extension to reach ink traces."
             }
         ]
     }

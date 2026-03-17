@@ -22,6 +22,8 @@ from .fragment import (
 
 SURFACE_OVERSHOOT: float = 1.0
 PINHOLE_CLEARANCE: float = 0.3
+PINHOLE_TAPER_EXTRA: float = 0.4   # extra width on each side for the funnel entry
+PINHOLE_TAPER_DEPTH: float = 0.5   # height of the funnel zone (mm)
 PIN_BRIDGE_WIDTH: float = 1.2
 HATCH_LEDGE_WIDTH: float = 2.5
 
@@ -260,14 +262,16 @@ class ComponentResolver:
     # ── Pinholes ───────────────────────────────────────────────────
 
     def _pinhole_fragments(self) -> list[ScadFragment]:
-        """Pin shafts for every pin.
+        """Pin shafts with funnel entry for every pin.
 
-        Each shaft spans from FLOOR_MM (trace surface) up to the component's
-        body cutout top, letting pins seat flush against the ink layer.
+        Each pinhole is a two-layer column:
+          - Shaft  (FLOOR_MM → taper_z): tight fit for press-fit contact.
+          - Taper  (taper_z → z_top):    wider funnel for guided insertion.
         """
         frags: list[ScadFragment] = []
         z_top = self._component_z_top()
-        shaft_h = z_top - FLOOR_MM
+        taper_z = z_top - PINHOLE_TAPER_DEPTH
+        shaft_h = max(taper_z - FLOOR_MM, 0.1)
 
         for pin in self.catalog.pins:
             pos = self.placed.pin_positions.get(pin.id)
@@ -285,16 +289,36 @@ class ComponentResolver:
             if pin.shape and pin.shape.type in ("rect", "slot"):
                 w = (pin.shape.width_mm or pin_d) + PINHOLE_CLEARANCE
                 h = (pin.shape.length_mm or pin_d) + PINHOLE_CLEARANCE
-                geom = RectGeometry(px, py, w, h)
+                shaft_geom = RectGeometry(px, py, w, h)
+                taper_geom = RectGeometry(
+                    px, py,
+                    w + PINHOLE_TAPER_EXTRA,
+                    h + PINHOLE_TAPER_EXTRA,
+                )
             else:
-                geom = RectGeometry(px, py, pin_d, pin_d)
+                shaft_geom = RectGeometry(px, py, pin_d, pin_d)
+                taper_geom = RectGeometry(
+                    px, py,
+                    pin_d + PINHOLE_TAPER_EXTRA,
+                    pin_d + PINHOLE_TAPER_EXTRA,
+                )
 
+            # Tight shaft
             frags.append(ScadFragment(
                 type="cutout",
-                geometry=geom,
+                geometry=shaft_geom,
                 z_base=FLOOR_MM,
                 depth=shaft_h,
                 label=f"pin {self.cid}:{pin.id}",
+            ))
+
+            # Wider funnel entry
+            frags.append(ScadFragment(
+                type="cutout",
+                geometry=taper_geom,
+                z_base=taper_z,
+                depth=PINHOLE_TAPER_DEPTH,
+                label=f"pin taper {self.cid}:{pin.id}",
             ))
 
         return frags

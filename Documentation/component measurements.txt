@@ -59,14 +59,25 @@ body:
 
 battery 2xAAA:
 
-These are a bit special. The battery hodler is just a printed plastic cavity, while the pins with springs are flat metal sheets we need to insert on either side. On one side, we have two disconnected pins (the negative and positive), while the other side has a flat plane, no pin connections, which connects the first battery to the second in series.
+These are a bit special. The battery holder is just a printed plastic cavity, while the pins with springs are flat metal sheets we need to insert on either side. On one side, we have two disconnected pins (the negative and positive), while the other side has a flat plane, no pin connections, which connects the first battery to the second in series.
 
-We have three components:
-on the pin side, we have two. One with a bump against the positive terminal of battery one, and one with spring for the negative terminal of the second battery.
-These two dimentions are as follows:
-plate: 0.3mm thick, 12mm wide, 12mm tall (rectangle). Center of plate has a pin which is 7.5mm tall, same 0.3mm thickness, 3mm wide (rectangle).
+We have three metal plate components:
 
-On the other side, we have one wide, with both a spring and a bump.
-This is 0.3mm thick, 27mm wide, 12mm tall (rectangle). Similarly, the center of this plate has a pin which is 7.5mm tall, 0.3mm thick, and 3mm wide (rectangle).
+PIN SIDE (two separate small plates):
+One plate with a raised dome contact (positive terminal of battery one), and one plate with a spring (negative terminal of battery two).
+Dimensions for each small plate:
+- Plate body: 1.46mm thick, 12.03mm wide, 12.1mm tall (rectangle).
+- Center of plate has a raised dome contact, 7.5mm diameter.
+- Bottom of plate has a rectangular tab extension: 7.5mm long, 0.3mm thick, 3mm wide. This tab passes through a slot in the holder floor to reach the ink traces below.
 
-We need cutouts on the battery holder which fits these snugly, with a small square in the center of the bump and spring side to interface with the batteries, and a pin hole to connect to the tracings.
+CONNECTOR SIDE (one wide plate):
+One wide plate with both a spring and a dome contact, bridging the two cells in series.
+Dimensions:
+- Plate body: 1.46mm thick, 27.2mm wide, 12mm tall (rectangle).
+- Two dome contacts, each 7.5mm diameter, spaced 8.7mm apart (center-to-center).
+- Bottom of plate has a rectangular tab extension: 7.5mm tall, 0.3mm thick, 3mm wide. Same purpose as above.
+
+CUTOUTS NEEDED:
+- Plate channels on each side of the holder wall, sized to fit the plates snugly.
+- Rectangular window cutouts in the holder wall at each dome contact / spring position, so the contacts can poke through and touch the batteries.
+- Pin slot through the floor for each tab extension, connecting to the ink traces.
