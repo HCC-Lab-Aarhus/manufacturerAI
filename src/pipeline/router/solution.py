@@ -15,6 +15,7 @@ import copy
 import logging
 import math
 import random
+from collections import deque
 from dataclasses import dataclass, field
 
 from src.catalog.models import CatalogResult
@@ -360,6 +361,8 @@ class Solution:
         paths, ok = self._find_paths(net_id, pads)
         if ok and paths and not self._has_foreign_cells(paths, net_id):
             self._commit(net_id, paths, pads)
+            if len(pads) > 2:
+                self._relax_tree(net_id)
             return
 
         # 2. Try crossing-cost route → surgical rip-up of crossed nets
@@ -370,6 +373,8 @@ class Solution:
             crossed = self._find_crossed_nets(paths_cross, net_id)
             if not crossed:
                 self._commit(net_id, paths_cross, pads)
+                if len(pads) > 2:
+                    self._relax_tree(net_id)
                 return
             if self._try_rip_reroute(net_id, paths_cross, pads, crossed):
                 return
@@ -603,6 +608,96 @@ class Solution:
 
         roots = {_find(i) for i in range(len(pads))}
         return (all_paths, len(roots) == 1)
+
+    # ── Internal: tree relaxation ──────────────────────────────
+
+    def _relax_tree(self, net_id: str) -> None:
+        """Re-route edges of a committed multi-pin tree to reduce total
+        trace length.  Each edge's unique cells are freed and re-routed
+        through the remaining tree, which may provide shortcuts."""
+        route = self.routes.get(net_id)
+        if route is None or len(route.paths) <= 1:
+            return
+
+        paths = route.paths
+        pads = route.pads
+        pad_cells = {(p.gx, p.gy) for p in pads}
+        W = self.grid.width
+        original_cells = sum(len(p) for p in paths)
+
+        for _round in range(3):
+            improved = False
+            for i in range(len(paths)):
+                old_path = paths[i]
+                old_len = len(old_path)
+                if old_len <= 2:
+                    continue
+
+                remaining: set[tuple[int, int]] = set(pad_cells)
+                for j, p in enumerate(paths):
+                    if j != i:
+                        remaining.update(p)
+
+                unique = set(old_path) - remaining
+                if not unique:
+                    continue
+
+                for gx, gy in unique:
+                    flat = gy * W + gx
+                    self.grid._cells[flat] = FREE
+                    self.grid._trace_owner.pop(flat, None)
+
+                start, end = old_path[0], old_path[-1]
+                comp_start = _bfs_grid_cells(remaining, start)
+
+                if end in comp_start:
+                    new_path = self._relax_find_path(start, remaining - {start})
+                else:
+                    comp_end = remaining - comp_start
+                    new_path = self._relax_find_path(end, comp_start) if comp_end else None
+
+                if new_path is not None and len(new_path) < old_len:
+                    paths[i] = new_path
+                    for gx, gy in set(new_path) - remaining:
+                        flat = gy * W + gx
+                        self.grid._cells[flat] = TRACE_PATH
+                        self.grid._trace_owner[flat] = net_id
+                    improved = True
+                else:
+                    for gx, gy in unique:
+                        flat = gy * W + gx
+                        self.grid._cells[flat] = TRACE_PATH
+                        self.grid._trace_owner[flat] = net_id
+
+            if not improved:
+                break
+
+        new_cells = sum(len(p) for p in paths)
+        if new_cells < original_cells:
+            log.debug(
+                "  %-20s relaxed %d → %d cells",
+                net_id, original_cells, new_cells,
+            )
+
+    def _relax_find_path(
+        self,
+        source: tuple[int, int],
+        target: set[tuple[int, int]],
+    ) -> list[tuple[int, int]] | None:
+        if not target:
+            return None
+        W = self.grid.width
+        flat = source[1] * W + source[0]
+        was_trace = self.grid._cells[flat] == TRACE_PATH
+        if was_trace:
+            self.grid._cells[flat] = FREE
+        result = find_path_to_tree(
+            self.grid, {source}, target,
+            turn_penalty=self.config.turn_penalty,
+        )
+        if was_trace:
+            self.grid._cells[flat] = TRACE_PATH
+        return result
 
     # ── Internal: commit / rip-up helpers ──────────────────────
 
@@ -1133,6 +1228,25 @@ class Solution:
 
 
 # ── Free functions ─────────────────────────────────────────────────
+
+
+def _bfs_grid_cells(
+    cells: set[tuple[int, int]], start: tuple[int, int],
+) -> set[tuple[int, int]]:
+    """4-connected flood fill through *cells* from *start*."""
+    if start not in cells:
+        return set()
+    visited: set[tuple[int, int]] = {start}
+    queue = deque([start])
+    while queue:
+        cx, cy = queue.popleft()
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nb = (cx + dx, cy + dy)
+            if nb in cells and nb not in visited:
+                visited.add(nb)
+                queue.append(nb)
+    return visited
+
 
 def _compute_mst(pads: list[NetPad]) -> list[tuple[int, int]]:
     n = len(pads)
