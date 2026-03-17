@@ -58,6 +58,7 @@ class NetRoute:
     paths: list[list[tuple[int, int]]]
     pads: list[NetPad]
     jumpers: list[dict] = field(default_factory=list)
+    violations: int = 0
 
     @property
     def trace_cells(self) -> int:
@@ -71,6 +72,7 @@ class Snapshot:
     trace_owner: dict[int, str]
     clearance_owner: dict[int, set[str]]
     jumper_committed: list[tuple[float, float]]
+    jumper_committed_wires: list[tuple[tuple[float, float], tuple[float, float]]]
 
 
 # ── Jumper collision checking ──────────────────────────────────────
@@ -80,6 +82,7 @@ class JumperEndpointChecker:
     pin_points: list[tuple[float, float]] = field(default_factory=list)
     keepout_mm: float = 1.5
     _committed: list[tuple[float, float]] = field(default_factory=list)
+    _committed_wires: list[tuple[tuple[float, float], tuple[float, float]]] = field(default_factory=list)
 
     @classmethod
     def build(
@@ -116,6 +119,21 @@ class JumperEndpointChecker:
         proj_y = ay + t * dy
         return (px - proj_x) ** 2 + (py - proj_y) ** 2
 
+    @staticmethod
+    def _segments_cross(
+        ax: float, ay: float, bx: float, by: float,
+        cx: float, cy: float, dx: float, dy: float,
+    ) -> bool:
+        """True if segment AB properly crosses segment CD."""
+        d1 = (dx - cx) * (ay - cy) - (dy - cy) * (ax - cx)
+        d2 = (dx - cx) * (by - cy) - (dy - cy) * (bx - cx)
+        d3 = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+        d4 = (bx - ax) * (dy - ay) - (by - ay) * (dx - ax)
+        if ((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and \
+           ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0)):
+            return True
+        return False
+
     def is_wire_clear(
         self,
         start: tuple[float, float],
@@ -129,6 +147,13 @@ class JumperEndpointChecker:
                 return False
         for ex, ey in self._committed:
             if self._point_seg_dist_sq(ex, ey, ax, ay, bx, by) < ko_sq:
+                return False
+        for (wsx, wsy), (wex, wey) in self._committed_wires:
+            if self._point_seg_dist_sq(ax, ay, wsx, wsy, wex, wey) < ko_sq:
+                return False
+            if self._point_seg_dist_sq(bx, by, wsx, wsy, wex, wey) < ko_sq:
+                return False
+            if self._segments_cross(ax, ay, bx, by, wsx, wsy, wex, wey):
                 return False
         return True
 
@@ -165,9 +190,11 @@ class JumperEndpointChecker:
     def commit(self, start: tuple[float, float], end: tuple[float, float]) -> None:
         self._committed.append(start)
         self._committed.append(end)
+        self._committed_wires.append((start, end))
 
     def reset(self) -> None:
         self._committed.clear()
+        self._committed_wires.clear()
 
 
 # ── Solution ───────────────────────────────────────────────────────
@@ -206,22 +233,24 @@ class Solution:
 
     # ── Scoring ────────────────────────────────────────────────
 
-    def score(self) -> tuple[int, int, float, int]:
-        """(missing_nets, jumper_count, jumper_length_mm, total_trace_cells).
+    def score(self) -> tuple[int, int, int, float, int]:
+        """(missing_nets, violations, jumper_count, jumper_length_mm, total_trace_cells).
         Lower is better, lexicographic."""
         missing = len(self.expected_nets - set(self.routes)) if self.expected_nets else 0
+        violations = 0
         jumper_count = 0
         jumper_length = 0.0
         total_cells = 0
         for route in self.routes.values():
+            violations += route.violations
             jumper_count += len(route.jumpers)
             jumper_length += sum(j.get("length_mm", 0.0) for j in route.jumpers)
             total_cells += route.trace_cells
-        return (missing, jumper_count, jumper_length, total_cells)
+        return (missing, violations, jumper_count, jumper_length, total_cells)
 
     def is_perfect(self) -> bool:
         s = self.score()
-        return s[0] == 0 and s[1] == 0
+        return s[0] == 0 and s[1] == 0 and s[2] == 0
 
     def jumper_count(self) -> int:
         return sum(len(r.jumpers) for r in self.routes.values())
@@ -261,6 +290,7 @@ class Solution:
                 paths=[list(p) for p in route.paths],
                 pads=list(route.pads),
                 jumpers=[dict(j) for j in route.jumpers],
+                violations=route.violations,
             )
         return Snapshot(
             routes=routes_copy,
@@ -268,6 +298,7 @@ class Solution:
             trace_owner=dict(self.grid._trace_owner),
             clearance_owner={k: set(v) for k, v in self.grid._clearance_owner.items()},
             jumper_committed=list(self.jumper_checker._committed),
+            jumper_committed_wires=list(self.jumper_checker._committed_wires),
         )
 
     def restore(self, snap: Snapshot) -> None:
@@ -276,6 +307,7 @@ class Solution:
                 paths=[list(p) for p in route.paths],
                 pads=list(route.pads),
                 jumpers=[dict(j) for j in route.jumpers],
+                violations=route.violations,
             )
             for nid, route in snap.routes.items()
         }
@@ -283,6 +315,7 @@ class Solution:
         self.grid._trace_owner = dict(snap.trace_owner)
         self.grid._clearance_owner = {k: set(v) for k, v in snap.clearance_owner.items()}
         self.jumper_checker._committed = list(snap.jumper_committed)
+        self.jumper_checker._committed_wires = list(snap.jumper_committed_wires)
 
     # ── Rip-up ─────────────────────────────────────────────────
 
@@ -293,6 +326,24 @@ class Solution:
                 continue
             for path in route.paths:
                 self.grid.free_trace(path, net_id=nid)
+            if route.jumpers:
+                self._uncommit_jumpers(route.jumpers)
+
+    def _uncommit_jumpers(self, jumpers: list[dict]) -> None:
+        """Remove jumper endpoints and wires from the committed lists."""
+        remove_pts: set[tuple[float, float]] = set()
+        remove_wires: set[tuple[tuple[float, float], tuple[float, float]]] = set()
+        for j in jumpers:
+            s, e = j["start"], j["end"]
+            remove_pts.add(s)
+            remove_pts.add(e)
+            remove_wires.add((s, e))
+        self.jumper_checker._committed = [
+            p for p in self.jumper_checker._committed if p not in remove_pts
+        ]
+        self.jumper_checker._committed_wires = [
+            w for w in self.jumper_checker._committed_wires if w not in remove_wires
+        ]
 
     # ── Route a single net (always succeeds) ───────────────────
 
@@ -341,18 +392,32 @@ class Solution:
     # ── Identify worst nets and their neighborhoods ────────────
 
     def worst_nets(self, k: int = 3) -> list[str]:
-        """Nets contributing most to the score (those with jumpers first,
-        then longest trace nets)."""
-        with_jumpers = [
-            (nid, sum(j.get("length_mm", 0.0) for j in r.jumpers))
-            for nid, r in self.routes.items() if r.jumpers
+        """Nets contributing most to the score (violations first, then
+        jumpers, then longest trace nets)."""
+        with_violations = [
+            (nid, r.violations)
+            for nid, r in self.routes.items() if r.violations > 0
         ]
-        with_jumpers.sort(key=lambda x: -x[1])
-        result = [nid for nid, _ in with_jumpers[:k]]
+        with_violations.sort(key=lambda x: -x[1])
+        result = [nid for nid, _ in with_violations[:k]]
+
         if len(result) < k:
+            with_jumpers = [
+                (nid, sum(j.get("length_mm", 0.0) for j in r.jumpers))
+                for nid, r in self.routes.items()
+                if r.jumpers and nid not in set(result)
+            ]
+            with_jumpers.sort(key=lambda x: -x[1])
+            for nid, _ in with_jumpers:
+                if len(result) >= k:
+                    break
+                result.append(nid)
+
+        if len(result) < k:
+            seen = set(result)
             by_length = sorted(
                 ((nid, r.trace_cells) for nid, r in self.routes.items()
-                 if nid not in result),
+                 if nid not in seen),
                 key=lambda x: -x[1],
             )
             for nid, _ in by_length:
@@ -784,11 +849,13 @@ class Solution:
 
             if cross_path is None or len(cross_path) < 3:
                 j = _make_edge_jumper(net_id, pads[pa], pads[pb], self.grid)
-                if not self.jumper_checker.is_wire_clear(j["start"], j["end"]):
+                v = 0 if self.jumper_checker.is_wire_clear(j["start"], j["end"]) else 1
+                if v:
                     log.warning(
                         "  %-20s edge jumper crosses pin keepout",
                         net_id,
                     )
+                j["violation"] = v
                 self.jumper_checker.commit(j["start"], j["end"])
                 edge_jumpers.append(j)
                 _merge(pa, pb, [])
@@ -850,21 +917,25 @@ class Solution:
 
             if not jumper_placed:
                 j = _make_edge_jumper(net_id, pads[pa], pads[pb], self.grid)
-                if not self.jumper_checker.is_wire_clear(j["start"], j["end"]):
+                v = 0 if self.jumper_checker.is_wire_clear(j["start"], j["end"]) else 1
+                if v:
                     log.warning(
                         "  %-20s edge jumper crosses pin keepout",
                         net_id,
                     )
+                j["violation"] = v
                 self.jumper_checker.commit(j["start"], j["end"])
                 edge_jumpers.append(j)
                 _merge(pa, pb, [])
 
         self._unblock_voronoi(blocked_v)
 
+        total_violations = sum(j.get("violation", 0) for j in edge_jumpers)
         self.routes[net_id] = NetRoute(
             paths=all_paths,
             pads=pads,
             jumpers=edge_jumpers,
+            violations=total_violations,
         )
         return True
 
@@ -943,7 +1014,8 @@ class Solution:
             snk_wx, snk_wy = self.grid.grid_to_world(pads[1].gx, pads[1].gy)
             start = (src_wx, src_wy)
             end = (snk_wx, snk_wy)
-            if not self.jumper_checker.is_wire_clear(start, end):
+            v = 0 if self.jumper_checker.is_wire_clear(start, end) else 1
+            if v:
                 log.warning(
                     "  %-20s full-span jumper crosses pin keepout",
                     net_id,
@@ -953,24 +1025,33 @@ class Solution:
                 "start": start,
                 "end": end,
                 "length_mm": math.hypot(snk_wx - src_wx, snk_wy - src_wy),
+                "violation": v,
             }
             self.jumper_checker.commit(start, end)
-            self.routes[net_id] = NetRoute(paths=[], pads=pads, jumpers=[jumper])
+            self.routes[net_id] = NetRoute(
+                paths=[], pads=pads, jumpers=[jumper], violations=v,
+            )
             log.info("  %-20s OK — full-span jumper (%.1f mm)", net_id, jumper["length_mm"])
         else:
             if not self._try_jumper_multi(net_id, pads):
                 mst_edges = _compute_mst(pads)
                 jumpers = []
+                total_v = 0
                 for a, b in mst_edges:
                     j = _make_edge_jumper(net_id, pads[a], pads[b], self.grid)
-                    if not self.jumper_checker.is_wire_clear(j["start"], j["end"]):
+                    v = 0 if self.jumper_checker.is_wire_clear(j["start"], j["end"]) else 1
+                    if v:
                         log.warning(
                             "  %-20s MST-edge jumper crosses pin keepout",
                             net_id,
                         )
+                    j["violation"] = v
+                    total_v += v
                     self.jumper_checker.commit(j["start"], j["end"])
                     jumpers.append(j)
-                self.routes[net_id] = NetRoute(paths=[], pads=pads, jumpers=jumpers)
+                self.routes[net_id] = NetRoute(
+                    paths=[], pads=pads, jumpers=jumpers, violations=total_v,
+                )
 
     # ── Internal: Voronoi pin blocking ─────────────────────────
 
