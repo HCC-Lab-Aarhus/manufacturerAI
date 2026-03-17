@@ -19,6 +19,22 @@ class Trace:
 
 
 @dataclass
+class JumperEndpoint:
+    """One end of a jumper wire.
+
+    When the jumper lands on an existing component pin, `pin_center`
+    is set and the physical solder point is offset outward so two
+    holes never overlap.  The SCAD generator uses these fields to
+    emit the correct capsule-shaped cutout.
+    """
+
+    x: float
+    y: float
+    pin_center: tuple[float, float] | None = None
+    pin_radius_mm: float = 0.0
+
+
+@dataclass
 class JumperWire:
     """A physical jumper wire bridging a planarity conflict.
 
@@ -27,9 +43,9 @@ class JumperWire:
     """
 
     net_id: str
-    start: tuple[float, float]          # world mm (solder point 1)
-    end: tuple[float, float]            # world mm (solder point 2)
-    length_mm: float                    # Euclidean distance between endpoints
+    start: JumperEndpoint
+    end: JumperEndpoint
+    length_mm: float
 
 
 @dataclass
@@ -71,7 +87,8 @@ class RouterConfig:
     # ── Router-only knobs ──────────────────────────────────────
     turn_penalty: int = 5                # A* cost penalty for changing direction
     crossing_cost: int = 50              # A* cost penalty for crossing an existing trace
-    max_retries: int = 30               # ordering-shuffle attempts (each includes crossing rip-up)
+    max_improve_iterations: int = 60     # iterative rip-up improvement rounds
+    stall_limit: int = 20                # stop after this many non-improving iterations
 
 
 # Module-level defaults (used when no RouterConfig is passed)

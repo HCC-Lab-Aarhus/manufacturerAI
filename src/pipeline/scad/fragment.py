@@ -76,7 +76,22 @@ class SegmentGeometry:
         ]
 
 
-Geometry = RectGeometry | CylinderGeometry | PolygonGeometry | SegmentGeometry
+@dataclass
+class CapsuleGeometry:
+    """Convex hull of two circles — a stadium/capsule shape.
+
+    Used for jumper endpoints that are offset from a component pin.
+    The SCAD emitter renders this as ``hull() { circle A; circle B; }``.
+    """
+    x1: float
+    y1: float
+    r1: float
+    x2: float
+    y2: float
+    r2: float
+
+
+Geometry = RectGeometry | CylinderGeometry | PolygonGeometry | SegmentGeometry | CapsuleGeometry
 
 
 # ── Fragment ───────────────────────────────────────────────────────
