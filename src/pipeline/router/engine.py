@@ -1,14 +1,13 @@
-"""Main routing engine — greedy Manhattan trace routing with retry.
+﻿"""Main routing engine â€” iterative improvement with jumper-first strategy.
 
 Algorithm:
   1. Build routing grid, block component bodies, protect pin cells.
   2. Resolve pin positions for all nets (with dynamic MCU allocation).
-  3. Sort nets by initial priority (power/ground first, then pin count).
-  4. Route each net via A* with foreign-pin clearance enforcement.
-  5. Commit each trace + clearance zone to the grid.
-  6. If any nets fail, clear all traces and retry with a different
-     random net ordering.  Previously tried orderings are tracked to
-     avoid duplicates.  The best result (fewest failures) is kept.
+  3. Sort nets by isolation-length priority.
+  4. Route all nets sequentially (jumpers allowed) â†’ guaranteed complete
+     initial solution with zero failed nets.
+  5. Iteratively improve: rip up worst nets + neighbors, re-route in
+     perturbed order. Keep best result seen. Stop when perfect or stalled.
 """
 
 from __future__ import annotations
@@ -16,59 +15,27 @@ from __future__ import annotations
 import logging
 import math
 import random
-from dataclasses import dataclass
 
-from shapely.geometry import Polygon, Point
+from shapely.geometry import Polygon
 
 from src.catalog.models import CatalogResult
 from src.pipeline.placer.models import FullPlacement
 from src.pipeline.placer.geometry import footprint_halfdims
 
-from .debug import build_debug_grids
-from .grid import RoutingGrid, FREE, BLOCKED, PERMANENTLY_BLOCKED, TRACE_PATH
-from .models import (
-    Trace, JumperWire, RoutingResult, RouterConfig,
-    TURN_PENALTY,
-)
-from .pathfinder import find_path, find_path_to_tree
+from .grid import RoutingGrid
+from .models import RoutingResult, RouterConfig
 from .pins import (
-    PinPool,
     pin_world_xy, build_pin_pools,
     resolve_pin_ref, get_pin_world_pos,
-    allocate_best_pin,
+    allocate_best_pin, PinPool,
 )
+from .solution import Solution, NetPad, _PinRef
 
 
 log = logging.getLogger(__name__)
 
 
-# ── Data structures ────────────────────────────────────────────────
-
-
-@dataclass
-class NetPad:
-    """A pad (pin position) participating in a net, in grid coordinates."""
-
-    instance_id: str
-    pin_id: str
-    group_id: str | None
-    gx: int
-    gy: int
-    world_x: float
-    world_y: float
-
-
-@dataclass
-class _PinRef:
-    """Unresolved pin reference from the net list."""
-
-    raw: str
-    instance_id: str
-    pin_or_group: str
-    is_group: bool
-
-
-# ── Main entry point ───────────────────────────────────────────────
+# â”€â”€ Main entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def route_traces(
@@ -77,14 +44,14 @@ def route_traces(
     *,
     config: RouterConfig | None = None,
 ) -> RoutingResult:
-    """Route all nets in the placement (single-pass, greedy)."""
+    """Route all nets. Always returns a complete result (zero failed nets)."""
     if config is None:
         config = RouterConfig()
 
     catalog_map = {c.id: c for c in catalog.components}
     outline_poly = Polygon(placement.outline.vertices)
 
-    log.info("Router: %d components, %d nets, area=%.1f mm²",
+    log.info("Router: %d components, %d nets, area=%.1f mmÂ²",
              len(placement.components), len(placement.nets), outline_poly.area)
 
     if not outline_poly.is_valid or outline_poly.area <= 0:
@@ -102,7 +69,6 @@ def route_traces(
         trace_clearance_mm=config.trace_clearance_mm,
     )
 
-    # Block cells in raised-floor zones (z_bottom >= FLOOR_MM)
     raised_blocked = grid.block_raised_floor(placement.outline, placement.enclosure)
     if raised_blocked:
         log.info("Router: blocked %d cells in raised-floor zone", raised_blocked)
@@ -115,8 +81,115 @@ def route_traces(
     pin_clearance_cells = _compute_pin_clearance_cells(config)
     pin_voronoi = _build_pin_voronoi(all_pin_cells, grid, pin_clearance_cells)
 
-    # 3. Parse net pin references — expand fixed_net groups into
-    #    individual pin refs so all pins in the group get routed.
+    # 3. Parse net pin references
+    net_pad_map = _parse_net_refs(placement, catalog, catalog_map)
+
+    # 4. Collect routable net IDs and compute priority ordering
+    net_ids = [
+        n.id for n in placement.nets
+        if len(net_pad_map.get(n.id, [])) >= 2
+    ]
+
+    pads_map, pin_assignments = _resolve_all_pads(
+        net_ids, net_pad_map, placement, catalog, grid,
+    )
+    ordering = _priority_order(net_ids, net_pad_map, pads_map, grid, config, pin_voronoi)
+
+    # 5. Build solution and route initial pass
+    solution = Solution(
+        grid, config, placement, catalog,
+        net_pad_map, pin_voronoi, all_pin_cells,
+    )
+    solution.expected_nets = set(net_ids)
+    solution.pin_assignments = pin_assignments
+
+    solution.route_nets(ordering, pads_map)
+    log.info("Initial solution: score=%s", solution.score())
+
+    if solution.is_perfect():
+        log.info("Router: all %d nets routed", len(net_ids))
+        return solution.to_result()
+
+    # 6. Iterative improvement
+    best = solution.snapshot()
+    best_score = solution.score()
+    stall = 0
+    pin_shift_tried = False
+
+    for iteration in range(config.max_improve_iterations):
+        jc = solution.jumper_count()
+        targets = solution.worst_nets(k=max(3, jc // 2))
+        if not targets:
+            break
+
+        neighborhood = solution.neighborhood(targets)
+        before = solution.score()
+
+        solution.rip_up(neighborhood)
+
+        new_order = _perturb(neighborhood, targets, iteration)
+        solution.route_nets(new_order, pads_map)
+
+        after = solution.score()
+
+        if after < before:
+            best = solution.snapshot()
+            best_score = after
+            stall = 0
+            pin_shift_tried = False
+            log.info("Iter %d: improved %s â†’ %s", iteration + 1, before, after)
+            if solution.is_perfect():
+                break
+        else:
+            solution.restore(best)
+            stall += 1
+
+            if not pin_shift_tried and stall >= 3 and jc > 0:
+                pin_shift_tried = True
+                shifted = _try_pin_shifts(
+                    solution, net_pad_map, pads_map, pin_assignments,
+                    ordering, placement, catalog,
+                )
+                if shifted:
+                    best = solution.snapshot()
+                    best_score = solution.score()
+                    stall = 0
+                    if solution.is_perfect():
+                        break
+                    continue
+
+            if stall >= config.stall_limit:
+                log.info(
+                    "Stalled for %d iterations (iteration %d of %d), stopping",
+                    stall, iteration + 1, config.max_improve_iterations,
+                )
+                break
+
+    solution.restore(best)
+
+    routed = len(solution.routes)
+    missing = len(net_ids) - routed
+    jc = solution.jumper_count()
+    if missing > 0:
+        log.warning("Router: %d/%d nets routed (%d missing, %d jumper wires)",
+                    routed, len(net_ids), missing, jc)
+    elif jc > 0:
+        log.info("Router: all %d nets routed (%d jumper wires)",
+                 len(net_ids), jc)
+    else:
+        log.info("Router: all %d nets routed", len(net_ids))
+
+    return solution.to_result()
+
+
+# â”€â”€ Net reference parsing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+
+def _parse_net_refs(
+    placement: FullPlacement,
+    catalog: CatalogResult,
+    catalog_map: dict,
+) -> dict[str, list[_PinRef]]:
     catalog_map_groups: dict[str, dict[str, list[str]]] = {}
     for cat_comp in catalog.components:
         if cat_comp.pin_groups:
@@ -131,10 +204,7 @@ def route_traces(
     for net in placement.nets:
         refs: list[_PinRef] = []
         for pin_ref_str in net.pins:
-            iid, pid, is_group = resolve_pin_ref(
-                pin_ref_str, placement, catalog,
-            )
-            # Expand fixed_net group refs into individual pin refs
+            iid, pid, is_group = resolve_pin_ref(pin_ref_str, placement, catalog)
             if is_group:
                 pc = next((p for p in placement.components if p.instance_id == iid), None)
                 cat_id = pc.catalog_id if pc else None
@@ -153,1192 +223,32 @@ def route_traces(
                 pin_or_group=pid, is_group=is_group,
             ))
         net_pad_map[net.id] = refs
-
-    # 4. Collect routable net IDs and compute initial ordering
-    net_ids = [
-        n.id for n in placement.nets
-        if len(net_pad_map.get(n.id, [])) >= 2
-    ]
-
-    # Route each net in isolation to measure its path length
-    log.debug("Isolation routing: measuring path lengths for %d nets", len(net_ids))
-    iso_pools = build_pin_pools(placement, catalog)
-    iso_lengths: dict[str, int] = {}
-    for nid in net_ids:
-        refs = net_pad_map[nid]
-        pads = _resolve_pads(
-            refs, nid, placement, catalog,
-            iso_pools, grid, {},
-        )
-        if pads is None or len(pads) < 2:
-            iso_lengths[nid] = 0
-            log.debug("  %-20s isolation: no pads", nid)
-            continue
-        paths, ok, _ = _route_single_net(
-            nid, pads, grid, pad_radius, config.turn_penalty,
-            pin_voronoi=pin_voronoi,
-        )
-        length = sum(len(p) for p in paths) if ok and paths else 0
-        iso_lengths[nid] = length
-        log.debug("  %-20s isolation: %d cells, %d pins",
-                  nid, length, len(refs))
-
-    def net_priority(nid: str) -> tuple[int, int]:
-        pin_count = len(net_pad_map.get(nid, []))
-        return (-pin_count, -iso_lengths.get(nid, 0))
-
-    net_ids.sort(key=net_priority)
-    log.debug("Initial ordering: %s",
-             ", ".join(f"{nid}({len(net_pad_map[nid])}p/{iso_lengths[nid]}c)"
-                       for nid in net_ids))
-
-    # 5. Negotiated congestion routing (attempt before retry fallback)
-    neg_result = _negotiate_routes(
-        net_ids, net_pad_map, grid, pad_radius, config,
-        placement, catalog, pin_voronoi,
-    )
-
-    best: dict | None = None
-    if neg_result is not None:
-        # Try committing negotiated paths with real clearance.
-        # Different commit orderings cause different clearance conflicts,
-        # so we try several and keep the best.
-        neg_paths = neg_result["routed_paths"]
-        neg_pads = neg_result["routed_pads"]
-        neg_pins = neg_result["pin_assignments"]
-        neg_nids = [nid for nid in net_ids if nid in neg_paths]
-        neg_unroutable = neg_result.get("failed_nets", [])
-
-        # Generate candidate commit orderings
-        orderings_to_try: list[list[str]] = [
-            # 1. Largest first (most path cells → hardest to reroute)
-            sorted(neg_nids,
-                   key=lambda nid: sum(len(p) for p in neg_paths[nid]),
-                   reverse=True),
-            # 2. Most pins first (most constrained)
-            sorted(neg_nids,
-                   key=lambda nid: len(neg_pads.get(nid, [])),
-                   reverse=True),
-            # 3. Smallest first (quick wins, then big ones reroute)
-            sorted(neg_nids,
-                   key=lambda nid: sum(len(p) for p in neg_paths[nid])),
-        ]
-        # 4-7. Random shuffles
-        for _ in range(4):
-            shuf = list(neg_nids)
-            random.shuffle(shuf)
-            orderings_to_try.append(shuf)
-
-        for oi, commit_order in enumerate(orderings_to_try):
-            committed_paths: dict[str, list[list[tuple[int, int]]]] = {}
-            committed_pads: dict[str, list[NetPad]] = {}
-            deferred: list[str] = []
-
-            for nid in commit_order:
-                can_commit = True
-                for path in neg_paths[nid]:
-                    for gx, gy in path:
-                        if not grid.is_free(gx, gy) and not grid.is_protected(gx, gy):
-                            can_commit = False
-                            break
-                    if not can_commit:
-                        break
-                if can_commit:
-                    for path in neg_paths[nid]:
-                        grid.block_trace(path, net_id=nid)
-                    committed_paths[nid] = neg_paths[nid]
-                    committed_pads[nid] = neg_pads[nid]
-                else:
-                    deferred.append(nid)
-
-            # Reroute deferred nets on the partially-filled grid
-            neg_jumpers: list[dict] = []
-            for nid in deferred:
-                pads = neg_pads.get(nid)
-                if pads is None or len(pads) < 2:
-                    continue
-                paths, ok, _ = _route_single_net(
-                    nid, pads, grid, pad_radius, config.turn_penalty,
-                    pin_voronoi=pin_voronoi,
-                )
-                if ok and paths:
-                    for path in paths:
-                        grid.block_trace(path, net_id=nid)
-                    committed_paths[nid] = paths
-                    committed_pads[nid] = pads
-                else:
-                    ok2 = _try_crossing_ripup(
-                        nid, pads, grid, pad_radius, config,
-                        committed_paths, committed_pads, pin_voronoi,
-                    )
-                    if not ok2:
-                        ok3 = _try_jumper_route(
-                            nid, pads, grid, pad_radius, config,
-                            committed_paths, committed_pads, pin_voronoi,
-                            neg_jumpers,
-                        )
-                        if not ok3:
-                            pass  # stays unrouted
-
-            cur_failed = [nid for nid in neg_nids
-                          if nid not in committed_paths]
-            all_failed = neg_unroutable + cur_failed
-            log.info("Negotiation commit order %d: %d/%d routed, "
-                     "%d deferred, %d failed, %d jumpers",
-                     oi + 1, len(committed_paths), len(neg_nids),
-                     len(deferred), len(cur_failed), len(neg_jumpers))
-
-            cur_result = {
-                "routed_paths": committed_paths,
-                "routed_pads": committed_pads,
-                "pin_assignments": neg_pins,
-                "failed_nets": all_failed,
-                "failed_pads": {},
-                "jumpers": list(neg_jumpers),
-            }
-
-            if not all_failed and not neg_jumpers:
-                best = cur_result
-                log.info("Negotiation commit order %d: all nets routed!",
-                         oi + 1)
-                break
-
-            if best is None or _candidate_score(cur_result) < _candidate_score(best):
-                best = cur_result
-
-            # Clear grid for next ordering attempt
-            for cn in committed_paths:
-                for path in committed_paths[cn]:
-                    grid.free_trace(path, net_id=cn)
-
-        if best is not None and best["failed_nets"]:
-            log.info("Negotiation best: %d failures, trying retry loop",
-                     len(best["failed_nets"]))
-
-    # 5b. Retry-based routing (fallback if negotiation had no result,
-    #     or negotiation committed with some failures)
-    baseline_order = list(net_ids)
-    tried_orderings: set[tuple[str, ...]] = set()
-    last_attempt: dict | None = None
-    ordering = list(baseline_order)
-    prev_failed: list[str] = []
-    neg_perfect = (best is not None and not best["failed_nets"]
-                   and not best.get("jumpers"))
-    _retry_attempts = 0 if neg_perfect else (1 + config.max_retries)
-
-    for attempt in range(_retry_attempts):
-        ordering_key = tuple(ordering)
-        if ordering_key in tried_orderings:
-            ordering = _perturb_ordering(baseline_order, prev_failed, attempt)
-            log.debug("Attempt %d: skipped duplicate ordering", attempt + 1)
-            continue
-        tried_orderings.add(ordering_key)
-        log.debug("Attempt %d: order = [%s]",
-                  attempt + 1, ", ".join(ordering))
-
-        pin_pools = build_pin_pools(placement, catalog)
-        routed_paths: dict[str, list[list[tuple[int, int]]]] = {}
-        routed_pads: dict[str, list[NetPad]] = {}
-        pin_assignments: dict[str, str] = {}
-        failed_nets: list[str] = []
-        failed_pads_map: dict[str, list[NetPad]] = {}
-        attempt_jumpers: list[dict] = []
-
-        for nid in ordering:
-            refs = net_pad_map[nid]
-            pads = _resolve_pads(
-                refs, nid, placement, catalog,
-                pin_pools, grid, pin_assignments,
-            )
-            if pads is None or len(pads) < 2:
-                failed_nets.append(nid)
-                log.info("  %-20s FAIL — pad resolution", nid)
-                continue
-
-            paths, ok, _ = _route_single_net(
-                nid, pads, grid, pad_radius, config.turn_penalty,
-                pin_voronoi=pin_voronoi,
-            )
-
-            if ok and paths:
-                routed_paths[nid] = paths
-                routed_pads[nid] = pads
-                for path in paths:
-                    grid.block_trace(path, net_id=nid)
-                log.info("  %-20s OK — %d segments", nid, len(paths))
-            else:
-                ok2 = _try_crossing_ripup(
-                    nid, pads, grid, pad_radius, config,
-                    routed_paths, routed_pads, pin_voronoi,
-                )
-                if ok2:
-                    log.info("  %-20s OK — rip-up resolved", nid)
-                else:
-                    ok3 = _try_jumper_route(
-                        nid, pads, grid, pad_radius, config,
-                        routed_paths, routed_pads, pin_voronoi,
-                        attempt_jumpers,
-                    )
-                    if not ok3:
-                        failed_nets.append(nid)
-                        failed_pads_map[nid] = pads
-                        log.info("  %-20s FAIL — no route", nid)
-
-        last_attempt = {
-            "routed_paths": routed_paths,
-            "routed_pads": routed_pads,
-            "pin_assignments": pin_assignments,
-            "failed_nets": failed_nets,
-            "failed_pads": failed_pads_map,
-            "jumpers": list(attempt_jumpers),
-        }
-
-        if not failed_nets and not attempt_jumpers:
-            log.info("Router: all nets routed on attempt %d", attempt + 1)
-            best = last_attempt
-            break
-
-        if best is None or _candidate_score(last_attempt) < _candidate_score(best):
-            best = last_attempt
-            log.debug("Attempt %d: new best (%d failed, %d jumpers)",
-                      attempt + 1, len(failed_nets), len(attempt_jumpers))
-
-        log.info("Router attempt %d: %d/%d failed, %d jumpers [%s]",
-                 attempt + 1, len(failed_nets), len(ordering),
-                 len(attempt_jumpers), ", ".join(failed_nets))
-
-        for nid, net_paths in routed_paths.items():
-            for path in net_paths:
-                grid.free_trace(path, net_id=nid)
-
-        prev_failed = list(failed_nets)
-        ordering = _perturb_ordering(baseline_order, failed_nets, attempt)
-
-    assert best is not None
-
-    if last_attempt is not None and best is not last_attempt:
-        for nid, net_paths in best["routed_paths"].items():
-            for path in net_paths:
-                grid.block_trace(path, net_id=nid)
-
-    routed_paths = best["routed_paths"]
-    routed_pads = best["routed_pads"]
-    pin_assignments = best["pin_assignments"]
-    failed_nets = best["failed_nets"]
-    best_jumpers = best.get("jumpers", [])
-
-    # 5b. Capture debug snapshots (self-contained, does not use the live grid)
-    debug_grids = build_debug_grids(
-        placement, catalog, routed_paths, routed_pads, config=config,
-    )
-
-    # 6. Convert grid paths to world-coordinate traces
-    traces = _grid_paths_to_traces(routed_paths, grid)
-
-    jumper_wires = [
-        JumperWire(
-            net_id=j["net_id"],
-            start=j["start"],
-            end=j["end"],
-            length_mm=j["length_mm"],
-        )
-        for j in best_jumpers
-    ]
-
-    if failed_nets:
-        log.warning("Router: %d/%d nets failed: %s",
-                    len(failed_nets), len(net_ids), failed_nets)
-    elif jumper_wires:
-        log.info("Router: all %d nets routed (%d jumper wires)",
-                 len(net_ids), len(jumper_wires))
-    else:
-        log.info("Router: all %d nets routed", len(net_ids))
-
-    return RoutingResult(
-        traces=traces,
-        pin_assignments=pin_assignments,
-        failed_nets=failed_nets,
-        jumpers=jumper_wires,
-        debug_grids=debug_grids,
-    )
+    return net_pad_map
 
 
-# ── Ordering perturbation ─────────────────────────────────────────
+# â”€â”€ Pad resolution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
-def _perturb_ordering(
-    baseline: list[str],
-    failed_nets: list[str],
-    attempt: int,
-) -> list[str]:
-    """Generate a new net ordering informed by previous failures.
-
-    Early attempts promote failed nets towards the front of the
-    baseline order (they failed because earlier nets blocked them).
-    Later attempts make increasingly random perturbations.
-    """
-    ordering = list(baseline)
-    if not failed_nets:
-        random.shuffle(ordering)
-        log.debug("Perturb attempt %d: no failures, random shuffle", attempt)
-        return ordering
-
-    n = len(ordering)
-    half = max(1, (1 + len(baseline)) // 2)
-
-    if attempt < half:
-        # Promote each failed net by `attempt` positions in the baseline
-        for nid in failed_nets:
-            if nid not in ordering:
-                continue
-            idx = ordering.index(nid)
-            new_idx = max(0, idx - (attempt + 1))
-            ordering.pop(idx)
-            ordering.insert(new_idx, nid)
-        log.debug("Perturb attempt %d: promoted %s by %d positions",
-                  attempt, failed_nets, attempt + 1)
-    else:
-        # Random shuffle with failed nets biased towards the front
-        non_failed = [nid for nid in ordering if nid not in failed_nets]
-        random.shuffle(non_failed)
-        failed_copy = list(failed_nets)
-        random.shuffle(failed_copy)
-        # Insert failed nets into random positions in the first half
-        ordering = list(non_failed)
-        for nid in failed_copy:
-            pos = random.randint(0, max(0, n // 2))
-            ordering.insert(pos, nid)
-        log.debug("Perturb attempt %d: random with %s biased to front",
-                  attempt, failed_nets)
-
-    return ordering
-
-
-# ── Negotiated congestion routing ──────────────────────────────────
-
-# PathFinder / McMurchie-Ebeling (1995) style.  All nets are routed on
-# a clean grid (no inter-net blocking) guided by a per-cell cost map.
-# After each iteration the history cost at cells used by more than one
-# net is increased, progressively pushing conflicting traces apart
-# until they stop overlapping.
-
-_NEG_HISTORY_FACTOR = 2.0   # multiplier for accumulated history cost
-_NEG_PRESENT_FACTOR = 20.0  # per-extra-user penalty for current overlap
-_NEG_MAX_ITERATIONS = 30    # hard cap on negotiation iterations
-
-
-def _negotiate_routes(
+def _resolve_all_pads(
     net_ids: list[str],
     net_pad_map: dict[str, list[_PinRef]],
-    grid: RoutingGrid,
-    pad_radius: int,
-    config: RouterConfig,
     placement: FullPlacement,
     catalog: CatalogResult,
-    pin_voronoi: dict[int, str] | None,
-) -> dict | None:
-    """Negotiated congestion routing.
-
-    Returns a result dict (same shape as the retry loop's ``best``)
-    when negotiation converges to a conflict-free solution, or *None*
-    if it fails to converge within ``_NEG_MAX_ITERATIONS`` iterations.
-    Paths are **not** committed to the grid — the caller must do that.
-    """
-    W = grid.width
-
-    # ── Resolve pads once (pin assignments stay fixed) ─────────
+    grid: RoutingGrid,
+) -> tuple[dict[str, list[NetPad]], dict[str, str]]:
     pin_pools = build_pin_pools(placement, catalog)
     pin_assignments: dict[str, str] = {}
-    resolved_pads: dict[str, list[NetPad]] = {}
-    unroutable: list[str] = []
+    pads_map: dict[str, list[NetPad]] = {}
 
     for nid in net_ids:
         refs = net_pad_map[nid]
         pads = _resolve_pads(
-            refs, nid, placement, catalog,
-            pin_pools, grid, pin_assignments,
+            refs, nid, placement, catalog, pin_pools, grid, pin_assignments,
         )
         if pads is not None and len(pads) >= 2:
-            resolved_pads[nid] = pads
-        else:
-            unroutable.append(nid)
+            pads_map[nid] = pads
 
-    routable = [nid for nid in net_ids if nid in resolved_pads]
-    if len(routable) < 2:
-        return None
-
-    log.info("Negotiation: %d routable nets, %d unroutable",
-             len(routable), len(unroutable))
-
-    # ── Iteration state ────────────────────────────────────────
-    history_cost: dict[int, float] = {}
-    net_cells: dict[str, set[int]] = {}   # flat-index sets per net
-    cell_usage: dict[int, int] = {}       # total users per cell
-    net_paths: dict[str, list[list[tuple[int, int]]]] = {}
-
-    prev_congested = None
-    stall_count = 0
-
-    # Track the best (lowest-congestion) snapshot across iterations so we
-    # can fall back to it when negotiation stalls near convergence.
-    best_congested = float("inf")
-    best_snapshot: dict | None = None
-
-    for iteration in range(_NEG_MAX_ITERATIONS):
-        # Shuffle net order after the first iteration to avoid bias
-        order = list(routable)
-        if iteration > 0:
-            random.shuffle(order)
-
-        for nid in order:
-            pads = resolved_pads[nid]
-
-            # Remove this net's old contribution to cell_usage
-            old = net_cells.pop(nid, None)
-            if old:
-                for key in old:
-                    cell_usage[key] -= 1
-                    if cell_usage[key] == 0:
-                        del cell_usage[key]
-
-            # Build cost map: present congestion + history
-            cost_map: dict[int, float] = {}
-            for key, count in cell_usage.items():
-                cost_map[key] = (
-                    count * _NEG_PRESENT_FACTOR
-                    + history_cost.get(key, 0.0) * _NEG_HISTORY_FACTOR
-                )
-            for key, h in history_cost.items():
-                if key not in cost_map and h > 0:
-                    cost_map[key] = h * _NEG_HISTORY_FACTOR
-
-            # Route on the clean grid (only component blocks, no traces)
-            paths, ok, _ = _route_single_net(
-                nid, pads, grid, pad_radius, config.turn_penalty,
-                pin_voronoi=pin_voronoi,
-                cost_map=cost_map if cost_map else None,
-            )
-
-            if ok and paths:
-                net_paths[nid] = paths
-                cells: set[int] = set()
-                for path in paths:
-                    for gx, gy in path:
-                        cells.add(gy * W + gx)
-                net_cells[nid] = cells
-                for key in cells:
-                    cell_usage[key] = cell_usage.get(key, 0) + 1
-            else:
-                net_paths.pop(nid, None)
-
-        # ── Measure congestion ─────────────────────────────────
-        congested = sum(1 for c in cell_usage.values() if c > 1)
-        overflow = sum(max(0, c - 1) for c in cell_usage.values())
-
-        log.info("Negotiation iter %d: %d congested cells, overflow=%d, "
-                 "%d/%d nets routed",
-                 iteration + 1, congested, overflow,
-                 len(net_paths), len(routable))
-
-        # ── Snapshot best iteration ────────────────────────────
-        if (len(net_paths) == len(routable) and
-                congested < best_congested):
-            best_congested = congested
-            # Deep-copy paths so later iterations don't mutate them
-            best_snapshot = {
-                nid: [list(seg) for seg in segs]
-                for nid, segs in net_paths.items()
-            }
-
-        # ── Update history ─────────────────────────────────────
-        for key, count in list(cell_usage.items()):
-            if count > 1:
-                history_cost[key] = history_cost.get(key, 0.0) + (count - 1)
-
-        # ── Check convergence ──────────────────────────────────
-        if congested == 0 and len(net_paths) == len(routable):
-            log.info("Negotiation converged in %d iterations", iteration + 1)
-            failed = unroutable + [
-                nid for nid in routable if nid not in net_paths
-            ]
-            return {
-                "routed_paths": net_paths,
-                "routed_pads": {nid: resolved_pads[nid]
-                                for nid in net_paths},
-                "pin_assignments": pin_assignments,
-                "failed_nets": failed,
-                "failed_pads": {},
-            }
-
-        # ── Stall detection ────────────────────────────────────
-        if prev_congested is not None and congested >= prev_congested:
-            stall_count += 1
-            if stall_count >= 8:
-                log.warning("Negotiation stalled for %d iterations, "
-                            "giving up", stall_count)
-                break
-        else:
-            stall_count = 0
-        prev_congested = congested
-
-    # ── Near-convergence: return best snapshot if overlap is small ────
-    # Even if path-cell overlaps remain, the path shapes are good
-    # guidance.  The caller verifies clearance at commit time.
-    if best_snapshot is not None and best_congested <= 5:
-        log.info("Negotiation nearly converged (best=%d path overlaps), "
-                 "returning best snapshot", best_congested)
-        failed = unroutable + [
-            nid for nid in routable if nid not in best_snapshot
-        ]
-        return {
-            "routed_paths": best_snapshot,
-            "routed_pads": {nid: resolved_pads[nid]
-                            for nid in best_snapshot},
-            "pin_assignments": pin_assignments,
-            "failed_nets": failed,
-            "failed_pads": {},
-        }
-
-    log.warning("Negotiation did not converge after %d iterations "
-                "(%d congested cells remain)",
-                min(iteration + 1, _NEG_MAX_ITERATIONS),
-                congested if 'congested' in dir() else -1)
-    return None
-
-
-# ── Crossing rip-up ────────────────────────────────────────────────
-
-
-def _try_crossing_ripup(
-    net_id: str,
-    pads: list[NetPad],
-    grid: RoutingGrid,
-    pad_radius: int,
-    config: RouterConfig,
-    routed_paths: dict[str, list[list[tuple[int, int]]]],
-    routed_pads: dict[str, list[NetPad]],
-    pin_voronoi: dict[int, str] | None,
-) -> bool:
-    """Route a net using crossing-cost A*, then rip up crossed nets.
-
-    1. Run A* with crossing_cost — the path may walk through existing
-       traces, paying a high penalty.
-    2. Identify which nets the path crossed (via grid trace ownership).
-    3. Rip those nets, commit the new path, reroute ripped nets.
-    4. If any ripped net cannot reroute, revert everything.
-    """
-    paths_cross, ok, _ = _route_single_net(
-        net_id, pads, grid, pad_radius, config.turn_penalty,
-        pin_voronoi=pin_voronoi,
-        crossing_cost=config.crossing_cost,
-    )
-    if not ok or not paths_cross:
-        return False
-
-    crossed_nets: set[str] = set()
-    for path in paths_cross:
-        for gx, gy in path:
-            owners = grid.cell_owner_at(gx, gy)
-            crossed_nets.update(owners - {net_id})
-
-    # Only rip nets that are actually routed — stale ownership or
-    # pin-protection cells may reference nets not in routed_paths.
-    crossed_nets = {cn for cn in crossed_nets if cn in routed_paths}
-
-    if not crossed_nets:
-        for path in paths_cross:
-            grid.block_trace(path, net_id=net_id)
-        routed_paths[net_id] = paths_cross
-        routed_pads[net_id] = pads
-        return True
-
-    log.debug("  rip-up: %s crosses %s", net_id, list(crossed_nets))
-
-    saved: dict[str, list[list[tuple[int, int]]]] = {}
-    for cn in crossed_nets:
-        saved[cn] = routed_paths[cn]
-        for path in routed_paths[cn]:
-            grid.free_trace(path, net_id=cn)
-
-    for path in paths_cross:
-        grid.block_trace(path, net_id=net_id)
-    routed_paths[net_id] = paths_cross
-    routed_pads[net_id] = pads
-
-    all_rerouted = True
-    for cn in crossed_nets:
-        cn_pads = routed_pads[cn]
-        cn_paths, cn_ok, _ = _route_single_net(
-            cn, cn_pads, grid, pad_radius, config.turn_penalty,
-            pin_voronoi=pin_voronoi,
-        )
-        if cn_ok and cn_paths:
-            for path in cn_paths:
-                grid.block_trace(path, net_id=cn)
-            routed_paths[cn] = cn_paths
-            log.debug("  rip-up: rerouted %s OK", cn)
-        else:
-            log.debug("  rip-up: rerouted %s FAIL, reverting", cn)
-            all_rerouted = False
-            break
-
-    if all_rerouted:
-        return True
-
-    for path in paths_cross:
-        grid.free_trace(path, net_id=net_id)
-    del routed_paths[net_id]
-
-    for rn in crossed_nets:
-        if rn in routed_paths and routed_paths[rn] is not saved.get(rn):
-            for path in routed_paths[rn]:
-                grid.free_trace(path, net_id=rn)
-        if rn in saved:
-            routed_paths[rn] = saved[rn]
-            for path in saved[rn]:
-                grid.block_trace(path, net_id=rn)
-
-    return False
-
-
-# ── Jumper wire fallback ───────────────────────────────────────────
-
-
-def _try_jumper_route(
-    net_id: str,
-    pads: list[NetPad],
-    grid: RoutingGrid,
-    pad_radius: int,
-    config: RouterConfig,
-    routed_paths: dict[str, list[list[tuple[int, int]]]],
-    routed_pads: dict[str, list[NetPad]],
-    pin_voronoi: dict[int, str] | None,
-    jumpers_out: list[dict],
-) -> bool:
-    """Last-resort fallback: insert a jumper wire to bridge a planarity conflict.
-
-    1. Route with crossing_cost to find the cheapest crossing path.
-    2. Identify contiguous segments of blocked/trace cells on that path
-       (these are the planarity conflicts).
-    3. For the shortest conflict segment, place a jumper wire that
-       bridges the gap — the two endpoints become virtual pins.
-    4. Route the sub-segments (pad→jumper_start, jumper_end→pad)
-       on the real grid.
-    5. Record the jumper in jumpers_out for the caller.
-    """
-    if len(pads) < 2:
-        return False
-
-    if len(pads) > 2:
-        return _try_jumper_route_multi(
-            net_id, pads, grid, pad_radius, config,
-            routed_paths, routed_pads, pin_voronoi, jumpers_out,
-        )
-
-    paths_cross, ok, _ = _route_single_net(
-        net_id, pads, grid, pad_radius, config.turn_penalty,
-        pin_voronoi=pin_voronoi,
-        crossing_cost=config.crossing_cost,
-    )
-    if not ok or not paths_cross:
-        return _commit_full_span_jumper(
-            net_id, pads, grid, routed_paths, routed_pads, jumpers_out,
-        )
-
-    cross_path = paths_cross[0]
-    if len(cross_path) < 3:
-        return _commit_full_span_jumper(
-            net_id, pads, grid, routed_paths, routed_pads, jumpers_out,
-        )
-
-    crossing_segments = _find_crossing_segments(cross_path, grid)
-    if not crossing_segments:
-        for path in paths_cross:
-            grid.block_trace(path, net_id=net_id)
-        routed_paths[net_id] = paths_cross
-        routed_pads[net_id] = pads
-        return True
-
-    crossing_segments.sort(key=lambda seg: seg[1] - seg[0])
-
-    for seg_start, seg_end in crossing_segments:
-        jstart_idx = max(0, seg_start)
-        jend_idx = min(len(cross_path) - 1, seg_end)
-
-        jstart_cell = cross_path[jstart_idx]
-        jend_cell = cross_path[jend_idx]
-
-        if jstart_cell == jend_cell:
-            continue
-
-        jstart_wx, jstart_wy = grid.grid_to_world(*jstart_cell)
-        jend_wx, jend_wy = grid.grid_to_world(*jend_cell)
-
-        sub_ok = _route_jumper_subsegments(
-            net_id, pads, jstart_cell, jend_cell,
-            grid, pad_radius, config.turn_penalty,
-            pin_voronoi, routed_paths, routed_pads,
-        )
-
-        if sub_ok:
-            length_mm = math.hypot(jend_wx - jstart_wx, jend_wy - jstart_wy)
-            jumpers_out.append({
-                "net_id": net_id,
-                "start": (jstart_wx, jstart_wy),
-                "end": (jend_wx, jend_wy),
-                "length_mm": length_mm,
-            })
-            log.info("  %-20s OK — jumper wire (%.1f mm)", net_id, length_mm)
-            return True
-
-    return _commit_full_span_jumper(
-        net_id, pads, grid, routed_paths, routed_pads, jumpers_out,
-    )
-
-
-def _commit_full_span_jumper(
-    net_id: str,
-    pads: list[NetPad],
-    grid: RoutingGrid,
-    routed_paths: dict[str, list[list[tuple[int, int]]]],
-    routed_pads: dict[str, list[NetPad]],
-    jumpers_out: list[dict],
-) -> bool:
-    """Absolute last resort: bridge the entire 2-pin net with a jumper wire.
-
-    No traces are committed to the grid — the connection is entirely
-    a physical wire soldered on top of the board.
-    """
-    src_wx, src_wy = grid.grid_to_world(pads[0].gx, pads[0].gy)
-    snk_wx, snk_wy = grid.grid_to_world(pads[1].gx, pads[1].gy)
-    length_mm = math.hypot(snk_wx - src_wx, snk_wy - src_wy)
-    jumpers_out.append({
-        "net_id": net_id,
-        "start": (src_wx, src_wy),
-        "end": (snk_wx, snk_wy),
-        "length_mm": length_mm,
-    })
-    routed_paths[net_id] = []
-    routed_pads[net_id] = pads
-    log.info("  %-20s OK — full-span jumper (%.1f mm)", net_id, length_mm)
-    return True
-
-
-def _find_crossing_segments(
-    path: list[tuple[int, int]],
-    grid: RoutingGrid,
-) -> list[tuple[int, int]]:
-    """Identify contiguous runs of non-free cells in a crossing path.
-
-    Returns a list of (last_free_before, first_free_after) index pairs.
-    """
-    segments: list[tuple[int, int]] = []
-    in_crossing = False
-    seg_start = 0
-
-    for i, (gx, gy) in enumerate(path):
-        cell_blocked = not grid.is_free(gx, gy) and not grid.is_protected(gx, gy)
-        if cell_blocked and not in_crossing:
-            seg_start = max(0, i - 1)
-            in_crossing = True
-        elif not cell_blocked and in_crossing:
-            segments.append((seg_start, i))
-            in_crossing = False
-
-    if in_crossing:
-        segments.append((seg_start, len(path) - 1))
-
-    return segments
-
-
-def _route_jumper_subsegments(
-    net_id: str,
-    pads: list[NetPad],
-    jstart: tuple[int, int],
-    jend: tuple[int, int],
-    grid: RoutingGrid,
-    pad_radius: int,
-    turn_penalty: int,
-    pin_voronoi: dict[int, str] | None,
-    routed_paths: dict[str, list[list[tuple[int, int]]]],
-    routed_pads: dict[str, list[NetPad]],
-) -> bool:
-    """Route the two sub-segments around a jumper and commit them."""
-    src = (pads[0].gx, pads[0].gy)
-    snk = (pads[1].gx, pads[1].gy)
-
-    grid.force_free_cell(jstart[0], jstart[1])
-    grid.protect_cell(jstart[0], jstart[1])
-    grid.force_free_cell(jend[0], jend[1])
-    grid.protect_cell(jend[0], jend[1])
-
-    blocked_v: list[tuple[int, int]] = []
-    if pin_voronoi is not None:
-        blocked_v = _block_voronoi(grid, pin_voronoi, pads)
-
-    path_a = find_path(grid, src, jstart, turn_penalty=turn_penalty)
-    path_b = find_path(grid, snk, jend, turn_penalty=turn_penalty)
-
-    _unblock_voronoi(grid, blocked_v)
-
-    if path_a is None or path_b is None:
-        blocked_v2: list[tuple[int, int]] = []
-        if pin_voronoi is not None:
-            blocked_v2 = _block_voronoi(grid, pin_voronoi, pads)
-
-        path_a2 = find_path(grid, src, jend, turn_penalty=turn_penalty)
-        path_b2 = find_path(grid, snk, jstart, turn_penalty=turn_penalty)
-
-        _unblock_voronoi(grid, blocked_v2)
-
-        if path_a2 is not None and path_b2 is not None:
-            path_a, path_b = path_a2, path_b2
-        else:
-            return False
-
-    all_paths = [path_a, path_b]
-    for path in all_paths:
-        grid.block_trace(path, net_id=net_id)
-    routed_paths[net_id] = all_paths
-    routed_pads[net_id] = pads
-    return True
-
-
-# ── Multi-pin jumper fallback ──────────────────────────────────────
-
-
-def _make_edge_jumper(
-    net_id: str,
-    pad_a: NetPad,
-    pad_b: NetPad,
-    grid: RoutingGrid,
-) -> dict:
-    """Build a full-span jumper dict for a single MST edge."""
-    wa_x, wa_y = grid.grid_to_world(pad_a.gx, pad_a.gy)
-    wb_x, wb_y = grid.grid_to_world(pad_b.gx, pad_b.gy)
-    return {
-        "net_id": net_id,
-        "start": (wa_x, wa_y),
-        "end": (wb_x, wb_y),
-        "length_mm": math.hypot(wb_x - wa_x, wb_y - wa_y),
-    }
-
-
-def _try_jumper_route_multi(
-    net_id: str,
-    pads: list[NetPad],
-    grid: RoutingGrid,
-    pad_radius: int,
-    config: RouterConfig,
-    routed_paths: dict[str, list[list[tuple[int, int]]]],
-    routed_pads: dict[str, list[NetPad]],
-    pin_voronoi: dict[int, str] | None,
-    jumpers_out: list[dict],
-) -> bool:
-    """Jumper fallback for multi-pin nets using MST decomposition.
-
-    Routes each MST edge normally; when an edge cannot be routed, it
-    applies the crossing-cost + jumper wire technique to bridge that
-    single edge, then continues with remaining edges.
-    """
-    mst_edges = _compute_mst(pads)
-    all_paths: list[list[tuple[int, int]]] = []
-    edge_jumpers: list[dict] = []
-
-    uf_parent = list(range(len(pads)))
-    uf_rank = [0] * len(pads)
-
-    def _find(x: int) -> int:
-        while uf_parent[x] != x:
-            uf_parent[x] = uf_parent[uf_parent[x]]
-            x = uf_parent[x]
-        return x
-
-    def _union(a: int, b: int) -> None:
-        ra, rb = _find(a), _find(b)
-        if ra == rb:
-            return
-        if uf_rank[ra] < uf_rank[rb]:
-            ra, rb = rb, ra
-        uf_parent[rb] = ra
-        if uf_rank[ra] == uf_rank[rb]:
-            uf_rank[ra] += 1
-
-    comp_trees: dict[int, set[tuple[int, int]]] = {
-        i: {(pads[i].gx, pads[i].gy)} for i in range(len(pads))
-    }
-
-    def _get_tree(idx: int) -> set[tuple[int, int]]:
-        return comp_trees[_find(idx)]
-
-    def _merge(a: int, b: int, path_cells: list[tuple[int, int]]) -> None:
-        ra, rb = _find(a), _find(b)
-        if ra == rb:
-            comp_trees[ra].update(path_cells)
-            return
-        tree_a = comp_trees.pop(ra)
-        tree_b = comp_trees.pop(rb)
-        _union(a, b)
-        new_root = _find(a)
-        combined = tree_a | tree_b | set(path_cells)
-        comp_trees[new_root] = combined
-
-    for pa, pb in mst_edges:
-        if _find(pa) == _find(pb):
-            continue
-
-        tree_a = _get_tree(pa)
-        tree_b = _get_tree(pb)
-        if len(tree_a) >= len(tree_b):
-            src_tree, target_tree = tree_b, tree_a
-        else:
-            src_tree, target_tree = tree_a, tree_b
-
-        # 1. Try normal routing
-        blocked_v: list[tuple[int, int]] = []
-        if pin_voronoi is not None:
-            blocked_v = _block_voronoi(grid, pin_voronoi, pads)
-
-        path = find_path_to_tree(
-            grid, src_tree, target_tree,
-            turn_penalty=config.turn_penalty,
-        )
-        _unblock_voronoi(grid, blocked_v)
-
-        if path is not None:
-            all_paths.append(path)
-            grid.block_trace(path, net_id=net_id)
-            _merge(pa, pb, path)
-            continue
-
-        # 2. Normal failed — try crossing-cost to locate the conflict
-        blocked_v2: list[tuple[int, int]] = []
-        if pin_voronoi is not None:
-            blocked_v2 = _block_voronoi(grid, pin_voronoi, pads)
-
-        cross_path = find_path_to_tree(
-            grid, src_tree, target_tree,
-            turn_penalty=config.turn_penalty,
-            crossing_cost=config.crossing_cost,
-        )
-        _unblock_voronoi(grid, blocked_v2)
-
-        if cross_path is None or len(cross_path) < 3:
-            edge_jumpers.append(_make_edge_jumper(
-                net_id, pads[pa], pads[pb], grid,
-            ))
-            _merge(pa, pb, [])
-            continue
-
-        # 3. Identify crossing segments
-        crossing_segments = _find_crossing_segments(cross_path, grid)
-
-        if not crossing_segments:
-            all_paths.append(cross_path)
-            grid.block_trace(cross_path, net_id=net_id)
-            _merge(pa, pb, cross_path)
-            continue
-
-        # 4. Try each crossing segment as a jumper candidate
-        crossing_segments.sort(key=lambda seg: seg[1] - seg[0])
-        jumper_placed = False
-
-        for seg_start, seg_end in crossing_segments:
-            jstart_idx = max(0, seg_start)
-            jend_idx = min(len(cross_path) - 1, seg_end)
-            jstart_cell = cross_path[jstart_idx]
-            jend_cell = cross_path[jend_idx]
-
-            if jstart_cell == jend_cell:
-                continue
-
-            sub_paths = _route_jumper_subsegments_multi(
-                net_id, src_tree, target_tree,
-                jstart_cell, jend_cell,
-                grid, config.turn_penalty, pin_voronoi, pads,
-            )
-
-            if sub_paths is not None:
-                for sp in sub_paths:
-                    all_paths.append(sp)
-                    grid.block_trace(sp, net_id=net_id)
-
-                jstart_wx, jstart_wy = grid.grid_to_world(*jstart_cell)
-                jend_wx, jend_wy = grid.grid_to_world(*jend_cell)
-                length_mm = math.hypot(
-                    jend_wx - jstart_wx, jend_wy - jstart_wy,
-                )
-                edge_jumpers.append({
-                    "net_id": net_id,
-                    "start": (jstart_wx, jstart_wy),
-                    "end": (jend_wx, jend_wy),
-                    "length_mm": length_mm,
-                })
-
-                merged_cells: list[tuple[int, int]] = []
-                for sp in sub_paths:
-                    merged_cells.extend(sp)
-                _merge(pa, pb, merged_cells)
-                jumper_placed = True
-                break
-
-        if not jumper_placed:
-            edge_jumpers.append(_make_edge_jumper(
-                net_id, pads[pa], pads[pb], grid,
-            ))
-            _merge(pa, pb, [])
-
-    routed_paths[net_id] = all_paths
-    routed_pads[net_id] = pads
-    jumpers_out.extend(edge_jumpers)
-
-    desc = ", ".join(f"{j['length_mm']:.1f} mm" for j in edge_jumpers)
-    log.info(
-        "  %-20s OK — %d jumper wire%s (%s)",
-        net_id, len(edge_jumpers),
-        "s" if len(edge_jumpers) != 1 else "", desc,
-    )
-    return True
-
-
-def _route_jumper_subsegments_multi(
-    net_id: str,
-    src_tree: set[tuple[int, int]],
-    target_tree: set[tuple[int, int]],
-    jstart: tuple[int, int],
-    jend: tuple[int, int],
-    grid: RoutingGrid,
-    turn_penalty: int,
-    pin_voronoi: dict[int, str] | None,
-    pads: list[NetPad],
-) -> list[list[tuple[int, int]]] | None:
-    """Route tree→jumper_start and tree→jumper_end for multi-pin nets.
-
-    Returns the two sub-paths on success, or None on failure.
-    """
-    grid.force_free_cell(jstart[0], jstart[1])
-    grid.protect_cell(jstart[0], jstart[1])
-    grid.force_free_cell(jend[0], jend[1])
-    grid.protect_cell(jend[0], jend[1])
-
-    blocked_v: list[tuple[int, int]] = []
-    if pin_voronoi is not None:
-        blocked_v = _block_voronoi(grid, pin_voronoi, pads)
-
-    path_a = find_path_to_tree(
-        grid, src_tree, {jstart}, turn_penalty=turn_penalty,
-    )
-    path_b = find_path_to_tree(
-        grid, target_tree, {jend}, turn_penalty=turn_penalty,
-    )
-    _unblock_voronoi(grid, blocked_v)
-
-    if path_a is None or path_b is None:
-        blocked_v2: list[tuple[int, int]] = []
-        if pin_voronoi is not None:
-            blocked_v2 = _block_voronoi(grid, pin_voronoi, pads)
-
-        path_a2 = find_path_to_tree(
-            grid, src_tree, {jend}, turn_penalty=turn_penalty,
-        )
-        path_b2 = find_path_to_tree(
-            grid, target_tree, {jstart}, turn_penalty=turn_penalty,
-        )
-        _unblock_voronoi(grid, blocked_v2)
-
-        if path_a2 is not None and path_b2 is not None:
-            path_a, path_b = path_a2, path_b2
-        else:
-            return None
-
-    return [path_a, path_b]
-
-
-# ── Candidate scoring ──────────────────────────────────────────────
-
-
-def _candidate_score(result: dict) -> tuple[int, int, float, int]:
-    """Lexicographic score for comparing routing candidates.
-
-    Lower is better:
-      (failed_nets, jumper_count, total_jumper_length_mm, total_path_length).
-    """
-    failed = len(result["failed_nets"])
-    jumper_list = result.get("jumpers", [])
-    jumper_count = len(jumper_list)
-    jumper_length = sum(j.get("length_mm", 0.0) for j in jumper_list)
-    total_len = sum(
-        len(p)
-        for paths in result["routed_paths"].values()
-        for p in paths
-    )
-    return (failed, jumper_count, jumper_length, total_len)
-
-
-# ── Component blocking ─────────────────────────────────────────────
-
-
-def _block_components(
-    grid: RoutingGrid,
-    placement: FullPlacement,
-    catalog_map: dict,
-    pad_radius: int,
-) -> None:
-    """Block component bodies, then ensure all pin cells are reachable."""
-
-    # Block routing-blocking component bodies (with keepout margin)
-    for pc in placement.components:
-        cat = catalog_map.get(pc.catalog_id)
-        if cat is None or not cat.mounting.blocks_routing:
-            continue
-        hw, hh = footprint_halfdims(cat, pc.rotation_deg)
-        keepout = cat.mounting.keepout_margin_mm
-        grid.block_rect_world(
-            pc.x_mm, pc.y_mm,
-            hw + keepout, hh + keepout,
-            permanent=True,
-        )
-
-    # Force-free pin cells + pad_radius neighbourhood, mark as protected
-    for pc in placement.components:
-        cat = catalog_map.get(pc.catalog_id)
-        if cat is None:
-            continue
-        for pin in cat.pins:
-            wx, wy = pin_world_xy(
-                pin.position_mm, pc.x_mm, pc.y_mm, pc.rotation_deg,
-            )
-            gx, gy = grid.world_to_grid(wx, wy)
-            for dx in range(-pad_radius, pad_radius + 1):
-                for dy in range(-pad_radius, pad_radius + 1):
-                    grid.force_free_cell(gx + dx, gy + dy)
-                    grid.protect_cell(gx + dx, gy + dy)
-
-    # Re-block body interiors so traces never cross through a component
-    for pc in placement.components:
-        cat = catalog_map.get(pc.catalog_id)
-        if cat is None or not cat.mounting.blocks_routing:
-            continue
-        hw, hh = footprint_halfdims(cat, pc.rotation_deg)
-        grid.block_rect_world(pc.x_mm, pc.y_mm, hw, hh, permanent=True)
-
-    # Re-free pin cells (1-cell ring) that the body re-block may have covered
-    for pc in placement.components:
-        cat = catalog_map.get(pc.catalog_id)
-        if cat is None or not cat.mounting.blocks_routing:
-            continue
-        for pin in cat.pins:
-            wx, wy = pin_world_xy(
-                pin.position_mm, pc.x_mm, pc.y_mm, pc.rotation_deg,
-            )
-            gx, gy = grid.world_to_grid(wx, wy)
-            for dx in range(-1, 2):
-                for dy in range(-1, 2):
-                    grid.force_free_cell(gx + dx, gy + dy)
-                    grid.protect_cell(gx + dx, gy + dy)
-
-
-# ── Pad resolution ─────────────────────────────────────────────────
+    return pads_map, pin_assignments
 
 
 def _resolve_pads(
@@ -1350,7 +260,6 @@ def _resolve_pads(
     grid: RoutingGrid,
     pin_assignments: dict[str, str],
 ) -> list[NetPad] | None:
-    """Resolve all pin references in a net to NetPads with grid coords."""
     pads: list[NetPad | None] = [None] * len(refs)
     unresolved_indices: list[int] = []
 
@@ -1439,57 +348,334 @@ def _resolve_pads(
     return result if len(result) == len(refs) else None
 
 
-# ── MST decomposition ─────────────────────────────────────────────
+# â”€â”€ Priority ordering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
-def _compute_mst(pads: list[NetPad]) -> list[tuple[int, int]]:
-    """Kruskal's MST on pads by Manhattan distance."""
-    n = len(pads)
-    if n < 2:
-        return []
+def _priority_order(
+    net_ids: list[str],
+    net_pad_map: dict[str, list[_PinRef]],
+    pads_map: dict[str, list[NetPad]],
+    grid: RoutingGrid,
+    config: RouterConfig,
+    pin_voronoi: dict[int, str] | None,
+) -> list[str]:
+    """Sort nets by isolation path length (hardest first)."""
+    from .pathfinder import find_path, find_path_to_tree
 
-    edges: list[tuple[int, int, int]] = []
-    for i in range(n):
-        for j in range(i + 1, n):
-            d = abs(pads[i].gx - pads[j].gx) + abs(pads[i].gy - pads[j].gy)
-            edges.append((d, i, j))
-    edges.sort()
+    iso_lengths: dict[str, int] = {}
+    log.debug("Isolation routing: measuring path lengths for %d nets", len(net_ids))
 
-    parent = list(range(n))
+    for nid in net_ids:
+        pads = pads_map.get(nid)
+        if pads is None or len(pads) < 2:
+            iso_lengths[nid] = 0
+            continue
 
-    def find(x: int) -> int:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
+        # Temporarily block foreign-pin voronoi cells
+        blocked_v: list[tuple[int, int]] = []
+        if pin_voronoi is not None:
+            net_pin_keys = {f"{pad.instance_id}:{pad.pin_id}" for pad in pads}
+            W = grid.width
+            for flat, pin_key in pin_voronoi.items():
+                if pin_key in net_pin_keys:
+                    continue
+                gx = flat % W
+                gy = flat // W
+                if grid.is_free(gx, gy):
+                    grid.block_cell(gx, gy)
+                    blocked_v.append((gx, gy))
 
-    def union(a: int, b: int) -> bool:
-        ra, rb = find(a), find(b)
-        if ra == rb:
-            return False
-        parent[ra] = rb
-        return True
+        if len(pads) == 2:
+            src = (pads[0].gx, pads[0].gy)
+            snk = (pads[1].gx, pads[1].gy)
+            path = find_path(grid, src, snk, turn_penalty=config.turn_penalty)
+            length = len(path) if path else 0
+        else:
+            length = 0  # multi-pin: skip isolation measurement
 
-    result: list[tuple[int, int]] = []
-    for d, i, j in edges:
-        if union(i, j):
-            result.append((i, j))
-            if len(result) == n - 1:
+        for cx, cy in blocked_v:
+            grid.free_cell(cx, cy)
+
+        iso_lengths[nid] = length
+        log.debug("  %-20s isolation: %d cells, %d pins",
+                  nid, length, len(net_pad_map.get(nid, [])))
+
+    def net_priority(nid: str) -> tuple[int, int]:
+        pin_count = len(net_pad_map.get(nid, []))
+        return (-pin_count, -iso_lengths.get(nid, 0))
+
+    ordered = sorted(net_ids, key=net_priority)
+    log.debug("Initial ordering: %s",
+             ", ".join(f"{nid}({len(net_pad_map[nid])}p/{iso_lengths[nid]}c)"
+                       for nid in ordered))
+    return ordered
+
+
+# â”€â”€ Ordering perturbation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+
+def _perturb(
+    neighborhood: list[str],
+    targets: list[str],
+    iteration: int,
+) -> list[str]:
+    """Generate a perturbed ordering biased toward routing target nets first."""
+    ordering = list(neighborhood)
+    if not targets:
+        random.shuffle(ordering)
+        return ordering
+
+    n = len(ordering)
+    half = max(1, (1 + n) // 2)
+
+    if iteration < half:
+        for nid in targets:
+            if nid not in ordering:
+                continue
+            idx = ordering.index(nid)
+            new_idx = max(0, idx - (iteration + 1))
+            ordering.pop(idx)
+            ordering.insert(new_idx, nid)
+    else:
+        non_targets = [nid for nid in ordering if nid not in targets]
+        random.shuffle(non_targets)
+        target_copy = list(targets)
+        random.shuffle(target_copy)
+        ordering = list(non_targets)
+        for nid in target_copy:
+            pos = random.randint(0, max(0, n // 2))
+            ordering.insert(pos, nid)
+
+    return ordering
+
+
+# ── Pin-shift improvement ──────────────────────────────────────────
+
+
+def _find_shared_groups(
+    net_a: str,
+    net_b: str,
+    net_pad_map: dict[str, list[_PinRef]],
+) -> list[tuple[str, str]]:
+    """Find (instance_id, group_id) pairs where both nets use a group pin."""
+    groups_a = {
+        (ref.instance_id, ref.pin_or_group)
+        for ref in net_pad_map.get(net_a, []) if ref.is_group
+    }
+    groups_b = {
+        (ref.instance_id, ref.pin_or_group)
+        for ref in net_pad_map.get(net_b, []) if ref.is_group
+    }
+    return list(groups_a & groups_b)
+
+
+def _find_group_nets(
+    instance_id: str,
+    group_id: str,
+    net_pad_map: dict[str, list[_PinRef]],
+    pads_map: dict[str, list[NetPad]],
+) -> list[str]:
+    """Find all routed nets using a specific pin group on an instance."""
+    result = []
+    for nid, refs in net_pad_map.items():
+        if nid not in pads_map:
+            continue
+        for ref in refs:
+            if (ref.instance_id == instance_id
+                    and ref.pin_or_group == group_id
+                    and ref.is_group):
+                result.append(nid)
                 break
-
     return result
 
 
-# ── Helpers ────────────────────────────────────────────────────────
+def _circular_shift_pins(
+    group_nets: list[str],
+    instance_id: str,
+    group_id: str,
+    net_pad_map: dict[str, list[_PinRef]],
+    pads_map: dict[str, list[NetPad]],
+    pin_assignments: dict[str, str],
+    placement: FullPlacement,
+    catalog: CatalogResult,
+    grid: RoutingGrid,
+) -> None:
+    """Circular-shift physical pin assignments by one position.
+
+    Nets are sorted by their current pin world-position so the shift
+    moves each net to its spatial neighbour's pin."""
+    entries: list[tuple[str, int, str, float, float]] = []
+    for nid in group_nets:
+        pads = pads_map.get(nid)
+        if pads is None:
+            continue
+        for i, pad in enumerate(pads):
+            if pad.instance_id == instance_id and pad.group_id == group_id:
+                entries.append((nid, i, pad.pin_id, pad.world_x, pad.world_y))
+                break
+
+    if len(entries) < 2:
+        return
+
+    entries.sort(key=lambda e: (e[3], e[4]))
+
+    pins = [e[2] for e in entries]
+    shifted = pins[1:] + pins[:1]
+
+    for (nid, pad_idx, _old_pin, _, _), new_pin in zip(entries, shifted):
+        pos = get_pin_world_pos(instance_id, new_pin, placement, catalog)
+        if pos is None:
+            continue
+        gx, gy = grid.world_to_grid(pos[0], pos[1])
+
+        pads_map[nid][pad_idx] = NetPad(
+            instance_id=instance_id,
+            pin_id=new_pin,
+            group_id=group_id,
+            gx=gx, gy=gy,
+            world_x=pos[0], world_y=pos[1],
+        )
+
+        for ref in net_pad_map.get(nid, []):
+            if (ref.instance_id == instance_id
+                    and ref.pin_or_group == group_id
+                    and ref.is_group):
+                key = f"{nid}|{ref.raw}"
+                pin_assignments[key] = f"{instance_id}:{new_pin}"
+                break
+
+
+def _try_pin_shifts(
+    solution: Solution,
+    net_pad_map: dict[str, list[_PinRef]],
+    pads_map: dict[str, list[NetPad]],
+    pin_assignments: dict[str, str],
+    ordering: list[str],
+    placement: FullPlacement,
+    catalog: CatalogResult,
+) -> bool:
+    """Try circular pin shifts for nets whose jumpers cross shared pin groups.
+
+    For each jumper, identify the trace it crosses.  If the jumper net and
+    the crossed net share a logical pin group (e.g. both use mcu_1:gpio),
+    collect *all* nets on that group, shift their physical assignments by
+    one position, rip them up, and re-route in the original ordering."""
+    seen_groups: set[tuple[str, str]] = set()
+    before = solution.score()
+
+    for nid in list(solution.routes):
+        route = solution.routes[nid]
+        if not route.jumpers:
+            continue
+        for jumper in route.jumpers:
+            crossed_nid = solution.crossed_net_for_jumper(jumper)
+            if crossed_nid is None:
+                continue
+
+            shared = _find_shared_groups(nid, crossed_nid, net_pad_map)
+            for inst_id, group_id in shared:
+                if (inst_id, group_id) in seen_groups:
+                    continue
+                seen_groups.add((inst_id, group_id))
+
+                group_nids = _find_group_nets(
+                    inst_id, group_id, net_pad_map, pads_map,
+                )
+                if len(group_nids) < 2:
+                    continue
+
+                snap = solution.snapshot()
+                saved_pads = {
+                    n: list(pads_map[n]) for n in group_nids if n in pads_map
+                }
+                saved_assigns = dict(pin_assignments)
+
+                _circular_shift_pins(
+                    group_nids, inst_id, group_id,
+                    net_pad_map, pads_map, pin_assignments,
+                    placement, catalog, solution.grid,
+                )
+
+                solution.rip_up(group_nids)
+                route_order = [n for n in ordering if n in set(group_nids)]
+                solution.route_nets(route_order, pads_map)
+
+                after = solution.score()
+                if after < before:
+                    log.info("Pin shift (%s:%s, %d nets): %s -> %s",
+                             inst_id, group_id, len(group_nids), before, after)
+                    return True
+
+                solution.restore(snap)
+                for n, old in saved_pads.items():
+                    pads_map[n] = old
+                pin_assignments.clear()
+                pin_assignments.update(saved_assigns)
+
+    return False
+
+
+def _block_components(
+    grid: RoutingGrid,
+    placement: FullPlacement,
+    catalog_map: dict,
+    pad_radius: int,
+) -> None:
+    for pc in placement.components:
+        cat = catalog_map.get(pc.catalog_id)
+        if cat is None or not cat.mounting.blocks_routing:
+            continue
+        hw, hh = footprint_halfdims(cat, pc.rotation_deg)
+        keepout = cat.mounting.keepout_margin_mm
+        grid.block_rect_world(
+            pc.x_mm, pc.y_mm,
+            hw + keepout, hh + keepout,
+            permanent=True,
+        )
+
+    for pc in placement.components:
+        cat = catalog_map.get(pc.catalog_id)
+        if cat is None:
+            continue
+        for pin in cat.pins:
+            wx, wy = pin_world_xy(
+                pin.position_mm, pc.x_mm, pc.y_mm, pc.rotation_deg,
+            )
+            gx, gy = grid.world_to_grid(wx, wy)
+            for dx in range(-pad_radius, pad_radius + 1):
+                for dy in range(-pad_radius, pad_radius + 1):
+                    grid.force_free_cell(gx + dx, gy + dy)
+                    grid.protect_cell(gx + dx, gy + dy)
+
+    for pc in placement.components:
+        cat = catalog_map.get(pc.catalog_id)
+        if cat is None or not cat.mounting.blocks_routing:
+            continue
+        hw, hh = footprint_halfdims(cat, pc.rotation_deg)
+        grid.block_rect_world(pc.x_mm, pc.y_mm, hw, hh, permanent=True)
+
+    for pc in placement.components:
+        cat = catalog_map.get(pc.catalog_id)
+        if cat is None or not cat.mounting.blocks_routing:
+            continue
+        for pin in cat.pins:
+            wx, wy = pin_world_xy(
+                pin.position_mm, pc.x_mm, pc.y_mm, pc.rotation_deg,
+            )
+            gx, gy = grid.world_to_grid(wx, wy)
+            for dx in range(-1, 2):
+                for dy in range(-1, 2):
+                    grid.force_free_cell(gx + dx, gy + dy)
+                    grid.protect_cell(gx + dx, gy + dy)
+
+
+# â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def _compute_pad_radius(cfg: RouterConfig) -> int:
     return max(1, math.ceil(
         (cfg.trace_width_mm / 2 + cfg.trace_clearance_mm) / cfg.grid_resolution_mm
     ))
-
-
-_PAD_RADIUS = _compute_pad_radius(RouterConfig())
 
 
 def _compute_pin_clearance_cells(cfg: RouterConfig) -> int:
@@ -1503,20 +689,11 @@ def _build_pin_voronoi(
     grid: RoutingGrid,
     pin_clearance_cells: int,
 ) -> dict[int, str]:
-    """Pre-compute a Voronoi map: for each cell within pin_clearance of
-    any pin, record which pin is nearest.
-
-    Returns flat_index -> "instance_id:pin_id" of the nearest pin.
-
-    When routing a net, cells whose nearest pin is foreign get blocked.
-    Cells whose nearest pin belongs to the net stay free — the trace
-    can approach its own pin through its own Voronoi territory.
-    """
     W = grid.width
     H = grid.height
     r = pin_clearance_cells
     r2 = r * r
-    nearest: dict[int, tuple[int, str]] = {}  # flat -> (dist_sq, pin_key)
+    nearest: dict[int, tuple[int, str]] = {}
 
     for pin_key, cells in all_pin_cells.items():
         for (px, py) in cells:
@@ -1535,45 +712,11 @@ def _build_pin_voronoi(
     return {flat: key for flat, (_, key) in nearest.items()}
 
 
-def _block_voronoi(
-    grid: RoutingGrid,
-    pin_voronoi: dict[int, str],
-    net_pads: list[NetPad],
-) -> list[tuple[int, int]]:
-    """Block cells in the Voronoi territory of foreign pins.
-
-    For each cell within pin_clearance of any pin, check if its nearest
-    pin belongs to the current net.  If not, block it.  This creates a
-    natural Voronoi boundary: traces approach their own net's pins
-    freely but are fenced away from foreign pins.
-    """
-    net_pin_keys = {f"{pad.instance_id}:{pad.pin_id}" for pad in net_pads}
-    W = grid.width
-    blocked: list[tuple[int, int]] = []
-    for flat, pin_key in pin_voronoi.items():
-        if pin_key in net_pin_keys:
-            continue
-        gx = flat % W
-        gy = flat // W
-        if grid.is_free(gx, gy):
-            grid.block_cell(gx, gy)
-            blocked.append((gx, gy))
-    return blocked
-
-
-def _unblock_voronoi(
-    grid: RoutingGrid, blocked: list[tuple[int, int]],
-) -> None:
-    for cx, cy in blocked:
-        grid.free_cell(cx, cy)
-
-
 def _build_all_pin_cells(
     placement: FullPlacement,
     catalog: CatalogResult,
     grid: RoutingGrid,
 ) -> dict[str, set[tuple[int, int]]]:
-    """Map every component pin to its grid cell."""
     catalog_map = {c.id: c for c in catalog.components}
     result: dict[str, set[tuple[int, int]]] = {}
     for pc in placement.components:
@@ -1588,203 +731,3 @@ def _build_all_pin_cells(
             result[f"{pc.instance_id}:{pin.id}"] = {(gx, gy)}
     return result
 
-
-# ── Single-net routing ─────────────────────────────────────────────
-
-
-def _route_single_net(
-    net_id: str,
-    pads: list[NetPad],
-    grid: RoutingGrid,
-    pad_radius: int = _PAD_RADIUS,
-    turn_penalty: int = TURN_PENALTY,
-    *,
-    pin_voronoi: dict[int, str] | None = None,
-    crossing_cost: int = 0,
-    cost_map: dict[int, float] | None = None,
-) -> tuple[list[list[tuple[int, int]]], bool, list[dict]]:
-    """Route a single net. Returns (grid_paths, success, debug_snapshots)."""
-    if len(pads) < 2:
-        return ([], True, [])
-
-    if len(pads) == 2:
-        return _route_two_pin(
-            net_id, pads, grid, pad_radius, turn_penalty,
-            pin_voronoi, crossing_cost=crossing_cost,
-            cost_map=cost_map,
-        )
-
-    return _route_multi_pin(
-        net_id, pads, grid, pad_radius, turn_penalty,
-        pin_voronoi, crossing_cost=crossing_cost,
-        cost_map=cost_map,
-    )
-
-
-def _route_two_pin(
-    net_id: str,
-    pads: list[NetPad],
-    grid: RoutingGrid,
-    pad_radius: int,
-    turn_penalty: int,
-    pin_voronoi: dict[int, str] | None,
-    *,
-    crossing_cost: int = 0,
-    cost_map: dict[int, float] | None = None,
-) -> tuple[list[list[tuple[int, int]]], bool, list[dict]]:
-    src = (pads[0].gx, pads[0].gy)
-    snk = (pads[1].gx, pads[1].gy)
-
-    blocked_v: list[tuple[int, int]] = []
-    if pin_voronoi is not None:
-        blocked_v = _block_voronoi(grid, pin_voronoi, pads)
-
-    path = find_path(grid, src, snk, turn_penalty=turn_penalty, crossing_cost=crossing_cost, cost_map=cost_map)
-
-    _unblock_voronoi(grid, blocked_v)
-
-    if path is None:
-        return ([], False, [])
-    return ([path], True, [])
-
-
-def _route_multi_pin(
-    net_id: str,
-    pads: list[NetPad],
-    grid: RoutingGrid,
-    pad_radius: int,
-    turn_penalty: int,
-    pin_voronoi: dict[int, str] | None,
-    *,
-    crossing_cost: int = 0,
-    cost_map: dict[int, float] | None = None,
-) -> tuple[list[list[tuple[int, int]]], bool, list[dict]]:
-    """MST-guided Steiner tree routing for multi-pin nets."""
-    mst_edges = _compute_mst(pads)
-    all_paths: list[list[tuple[int, int]]] = []
-
-    uf_parent = list(range(len(pads)))
-    uf_rank = [0] * len(pads)
-
-    def _find(x: int) -> int:
-        while uf_parent[x] != x:
-            uf_parent[x] = uf_parent[uf_parent[x]]
-            x = uf_parent[x]
-        return x
-
-    def _union(a: int, b: int) -> None:
-        ra, rb = _find(a), _find(b)
-        if ra == rb:
-            return
-        if uf_rank[ra] < uf_rank[rb]:
-            ra, rb = rb, ra
-        uf_parent[rb] = ra
-        if uf_rank[ra] == uf_rank[rb]:
-            uf_rank[ra] += 1
-
-    comp_trees: dict[int, set[tuple[int, int]]] = {
-        i: {(pads[i].gx, pads[i].gy)} for i in range(len(pads))
-    }
-
-    def _get_tree(idx: int) -> set[tuple[int, int]]:
-        return comp_trees[_find(idx)]
-
-    def _merge(a: int, b: int, path_cells: list[tuple[int, int]]) -> None:
-        ra, rb = _find(a), _find(b)
-        if ra == rb:
-            comp_trees[ra].update(path_cells)
-            return
-        tree_a = comp_trees.pop(ra)
-        tree_b = comp_trees.pop(rb)
-        _union(a, b)
-        new_root = _find(a)
-        if len(tree_a) >= len(tree_b):
-            tree_a.update(tree_b)
-            tree_a.update(path_cells)
-            comp_trees[new_root] = tree_a
-        else:
-            tree_b.update(tree_a)
-            tree_b.update(path_cells)
-            comp_trees[new_root] = tree_b
-
-    for pa, pb in mst_edges:
-        if _find(pa) == _find(pb):
-            continue
-
-        tree_a = _get_tree(pa)
-        tree_b = _get_tree(pb)
-        if len(tree_a) >= len(tree_b):
-            src_tree, target_tree = tree_b, tree_a
-        else:
-            src_tree, target_tree = tree_a, tree_b
-
-        blocked_v: list[tuple[int, int]] = []
-        if pin_voronoi is not None:
-            blocked_v = _block_voronoi(grid, pin_voronoi, pads)
-
-        path = find_path_to_tree(
-            grid, src_tree, target_tree,
-            turn_penalty=turn_penalty,
-            crossing_cost=crossing_cost,
-            cost_map=cost_map,
-        )
-
-        _unblock_voronoi(grid, blocked_v)
-
-        if path is not None:
-            all_paths.append(path)
-            _merge(pa, pb, path)
-        else:
-            return (all_paths, False, [])
-
-    roots = {_find(i) for i in range(len(pads))}
-    return (all_paths, len(roots) == 1, [])
-
-
-# ── Output conversion ─────────────────────────────────────────────
-
-
-def _grid_paths_to_traces(
-    routed_paths: dict[str, list[list[tuple[int, int]]]],
-    grid: RoutingGrid,
-) -> list[Trace]:
-    """Convert grid paths to world-coordinate Traces with simplification."""
-    outline = grid.outline_poly
-    traces: list[Trace] = []
-    for net_id, paths in routed_paths.items():
-        for grid_path in paths:
-            if len(grid_path) < 2:
-                continue
-            world_path = _simplify_path(grid_path, grid)
-            clamped: list[tuple[float, float]] = []
-            for wx, wy in world_path:
-                pt = Point(wx, wy)
-                if not outline.contains(pt):
-                    nearest = outline.exterior.interpolate(
-                        outline.exterior.project(pt),
-                    )
-                    clamped.append((nearest.x, nearest.y))
-                else:
-                    clamped.append((wx, wy))
-            traces.append(Trace(net_id=net_id, path=clamped))
-    return traces
-
-
-def _simplify_path(
-    grid_path: list[tuple[int, int]],
-    grid: RoutingGrid,
-) -> list[tuple[float, float]]:
-    """Remove collinear intermediate points, convert to world coords."""
-    if len(grid_path) <= 2:
-        return [grid.grid_to_world(gx, gy) for gx, gy in grid_path]
-
-    waypoints: list[tuple[int, int]] = [grid_path[0]]
-    for i in range(1, len(grid_path) - 1):
-        prev, curr, nxt = grid_path[i - 1], grid_path[i], grid_path[i + 1]
-        d1 = (curr[0] - prev[0], curr[1] - prev[1])
-        d2 = (nxt[0] - curr[0], nxt[1] - curr[1])
-        if d1 != d2:
-            waypoints.append(curr)
-    waypoints.append(grid_path[-1])
-
-    return [grid.grid_to_world(gx, gy) for gx, gy in waypoints]

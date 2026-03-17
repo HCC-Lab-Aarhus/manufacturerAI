@@ -23,7 +23,7 @@ from shapely.ops import unary_union
 
 from .fragment import (
     ScadFragment, RectGeometry, CylinderGeometry,
-    PolygonGeometry, SegmentGeometry,
+    PolygonGeometry, SegmentGeometry, CapsuleGeometry,
 )
 
 log = logging.getLogger(__name__)
@@ -33,9 +33,9 @@ log = logging.getLogger(__name__)
 
 
 def _fragment_to_polygon(frag: ScadFragment) -> list[list[float]] | None:
-    """Convert a fragment's geometry to a polygon point list, or None for cylinders."""
+    """Convert a fragment's geometry to a polygon point list, or None for cylinders/capsules."""
     g = frag.geometry
-    if isinstance(g, CylinderGeometry):
+    if isinstance(g, (CylinderGeometry, CapsuleGeometry)):
         return None
     if isinstance(g, RectGeometry):
         return g.to_polygon()
@@ -260,8 +260,9 @@ def generate_scad(
     if not cutouts and not additions:
         return header + "\n".join(shell_body_lines) + "\n"
 
-    # Split cutouts into cylinders, tilted, and polygons
+    # Split cutouts into cylinders, capsules, tilted, and polygons
     cylinder_cuts: list[ScadFragment] = []
+    capsule_cuts: list[ScadFragment] = []
     tilted_cuts: list[ScadFragment] = []
     polygon_cuts: list[ScadFragment] = []
     for f in cutouts:
@@ -269,14 +270,16 @@ def generate_scad(
             tilted_cuts.append(f)
         elif isinstance(f.geometry, CylinderGeometry):
             cylinder_cuts.append(f)
+        elif isinstance(f.geometry, CapsuleGeometry):
+            capsule_cuts.append(f)
         else:
             polygon_cuts.append(f)
 
     merged_groups = _merge_polygon_fragments(polygon_cuts, outline_pts)
 
     log.info(
-        "Cutout merging: %d polygon → %d groups  |  %d cylinder  |  %d tilted  |  %d additions",
-        len(polygon_cuts), len(merged_groups), len(cylinder_cuts), len(tilted_cuts), len(additions),
+        "Cutout merging: %d polygon → %d groups  |  %d cylinder  |  %d capsule  |  %d tilted  |  %d additions",
+        len(polygon_cuts), len(merged_groups), len(cylinder_cuts), len(capsule_cuts), len(tilted_cuts), len(additions),
     )
 
     out_lines: list[str] = []
@@ -329,6 +332,25 @@ def generate_scad(
                 out_lines += [
                     f"    translate([{cg.cx:.3f}, {cg.cy:.3f}, {c.z_base - _EPS:.3f}])",
                     f"      cylinder(h = {c.depth + 2 * _EPS:.3f}, r = {cg.r:.3f});",
+                ]
+
+        # Capsule cutouts (jumper endpoints adjacent to component pins)
+        if capsule_cuts:
+            out_lines.append("")
+            out_lines.append(f"    // --- Capsule cutouts ({len(capsule_cuts)}) ---")
+            _EPS = 0.001
+            for c in capsule_cuts:
+                cg = c.geometry
+                assert isinstance(cg, CapsuleGeometry)
+                if c.label:
+                    out_lines.append(f"    // {c.label}")
+                out_lines += [
+                    f"    translate([0, 0, {c.z_base - _EPS:.3f}])",
+                    f"      linear_extrude(height = {c.depth + 2 * _EPS:.3f})",
+                    f"        hull() {{",
+                    f"          translate([{cg.x1:.3f}, {cg.y1:.3f}]) circle(r = {cg.r1:.3f});",
+                    f"          translate([{cg.x2:.3f}, {cg.y2:.3f}]) circle(r = {cg.r2:.3f});",
+                    f"        }}",
                 ]
 
         # Tilted cutouts (side-mounted reoriented bodies)

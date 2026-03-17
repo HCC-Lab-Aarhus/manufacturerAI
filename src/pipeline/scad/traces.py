@@ -9,13 +9,15 @@ from __future__ import annotations
 
 import math
 
-from src.pipeline.config import FLOOR_MM, TRACE_HEIGHT_MM
+from src.pipeline.config import FLOOR_MM, TRACE_HEIGHT_MM, CAVITY_START_MM
 from src.pipeline.router.models import RoutingResult
 
-from .fragment import ScadFragment, SegmentGeometry, RectGeometry
+from .fragment import ScadFragment, SegmentGeometry, RectGeometry, CapsuleGeometry
 
 TRACE_WIDTH: float = 1.2
 JUMPER_PAD_SIZE: float = 1.0
+JUMPER_PAD_RADIUS: float = JUMPER_PAD_SIZE / 2
+JUMPER_WIRE_WIDTH: float = 1.0
 
 
 def build_trace_fragments(
@@ -64,22 +66,53 @@ def build_jumper_fragments(
     routing: RoutingResult,
     ceil_start: float,
 ) -> list[ScadFragment]:
-    """Build pinhole cutouts at each jumper wire endpoint.
+    """Build jumper wire cutouts: endpoint pinholes + wire channel.
 
-    Each endpoint gets a square shaft from FLOOR_MM up to ceil_start,
-    matching the pin shaft depth of regular components.
+    Endpoint pinholes run from FLOOR_MM up to ceil_start (full depth).
+    The wire channel sits between the trace roof and the component floor
+    (the jumper layer), giving the physical wire a place to lie flat.
     """
     shaft_h = ceil_start - FLOOR_MM
+    trace_roof = FLOOR_MM + TRACE_HEIGHT_MM
+    jumper_layer_depth = CAVITY_START_MM - trace_roof
     frags: list[ScadFragment] = []
 
     for j in routing.jumpers:
-        for label, (px, py) in [("start", j.start), ("end", j.end)]:
+        # Endpoint pinholes
+        for label, ep in [("start", j.start), ("end", j.end)]:
+            if ep.pin_center is not None:
+                frags.append(ScadFragment(
+                    type="cutout",
+                    geometry=CapsuleGeometry(
+                        x1=ep.pin_center[0], y1=ep.pin_center[1],
+                        r1=ep.pin_radius_mm,
+                        x2=ep.x, y2=ep.y,
+                        r2=JUMPER_PAD_RADIUS,
+                    ),
+                    z_base=FLOOR_MM,
+                    depth=shaft_h,
+                    label=f"jumper {j.net_id} {label} (capsule)",
+                ))
+            else:
+                frags.append(ScadFragment(
+                    type="cutout",
+                    geometry=RectGeometry(ep.x, ep.y, JUMPER_PAD_SIZE, JUMPER_PAD_SIZE),
+                    z_base=FLOOR_MM,
+                    depth=shaft_h,
+                    label=f"jumper {j.net_id} {label}",
+                ))
+
+        # Wire channel between trace roof and component floor
+        sx, sy = j.start.x, j.start.y
+        ex, ey = j.end.x, j.end.y
+        seg_len = math.hypot(ex - sx, ey - sy)
+        if seg_len > 1e-6 and jumper_layer_depth > 0:
             frags.append(ScadFragment(
                 type="cutout",
-                geometry=RectGeometry(px, py, JUMPER_PAD_SIZE, JUMPER_PAD_SIZE),
-                z_base=FLOOR_MM,
-                depth=shaft_h,
-                label=f"jumper {j.net_id} {label}",
+                geometry=SegmentGeometry(sx, sy, ex, ey, JUMPER_WIRE_WIDTH),
+                z_base=trace_roof,
+                depth=jumper_layer_depth,
+                label=f"jumper {j.net_id} wire channel",
             ))
 
     return frags
