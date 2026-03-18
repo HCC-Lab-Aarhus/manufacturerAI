@@ -12,6 +12,7 @@ import array as _array_mod
 from heapq import heappush as _heappush, heappop as _heappop
 
 import numpy as np
+from scipy.ndimage import distance_transform_cdt
 
 from .grid import RoutingGrid, FREE, BLOCKED, TRACE_PATH, PERMANENTLY_BLOCKED
 from .models import TURN_PENALTY
@@ -261,27 +262,18 @@ def find_path_to_tree(
 def _manhattan_dt(W: int, H: int, tree_cells: list[tuple[int, int]]) -> _array_mod.array:
     """Return flat array of Manhattan distances to nearest tree cell.
 
-    Uses a separable 2-pass distance transform: O(W*H) total,
-    then O(1) per heuristic lookup during A*.
+    Uses scipy's C-implemented chamfer distance transform with taxicab
+    metric — single call, much faster than Python loops.
     """
-    INF32 = np.int32(W + H + 2)
-    dist = np.full((H, W), INF32, dtype=np.int32)
+    mask = np.ones((H, W), dtype=bool)
     n = len(tree_cells)
     if n > 32:
         tc = np.array(tree_cells, dtype=np.intp)
-        dist[tc[:, 1], tc[:, 0]] = 0
+        mask[tc[:, 1], tc[:, 0]] = False
     else:
         for tx, ty in tree_cells:
-            dist[ty, tx] = 0
-    one = np.int32(1)
-    for x in range(1, W):
-        np.minimum(dist[:, x], dist[:, x - 1] + one, out=dist[:, x])
-    for x in range(W - 2, -1, -1):
-        np.minimum(dist[:, x], dist[:, x + 1] + one, out=dist[:, x])
-    for y in range(1, H):
-        np.minimum(dist[y], dist[y - 1] + one, out=dist[y])
-    for y in range(H - 2, -1, -1):
-        np.minimum(dist[y], dist[y + 1] + one, out=dist[y])
+            mask[ty, tx] = False
+    dist = distance_transform_cdt(mask, metric='taxicab').astype(np.int32)
     return _array_mod.array('i', dist.tobytes())
 
 
