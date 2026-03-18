@@ -108,7 +108,7 @@
                 "length_mm": 7.5,
                 "depth_mm": 12.0,
                 "z_anchor": "cavity_start",
-                "description": "Window for first 7.5mm dome on wide plate. Two domes are 8.7mm apart center-to-center."
+                "description": "Window for first 7.5mm dome on wide plate. Dome center is 5.75mm from side wall (2mm clearance + 3.75mm radius). Domes are 8.7mm apart center-to-center with ~1.2mm cell divider between them."
             },
             {
                 "shape": "rect",
@@ -118,7 +118,7 @@
                 "length_mm": 7.5,
                 "depth_mm": 12.0,
                 "z_anchor": "cavity_start",
-                "description": "Window for second 7.5mm dome on wide plate. Two domes are 8.7mm apart center-to-center."
+                "description": "Window for second 7.5mm dome on wide plate. Dome center is 5.75mm from side wall (2mm clearance + 3.75mm radius). Domes are 8.7mm apart center-to-center with ~1.2mm cell divider between them."
             },
             {
                 "shape": "rect",

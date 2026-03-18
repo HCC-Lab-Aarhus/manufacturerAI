@@ -75,9 +75,17 @@ One wide plate with both a spring and a dome contact, bridging the two cells in 
 Dimensions:
 - Plate body: 1.46mm thick, 27.2mm wide, 12mm tall (rectangle).
 - Two dome contacts, each 7.5mm diameter, spaced 8.7mm apart (center-to-center).
+- Each dome sits 2mm from the nearest side wall.
+- Between the two domes there is a ~1.2mm gap where the cell divider wall sits.
 - Bottom of plate has a rectangular tab extension: 7.5mm tall, 0.3mm thick, 3mm wide. Same purpose as above.
+
+WALL LAYOUT (connector side, looking from outside):
+  [ side wall (2mm) | dome 1 (7.5mm) | cell divider (~1.2mm) | dome 2 (7.5mm) | side wall (2mm) ]
+  Total internal width: ~20.2mm
+  Dome 1 center: 5.75mm from left wall
+  Dome 2 center: 14.45mm from left wall (= 5.75 + 8.7)
 
 CUTOUTS NEEDED:
 - Plate channels on each side of the holder wall, sized to fit the plates snugly.
-- Rectangular window cutouts in the holder wall at each dome contact / spring position, so the contacts can poke through and touch the batteries.
+- Dome contact windows through the side walls and cell divider so the 7.5mm domes can poke through and touch the batteries.
 - Pin slot through the floor for each tab extension, connecting to the ink traces.
