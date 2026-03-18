@@ -136,6 +136,49 @@ class Session:
             self.pipeline_errors.pop(later, None)
         return invalidated
 
+    def invalidate_design_smart(self, new_design: dict) -> list[str]:
+        """Invalidate downstream of design, but skip circuit if components unchanged.
+
+        Only invalidates circuit when ui_placements differ in identity or
+        configuration (added, removed, catalog_id changed, config changed,
+        mounting_style changed). Pure position changes (x_mm, y_mm) and
+        outline/enclosure changes do NOT invalidate circuit.
+
+        When circuit IS invalidated due to component changes, the existing
+        circuit.json is preserved as circuit_pending.json so it can be
+        re-validated against the updated design without re-running the LLM.
+        """
+        old_design = self.read_artifact("design.json")
+        if _components_changed(old_design, new_design):
+            circuit_data = self.read_artifact("circuit.json")
+            if circuit_data and not self.has_artifact("circuit_pending.json"):
+                self.write_artifact("circuit_pending.json", circuit_data)
+            return self.invalidate_downstream("design")
+        return self.invalidate_downstream("circuit")
+
+
+def _component_signature(design: dict | None) -> set[tuple]:
+    """Extract a hashable set of (instance_id, catalog_id, config, mounting_style)
+    from ui_placements, ignoring positional fields."""
+    if not design:
+        return set()
+    sigs = set()
+    for p in design.get("ui_placements", []):
+        config = p.get("config")
+        config_key = tuple(sorted(config.items())) if isinstance(config, dict) else config
+        sigs.add((
+            p.get("instance_id"),
+            p.get("catalog_id"),
+            config_key,
+            p.get("mounting_style"),
+        ))
+    return sigs
+
+
+def _components_changed(old_design: dict | None, new_design: dict | None) -> bool:
+    """Return True if components were added, removed, or changed values."""
+    return _component_signature(old_design) != _component_signature(new_design)
+
 
 def _generate_session_id() -> str:
     """Generate a short, unique, human-readable session ID."""
