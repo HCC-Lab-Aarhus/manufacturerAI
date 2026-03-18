@@ -21,8 +21,8 @@ from src.pipeline.circuit import validate_circuit
 from src.session import Session
 
 from .config import MODEL, MAX_TOKENS, THINKING_BUDGET, MAX_TURNS, TOKEN_BUDGET
-from .tools import DESIGN_TOOLS, CIRCUIT_TOOLS
-from .prompt import build_design_prompt, build_circuit_prompt, build_circuit_user_prompt, catalog_summary
+from .tools import DESIGN_TOOLS, CIRCUIT_TOOLS, SETUP_TOOLS
+from .prompt import build_design_prompt, build_circuit_prompt, build_circuit_user_prompt, build_setup_prompt, catalog_summary
 from .messages import serialize_content, sanitize_messages, prune_messages
 
 
@@ -388,3 +388,99 @@ class CircuitAgent(_BaseAgent):
         self.session.save()
 
         return "Circuit validated successfully! Saved to session.", True
+
+
+# ── Setup (firmware) agent ─────────────────────────────────────────
+
+class SetupAgent(_BaseAgent):
+    """Firmware engineer — generates Arduino code for the device."""
+
+    conversation_file = "setup_conversation.json"
+
+    MAX_COMPILE_RETRIES = 3
+
+    def __init__(self, catalog, session, firmware_context: str):
+        super().__init__(catalog, session)
+        self._firmware_context = firmware_context
+        self._compile_retries = 0
+
+    def _get_tools(self) -> list[dict]:
+        return SETUP_TOOLS
+
+    def _get_system_prompt(self) -> str:
+        return build_setup_prompt(self._firmware_context)
+
+    def _handle_tool(self, name: str, input_data: dict) -> tuple[str, bool]:
+        if name == "submit_firmware":
+            return self._tool_submit_firmware(input_data)
+        return f"Unknown tool: {name}", False
+
+    def _terminal_event(self, tool_name: str, input_data: dict) -> AgentEvent | None:
+        if tool_name == "submit_firmware":
+            return AgentEvent("firmware", {"firmware": {"compiled": True}})
+        return None
+
+    def _tool_submit_firmware(self, input_data: dict) -> tuple[str, bool]:
+        """Validate, save, and compile firmware."""
+        code = input_data.get("code", "")
+        if not code.strip():
+            return "Error: empty code submitted.", False
+
+        # Basic sanity checks
+        if "void setup()" not in code and "void setup ()" not in code:
+            return "Error: sketch must contain a setup() function.", False
+        if "void loop()" not in code and "void loop ()" not in code:
+            return "Error: sketch must contain a loop() function.", False
+
+        # Save the .ino file
+        ino_path = self.session.path / "firmware.ino"
+        ino_path.write_text(code, encoding="utf-8")
+
+        # Try to compile
+        from src.pipeline.firmware.arduino_cli import compile_sketch, find_arduino_cli
+
+        if find_arduino_cli() is None:
+            # No arduino-cli available — save the code but skip compilation
+            self.session.pipeline_state["setup"] = "complete"
+            self.session.save()
+            return (
+                "Firmware saved to firmware.ino. "
+                "Note: arduino-cli is not installed, so the sketch was not compiled. "
+                "Install arduino-cli to enable compilation verification.",
+                True,
+            )
+
+        result = compile_sketch(code, self.session.path)
+
+        if result.success:
+            self.session.pipeline_state["setup"] = "complete"
+            self.session.save()
+            hex_msg = f" HEX: {result.hex_path.name}" if result.hex_path else ""
+            elf_msg = f" ELF: {result.elf_path.name}" if result.elf_path else ""
+            return (
+                f"Firmware compiled successfully!{hex_msg}{elf_msg} "
+                f"Saved to session.",
+                True,
+            )
+
+        # Compilation failed
+        self._compile_retries += 1
+        if self._compile_retries >= self.MAX_COMPILE_RETRIES:
+            # Save anyway after max retries, but mark as incomplete
+            self.session.pipeline_state["setup"] = "compile_failed"
+            self.session.save()
+            return (
+                f"Compilation failed after {self.MAX_COMPILE_RETRIES} attempts. "
+                f"Last error:\n{result.stderr}\n\n"
+                f"The .ino file has been saved but could not be compiled.",
+                True,
+            )
+
+        # Feed compiler errors back to the agent for a retry
+        error_msg = result.stderr or result.stdout or "Unknown compilation error"
+        return (
+            f"Compilation failed (attempt {self._compile_retries}/{self.MAX_COMPILE_RETRIES}).\n"
+            f"Compiler output:\n```\n{error_msg}\n```\n\n"
+            f"Fix the errors and call submit_firmware again.",
+            False,
+        )
