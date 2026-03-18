@@ -253,6 +253,10 @@ def place_components(
     prep_poly = shapely_prep(outline_poly)
     _min_pin_sq = MIN_PIN_CLEARANCE_MM * MIN_PIN_CLEARANCE_MM
 
+    # Fast-path: detect axis-aligned rectangular outlines
+    from .geometry import _is_aabb
+    _outline_aabb = _is_aabb(outline_verts)
+
     for ci in to_place:
         cat = catalog_map[ci.catalog_id]
         style = effective_style.get(ci.instance_id, cat.mounting.style)
@@ -261,6 +265,19 @@ def place_components(
         best_pos: tuple[float, float] | None = None
         best_rot = 0
         best_score = -float("inf")
+
+        _placed_pins_world: list[list[tuple[float, float]]] = []
+        for _pp in placed:
+            _pcat = catalog_map.get(_pp.catalog_id)
+            if not _pcat or not _pcat.pins:
+                _placed_pins_world.append([])
+                continue
+            _pc, _ps = math.cos(math.radians(_pp.rotation)), math.sin(math.radians(_pp.rotation))
+            _placed_pins_world.append([
+                (_pp.x + _pin.position_mm[0] * _pc - _pin.position_mm[1] * _ps,
+                 _pp.y + _pin.position_mm[0] * _ps + _pin.position_mm[1] * _pc)
+                for _pin in _pcat.pins
+            ])
 
         _PASSES = [
             (False, 1.0, MIN_EDGE_CLEARANCE_MM + floor_inset),
@@ -293,7 +310,12 @@ def place_components(
                 ]
 
                 for cx, cy in candidates:
-                    if not prep_poly.contains(
+                    if _outline_aabb is not None:
+                        _oxmin, _oymin, _oxmax, _oymax = _outline_aabb
+                        if (cx - ihw < _oxmin or cx + ihw > _oxmax
+                                or cy - ihh < _oymin or cy + ihh > _oymax):
+                            continue
+                    elif not prep_poly.contains(
                         shapely_box(cx - ihw, cy - ihh, cx + ihw, cy + ihh)
                     ):
                         continue
@@ -356,17 +378,18 @@ def place_components(
 
                     pin_clash = False
                     my_pins_world = [(cx + ox, cy + oy) for ox, oy in my_pin_offsets]
-                    for p in placed:
+                    for _pp, _ppw in zip(placed, _placed_pins_world):
                         if pin_clash:
                             break
-                        p_cat = catalog_map.get(p.catalog_id)
-                        if p_cat is None:
+                        if not _ppw:
                             continue
-                        for opin in p_cat.pins:
+                        if abs(cx - _pp.x) > ehw + _pp.env_hw + MIN_PIN_CLEARANCE_MM:
+                            continue
+                        if abs(cy - _pp.y) > ehh + _pp.env_hh + MIN_PIN_CLEARANCE_MM:
+                            continue
+                        for opx, opy in _ppw:
                             if pin_clash:
                                 break
-                            opx, opy = pin_world_xy(
-                                opin.position_mm, p.x, p.y, p.rotation)
                             for mpx, mpy in my_pins_world:
                                 dx, dy = mpx - opx, mpy - opy
                                 if dx * dx + dy * dy < _min_pin_sq:

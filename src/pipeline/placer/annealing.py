@@ -43,63 +43,148 @@ from .geometry import (
 from .models import Placed, VALID_ROTATIONS, MIN_PIN_CLEARANCE_MM
 
 
-def _crossing_count(
-    nets: list[Net],
+def _build_net_seg_bboxes(
+    entries: list[tuple[str, tuple[float, float] | None]],
     positions: dict[str, Placed],
-    catalog_map: dict[str, Component],
-    _pin_cache: dict[str, dict[str, tuple[float, float]]],
-) -> int:
-    """Count bounding-box crossings among all net-segment pairs."""
-    segments: list[tuple[str, tuple[float, float], tuple[float, float]]] = []
-    for net in nets:
-        points: list[tuple[float, float]] = []
-        for ref in net.pins:
-            if ":" not in ref:
-                continue
-            iid, pid = ref.split(":", 1)
-            p = positions.get(iid)
-            if p is None:
-                continue
-            local = _pin_cache.get(p.catalog_id, {}).get(pid)
-            if local is not None:
-                rad = math.radians(p.rotation)
-                cos_r = math.cos(rad)
-                sin_r = math.sin(rad)
-                wx = p.x + local[0] * cos_r - local[1] * sin_r
-                wy = p.y + local[0] * sin_r + local[1] * cos_r
-            else:
-                wx, wy = p.x, p.y
-            points.append((wx, wy))
-        for i in range(len(points)):
-            for j in range(i + 1, len(points)):
-                segments.append((net.id, points[i], points[j]))
+) -> list[tuple[float, float, float, float]]:
+    """Build (xmin, xmax, ymin, ymax) bbox tuples for one net's segments."""
+    points: list[tuple[float, float]] = []
+    for iid, local in entries:
+        p = positions.get(iid)
+        if p is None:
+            continue
+        if local is not None:
+            c, s = _cos_sin(p.rotation)
+            points.append((p.x + local[0] * c - local[1] * s,
+                           p.y + local[0] * s + local[1] * c))
+        else:
+            points.append((p.x, p.y))
+    segs: list[tuple[float, float, float, float]] = []
+    np_len = len(points)
+    for i in range(np_len):
+        x1, y1 = points[i]
+        for j in range(i + 1, np_len):
+            x2, y2 = points[j]
+            segs.append((
+                x1 if x1 < x2 else x2,
+                x1 if x1 > x2 else x2,
+                y1 if y1 < y2 else y2,
+                y1 if y1 > y2 else y2,
+            ))
+    return segs
 
-    crossings = 0
-    for i, (id_a, a1, a2) in enumerate(segments):
-        for id_b, b1, b2 in segments[i + 1:]:
-            if id_a == id_b:
-                continue
-            if (max(a1[0], a2[0]) > min(b1[0], b2[0])
-                and max(b1[0], b2[0]) > min(a1[0], a2[0])
-                and max(a1[1], a2[1]) > min(b1[1], b2[1])
-                and max(b1[1], b2[1]) > min(a1[1], a2[1])):
-                crossings += 1
-    return crossings
+
+def _count_pair_bboxes(
+    segs_a: list[tuple[float, float, float, float]],
+    segs_b: list[tuple[float, float, float, float]],
+) -> int:
+    """Count bbox overlaps between segments of two different nets."""
+    count = 0
+    for axmin, axmax, aymin, aymax in segs_a:
+        for bxmin, bxmax, bymin, bymax in segs_b:
+            if axmax > bxmin and bxmax > axmin and aymax > bymin and bymax > aymin:
+                count += 1
+    return count
+
+
+_cc_state: dict | None = None
+
+
+def _crossing_count(
+    net_pin_data: list[list[tuple[str, tuple[float, float] | None]]],
+    positions: dict[str, Placed],
+) -> int:
+    """Count bounding-box crossings with incremental updates across SA calls."""
+    global _cc_state
+
+    if _cc_state is not None and _cc_state['npd'] is not net_pin_data:
+        _cc_state = None
+
+    if _cc_state is not None:
+        snap = _cc_state['snap']
+        changed: set[str] = set()
+        for iid, p in positions.items():
+            old = snap.get(iid)
+            if old is None or p.x != old[0] or p.y != old[1] or p.rotation != old[2]:
+                changed.add(iid)
+
+        if not changed:
+            return _cc_state['count']
+
+        inst_nets = _cc_state['inst_nets']
+        affected: set[int] = set()
+        for iid in changed:
+            affected.update(inst_nets.get(iid, set()))
+
+        if affected:
+            net_segs = _cc_state['net_segs']
+            n_nets = len(net_segs)
+            cnt = _cc_state['count']
+            for ni in affected:
+                segs_a = net_segs[ni]
+                for nj in range(n_nets):
+                    if ni == nj:
+                        continue
+                    if nj in affected and nj < ni:
+                        continue
+                    for axmin, axmax, aymin, aymax in segs_a:
+                        for bxmin, bxmax, bymin, bymax in net_segs[nj]:
+                            if axmax > bxmin and bxmax > axmin and aymax > bymin and bymax > aymin:
+                                cnt -= 1
+            for ni in affected:
+                net_segs[ni] = _build_net_seg_bboxes(
+                    net_pin_data[ni], positions)
+            for ni in affected:
+                segs_a = net_segs[ni]
+                for nj in range(n_nets):
+                    if ni == nj:
+                        continue
+                    if nj in affected and nj < ni:
+                        continue
+                    for axmin, axmax, aymin, aymax in segs_a:
+                        for bxmin, bxmax, bymin, bymax in net_segs[nj]:
+                            if axmax > bxmin and bxmax > axmin and aymax > bymin and bymax > aymin:
+                                cnt += 1
+            _cc_state['count'] = cnt
+
+        for iid in changed:
+            p = positions[iid]
+            snap[iid] = (p.x, p.y, p.rotation)
+
+        return _cc_state['count']
+
+    inst_nets: dict[str, set[int]] = {}
+    net_segs: list[list[tuple[float, float, float, float]]] = []
+    for ni, entries in enumerate(net_pin_data):
+        for iid, _local in entries:
+            inst_nets.setdefault(iid, set()).add(ni)
+        net_segs.append(_build_net_seg_bboxes(entries, positions))
+
+    count = 0
+    n_nets = len(net_segs)
+    for i in range(n_nets):
+        for j in range(i + 1, n_nets):
+            count += _count_pair_bboxes(net_segs[i], net_segs[j])
+
+    _cc_state = {
+        'npd': net_pin_data,
+        'net_segs': net_segs,
+        'count': count,
+        'snap': {iid: (p.x, p.y, p.rotation)
+                 for iid, p in positions.items()},
+        'inst_nets': inst_nets,
+    }
+    return count
 
 log = logging.getLogger(__name__)
 
 
-# ── Precomputed net pin index ──────────────────────────────────────
-
-def _build_net_pin_index(
+def _preparse_net_pins(
     nets: list[Net],
-    catalog_map: dict[str, Component],
+    pin_cache: dict[str, dict[str, tuple[float, float]]],
+    positions: dict[str, Placed],
 ) -> list[list[tuple[str, tuple[float, float] | None]]]:
-    """Pre-resolve pin local positions per net for fast HPWL computation.
-
-    Returns a list parallel to *nets*.  Each entry is a list of
-    ``(instance_id, pin_local_or_None)`` tuples.
-    """
+    """Pre-parse net pin references once for reuse across SA iterations."""
     result: list[list[tuple[str, tuple[float, float] | None]]] = []
     for net in nets:
         entries: list[tuple[str, tuple[float, float] | None]] = []
@@ -107,13 +192,11 @@ def _build_net_pin_index(
             if ":" not in ref:
                 continue
             iid, pid = ref.split(":", 1)
-            cat = catalog_map.get(
-                next((c.id for c in catalog_map.values()), "")
-            )
-            # We need the catalog_id for this instance — defer pin
-            # resolution to the cost function since we don't have
-            # the positions dict here.  Instead, cache the pin_id.
-            entries.append((iid, pid))  # type: ignore[arg-type]
+            if iid not in positions:
+                continue
+            cat_id = positions[iid].catalog_id
+            local = pin_cache.get(cat_id, {}).get(pid)
+            entries.append((iid, local))
         result.append(entries)
     return result
 
@@ -121,33 +204,25 @@ def _build_net_pin_index(
 # ── Cost helpers ───────────────────────────────────────────────────
 
 def _hpwl(
-    nets: list[Net],
+    net_pin_data: list[list[tuple[str, tuple[float, float] | None]]],
     positions: dict[str, Placed],
-    catalog_map: dict[str, Component],
-    _pin_cache: dict[str, dict[str, tuple[float, float]]],
 ) -> float:
-    """Half-perimeter wirelength over all nets (optimised)."""
+    """Half-perimeter wirelength over all nets using pre-parsed pin data."""
     total = 0.0
-    for net in nets:
+    for entries in net_pin_data:
         xmin_n = math.inf
         xmax_n = -math.inf
         ymin_n = math.inf
         ymax_n = -math.inf
         count = 0
-        for ref in net.pins:
-            if ":" not in ref:
-                continue
-            iid, pid = ref.split(":", 1)
+        for iid, local in entries:
             p = positions.get(iid)
             if p is None:
                 continue
-            local = _pin_cache.get(p.catalog_id, {}).get(pid)
             if local is not None:
-                rad = math.radians(p.rotation)
-                cos_r = math.cos(rad)
-                sin_r = math.sin(rad)
-                wx = p.x + local[0] * cos_r - local[1] * sin_r
-                wy = p.y + local[0] * sin_r + local[1] * cos_r
+                c, s = _cos_sin(p.rotation)
+                wx = p.x + local[0] * c - local[1] * s
+                wy = p.y + local[0] * s + local[1] * c
             else:
                 wx, wy = p.x, p.y
             if wx < xmin_n:
@@ -189,17 +264,41 @@ def _outline_penalty_fast(
     positions: dict[str, Placed],
     prep_poly,
     edge_clearance: float,
+    *,
+    outline_aabb: tuple[float, float, float, float] | None = None,
 ) -> float:
     """Fast outline check — flat penalty per component outside."""
     penalty = 0.0
-    for iid in movable:
-        p = positions[iid]
-        ihw = p.env_hw + edge_clearance
-        ihh = p.env_hh + edge_clearance
-        rect = shapely_box(p.x - ihw, p.y - ihh, p.x + ihw, p.y + ihh)
-        if not prep_poly.contains(rect):
-            penalty += 10.0
+    if outline_aabb is not None:
+        oxmin, oymin, oxmax, oymax = outline_aabb
+        for iid in movable:
+            p = positions[iid]
+            ihw = p.env_hw + edge_clearance
+            ihh = p.env_hh + edge_clearance
+            if (p.x - ihw < oxmin or p.x + ihw > oxmax
+                    or p.y - ihh < oymin or p.y + ihh > oymax):
+                penalty += 10.0
+    else:
+        for iid in movable:
+            p = positions[iid]
+            ihw = p.env_hw + edge_clearance
+            ihh = p.env_hh + edge_clearance
+            rect = shapely_box(p.x - ihw, p.y - ihh, p.x + ihw, p.y + ihh)
+            if not prep_poly.contains(rect):
+                penalty += 10.0
     return penalty
+
+
+_TRIG_TABLE: dict[int, tuple[float, float]] = {}
+
+
+def _cos_sin(rotation: int) -> tuple[float, float]:
+    t = _TRIG_TABLE.get(rotation)
+    if t is None:
+        rad = math.radians(rotation)
+        t = (math.cos(rad), math.sin(rad))
+        _TRIG_TABLE[rotation] = t
+    return t
 
 
 def _pin_clearance_penalty(
@@ -216,6 +315,12 @@ def _pin_clearance_penalty(
         cat_a = catalog_map.get(a.catalog_id)
         if not cat_a or not cat_a.pins:
             continue
+        a_cos, a_sin = _cos_sin(a.rotation)
+        a_world = [
+            (a.x + pa.position_mm[0] * a_cos - pa.position_mm[1] * a_sin,
+             a.y + pa.position_mm[0] * a_sin + pa.position_mm[1] * a_cos)
+            for pa in cat_a.pins
+        ]
         for j in range(i + 1, n):
             b = positions[all_ids[j]]
             if abs(a.x - b.x) > a.env_hw + b.env_hw + MIN_PIN_CLEARANCE_MM:
@@ -225,12 +330,11 @@ def _pin_clearance_penalty(
             cat_b = catalog_map.get(b.catalog_id)
             if not cat_b or not cat_b.pins:
                 continue
-            for pa in cat_a.pins:
-                ax = a.x + pa.position_mm[0] * math.cos(math.radians(a.rotation)) - pa.position_mm[1] * math.sin(math.radians(a.rotation))
-                ay = a.y + pa.position_mm[0] * math.sin(math.radians(a.rotation)) + pa.position_mm[1] * math.cos(math.radians(a.rotation))
+            b_cos, b_sin = _cos_sin(b.rotation)
+            for ax, ay in a_world:
                 for pb in cat_b.pins:
-                    bx = b.x + pb.position_mm[0] * math.cos(math.radians(b.rotation)) - pb.position_mm[1] * math.sin(math.radians(b.rotation))
-                    by = b.y + pb.position_mm[0] * math.sin(math.radians(b.rotation)) + pb.position_mm[1] * math.cos(math.radians(b.rotation))
+                    bx = b.x + pb.position_mm[0] * b_cos - pb.position_mm[1] * b_sin
+                    by = b.y + pb.position_mm[0] * b_sin + pb.position_mm[1] * b_cos
                     dsq = (ax - bx) ** 2 + (ay - by) ** 2
                     if dsq < min_sq:
                         penalty += MIN_PIN_CLEARANCE_MM - math.sqrt(dsq)
@@ -340,6 +444,11 @@ def sa_refine(
     prep_poly = shapely_prep(outline_poly)
     edge_clearance = 1.5
 
+    # Detect axis-aligned rectangular outline for fast containment
+    from .geometry import _is_aabb
+    outline_verts = list(outline_poly.exterior.coords[:-1])
+    _outline_aabb = _is_aabb(outline_verts)
+
     # Build pin local-position cache for fast HPWL
     pin_cache: dict[str, dict[str, tuple[float, float]]] = {}
     for cat in catalog_map.values():
@@ -348,7 +457,7 @@ def sa_refine(
             pin_map[pin.id] = pin.position_mm
         pin_cache[cat.id] = pin_map
 
-    # Build mutable position map
+    # Build mutable position map (needed before _preparse_net_pins)
     positions: dict[str, Placed] = {}
     for p in placed:
         positions[p.instance_id] = Placed(
@@ -370,7 +479,6 @@ def sa_refine(
 
     # Identify large components that should prefer edges (>5% of outline area)
     outline_area = board_w * board_h
-    outline_verts = list(outline_poly.exterior.coords[:-1])
     large_comps: dict[str, float] = {}  # iid -> strength
     for iid in movable:
         p = positions[iid]
@@ -390,19 +498,22 @@ def sa_refine(
             cost += edge_dist * strength
         return cost
 
-    # Congestion is expensive — compute every CONG_INTERVAL iterations
+    # Pre-parse net pin references once (structure doesn't change during SA)
+    net_pin_data = _preparse_net_pins(nets, pin_cache, positions)
+
+    # Congestion is expensive — cache and refresh periodically
     CONG_INTERVAL = 50
     cached_cong = _congestion_cost(nets, positions, congestion_grid)
 
     def fast_cost() -> float:
         return (
-            W_HPWL * _hpwl(nets, positions, catalog_map, pin_cache)
+            W_HPWL * _hpwl(net_pin_data, positions)
             + W_CONGESTION * cached_cong
             + W_OVERLAP * _overlap_penalty(all_ids, positions)
-            + W_OUTLINE * _outline_penalty_fast(movable, positions, prep_poly, edge_clearance)
+            + W_OUTLINE * _outline_penalty_fast(movable, positions, prep_poly, edge_clearance, outline_aabb=_outline_aabb)
             + W_PIN_CLR * _pin_clearance_penalty(all_ids, positions, catalog_map)
             + W_EDGE_PREF * _edge_pref_cost()
-            + W_CROSSING * _crossing_count(nets, positions, catalog_map, pin_cache)
+            + W_CROSSING * _crossing_count(net_pin_data, positions)
         )
 
     current_cost = fast_cost()
@@ -421,7 +532,7 @@ def sa_refine(
     iid2: str = ""  # for rollback in swap branch
 
     for iteration in range(n_iterations):
-        # Refresh congestion periodically
+        # Refresh expensive cost terms periodically
         if iteration % CONG_INTERVAL == 0 and iteration > 0:
             cached_cong = _congestion_cost(nets, positions, congestion_grid)
 
@@ -508,7 +619,7 @@ def sa_refine(
 
     # Feasibility check
     overlap = _overlap_penalty(all_ids, positions)
-    outline_viol = _outline_penalty_fast(movable, positions, prep_poly, edge_clearance)
+    outline_viol = _outline_penalty_fast(movable, positions, prep_poly, edge_clearance, outline_aabb=_outline_aabb)
     pin_viol = _pin_clearance_penalty(all_ids, positions, catalog_map)
 
     if overlap > 0.01 or outline_viol > 0.01 or pin_viol > 0.01:

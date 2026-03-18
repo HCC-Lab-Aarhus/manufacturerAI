@@ -141,12 +141,46 @@ def _rect_perimeter_samples(
     return pts
 
 
+def _is_aabb(verts: list[tuple[float, float]]) -> tuple[float, float, float, float] | None:
+    """If *verts* form an axis-aligned rectangle, return (xmin, ymin, xmax, ymax)."""
+    if len(verts) != 4:
+        return None
+    xs = [v[0] for v in verts]
+    ys = [v[1] for v in verts]
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+    if xmax - xmin < 1e-9 or ymax - ymin < 1e-9:
+        return None
+    for vx, vy in verts:
+        if abs(vx - xmin) > 1e-6 and abs(vx - xmax) > 1e-6:
+            return None
+        if abs(vy - ymin) > 1e-6 and abs(vy - ymax) > 1e-6:
+            return None
+    return (xmin, ymin, xmax, ymax)
+
+
 def rect_edge_clearance(
     cx: float, cy: float,
     hw: float, hh: float,
     verts: list[tuple[float, float]],
+    _aabb_cache: dict[int, tuple[float, float, float, float] | None] = {},
 ) -> float:
-    """Min distance from rectangle perimeter samples to polygon boundary."""
+    """Min distance from rectangle perimeter samples to polygon boundary.
+
+    Fast O(1) path for axis-aligned rectangular outlines.
+    """
+    key = id(verts)
+    if key not in _aabb_cache:
+        _aabb_cache[key] = _is_aabb(verts)
+    bounds = _aabb_cache[key]
+    if bounds is not None:
+        xmin, ymin, xmax, ymax = bounds
+        return min(
+            (cx - hw) - xmin,
+            xmax - (cx + hw),
+            (cy - hh) - ymin,
+            ymax - (cy + hh),
+        )
     return min(
         _min_dist_to_boundary(px, py, verts)
         for px, py in _rect_perimeter_samples(cx, cy, hw, hh)

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import math
+from collections import defaultdict
 
 from src.catalog.models import Component
 
-from .geometry import rect_edge_clearance, aabb_gap, pin_world_xy
+from .geometry import rect_edge_clearance, aabb_gap
 from .models import Placed
 from .nets import NetEdge, resolve_pin_positions
 
@@ -33,16 +34,14 @@ def score_candidate(
     """Lightweight scoring: net proximity + edge/bottom preference + spacing."""
     score = 0.0
 
+    # Precompute trig for candidate rotation
+    _rad = math.radians(rotation)
+    _cos_r = math.cos(_rad)
+    _sin_r = math.sin(_rad)
+
     # 1. Net proximity — dominant term.
-    #    For high-fanout nets (GND, VCC) we only count the K nearest
-    #    placed neighbours to avoid overwhelming centroid-pull that
-    #    drags small passives away from the IC they need to decouple.
-    #    The router builds an MST anyway, so proximity to *every*
-    #    member isn't needed — just to the tree's local subtree.
     _MAX_EDGES_PER_NET = 2
 
-    # Group edges by net so we can limit per-net contribution
-    from collections import defaultdict
     edges_by_net: dict[str, list[NetEdge]] = defaultdict(list)
     for edge in net_graph.get(instance_id, []):
         if placed_map.get(edge.other_iid) is not None:
@@ -51,8 +50,10 @@ def score_candidate(
     best_pin_pairs: list[tuple[tuple[float, float], tuple[float, float],
                                 float, float, float, float]] = []
 
+    # Cache trig values per rotation for placed components
+    _trig_cache: dict[int, tuple[float, float]] = {}
+
     for _net_id, edges in edges_by_net.items():
-        # Compute distance for each edge, keep only K nearest
         edge_dists: list[tuple[float, NetEdge,
                                tuple[float, float], tuple[float, float]]] = []
         for edge in edges:
@@ -62,14 +63,28 @@ def score_candidate(
             if other_cat is None:
                 continue
             other_positions = resolve_pin_positions(edge.other_pins, other_cat)
+
+            o_rot = other.rotation
+            o_trig = _trig_cache.get(o_rot)
+            if o_trig is None:
+                o_rad = math.radians(o_rot)
+                o_trig = (math.cos(o_rad), math.sin(o_rad))
+                _trig_cache[o_rot] = o_trig
+            o_cos, o_sin = o_trig
+            o_x, o_y = other.x, other.y
+
             best_dist = float("inf")
             best_wp: tuple[float, float] = (cx, cy)
-            best_op: tuple[float, float] = (other.x, other.y)
+            best_op: tuple[float, float] = (o_x, o_y)
             for mp in my_positions:
-                wx, wy = pin_world_xy(mp, cx, cy, rotation)
+                wx = cx + mp[0] * _cos_r - mp[1] * _sin_r
+                wy = cy + mp[0] * _sin_r + mp[1] * _cos_r
                 for op in other_positions:
-                    owx, owy = pin_world_xy(op, other.x, other.y, other.rotation)
-                    d = math.hypot(wx - owx, wy - owy)
+                    owx = o_x + op[0] * o_cos - op[1] * o_sin
+                    owy = o_y + op[0] * o_sin + op[1] * o_cos
+                    dx = wx - owx
+                    dy = wy - owy
+                    d = math.sqrt(dx * dx + dy * dy)
                     if d < best_dist:
                         best_dist = d
                         best_wp = (wx, wy)
@@ -77,7 +92,6 @@ def score_candidate(
             if best_dist < float("inf"):
                 edge_dists.append((best_dist, edge, best_wp, best_op))
 
-        # Sort by distance and keep only K nearest for this net
         edge_dists.sort(key=lambda t: t[0])
         for best_dist, edge, best_wp, best_op in edge_dists[:_MAX_EDGES_PER_NET]:
             other = placed_map[edge.other_iid]
