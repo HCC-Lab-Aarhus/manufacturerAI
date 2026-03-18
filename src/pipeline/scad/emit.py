@@ -13,11 +13,13 @@ The final SCAD structure::
 
 from __future__ import annotations
 
+import math
 import logging
 from collections import defaultdict
 from datetime import datetime
 
 from shapely.geometry import MultiPolygon as _SMultiPoly
+from shapely.geometry import Point as _SPoint
 from shapely.geometry import Polygon as _SPoly
 from shapely.ops import unary_union
 
@@ -32,11 +34,31 @@ log = logging.getLogger(__name__)
 # ── Geometry → polygon conversion ─────────────────────────────────
 
 
+def _cylinder_to_polygon(cg: CylinderGeometry, fn: int = 16) -> list[list[float]]:
+    """Approximate a cylinder as a regular polygon with *fn* sides."""
+    return [
+        [cg.cx + cg.r * math.cos(2 * math.pi * i / fn),
+         cg.cy + cg.r * math.sin(2 * math.pi * i / fn)]
+        for i in range(fn)
+    ]
+
+
+def _capsule_to_polygon(cg: CapsuleGeometry, fn: int = 16) -> list[list[float]]:
+    """Approximate hulled two-circle capsule as a polygon via Shapely."""
+    c1 = _SPoint(cg.x1, cg.y1).buffer(cg.r1, resolution=fn // 4)
+    c2 = _SPoint(cg.x2, cg.y2).buffer(cg.r2, resolution=fn // 4)
+    hull = c1.union(c2).convex_hull
+    coords = list(hull.exterior.coords)[:-1]
+    return [[x, y] for x, y in coords]
+
+
 def _fragment_to_polygon(frag: ScadFragment) -> list[list[float]] | None:
-    """Convert a fragment's geometry to a polygon point list, or None for cylinders/capsules."""
+    """Convert a fragment's geometry to a polygon point list."""
     g = frag.geometry
-    if isinstance(g, (CylinderGeometry, CapsuleGeometry)):
-        return None
+    if isinstance(g, CylinderGeometry):
+        return _cylinder_to_polygon(g)
+    if isinstance(g, CapsuleGeometry):
+        return _capsule_to_polygon(g)
     if isinstance(g, RectGeometry):
         return g.to_polygon()
     if isinstance(g, SegmentGeometry):
@@ -258,28 +280,23 @@ def generate_scad(
 
     # No cutouts and no additions — just emit the shell body
     if not cutouts and not additions:
-        return header + "\n".join(shell_body_lines) + "\n"
+        body = "\n".join(_indent(shell_body_lines, "  "))
+        return header + f"mirror([0, 1, 0]) {{\n{body}\n}}\n"
 
-    # Split cutouts into cylinders, capsules, tilted, and polygons
-    cylinder_cuts: list[ScadFragment] = []
-    capsule_cuts: list[ScadFragment] = []
+    # Split cutouts: tilted go separate; everything else merges as polygons
     tilted_cuts: list[ScadFragment] = []
     polygon_cuts: list[ScadFragment] = []
     for f in cutouts:
         if f.tilt_deg:
             tilted_cuts.append(f)
-        elif isinstance(f.geometry, CylinderGeometry):
-            cylinder_cuts.append(f)
-        elif isinstance(f.geometry, CapsuleGeometry):
-            capsule_cuts.append(f)
         else:
             polygon_cuts.append(f)
 
     merged_groups = _merge_polygon_fragments(polygon_cuts, outline_pts)
 
     log.info(
-        "Cutout merging: %d polygon → %d groups  |  %d cylinder  |  %d capsule  |  %d tilted  |  %d additions",
-        len(polygon_cuts), len(merged_groups), len(cylinder_cuts), len(capsule_cuts), len(tilted_cuts), len(additions),
+        "Cutout merging: %d polygon → %d groups  |  %d tilted  |  %d additions",
+        len(polygon_cuts), len(merged_groups), len(tilted_cuts), len(additions),
     )
 
     out_lines: list[str] = []
@@ -295,7 +312,6 @@ def generate_scad(
     if has_additions:
         out_lines.append("  union() {")
         out_lines.append("    // --- Shell body ---")
-        out_lines.append("    render(convexity = 10)")
         out_lines += _indent(shell_body_lines, "    ")
         out_lines.append("")
         out_lines.append("    // --- Additions ---")
@@ -307,7 +323,6 @@ def generate_scad(
         prefix = "  " if has_cutouts else ""
         if has_cutouts:
             out_lines.append("  // --- Shell body ---")
-            out_lines.append("  render(convexity = 10)")
         out_lines += _indent(shell_body_lines, prefix)
 
     if has_cutouts:
@@ -318,40 +333,6 @@ def generate_scad(
             out_lines.append("")
             out_lines.append("    " + comment.lstrip())
             out_lines += _indent(scad_lines, "    ")
-
-        # Cylinder cutouts
-        if cylinder_cuts:
-            out_lines.append("")
-            out_lines.append(f"    // --- Cylindrical holes ({len(cylinder_cuts)}) ---")
-            _EPS = 0.001
-            for c in cylinder_cuts:
-                cg = c.geometry
-                assert isinstance(cg, CylinderGeometry)
-                if c.label:
-                    out_lines.append(f"    // {c.label}")
-                out_lines += [
-                    f"    translate([{cg.cx:.3f}, {cg.cy:.3f}, {c.z_base - _EPS:.3f}])",
-                    f"      cylinder(h = {c.depth + 2 * _EPS:.3f}, r = {cg.r:.3f});",
-                ]
-
-        # Capsule cutouts (jumper endpoints adjacent to component pins)
-        if capsule_cuts:
-            out_lines.append("")
-            out_lines.append(f"    // --- Capsule cutouts ({len(capsule_cuts)}) ---")
-            _EPS = 0.001
-            for c in capsule_cuts:
-                cg = c.geometry
-                assert isinstance(cg, CapsuleGeometry)
-                if c.label:
-                    out_lines.append(f"    // {c.label}")
-                out_lines += [
-                    f"    translate([0, 0, {c.z_base - _EPS:.3f}])",
-                    f"      linear_extrude(height = {c.depth + 2 * _EPS:.3f})",
-                    f"        hull() {{",
-                    f"          translate([{cg.x1:.3f}, {cg.y1:.3f}]) circle(r = {cg.r1:.3f});",
-                    f"          translate([{cg.x2:.3f}, {cg.y2:.3f}]) circle(r = {cg.r2:.3f});",
-                    f"        }}",
-                ]
 
         # Tilted cutouts (side-mounted reoriented bodies)
         if tilted_cuts:
@@ -364,7 +345,8 @@ def generate_scad(
 
         out_lines += ["", "}"]     # close difference()
 
-    return header + "\n".join(out_lines) + "\n"
+    body = "\n".join(_indent(out_lines, "  "))
+    return header + f"mirror([0, 1, 0]) {{\n{body}\n}}\n"
 
 
 def _tilted_scad_lines(frag: ScadFragment) -> list[str]:
