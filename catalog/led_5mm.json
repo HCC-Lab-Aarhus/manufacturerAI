@@ -5,7 +5,7 @@
     "ui_placement": true,
     "body": {
         "shape": "circle",
-        "diameter_mm": 4.8,
+        "diameter_mm": 5.4,
         "height_mm": 8.5
     },
     "mounting": {
