@@ -27,7 +27,7 @@
         {
             "id": "V+",
             "label": "Positive tab (3V)",
-            "position_mm": [6.25, 25.0],
+            "position_mm": [6.25, 26.0],
             "direction": "out",
             "voltage_v": 3.0,
             "current_max_ma": 1000,
@@ -38,7 +38,7 @@
         {
             "id": "GND",
             "label": "Ground tab (-)",
-            "position_mm": [-6.25, 25.0],
+            "position_mm": [-6.25, 26.0],
             "direction": "out",
             "voltage_v": 0,
             "current_max_ma": 1000,
@@ -53,27 +53,27 @@
             {
                 "shape": "rect",
                 "label": "positive plate channel",
-                "position_mm": [6.25, 25.0],
-                "width_mm": 12.03,
+                "position_mm": [6.25, 26.0],
+                "width_mm": 13.03,
                 "length_mm": 1.46,
-                "depth_mm": 12.1,
+                "depth_mm": 13.1,
                 "z_anchor": "cavity_start",
-                "description": "Channel for small V+ plate (12.03mm wide, 1.46mm thick, 12.1mm tall)."
+                "description": "Channel for small V+ plate (13.03mm wide, 1.46mm thick, 13.1mm tall)."
             },
             {
                 "shape": "rect",
                 "label": "negative plate channel",
-                "position_mm": [-6.25, 25.0],
-                "width_mm": 12.03,
+                "position_mm": [-6.25, 26.0],
+                "width_mm": 13.03,
                 "length_mm": 1.46,
-                "depth_mm": 12.1,
+                "depth_mm": 13.1,
                 "z_anchor": "cavity_start",
-                "description": "Channel for small GND plate (12.03mm wide, 1.46mm thick, 12.1mm tall)."
+                "description": "Channel for small GND plate (13.03mm wide, 1.46mm thick, 13.1mm tall)."
             },
             {
                 "shape": "rect",
                 "label": "inter-cell contact plate channel",
-                "position_mm": [0, -25.0],
+                "position_mm": [0, -26.0],
                 "width_mm": 27.2,
                 "length_mm": 1.46,
                 "depth_mm": 12.0,
@@ -83,37 +83,47 @@
             {
                 "shape": "rect",
                 "label": "V+ dome contact window",
-                "position_mm": [6.25, 25.0],
+                "position_mm": [6.25, 22.0],
                 "width_mm": 7.5,
-                "length_mm": 4.0,
-                "depth_mm": 8.0,
+                "length_mm": 7.5,
+                "depth_mm": 12.1,
                 "z_anchor": "cavity_start",
-                "description": "Window for 7.5mm dome on V+ plate. Reduced penetration (4mm) and height (8mm) — just enough for dome protrusion."
+                "description": "Window for 7.5mm dome contact on V+ plate to reach battery."
             },
             {
                 "shape": "rect",
                 "label": "GND dome contact window",
-                "position_mm": [-6.25, 25.0],
+                "position_mm": [-6.25, 22.0],
                 "width_mm": 7.5,
-                "length_mm": 4.0,
-                "depth_mm": 8.0,
+                "length_mm": 7.5,
+                "depth_mm": 12.1,
                 "z_anchor": "cavity_start",
-                "description": "Window for 7.5mm dome on GND plate. Reduced penetration (4mm) and height (8mm) — just enough for dome protrusion."
+                "description": "Window for 7.5mm dome contact on GND plate to reach battery."
             },
             {
                 "shape": "rect",
-                "label": "inter-cell dome contact window",
-                "position_mm": [0, -25.0],
-                "width_mm": 21.6,
-                "length_mm": 4.0,
-                "depth_mm": 8.0,
+                "label": "inter-cell dome contact window (+)",
+                "position_mm": [4.35, -22.0],
+                "width_mm": 9,
+                "length_mm": 7.5,
+                "depth_mm": 12.0,
                 "z_anchor": "cavity_start",
-                "description": "Single merged window for both 7.5mm domes on wide plate. 21.6mm wide to clear side-wall overhang and cell divider."
+                "description": "Window for first 7.5mm dome on wide plate. Two domes are 8.7mm apart center-to-center."
+            },
+            {
+                "shape": "rect",
+                "label": "inter-cell dome contact window (-)",
+                "position_mm": [-4.35, -22.0],
+                "width_mm": 9,
+                "length_mm": 7.5,
+                "depth_mm": 12.0,
+                "z_anchor": "cavity_start",
+                "description": "Window for second 7.5mm dome on wide plate. Two domes are 8.7mm apart center-to-center."
             },
             {
                 "shape": "rect",
                 "label": "V+ pin passthrough",
-                "position_mm": [6.25, 25.0],
+                "position_mm": [6.25, 26.0],
                 "width_mm": 3.0,
                 "length_mm": 0.3,
                 "through_surface": true,
@@ -123,7 +133,7 @@
             {
                 "shape": "rect",
                 "label": "GND pin passthrough",
-                "position_mm": [-6.25, 25.0],
+                "position_mm": [-6.25, 26.0],
                 "width_mm": 3.0,
                 "length_mm": 0.3,
                 "through_surface": true,
