@@ -143,6 +143,8 @@ def _calibration_gcode(
             lines.append(f"G1 X{nx:.2f} Y{ny:.2f} E{e:.4f} F{feed}")
             prev_x, prev_y = nx, ny
 
+    e -= 0.8
+    lines.append(f"G1 E{e:.4f} F2400 ; retract filament")
     lines += [
         "",
         "G91 ; relative positioning",
@@ -439,6 +441,8 @@ def _silverink_test_gcode(
                         lines.append(
                             f"G1 X{x_pos:.3f} E{e:.5f} F900")
 
+    e -= 0.8
+    lines.append(f"G1 E{e:.4f} F2400 ; retract filament")
     lines += [
         "",
         "G91 ; relative positioning",
@@ -901,6 +905,8 @@ def _pinhole_gcode(
         else:
             _cube_with_pinholes(cube_x, cube_y, cube_w, cube_h, do_iron=is_last)
 
+    e -= 0.8
+    lines.append(f"G1 E{e:.4f} F2400 ; retract filament")
     lines += [
         "",
         "G91 ; relative positioning",
@@ -1165,6 +1171,8 @@ def _progressive_trace_gcode(
                         e += iron_spacing * iron_epmm
                         lines.append(f"G1 X{x_pos:.3f} E{e:.5f} F900")
 
+    e -= 0.8
+    lines.append(f"G1 E{e:.4f} F2400 ; retract filament")
     lines += [
         "", "G91", "G1 Z30 F1000", "G90",
         "M0 ; pause before silver ink",
@@ -1428,6 +1436,8 @@ def _parallel_lines_gcode(
                         e += iron_spacing * iron_epmm
                         lines.append(f"G1 X{x_pos:.3f} E{e:.5f} F900")
 
+    e -= 0.8
+    lines.append(f"G1 E{e:.4f} F2400 ; retract filament")
     lines += [
         "", "G91", "G1 Z30 F1000", "G90",
         "M0 ; pause before silver ink",
@@ -1686,6 +1696,8 @@ def _trace_width_gcode(
                     e += iron_spacing * iron_epmm
                     lines.append(f"G1 X{x_pos:.3f} E{e:.5f} F900")
 
+    e -= 0.8
+    lines.append(f"G1 E{e:.4f} F2400 ; retract filament")
     lines += [
         "", "G91", "G1 Z30 F1000", "G90",
         "M0 ; pause before silver ink",
