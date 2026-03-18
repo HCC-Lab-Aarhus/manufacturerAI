@@ -143,17 +143,22 @@ def _calibration_gcode(
             lines.append(f"G1 X{nx:.2f} Y{ny:.2f} E{e:.4f} F{feed}")
             prev_x, prev_y = nx, ny
 
-    e -= 0.8
-    lines.append(f"G1 E{e:.4f} F2400 ; retract filament")
+    e -= 4.0
+    lines.append(f"G1 E{e:.4f} F3000 ; retract")
     lines += [
         "",
         "G91 ; relative positioning",
-        "G1 Z30 F1000 ; lift head before pause",
+        "G1 Z1 F1000 ; lift head before pause",
         "G90 ; absolute positioning",
-        "M0 ; pause before silver ink",
+        "",
+        "G1 X0 Y0 F3000 ; move to home",
+        "",
         "G91 ; relative positioning",
-        "G1 Z-30 F1000 ; lower head back down",
+        "G1 Z-1 F1000 ; lower head back down",
         "G90 ; absolute positioning",
+        "",
+        "M0 ; pause before silver ink",
+        "",
         ";silverink",
         "",
         "; --- End sequence ---",
@@ -441,17 +446,22 @@ def _silverink_test_gcode(
                         lines.append(
                             f"G1 X{x_pos:.3f} E{e:.5f} F900")
 
-    e -= 0.8
-    lines.append(f"G1 E{e:.4f} F2400 ; retract filament")
+    e -= 4.0
+    lines.append(f"G1 E{e:.4f} F3000 ; retract")
     lines += [
         "",
         "G91 ; relative positioning",
-        "G1 Z30 F1000 ; lift head before pause",
+        "G1 Z1 F1000 ; lift head before pause",
         "G90 ; absolute positioning",
-        "M0 ; pause before silver ink",
+        "",
+        "G1 X0 Y0 F3000 ; move to home",
+        "",
         "G91 ; relative positioning",
-        "G1 Z-30 F1000 ; lower head back down",
+        "G1 Z-1 F1000 ; lower head back down",
         "G90 ; absolute positioning",
+        "",
+        "M0 ; pause before silver ink",
+        "",
         ";silverink",
         "",
         "; --- End sequence ---",
@@ -584,6 +594,7 @@ def _pinhole_gcode(
     plate_w: float,
     plate_h: float,
     cube_size: float,
+    cube_width: float = 5,
     z: float = 0.2,
     feed: float = 1200,
 ) -> str:
@@ -597,7 +608,6 @@ def _pinhole_gcode(
     extrusion_w = nozzle_d * 1.125
     filament_area = math.pi * (filament_d / 2) ** 2
     e_per_mm = (z * extrusion_w) / filament_area
-    infill_spacing = extrusion_w
     iron_spacing = 0.1
     iron_flow = 0.05
 
@@ -607,7 +617,7 @@ def _pinhole_gcode(
     plate_x = (nom_w - plate_w) / 2
     plate_y = (nom_d - plate_h) / 2
 
-    cube_w = cube_size
+    cube_w = cube_width
     cube_h = cube_size
     cube_x = plate_x + plate_w - cube_w
     cube_y = plate_y + (plate_h - cube_h) / 2
@@ -682,7 +692,7 @@ def _pinhole_gcode(
                 e += (iy1 - iy0) * e_per_mm
                 lines.append(f"G1 X{x_pos:.3f} Y{iy0:.3f} E{e:.4f} F{feed}")
             going_up = not going_up
-            x_pos += infill_spacing
+            x_pos += extrusion_w
         if do_iron:
             iron_epmm = e_per_mm * iron_flow
             lines.append(";TYPE:Ironing")
@@ -705,19 +715,48 @@ def _pinhole_gcode(
                     e += iron_spacing * iron_epmm
                     lines.append(f"G1 X{x_pos:.3f} E{e:.5f} F900")
 
+    # ── Cutout geometry (matches SCAD pipeline dimensions) ──
+    pin_half = PINHOLE_TAPER_D / 2
+    cut_hw = SCAD_TRACE_WIDTH / 2
+    cube_cx = cube_x + cube_w / 2
+    pin_ys = [cube_y + cube_h * 0.3, cube_y + cube_h * 0.7]
+
+    def _iron_trace_channels() -> None:
+        nonlocal e
+        iron_epmm = e_per_mm * iron_flow
+        lines.append(";TYPE:Ironing - trace channels")
+        for py in pin_ys:
+            y_lo = py - cut_hw
+            y_hi = py + cut_hw
+            x_lo = plate_x
+            x_hi = cube_cx
+            e -= 0.8
+            lines.append(f"G1 E{e:.4f} F2400 ; retract")
+            lines.append(f"G1 X{x_hi:.3f} Y{y_lo:.3f} F3000")
+            e += 0.8
+            lines.append(f"G1 E{e:.4f} F2400 ; unretract")
+            x_pos = x_hi
+            going_down = True
+            while x_pos >= x_lo - 0.001:
+                e += (y_hi - y_lo) * iron_epmm
+                if going_down:
+                    lines.append(f"G1 X{x_pos:.3f} Y{y_hi:.3f} E{e:.5f} F900")
+                else:
+                    lines.append(f"G1 X{x_pos:.3f} Y{y_lo:.3f} E{e:.5f} F900")
+                going_down = not going_down
+                x_pos -= iron_spacing
+                if x_pos >= x_lo - 0.001:
+                    e += iron_spacing * iron_epmm
+                    lines.append(f"G1 X{x_pos:.3f} E{e:.5f} F900")
+
     plate_layers = 4
     for pl in range(1, plate_layers + 1):
         lz = z * pl
         lines.append(";LAYER_CHANGE")
         lines.append(f";Z:{lz:.1f}")
         lines.append(f"G1 Z{lz:.2f} F600")
-        _rect_perimeter_infill_iron(plate_x, plate_y, plate_w, plate_h, do_iron=(pl == plate_layers))
-
-    # ── Cutout geometry (matches SCAD pipeline dimensions) ──
-    pin_half = PINHOLE_TAPER_D / 2
-    cut_hw = SCAD_TRACE_WIDTH / 2
-    cube_cx = cube_x + cube_w / 2
-    pin_ys = [cube_y + cube_h * 0.3, cube_y + cube_h * 0.7]
+        _rect_perimeter_infill_iron(plate_x, plate_y, plate_w, plate_h)
+    _iron_trace_channels()
 
     def _excl_at(x: float) -> list[tuple[float, float]]:
         raw: list[tuple[float, float]] = []
@@ -752,40 +791,45 @@ def _pinhole_gcode(
             segs = ns
         return segs
 
+    n_walls = 3
+
     def _cube_with_cutouts(
         x0: float, y0: float, w: float, h: float,
-        do_iron: bool = False,
     ) -> None:
         nonlocal e
         x1, y1 = x0 + w, y0 + h
-        inset = extrusion_w / 2
 
-        # Perimeter — bottom / right / top are solid
-        e -= 0.8
-        lines.append(f"G1 E{e:.4f} F2400 ; retract")
-        lines.append(f"G1 X{x0:.3f} Y{y0:.3f} F3000 ; travel")
-        e += 0.8
-        lines.append(f"G1 E{e:.4f} F2400 ; unretract")
-        e += w * e_per_mm
-        lines.append(f"G1 X{x1:.3f} Y{y0:.3f} E{e:.4f} F{feed}")
-        e += h * e_per_mm
-        lines.append(f"G1 X{x1:.3f} Y{y1:.3f} E{e:.4f} F{feed}")
-        e += w * e_per_mm
-        lines.append(f"G1 X{x0:.3f} Y{y1:.3f} E{e:.4f} F{feed}")
+        for wall in range(n_walls):
+            offset = extrusion_w * wall
+            wx0 = x0 + offset
+            wy0 = y0 + offset
+            wx1 = x1 - offset
+            wy1 = y1 - offset
 
-        # Left edge — gaps for trace cutout channels
-        for seg in sorted(
-            _split_y(y0, y1, _excl_at(x0)), key=lambda s: -s[1],
-        ):
             e -= 0.8
             lines.append(f"G1 E{e:.4f} F2400 ; retract")
-            lines.append(f"G1 X{x0:.3f} Y{seg[1]:.3f} F3000")
+            lines.append(f"G1 X{wx0:.3f} Y{wy0:.3f} F3000 ; travel")
             e += 0.8
             lines.append(f"G1 E{e:.4f} F2400 ; unretract")
-            e += (seg[1] - seg[0]) * e_per_mm
-            lines.append(f"G1 X{x0:.3f} Y{seg[0]:.3f} E{e:.4f} F{feed}")
+            e += (wx1 - wx0) * e_per_mm
+            lines.append(f"G1 X{wx1:.3f} Y{wy0:.3f} E{e:.4f} F{feed}")
+            e += (wy1 - wy0) * e_per_mm
+            lines.append(f"G1 X{wx1:.3f} Y{wy1:.3f} E{e:.4f} F{feed}")
+            e += (wx1 - wx0) * e_per_mm
+            lines.append(f"G1 X{wx0:.3f} Y{wy1:.3f} E{e:.4f} F{feed}")
 
-        # Infill with pin-hole and channel exclusions
+            for seg in sorted(
+                _split_y(wy0, wy1, _excl_at(wx0)), key=lambda s: -s[1],
+            ):
+                e -= 0.8
+                lines.append(f"G1 E{e:.4f} F2400 ; retract")
+                lines.append(f"G1 X{wx0:.3f} Y{seg[1]:.3f} F3000")
+                e += 0.8
+                lines.append(f"G1 E{e:.4f} F2400 ; unretract")
+                e += (seg[1] - seg[0]) * e_per_mm
+                lines.append(f"G1 X{wx0:.3f} Y{seg[0]:.3f} E{e:.4f} F{feed}")
+
+        inset = n_walls * extrusion_w - extrusion_w / 2
         ix0, iy0 = x0 + inset, y0 + inset
         ix1, iy1 = x1 - inset, y1 - inset
         x_pos = ix0
@@ -803,27 +847,7 @@ def _pinhole_gcode(
                 e += abs(sy_b - sy_a) * e_per_mm
                 lines.append(f"G1 X{x_pos:.3f} Y{sy_b:.3f} E{e:.4f} F{feed}")
             going_up = not going_up
-            x_pos += infill_spacing
-
-        if do_iron:
-            iron_epmm = e_per_mm * iron_flow
-            lines.append(";TYPE:Ironing")
-            x_pos = ix1
-            going_down = True
-            while x_pos >= ix0 - 0.001:
-                segs = _split_y(iy0, iy1, _excl_at(x_pos))
-                ordered = list(reversed(segs)) if going_down else segs
-                for s in ordered:
-                    sy_a, sy_b = (s[1], s[0]) if going_down else (s[0], s[1])
-                    e -= 0.8
-                    lines.append(f"G1 E{e:.4f} F2400 ; retract")
-                    lines.append(f"G1 X{x_pos:.3f} Y{sy_a:.3f} F3000")
-                    e += 0.8
-                    lines.append(f"G1 E{e:.4f} F2400 ; unretract")
-                    e += abs(sy_b - sy_a) * iron_epmm
-                    lines.append(f"G1 X{x_pos:.3f} Y{sy_b:.3f} E{e:.5f} F900")
-                going_down = not going_down
-                x_pos -= iron_spacing
+            x_pos += extrusion_w
 
     def _pinhole_excl_at(x: float) -> list[tuple[float, float]]:
         raw: list[tuple[float, float]] = []
@@ -834,24 +858,30 @@ def _pinhole_gcode(
 
     def _cube_with_pinholes(
         x0: float, y0: float, w: float, h: float,
-        do_iron: bool = False,
     ) -> None:
         nonlocal e
         x1, y1 = x0 + w, y0 + h
-        inset = extrusion_w / 2
 
-        e -= 0.8
-        lines.append(f"G1 E{e:.4f} F2400 ; retract")
-        lines.append(f"G1 X{x0:.3f} Y{y0:.3f} F3000 ; travel")
-        e += 0.8
-        lines.append(f"G1 E{e:.4f} F2400 ; unretract")
-        prev = (x0, y0)
-        for nx, ny in [(x1, y0), (x1, y1), (x0, y1), (x0, y0)]:
-            dist = math.hypot(nx - prev[0], ny - prev[1])
-            e += dist * e_per_mm
-            lines.append(f"G1 X{nx:.3f} Y{ny:.3f} E{e:.4f} F{feed}")
-            prev = (nx, ny)
+        for wall in range(n_walls):
+            offset = extrusion_w * wall
+            wx0 = x0 + offset
+            wy0 = y0 + offset
+            wx1 = x1 - offset
+            wy1 = y1 - offset
 
+            e -= 0.8
+            lines.append(f"G1 E{e:.4f} F2400 ; retract")
+            lines.append(f"G1 X{wx0:.3f} Y{wy0:.3f} F3000 ; travel")
+            e += 0.8
+            lines.append(f"G1 E{e:.4f} F2400 ; unretract")
+            prev = (wx0, wy0)
+            for nx, ny in [(wx1, wy0), (wx1, wy1), (wx0, wy1), (wx0, wy0)]:
+                dist = math.hypot(nx - prev[0], ny - prev[1])
+                e += dist * e_per_mm
+                lines.append(f"G1 X{nx:.3f} Y{ny:.3f} E{e:.4f} F{feed}")
+                prev = (nx, ny)
+
+        inset = n_walls * extrusion_w - extrusion_w / 2
         ix0, iy0 = x0 + inset, y0 + inset
         ix1, iy1 = x1 - inset, y1 - inset
         x_pos = ix0
@@ -869,53 +899,36 @@ def _pinhole_gcode(
                 e += abs(sy_b - sy_a) * e_per_mm
                 lines.append(f"G1 X{x_pos:.3f} Y{sy_b:.3f} E{e:.4f} F{feed}")
             going_up = not going_up
-            x_pos += infill_spacing
-
-        if do_iron:
-            iron_epmm = e_per_mm * iron_flow
-            lines.append(";TYPE:Ironing")
-            x_pos = ix1
-            going_down = True
-            while x_pos >= ix0 - 0.001:
-                segs = _split_y(iy0, iy1, _pinhole_excl_at(x_pos))
-                ordered = list(reversed(segs)) if going_down else segs
-                for s in ordered:
-                    sy_a, sy_b = (s[1], s[0]) if going_down else (s[0], s[1])
-                    e -= 0.8
-                    lines.append(f"G1 E{e:.4f} F2400 ; retract")
-                    lines.append(f"G1 X{x_pos:.3f} Y{sy_a:.3f} F3000")
-                    e += 0.8
-                    lines.append(f"G1 E{e:.4f} F2400 ; unretract")
-                    e += abs(sy_b - sy_a) * iron_epmm
-                    lines.append(f"G1 X{x_pos:.3f} Y{sy_b:.3f} E{e:.5f} F900")
-                going_down = not going_down
-                x_pos -= iron_spacing
+            x_pos += extrusion_w
 
     cutout_layers = max(1, round((cube_size / 2) / z))
 
-    # Cube layers — channels+pinholes up to half height, pinholes-only above
     for layer in range(1, cube_layers + 1):
         lz = z * (plate_layers + layer)
         lines.append(";LAYER_CHANGE")
         lines.append(f";Z:{lz:.1f}")
         lines.append(f"G1 Z{lz:.2f} F600")
-        is_last = layer == cube_layers
         if layer <= cutout_layers:
-            _cube_with_cutouts(cube_x, cube_y, cube_w, cube_h, do_iron=is_last)
+            _cube_with_cutouts(cube_x, cube_y, cube_w, cube_h)
         else:
-            _cube_with_pinholes(cube_x, cube_y, cube_w, cube_h, do_iron=is_last)
+            _cube_with_pinholes(cube_x, cube_y, cube_w, cube_h)
 
-    e -= 0.8
-    lines.append(f"G1 E{e:.4f} F2400 ; retract filament")
+    e -= 4.0
+    lines.append(f"G1 E{e:.4f} F3000 ; retract")
     lines += [
         "",
         "G91 ; relative positioning",
-        "G1 Z30 F1000 ; lift head before pause",
+        "G1 Z1 F1000 ; lift head before pause",
         "G90 ; absolute positioning",
-        "M0 ; pause before silver ink",
+        "",
+        "G1 X0 Y0 F3000 ; move to home",
+        "",
         "G91 ; relative positioning",
-        "G1 Z-30 F1000 ; lower head back down",
+        "G1 Z-1 F1000 ; lower head back down",
         "G90 ; absolute positioning",
+        "",
+        "M0 ; pause before silver ink",
+        "",
         ";silverink",
         "",
         "; --- End sequence ---",
@@ -936,6 +949,7 @@ def _pinhole_bitmap(
     plate_w: float,
     plate_h: float,
     cube_size: float,
+    cube_width: float = 5,
 ) -> str:
     px = grid.pixel_size_mm
     cols = grid.data_cols
@@ -949,7 +963,7 @@ def _pinhole_bitmap(
     plate_x = (nom_w - plate_w) / 2
     plate_y = (nom_d - plate_h) / 2
 
-    cube_w = cube_size
+    cube_w = cube_width
     cube_h = cube_size
     cube_x = plate_x + plate_w - cube_w
     cube_y = plate_y + (plate_h - cube_h) / 2
@@ -988,9 +1002,10 @@ async def generate_pinhole(
     printer: str = Query("coreone"),
     filament: str = Query("prusament_pla"),
     padding: float = Query(5),
-    plate_width: float = Query(40),
-    plate_height: float = Query(30),
+    plate_width: float = Query(15),
+    plate_height: float = Query(20),
     cube_size: float = Query(15),
+    cube_width: float = Query(5),
 ) -> dict[str, Any]:
     """Generate G-code + bitmap for cube-trace test."""
     pdef = get_printer(printer)
@@ -998,8 +1013,8 @@ async def generate_pinhole(
     grid = sweep_grid(pdef)
 
     gcode = _pinhole_gcode(
-        pdef, fdef, padding, plate_width, plate_height, cube_size)
-    bitmap = _pinhole_bitmap(pdef, grid, plate_width, plate_height, cube_size)
+        pdef, fdef, padding, plate_width, plate_height, cube_size, cube_width)
+    bitmap = _pinhole_bitmap(pdef, grid, plate_width, plate_height, cube_size, cube_width)
 
     plate_x = (pdef.nominal_bed_width - plate_width) / 2
     plate_y = (pdef.nominal_bed_depth - plate_height) / 2
@@ -1171,16 +1186,31 @@ def _progressive_trace_gcode(
                         e += iron_spacing * iron_epmm
                         lines.append(f"G1 X{x_pos:.3f} E{e:.5f} F900")
 
-    e -= 0.8
-    lines.append(f"G1 E{e:.4f} F2400 ; retract filament")
+    e -= 4.0
+    lines.append(f"G1 E{e:.4f} F3000 ; retract")
     lines += [
-        "", "G91", "G1 Z30 F1000", "G90",
+        "",
+        "G91 ; relative positioning",
+        "G1 Z1 F1000 ; lift head before pause",
+        "G90 ; absolute positioning",
+        "",
+        "G1 X0 Y0 F3000 ; move to home",
+        "",
+        "G91 ; relative positioning",
+        "G1 Z-1 F1000 ; lower head back down",
+        "G90 ; absolute positioning",
+        "",
         "M0 ; pause before silver ink",
-        "G91", "G1 Z-30 F1000", "G90",
-        ";silverink", "",
+        "",
+        ";silverink",
+        "",
         "; --- End sequence ---",
-        "G4", "M104 S0", "M140 S0", "M107",
-        f"G1 X0 Y{nom_d:.0f} F3000", "M84",
+        "G4 ; wait for moves to finish",
+        "M104 S0 ; turn off nozzle",
+        "M140 S0 ; turn off heatbed",
+        "M107 ; turn off fan",
+        f"G1 X0 Y{nom_d:.0f} F3000 ; park head",
+        "M84 ; disable motors",
     ]
 
     return "\n".join(lines)
@@ -1436,16 +1466,31 @@ def _parallel_lines_gcode(
                         e += iron_spacing * iron_epmm
                         lines.append(f"G1 X{x_pos:.3f} E{e:.5f} F900")
 
-    e -= 0.8
-    lines.append(f"G1 E{e:.4f} F2400 ; retract filament")
+    e -= 4.0
+    lines.append(f"G1 E{e:.4f} F3000 ; retract")
     lines += [
-        "", "G91", "G1 Z30 F1000", "G90",
+        "",
+        "G91 ; relative positioning",
+        "G1 Z1 F1000 ; lift head before pause",
+        "G90 ; absolute positioning",
+        "",
+        "G1 X0 Y0 F3000 ; move to home",
+        "",
+        "G91 ; relative positioning",
+        "G1 Z-1 F1000 ; lower head back down",
+        "G90 ; absolute positioning",
+        "",
         "M0 ; pause before silver ink",
-        "G91", "G1 Z-30 F1000", "G90",
-        ";silverink", "",
+        "",
+        ";silverink",
+        "",
         "; --- End sequence ---",
-        "G4", "M104 S0", "M140 S0", "M107",
-        f"G1 X0 Y{nom_d:.0f} F3000", "M84",
+        "G4 ; wait for moves to finish",
+        "M104 S0 ; turn off nozzle",
+        "M140 S0 ; turn off heatbed",
+        "M107 ; turn off fan",
+        f"G1 X0 Y{nom_d:.0f} F3000 ; park head",
+        "M84 ; disable motors",
     ]
 
     return "\n".join(lines)
@@ -1696,16 +1741,31 @@ def _trace_width_gcode(
                     e += iron_spacing * iron_epmm
                     lines.append(f"G1 X{x_pos:.3f} E{e:.5f} F900")
 
-    e -= 0.8
-    lines.append(f"G1 E{e:.4f} F2400 ; retract filament")
+    e -= 4.0
+    lines.append(f"G1 E{e:.4f} F3000 ; retract")
     lines += [
-        "", "G91", "G1 Z30 F1000", "G90",
+        "",
+        "G91 ; relative positioning",
+        "G1 Z1 F1000 ; lift head before pause",
+        "G90 ; absolute positioning",
+        "",
+        "G1 X0 Y0 F3000 ; move to home",
+        "",
+        "G91 ; relative positioning",
+        "G1 Z-1 F1000 ; lower head back down",
+        "G90 ; absolute positioning",
+        "",
         "M0 ; pause before silver ink",
-        "G91", "G1 Z-30 F1000", "G90",
-        ";silverink", "",
+        "",
+        ";silverink",
+        "",
         "; --- End sequence ---",
-        "G4", "M104 S0", "M140 S0", "M107",
-        f"G1 X0 Y{nom_d:.0f} F3000", "M84",
+        "G4 ; wait for moves to finish",
+        "M104 S0 ; turn off nozzle",
+        "M140 S0 ; turn off heatbed",
+        "M107 ; turn off fan",
+        f"G1 X0 Y{nom_d:.0f} F3000 ; park head",
+        "M84 ; disable motors",
     ]
 
     return "\n".join(lines)
