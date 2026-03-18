@@ -20,7 +20,7 @@ router = APIRouter()
 async def start_gcode(
     sid: str,
     force: bool = Query(False),
-    filament: str = Query(None),
+    filament: str = Query(...),
     silverink_only: bool = Query(False),
 ):
     s = load_session_or_404(sid)
