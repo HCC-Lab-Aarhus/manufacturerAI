@@ -573,7 +573,7 @@ async def generate_silverink_test(
 # channels.
 
 
-def _cube_trace_gcode(
+def _pinhole_gcode(
     pdef: PrinterDef,
     fdef: FilamentDef,
     pad: float,
@@ -924,7 +924,7 @@ def _cube_trace_gcode(
     return "\n".join(lines)
 
 
-def _cube_trace_bitmap(
+def _pinhole_bitmap(
     pdef: PrinterDef,
     grid: SweepGrid,
     plate_w: float,
@@ -978,7 +978,7 @@ def _cube_trace_bitmap(
 
 
 @router.post("/cube-trace")
-async def generate_cube_trace(
+async def generate_pinhole(
     printer: str = Query("coreone"),
     filament: str = Query("prusament_pla"),
     padding: float = Query(5),
@@ -991,9 +991,9 @@ async def generate_cube_trace(
     fdef = get_filament(filament)
     grid = sweep_grid(pdef)
 
-    gcode = _cube_trace_gcode(
+    gcode = _pinhole_gcode(
         pdef, fdef, padding, plate_width, plate_height, cube_size)
-    bitmap = _cube_trace_bitmap(pdef, grid, plate_width, plate_height, cube_size)
+    bitmap = _pinhole_bitmap(pdef, grid, plate_width, plate_height, cube_size)
 
     plate_x = (pdef.nominal_bed_width - plate_width) / 2
     plate_y = (pdef.nominal_bed_depth - plate_height) / 2
@@ -1004,8 +1004,8 @@ async def generate_cube_trace(
         part_origin_y_mm=plate_y,
         part_width_mm=plate_width,
         part_depth_mm=plate_height,
-        gcode_file="cube_trace.gcode",
-        bitmap_file="cube_trace_bitmap.txt",
+        gcode_file="pinhole.gcode",
+        bitmap_file="pinhole_bitmap.txt",
         printer=pdef,
     )
 
