@@ -48,7 +48,10 @@ async def _run_setup_background(sid: str, task: AgentTask):
         catalog_map = _build_catalog_map(cat)
         firmware_context = build_firmware_context(design, circuit, routing, catalog_map)
 
-        agent = SetupAgent(cat, sess, firmware_context)
+        agent = SetupAgent(
+            cat, sess, firmware_context,
+            circuit=circuit, routing=routing, catalog_map=catalog_map,
+        )
 
         prompt = (
             "Write the firmware for this device. Read the device context in your "

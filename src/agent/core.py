@@ -399,9 +399,21 @@ class SetupAgent(_BaseAgent):
 
     MAX_COMPILE_RETRIES = 3
 
-    def __init__(self, catalog, session, firmware_context: str):
+    def __init__(
+        self,
+        catalog,
+        session,
+        firmware_context: str,
+        *,
+        circuit: dict | None = None,
+        routing: dict | None = None,
+        catalog_map: dict | None = None,
+    ):
         super().__init__(catalog, session)
         self._firmware_context = firmware_context
+        self._circuit = circuit
+        self._routing = routing
+        self._catalog_map = catalog_map
         self._compile_retries = 0
 
     def _get_tools(self) -> list[dict]:
@@ -431,6 +443,29 @@ class SetupAgent(_BaseAgent):
             return "Error: sketch must contain a setup() function.", False
         if "void loop()" not in code and "void loop ()" not in code:
             return "Error: sketch must contain a loop() function.", False
+
+        # Static validation against routing pin assignments
+        if self._circuit and self._routing and self._catalog_map:
+            from src.pipeline.firmware.validate_firmware import validate_firmware
+            vr = validate_firmware(code, self._circuit, self._routing, self._catalog_map)
+            if not vr.ok:
+                self._compile_retries += 1
+                if self._compile_retries >= self.MAX_COMPILE_RETRIES:
+                    self.session.pipeline_state["setup"] = "validation_failed"
+                    self.session.save()
+                    return (
+                        f"Static validation failed after {self.MAX_COMPILE_RETRIES} "
+                        f"attempts.\n{vr.summary()}\n\n"
+                        f"The .ino file has been saved but is incorrect.",
+                        True,
+                    )
+                return (
+                    f"Static validation failed (attempt "
+                    f"{self._compile_retries}/{self.MAX_COMPILE_RETRIES}).\n"
+                    f"{vr.summary()}\n\n"
+                    f"Fix the errors and call submit_firmware again.",
+                    False,
+                )
 
         # Save the .ino file
         ino_path = self.session.path / "firmware.ino"
