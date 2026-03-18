@@ -66,6 +66,43 @@ def build_firmware_context(
 
     ui_ids = {p["instance_id"] for p in ui_placements}
 
+    # ── Resistor-chain tracing helpers ─────────────────────────────
+    # Identify resistor instances so we can trace through them
+    resistor_ids: set[str] = set()
+    for comp in components:
+        if "resistor" in comp.get("catalog_id", "").lower():
+            resistor_ids.add(comp["instance_id"])
+
+    # net_id → set of instance_ids on that net
+    net_members: dict[str, set[str]] = {}
+    for net in nets:
+        members: set[str] = set()
+        for pin_ref in net.get("pins", []):
+            members.add(pin_ref.split(":")[0])
+        net_members[net["id"]] = members
+
+    # instance_id → list of net_ids the instance appears on
+    inst_nets: dict[str, list[str]] = {}
+    for net in nets:
+        for pin_ref in net.get("pins", []):
+            iid = pin_ref.split(":")[0]
+            inst_nets.setdefault(iid, []).append(net["id"])
+
+    def _resolve_port_through_resistor(iid: str) -> str | None:
+        """Follow a resistor bridge to find the MCU port driving *iid*.
+
+        When a component is on a net with a resistor, and that resistor is
+        also on another net that has a known MCU port, return that port.
+        """
+        for nid in inst_nets.get(iid, []):
+            for res_id in net_members.get(nid, set()) & resistor_ids:
+                for other_nid in inst_nets.get(res_id, []):
+                    if other_nid != nid:
+                        port = net_to_port.get(other_nid)
+                        if port and port in ATMEGA_TO_ARDUINO:
+                            return port
+        return None
+
     # ── Components & pin map ───────────────────────────────────────
     lines: list[str] = []
 
@@ -92,23 +129,43 @@ def build_firmware_context(
             lines.append(f"  {iid} ({comp_name}) — Microcontroller")
             continue
 
+        # Resolve the MCU port for this component.
+        # First try a direct net lookup; fall back to resistor-chain tracing.
+        resolved_port: str | None = None
+        resolved_net: str | None = None
         for net_id, port in comp_nets:
-            arduino_pin = ATMEGA_TO_ARDUINO.get(port) if port else None
-            pin_str = f"Arduino pin {arduino_pin}" if arduino_pin is not None else "unrouted"
-            pwm_note = " (PWM capable)" if arduino_pin is not None and arduino_pin in PWM_PINS else ""
+            if port and port in ATMEGA_TO_ARDUINO:
+                resolved_port = port
+                resolved_net = net_id
+                break
 
-            if role == "button":
-                lines.append(f"  {iid} ({comp_name}) → {pin_str}{pwm_note}  [INPUT_PULLUP, active LOW]  net: {net_id}")
-            elif role == "led":
-                lines.append(f"  {iid} ({comp_name}) → {pin_str}{pwm_note}  [OUTPUT]  net: {net_id}")
-            elif role == "ir_led":
-                lines.append(f"  {iid} ({comp_name}) → {pin_str}{pwm_note}  [OUTPUT, 38kHz PWM carrier]  net: {net_id}")
-            elif role == "resistor":
-                config = inst_to_config.get(iid, {})
-                val = config.get("resistance", config.get("value", "?"))
-                lines.append(f"  {iid} ({comp_name}, {val}) — current limiter on net: {net_id}")
-            else:
-                lines.append(f"  {iid} ({comp_name}) → {pin_str}{pwm_note}  net: {net_id}")
+        if not resolved_port:
+            resolved_port = _resolve_port_through_resistor(iid)
+            # Pick a representative net (first signal net, not GND/VCC)
+            for net_id, _ in comp_nets:
+                if net_id.upper() not in ("GND", "VCC", "5V", "3V3"):
+                    resolved_net = net_id
+                    break
+            if not resolved_net and comp_nets:
+                resolved_net = comp_nets[0][0]
+
+        arduino_pin = ATMEGA_TO_ARDUINO.get(resolved_port) if resolved_port else None
+        pin_str = f"Arduino pin {arduino_pin}" if arduino_pin is not None else "unrouted"
+        pwm_note = " (PWM capable)" if arduino_pin is not None and arduino_pin in PWM_PINS else ""
+        net_label = resolved_net or "?"
+
+        if role == "button":
+            lines.append(f"  {iid} ({comp_name}) → {pin_str}{pwm_note}  [INPUT_PULLUP, active LOW]  net: {net_label}")
+        elif role == "led":
+            lines.append(f"  {iid} ({comp_name}) → {pin_str}{pwm_note}  [OUTPUT]  net: {net_label}")
+        elif role == "ir_led":
+            lines.append(f"  {iid} ({comp_name}) → {pin_str}{pwm_note}  [OUTPUT, 38kHz PWM carrier]  net: {net_label}")
+        elif role == "resistor":
+            config = inst_to_config.get(iid, {})
+            val = config.get("resistance", config.get("value", "?"))
+            lines.append(f"  {iid} ({comp_name}, {val}) — current limiter  net: {net_label}")
+        else:
+            lines.append(f"  {iid} ({comp_name}) → {pin_str}{pwm_note}  net: {net_label}")
 
     sections.append("COMPONENTS & PIN MAP:\n" + "\n".join(lines))
 
