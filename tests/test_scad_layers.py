@@ -1,12 +1,12 @@
-"""Tests for src/pipeline/scad/layers.py — variable-height shell body generation.
+"""Tests for src/pipeline/scad/layers.py — shell body polyhedron generation.
 
 Coverage
 --------
 * ``_polygon_signed_area``         — correct sign for CCW and CW polygons.
 * ``_inset_polygon_pts``           — vertex count preserved; inset moves inward.
 * ``_build_rings``                 — correct ring count for all edge-profile combinations.
-* ``shell_body_lines`` (uniform)   — uses linear_extrude when heights are equal.
-* ``shell_body_lines`` (variable)  — uses polyhedron() when heights differ.
+* ``shell_body_lines`` (uniform)   — polyhedron with cap_rings=0 for flat heights.
+* ``shell_body_lines`` (variable)  — polyhedron with cap rings for varying heights.
 * polyhedron output structure      — correct point/face counts, valid index range.
 * Edge profiles in polyhedron path — extra rings are emitted for chamfer/fillet.
 * Winding sanity                   — bottom-cap and top-cap face indices are reversed
@@ -253,8 +253,8 @@ class TestBuildRings(unittest.TestCase):
 # ── shell_body_lines: uniform path ────────────────────────────────────────────
 
 
-class TestShellBodyUniformPath(unittest.TestCase):
-    """Shell body should use linear_extrude when heights are uniform."""
+class TestShellBodyUniformHeight(unittest.TestCase):
+    """Shell body uses polyhedron for uniform heights (cap_rings=0)."""
 
     def setUp(self):
         self.pts = _rect_pts(30, 50)
@@ -263,26 +263,24 @@ class TestShellBodyUniformPath(unittest.TestCase):
     def _joined(self, lines):
         return "\n".join(lines)
 
-    def test_none_top_zs_is_uniform_path(self):
+    def test_none_top_zs_is_polyhedron_path(self):
         lines = shell_body_lines(self.outline, _plain_enclosure(25.0), self.pts)
         scad = self._joined(lines)
-        self.assertIn("linear_extrude", scad)
-        self.assertNotIn("polyhedron", scad)
+        self.assertIn("polyhedron", scad)
 
-    def test_uniform_top_zs_uses_linear_extrude(self):
+    def test_uniform_top_zs_uses_polyhedron(self):
         top_zs = [25.0] * len(self.pts)
         lines = shell_body_lines(self.outline, _plain_enclosure(25.0), self.pts, top_zs=top_zs)
         scad = self._joined(lines)
-        self.assertIn("linear_extrude", scad)
-        self.assertNotIn("polyhedron", scad)
+        self.assertIn("polyhedron", scad)
 
-    def test_near_threshold_variation_still_uniform(self):
-        """Heights within _VARIABLE_HEIGHT_THRESHOLD should stay on the uniform path."""
+    def test_near_threshold_variation_still_polyhedron(self):
+        """Heights within _VARIABLE_HEIGHT_THRESHOLD still use the polyhedron path."""
         delta = _VARIABLE_HEIGHT_THRESHOLD * 0.9
         top_zs = [25.0, 25.0 + delta, 25.0, 25.0]
         lines = shell_body_lines(self.outline, _plain_enclosure(25.0), self.pts, top_zs=top_zs)
         scad = self._joined(lines)
-        self.assertNotIn("polyhedron", scad)
+        self.assertIn("polyhedron", scad)
 
     def test_uniform_height_from_top_zs_overrides_enclosure_height(self):
         """If all top_zs are equal but differ from enclosure.height_mm,
@@ -290,22 +288,20 @@ class TestShellBodyUniformPath(unittest.TestCase):
         top_zs = [30.0] * len(self.pts)   # all = 30, but enclosure says 25
         lines = shell_body_lines(self.outline, _plain_enclosure(25.0), self.pts, top_zs=top_zs)
         scad = self._joined(lines)
-        # The extrude height should be 30, not 25
         self.assertIn("30.000", scad)
 
-    def test_with_fillet_still_uniform_path_when_no_variation(self):
+    def test_with_fillet_uniform_height_uses_polyhedron(self):
         top_zs = [25.0] * len(self.pts)
         lines = shell_body_lines(self.outline, _fillet_enclosure(25.0), self.pts, top_zs=top_zs)
         scad = self._joined(lines)
-        self.assertNotIn("polyhedron", scad)
-        self.assertIn("union()", scad)
+        self.assertIn("polyhedron", scad)
 
 
-# ── shell_body_lines: polyhedron path ─────────────────────────────────────────
+# ── shell_body_lines: variable heights ──────────────────────────────────────────────
 
 
 class TestShellBodyPolyhedronPath(unittest.TestCase):
-    """shell_body_lines must switch to polyhedron() when heights vary."""
+    """shell_body_lines uses cap-ring interpolation when heights vary."""
 
     def setUp(self):
         # Simple 4-vertex rectangle with variable ceiling heights
@@ -319,15 +315,15 @@ class TestShellBodyPolyhedronPath(unittest.TestCase):
         tz  = top_zs if top_zs is not None else self.top_zs
         return "\n".join(shell_body_lines(self.outline, enc, self.pts, top_zs=tz))
 
-    # ── Path selection ─────────────────────────────────────────────────────────
+    # ── Output structure ────────────────────────────────────────────────────────
 
-    def test_polyhedron_path_activated(self):
+    def test_polyhedron_emitted(self):
         self.assertIn("polyhedron(", self._get_scad())
 
-    def test_no_linear_extrude_in_polyhedron_path(self):
+    def test_no_linear_extrude(self):
         self.assertNotIn("linear_extrude", self._get_scad())
 
-    def test_above_threshold_activates_polyhedron(self):
+    def test_above_threshold_uses_cap_rings(self):
         delta = _VARIABLE_HEIGHT_THRESHOLD * 1.1
         top_zs = [25.0, 25.0 + delta, 25.0, 25.0]
         self.assertIn("polyhedron(", self._get_scad(top_zs=top_zs))
@@ -707,7 +703,7 @@ class TestVariableBottomSurface(unittest.TestCase):
                 for fs in re.findall(r"\[([^\]]+)\]", m.group(1))]
 
     def test_variable_bottom_activates_polyhedron(self):
-        """Variable bottom_zs should trigger the polyhedron path even with
+        """Variable bottom_zs should enable cap-ring interpolation even with
         uniform top_zs."""
         lines = shell_body_lines(
             self.outline, _plain_enclosure(25.0), self.pts,
