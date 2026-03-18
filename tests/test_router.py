@@ -62,20 +62,13 @@ class TestRoutingGrid(unittest.TestCase):
         self.assertTrue(self.grid.is_blocked(gx, gy))
 
     def test_block_and_free_cell(self):
-        """Temporary blocking can be reversed."""
+        """Blocking and freeing cells works."""
         gx, gy = self.grid.world_to_grid(10.0, 10.0)
         self.assertTrue(self.grid.is_free(gx, gy))
         self.grid.block_cell(gx, gy)
         self.assertTrue(self.grid.is_blocked(gx, gy))
         self.grid.free_cell(gx, gy)
         self.assertTrue(self.grid.is_free(gx, gy))
-
-    def test_permanent_block_not_freeable(self):
-        """Permanently blocked cells cannot be freed."""
-        gx, gy = self.grid.world_to_grid(10.0, 10.0)
-        self.grid.permanently_block_cell(gx, gy)
-        self.grid.free_cell(gx, gy)
-        self.assertTrue(self.grid.is_blocked(gx, gy))
 
     def test_coordinate_round_trip(self):
         """World -> grid -> world round-trips approximately."""
@@ -136,7 +129,7 @@ class TestPathfinder(unittest.TestCase):
         # Block a complete wall
         for y in range(self.grid.height):
             gx = self.grid.width // 2
-            self.grid.permanently_block_cell(gx, y)
+            self.grid.block_cell(gx, y)
         src = self.grid.world_to_grid(5.0, 15.0)
         snk = self.grid.world_to_grid(25.0, 15.0)
         path = find_path(self.grid, src, snk)

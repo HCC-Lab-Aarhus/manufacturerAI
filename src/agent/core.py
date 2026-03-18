@@ -306,9 +306,9 @@ class DesignAgent(_BaseAgent):
             error_list = "\n".join(f"  - {e}" for e in errors)
             return f"Design validation failed:\n{error_list}", False
 
+        self._last_invalidated = self.session.invalidate_design_smart(input_data)
         self.session.write_artifact("design.json", input_data)
         self.session.pipeline_state["design"] = "complete"
-        self._last_invalidated = self.session.invalidate_downstream("design")
         self.session.save()
 
         return "Design validated successfully! Saved to session.", True

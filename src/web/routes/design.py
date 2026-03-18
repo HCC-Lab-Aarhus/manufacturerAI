@@ -153,9 +153,9 @@ async def put_design(sid: str, request: Request):
     if errors:
         raise HTTPException(422, detail={"errors": errors})
 
+    invalidated = s.invalidate_design_smart(body)
     s.write_artifact("design.json", body)
     s.pipeline_state["design"] = "complete"
-    invalidated = invalidate_downstream(s, "design")
     s.save()
 
     enrich_design(body, cat)
