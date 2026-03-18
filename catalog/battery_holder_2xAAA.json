@@ -32,7 +32,7 @@
             "voltage_v": 3.0,
             "current_max_ma": 1000,
             "hole_diameter_mm": 3.0,
-            "shape": { "type": "rect", "width_mm": 3.0, "length_mm": 0.3 },
+            "shape": { "type": "rect", "width_mm": 4.0, "length_mm": 1.0 },
             "description": "Positive tab extension from small plate. 7.5mm long, 0.3mm thick, 3mm wide rectangle passing through floor to ink traces."
         },
         {
@@ -43,7 +43,7 @@
             "voltage_v": 0,
             "current_max_ma": 1000,
             "hole_diameter_mm": 3.0,
-            "shape": { "type": "rect", "width_mm": 3.0, "length_mm": 0.3 },
+            "shape": { "type": "rect", "width_mm": 4.0, "length_mm": 1.0 },
             "description": "Negative tab extension from small plate. 7.5mm long, 0.3mm thick, 3mm wide rectangle passing through floor to ink traces."
         }
     ],
