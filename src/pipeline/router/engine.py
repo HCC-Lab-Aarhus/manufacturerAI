@@ -359,54 +359,29 @@ def _priority_order(
     config: RouterConfig,
     pin_voronoi: dict[int, str] | None,
 ) -> list[str]:
-    """Sort nets by isolation path length (hardest first)."""
-    from .pathfinder import find_path, find_path_to_tree
+    """Sort nets by Manhattan distance heuristic (hardest first).
 
-    iso_lengths: dict[str, int] = {}
-    log.debug("Isolation routing: measuring path lengths for %d nets", len(net_ids))
+    Uses bounding-box semi-perimeter (HPWL) as a fast proxy for
+    routing difficulty instead of performing full isolation A* per net.
+    """
+    hpwl: dict[str, int] = {}
 
     for nid in net_ids:
         pads = pads_map.get(nid)
         if pads is None or len(pads) < 2:
-            iso_lengths[nid] = 0
+            hpwl[nid] = 0
             continue
-
-        # Temporarily block foreign-pin voronoi cells
-        blocked_v: list[tuple[int, int]] = []
-        if pin_voronoi is not None:
-            net_pin_keys = {f"{pad.instance_id}:{pad.pin_id}" for pad in pads}
-            W = grid.width
-            for flat, pin_key in pin_voronoi.items():
-                if pin_key in net_pin_keys:
-                    continue
-                gx = flat % W
-                gy = flat // W
-                if grid.is_free(gx, gy):
-                    grid.block_cell(gx, gy)
-                    blocked_v.append((gx, gy))
-
-        if len(pads) == 2:
-            src = (pads[0].gx, pads[0].gy)
-            snk = (pads[1].gx, pads[1].gy)
-            path = find_path(grid, src, snk, turn_penalty=config.turn_penalty)
-            length = len(path) if path else 0
-        else:
-            length = 0  # multi-pin: skip isolation measurement
-
-        for cx, cy in blocked_v:
-            grid.free_cell(cx, cy)
-
-        iso_lengths[nid] = length
-        log.debug("  %-20s isolation: %d cells, %d pins",
-                  nid, length, len(net_pad_map.get(nid, [])))
+        xs = [p.gx for p in pads]
+        ys = [p.gy for p in pads]
+        hpwl[nid] = (max(xs) - min(xs)) + (max(ys) - min(ys))
 
     def net_priority(nid: str) -> tuple[int, int]:
         pin_count = len(net_pad_map.get(nid, []))
-        return (-pin_count, -iso_lengths.get(nid, 0))
+        return (-pin_count, -hpwl.get(nid, 0))
 
     ordered = sorted(net_ids, key=net_priority)
-    log.debug("Initial ordering: %s",
-             ", ".join(f"{nid}({len(net_pad_map[nid])}p/{iso_lengths[nid]}c)"
+    log.debug("Initial ordering (HPWL): %s",
+             ", ".join(f"{nid}({len(net_pad_map[nid])}p/{hpwl[nid]}hpwl)"
                        for nid in ordered))
     return ordered
 

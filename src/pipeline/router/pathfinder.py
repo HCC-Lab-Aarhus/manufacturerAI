@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import heapq
 
+import numpy as np
+
 from .grid import RoutingGrid, FREE, BLOCKED, TRACE_PATH, PERMANENTLY_BLOCKED
 from .models import TURN_PENALTY
 
@@ -51,35 +53,38 @@ def find_path(
     if source == sink:
         return [source]
 
-    if crossing_cost == 0 and cost_map is None:
+    if cost_map is None:
         l_path = _try_l_route(grid, source, sink)
         if l_path is not None:
             return l_path
 
+    N = W * H
+    INF = 0x7FFFFFFF
     start_key = sy * W + sx
     sink_key = ty * W + tx
+
+    g = [INF] * N
+    g[start_key] = 0
+    parent = [-1] * N
+    closed = bytearray(N)
+
     h0 = abs(sx - tx) + abs(sy - ty)
     counter = 0
-    heap: list[tuple[int, int, int, int, int, int]] = [(h0, counter, sx, sy, -1, -1)]
-    g_scores: dict[int, int] = {start_key: 0}
-    parents: dict[int, tuple[int, int]] = {}
-    closed: set[int] = set()
+    heap: list[tuple[int, int, int, int, int]] = [(h0, counter, sx, sy, -1)]
 
     while heap:
-        f, _cnt, cx, cy, direction, parent_key = heapq.heappop(heap)
+        f, _cnt, cx, cy, direction = heapq.heappop(heap)
         key = cy * W + cx
 
-        if key in closed:
+        if closed[key]:
             continue
-        closed.add(key)
-        if key != start_key:
-            parents[key] = (parent_key, direction)
+        closed[key] = 1
 
         if key == sink_key:
             path = [(cx, cy)]
             k = key
-            while k in parents:
-                pk, _ = parents[k]
+            while True:
+                pk = parent[k]
                 if pk < 0:
                     break
                 path.append((pk % W, pk // W))
@@ -87,14 +92,14 @@ def find_path(
             path.reverse()
             return path
 
-        cur_g = g_scores[key]
+        cur_g = g[key]
 
         for d, (dx, dy) in enumerate(DIRS):
             nx, ny = cx + dx, cy + dy
             if not (0 <= nx < W and 0 <= ny < H):
                 continue
             nkey = ny * W + nx
-            if nkey in closed:
+            if closed[nkey]:
                 continue
 
             nval = cells[nkey]
@@ -116,11 +121,12 @@ def find_path(
                 cost += cost_map.get(nkey, 0)
             tentative_g = cur_g + cost
 
-            if nkey not in g_scores or tentative_g < g_scores[nkey]:
-                g_scores[nkey] = tentative_g
+            if tentative_g < g[nkey]:
+                g[nkey] = tentative_g
+                parent[nkey] = key
                 h = abs(nx - tx) + abs(ny - ty)
                 counter += 1
-                heapq.heappush(heap, (tentative_g + h, counter, nx, ny, d, key))
+                heapq.heappush(heap, (tentative_g + h, counter, nx, ny, d))
 
     return None
 
@@ -145,7 +151,9 @@ def find_path_to_tree(
     # Cache grid internals as locals
     W = grid.width
     H = grid.height
+    N = W * H
     cells = grid._cells
+    INF = 0x7FFFFFFF
 
     # ── Normalise source to a set ──────────────────────────────
     if isinstance(source, set):
@@ -159,64 +167,73 @@ def find_path_to_tree(
         cell = next(iter(overlap))
         return [cell]
 
-    # Precompute tree coordinates for fast heuristic
+    # Build a flat bytearray mask for O(1) tree membership
+    tree_mask = bytearray(N)
     tree_list = list(tree)
+    for tx, ty in tree_list:
+        tree_mask[ty * W + tx] = 1
+
+    # Precompute tree coordinates for heuristic
     tree_xs = tuple(t[0] for t in tree_list)
     tree_ys = tuple(t[1] for t in tree_list)
     n_tree = len(tree_list)
 
-    def min_h(x: int, y: int) -> int:
-        best = abs(x - tree_xs[0]) + abs(y - tree_ys[0])
-        for i in range(1, n_tree):
-            d = abs(x - tree_xs[i]) + abs(y - tree_ys[i])
-            if d < best:
-                best = d
-                if d == 0:
-                    return 0
-        return best
+    if n_tree >= 16:
+        _tree_xs_np = np.array(tree_xs, dtype=np.int32)
+        _tree_ys_np = np.array(tree_ys, dtype=np.int32)
 
-    tree_keys = frozenset(t[1] * W + t[0] for t in tree_list)
+        def min_h(x: int, y: int) -> int:
+            return int(np.min(np.abs(_tree_xs_np - x) + np.abs(_tree_ys_np - y)))
+    else:
+        def min_h(x: int, y: int) -> int:
+            best = abs(x - tree_xs[0]) + abs(y - tree_ys[0])
+            for i in range(1, n_tree):
+                d = abs(x - tree_xs[i]) + abs(y - tree_ys[i])
+                if d < best:
+                    best = d
+                    if d == 0:
+                        return 0
+            return best
+
+    # ── Pre-allocated containers ───────────────────────────────
+    g = [INF] * N
+    parent = [-1] * N
+    closed = bytearray(N)
+    source_mask = bytearray(N)
 
     # ── Seed heap with all valid source cells ──────────────────
     counter = 0
-    heap: list[tuple[int, int, int, int, int, int]] = []
-    g_scores: dict[int, int] = {}
-    source_keys: set[int] = set()
+    heap: list[tuple[int, int, int, int, int]] = []
 
     for sx, sy in sources:
         if not (0 <= sx < W and 0 <= sy < H):
             continue
         skey = sy * W + sx
-        if cells[skey] != FREE and skey not in tree_keys:
+        if cells[skey] != FREE and not tree_mask[skey]:
             continue
-        source_keys.add(skey)
+        source_mask[skey] = 1
+        g[skey] = 0
         h0 = min_h(sx, sy)
-        heapq.heappush(heap, (h0, counter, sx, sy, -1, -1))
-        g_scores[skey] = 0
+        heapq.heappush(heap, (h0, counter, sx, sy, -1))
         counter += 1
 
     if not heap:
         return None
 
-    parents: dict[int, tuple[int, int]] = {}
-    closed: set[int] = set()
-
     while heap:
-        f, _cnt, cx, cy, direction, parent_key = heapq.heappop(heap)
+        f, _cnt, cx, cy, direction = heapq.heappop(heap)
         key = cy * W + cx
 
-        if key in closed:
+        if closed[key]:
             continue
-        closed.add(key)
-        if key not in source_keys:
-            parents[key] = (parent_key, direction)
+        closed[key] = 1
 
-        if key in tree_keys:
+        if tree_mask[key]:
             # Reconstruct path
             path = [(cx, cy)]
             k = key
-            while k in parents:
-                pk, _ = parents[k]
+            while True:
+                pk = parent[k]
                 if pk < 0:
                     break
                 path.append((pk % W, pk // W))
@@ -224,19 +241,19 @@ def find_path_to_tree(
             path.reverse()
             return path
 
-        cur_g = g_scores[key]
+        cur_g = g[key]
 
         for d, (dx, dy) in enumerate(DIRS):
             nx, ny = cx + dx, cy + dy
             if not (0 <= nx < W and 0 <= ny < H):
                 continue
             nkey = ny * W + nx
-            if nkey in closed:
+            if closed[nkey]:
                 continue
 
             nval = cells[nkey]
             cross_extra = 0
-            if nval != FREE and nkey not in tree_keys:
+            if nval != FREE and not tree_mask[nkey]:
                 if nval == PERMANENTLY_BLOCKED:
                     continue
                 if crossing_cost > 0 and (nval == TRACE_PATH or nval == BLOCKED):
@@ -250,11 +267,12 @@ def find_path_to_tree(
                 cost += cost_map.get(nkey, 0)
             tentative_g = cur_g + cost
 
-            if nkey not in g_scores or tentative_g < g_scores[nkey]:
-                g_scores[nkey] = tentative_g
+            if tentative_g < g[nkey]:
+                g[nkey] = tentative_g
+                parent[nkey] = key
                 h = min_h(nx, ny)
                 counter += 1
-                heapq.heappush(heap, (tentative_g + h, counter, nx, ny, d, key))
+                heapq.heappush(heap, (tentative_g + h, counter, nx, ny, d))
 
     return None
 

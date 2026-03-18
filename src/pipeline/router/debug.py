@@ -27,33 +27,39 @@ def build_debug_grids(
     routed_pads: dict[str, list],
     *,
     config: RouterConfig | None = None,
+    grid: RoutingGrid | None = None,
 ) -> list[dict]:
-    """Build a single combined-ownership overlay bitmap."""
+    """Build a single combined-ownership overlay bitmap.
+
+    If *grid* is provided it is used directly (fast path).
+    Otherwise a new grid is constructed from scratch (standalone mode).
+    """
     if config is None:
         config = RouterConfig()
 
-    catalog_map = {c.id: c for c in catalog.components}
-    outline_poly = Polygon(placement.outline.vertices)
+    if grid is None:
+        catalog_map = {c.id: c for c in catalog.components}
+        outline_poly = Polygon(placement.outline.vertices)
 
-    if not outline_poly.is_valid or outline_poly.area <= 0:
-        return []
+        if not outline_poly.is_valid or outline_poly.area <= 0:
+            return []
 
-    grid = RoutingGrid(
-        outline_poly,
-        resolution=config.grid_resolution_mm,
-        edge_clearance=config.edge_clearance_mm,
-        trace_width_mm=config.trace_width_mm,
-        trace_clearance_mm=config.trace_clearance_mm,
-    )
-    pad_radius = max(1, math.ceil(
-        (config.trace_width_mm / 2 + config.trace_clearance_mm)
-        / config.grid_resolution_mm
-    ))
-    _block_components(grid, placement, catalog_map, pad_radius)
+        grid = RoutingGrid(
+            outline_poly,
+            resolution=config.grid_resolution_mm,
+            edge_clearance=config.edge_clearance_mm,
+            trace_width_mm=config.trace_width_mm,
+            trace_clearance_mm=config.trace_clearance_mm,
+        )
+        pad_radius = max(1, math.ceil(
+            (config.trace_width_mm / 2 + config.trace_clearance_mm)
+            / config.grid_resolution_mm
+        ))
+        _block_components(grid, placement, catalog_map, pad_radius)
 
-    for nid, paths in routed_paths.items():
-        for path in paths:
-            grid.block_trace(path, net_id=nid)
+        for nid, paths in routed_paths.items():
+            for path in paths:
+                grid.block_trace(path, net_id=nid)
 
     W = grid.width
     H = grid.height

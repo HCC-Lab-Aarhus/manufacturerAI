@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 from shapely.geometry import Polygon, Point
+from shapely.prepared import prep
+from shapely import contains_xy
 
 from .models import GRID_RESOLUTION_MM, EDGE_CLEARANCE_MM, TRACE_CLEARANCE_MM, TRACE_WIDTH_MM
 
@@ -67,13 +70,18 @@ class RoutingGrid:
 
         # Block cells outside polygon or too close to its edges
         inset_poly = outline_poly.buffer(-edge_clearance)
-        for gy in range(self.height):
-            wy = self.origin_y + (gy + 0.5) * resolution
-            for gx in range(self.width):
-                wx = self.origin_x + (gx + 0.5) * resolution
-                pt = Point(wx, wy)
-                if not inset_poly.contains(pt):
-                    self._cells[gy * self.width + gx] = PERMANENTLY_BLOCKED
+        W = self.width
+        H = self.height
+        ox, oy = self.origin_x, self.origin_y
+        gx_arr = np.arange(W)
+        gy_arr = np.arange(H)
+        wx_arr = ox + (gx_arr + 0.5) * resolution
+        wy_arr = oy + (gy_arr + 0.5) * resolution
+        xx, yy = np.meshgrid(wx_arr, wy_arr)
+        inside = contains_xy(inset_poly, xx.ravel(), yy.ravel())
+        blocked_indices = np.where(~inside)[0]
+        for flat in blocked_indices:
+            self._cells[flat] = PERMANENTLY_BLOCKED
 
     # ── Coordinate conversion ──────────────────────────────────────
 
@@ -224,6 +232,17 @@ class RoutingGrid:
         from src.pipeline.design.height_field import blended_bottom_height
         from src.pipeline.config import FLOOR_MM
 
+        # Fast check: skip entirely if no vertex has z_bottom and no bottom surface
+        has_raised = False
+        for pt in outline.points:
+            if pt.z_bottom is not None and pt.z_bottom > 0:
+                has_raised = True
+                break
+        if not has_raised:
+            bs = enclosure.bottom_surface
+            if bs is None or bs.type == "flat":
+                return 0
+
         threshold = FLOOR_MM - 0.1   # small tolerance
         count = 0
         res = self.resolution
@@ -263,31 +282,47 @@ class RoutingGrid:
                     (self.trace_width_mm / 2 + self.trace_clearance_mm) / self.resolution
                 ))
             )
-        path_set = set(path)
-        protected = self._protected
+        if not path:
+            return
+
         W = self.width
+        H = self.height
+        path_set = set(path)
+        path_coords = np.array(list(path_set), dtype=np.int32)
+        path_flat = path_coords[:, 1] * W + path_coords[:, 0]
 
-        for gx, gy in path_set:
-            if self.in_bounds(gx, gy):
-                flat = gy * W + gx
-                v = self._cells[flat]
-                if v == FREE or v == BLOCKED:
-                    self._cells[flat] = TRACE_PATH
-                self._trace_owner[flat] = net_id
+        cells_np = np.frombuffer(self._cells, dtype=np.uint8)
 
-        for gx, gy in path:
-            for dy in range(-clearance_cells, clearance_cells + 1):
-                for dx in range(-clearance_cells, clearance_cells + 1):
-                    nx, ny = gx + dx, gy + dy
-                    if (nx, ny) in path_set or (nx, ny) in protected:
-                        continue
-                    if not self.in_bounds(nx, ny):
-                        continue
-                    flat = ny * W + nx
-                    if self._cells[flat] == FREE:
-                        self._cells[flat] = BLOCKED
-                    if self._cells[flat] == BLOCKED:
-                        self._clearance_owner.setdefault(flat, set()).add(net_id)
+        states = cells_np[path_flat]
+        cells_np[path_flat[(states == FREE) | (states == BLOCKED)]] = TRACE_PATH
+        for f in path_flat:
+            self._trace_owner[int(f)] = net_id
+
+        r = clearance_cells
+        d1 = np.arange(-r, r + 1, dtype=np.int32)
+        ox, oy = np.meshgrid(d1, d1)
+        offsets = np.column_stack([ox.ravel(), oy.ravel()])
+
+        all_nb = (path_coords[:, None, :] + offsets[None, :, :]).reshape(-1, 2)
+        mask = (
+            (all_nb[:, 0] >= 0) & (all_nb[:, 0] < W)
+            & (all_nb[:, 1] >= 0) & (all_nb[:, 1] < H)
+        )
+        valid_flat = (all_nb[mask, 1] * W + all_nb[mask, 0]).astype(np.int32)
+        clearance_flat = np.setdiff1d(valid_flat, path_flat)
+
+        if self._protected:
+            prot_arr = np.array(
+                [(gx, gy) for gx, gy in self._protected], dtype=np.int32,
+            )
+            prot_flat = prot_arr[:, 1] * W + prot_arr[:, 0]
+            clearance_flat = np.setdiff1d(clearance_flat, prot_flat)
+
+        cl_states = cells_np[clearance_flat]
+        cells_np[clearance_flat[cl_states == FREE]] = BLOCKED
+
+        for f in clearance_flat[(cl_states == FREE) | (cl_states == BLOCKED)]:
+            self._clearance_owner.setdefault(int(f), set()).add(net_id)
 
     def free_trace(
         self,
@@ -310,32 +345,47 @@ class RoutingGrid:
                     (self.trace_width_mm / 2 + self.trace_clearance_mm) / self.resolution
                 ))
             )
+        if not path:
+            return
+
         W = self.width
+        H = self.height
         path_set = set(path)
+        path_coords = np.array(list(path_set), dtype=np.int32)
+        path_flat = path_coords[:, 1] * W + path_coords[:, 0]
 
-        for gx, gy in path_set:
-            if self.in_bounds(gx, gy):
-                flat = gy * W + gx
-                self._trace_owner.pop(flat, None)
-                if self._cells[flat] == TRACE_PATH:
-                    self._cells[flat] = FREE
+        cells_np = np.frombuffer(self._cells, dtype=np.uint8)
 
-        for gx, gy in path:
-            for dy in range(-clearance_cells, clearance_cells + 1):
-                for dx in range(-clearance_cells, clearance_cells + 1):
-                    nx, ny = gx + dx, gy + dy
-                    if (nx, ny) in path_set or not self.in_bounds(nx, ny):
-                        continue
-                    flat = ny * W + nx
-                    if self._cells[flat] != BLOCKED:
-                        continue
-                    owners = self._clearance_owner.get(flat)
-                    if owners is None:
-                        self._cells[flat] = FREE
-                        continue
-                    owners.discard(net_id)
-                    if not owners:
-                        del self._clearance_owner[flat]
-                        self._cells[flat] = FREE
+        trace_mask = cells_np[path_flat] == TRACE_PATH
+        cells_np[path_flat[trace_mask]] = FREE
+        for f in path_flat:
+            self._trace_owner.pop(int(f), None)
+
+        r = clearance_cells
+        d1 = np.arange(-r, r + 1, dtype=np.int32)
+        ox, oy = np.meshgrid(d1, d1)
+        offsets = np.column_stack([ox.ravel(), oy.ravel()])
+
+        all_nb = (path_coords[:, None, :] + offsets[None, :, :]).reshape(-1, 2)
+        mask = (
+            (all_nb[:, 0] >= 0) & (all_nb[:, 0] < W)
+            & (all_nb[:, 1] >= 0) & (all_nb[:, 1] < H)
+        )
+        valid_flat = (all_nb[mask, 1] * W + all_nb[mask, 0]).astype(np.int32)
+        clearance_flat = np.setdiff1d(valid_flat, path_flat)
+
+        cl_states = cells_np[clearance_flat]
+        blocked_flat = clearance_flat[cl_states == BLOCKED]
+
+        for f in blocked_flat:
+            fi = int(f)
+            owners = self._clearance_owner.get(fi)
+            if owners is None:
+                self._cells[fi] = FREE
+                continue
+            owners.discard(net_id)
+            if not owners:
+                del self._clearance_owner[fi]
+                self._cells[fi] = FREE
 
 

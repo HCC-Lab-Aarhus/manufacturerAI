@@ -18,6 +18,8 @@ import random
 from collections import deque
 from dataclasses import dataclass, field
 
+import numpy as np
+
 from src.catalog.models import CatalogResult
 from src.pipeline.placer.models import FullPlacement
 
@@ -221,6 +223,20 @@ class Solution:
         self.pin_voronoi = pin_voronoi
         self.all_pin_cells = all_pin_cells
 
+        # Pre-group voronoi cells by pin_key for fast blocking
+        self._voronoi_by_pin: dict[str, list[tuple[int, int]]] = {}
+        self._voronoi_flat_by_pin: dict[str, np.ndarray] = {}
+        if pin_voronoi is not None:
+            W = grid.width
+            for flat, pin_key in pin_voronoi.items():
+                gx = flat % W
+                gy = flat // W
+                self._voronoi_by_pin.setdefault(pin_key, []).append((gx, gy))
+            for pin_key, cells in self._voronoi_by_pin.items():
+                self._voronoi_flat_by_pin[pin_key] = np.array(
+                    [gy * W + gx for gx, gy in cells], dtype=np.int32,
+                )
+
         self.routes: dict[str, NetRoute] = {}
         self.expected_nets: set[str] = set()
         self.pin_assignments: dict[str, str] = {}
@@ -293,11 +309,13 @@ class Solution:
                 jumpers=[dict(j) for j in route.jumpers],
                 violations=route.violations,
             )
+        # Use frozenset for clearance_owner values to speed up copy
+        clearance_snap = {k: set(v) for k, v in self.grid._clearance_owner.items()}
         return Snapshot(
             routes=routes_copy,
             cells=bytearray(self.grid._cells),
             trace_owner=dict(self.grid._trace_owner),
-            clearance_owner={k: set(v) for k, v in self.grid._clearance_owner.items()},
+            clearance_owner=clearance_snap,
             jumper_committed=list(self.jumper_checker._committed),
             jumper_committed_wires=list(self.jumper_checker._committed_wires),
         )
@@ -312,7 +330,7 @@ class Solution:
             )
             for nid, route in snap.routes.items()
         }
-        self.grid._cells = bytearray(snap.cells)
+        self.grid._cells[:] = snap.cells
         self.grid._trace_owner = dict(snap.trace_owner)
         self.grid._clearance_owner = {k: set(v) for k, v in snap.clearance_owner.items()}
         self.jumper_checker._committed = list(snap.jumper_committed)
@@ -357,34 +375,32 @@ class Solution:
 
         config = self.config
 
-        # 1. Try clean route
-        paths, ok = self._find_paths(net_id, pads)
-        if ok and paths and not self._has_foreign_cells(paths, net_id):
-            self._commit(net_id, paths, pads)
-            if len(pads) > 2:
-                self._relax_tree(net_id)
-            return
-
-        # 2. Try crossing-cost route → surgical rip-up of crossed nets
-        paths_cross, ok = self._find_paths(
+        # 1. Try with crossing cost — covers both clean and crossing paths.
+        #    L-route fast path inside find_path catches trivial clean routes.
+        paths, ok = self._find_paths(
             net_id, pads, crossing_cost=config.crossing_cost,
         )
-        if ok and paths_cross:
-            crossed = self._find_crossed_nets(paths_cross, net_id)
-            if not crossed:
-                self._commit(net_id, paths_cross, pads)
+        if ok and paths:
+            if not self._has_foreign_cells(paths, net_id):
+                self._commit(net_id, paths, pads)
                 if len(pads) > 2:
                     self._relax_tree(net_id)
                 return
-            if self._try_rip_reroute(net_id, paths_cross, pads, crossed):
+            crossed = self._find_crossed_nets(paths, net_id)
+            if not crossed:
+                self._commit(net_id, paths, pads)
+                if len(pads) > 2:
+                    self._relax_tree(net_id)
+                return
+            if self._try_rip_reroute(net_id, paths, pads, crossed):
                 return
 
-        # 3. Place jumper at shortest conflict segment
-        if ok and paths_cross:
-            if self._try_jumper(net_id, pads, paths_cross):
+        # 2. Place jumper at shortest conflict segment
+        if ok and paths:
+            if self._try_jumper(net_id, pads, paths):
                 return
 
-        # 4. Full-span jumper(s) — always works
+        # 3. Full-span jumper(s) — always works
         self._commit_full_jumper(net_id, pads)
 
     def route_nets(self, ordering: list[str], pads_map: dict[str, list[NetPad]]) -> None:
@@ -481,6 +497,7 @@ class Solution:
         debug_grids = build_debug_grids(
             self.placement, self.catalog, routed_paths, routed_pads,
             config=self.config,
+            grid=self.grid,
         )
 
         traces = self._grid_paths_to_traces(routed_paths)
@@ -642,36 +659,36 @@ class Solution:
                 if not unique:
                     continue
 
-                for gx, gy in unique:
-                    flat = gy * W + gx
-                    self.grid._cells[flat] = FREE
-                    self.grid._trace_owner.pop(flat, None)
+            unique_arr = np.array(list(unique), dtype=np.int32)
+            unique_flat = unique_arr[:, 1] * W + unique_arr[:, 0]
+            cells_np = np.frombuffer(self.grid._cells, dtype=np.uint8)
+            cells_np[unique_flat] = FREE
+            for f in unique_flat:
+                self.grid._trace_owner.pop(int(f), None)
 
-                start, end = old_path[0], old_path[-1]
-                comp_start = _bfs_grid_cells(remaining, start)
+            start, end = old_path[0], old_path[-1]
+            comp_start = _bfs_grid_cells(remaining, start)
 
-                if end in comp_start:
-                    new_path = self._relax_find_path(start, remaining - {start})
-                else:
-                    comp_end = remaining - comp_start
-                    new_path = self._relax_find_path(end, comp_start) if comp_end else None
+            if end in comp_start:
+                new_path = self._relax_find_path(start, remaining - {start})
+            else:
+                comp_end = remaining - comp_start
+                new_path = self._relax_find_path(end, comp_start) if comp_end else None
 
-                if new_path is not None and len(new_path) < old_len:
-                    paths[i] = new_path
-                    for gx, gy in set(new_path) - remaining:
-                        flat = gy * W + gx
-                        self.grid._cells[flat] = TRACE_PATH
-                        self.grid._trace_owner[flat] = net_id
-                    improved = True
-                else:
-                    for gx, gy in unique:
-                        flat = gy * W + gx
-                        self.grid._cells[flat] = TRACE_PATH
-                        self.grid._trace_owner[flat] = net_id
-
-            if not improved:
-                break
-
+            if new_path is not None and len(new_path) < old_len:
+                paths[i] = new_path
+                new_unique = set(new_path) - remaining
+                if new_unique:
+                    nu_arr = np.array(list(new_unique), dtype=np.int32)
+                    nu_flat = nu_arr[:, 1] * W + nu_arr[:, 0]
+                    cells_np[nu_flat] = TRACE_PATH
+                    for f in nu_flat:
+                        self.grid._trace_owner[int(f)] = net_id
+                improved = True
+            else:
+                cells_np[unique_flat] = TRACE_PATH
+                for f in unique_flat:
+                    self.grid._trace_owner[int(f)] = net_id
         new_cells = sum(len(p) for p in paths)
         if new_cells < original_cells:
             log.debug(
@@ -1150,25 +1167,28 @@ class Solution:
 
     # ── Internal: Voronoi pin blocking ─────────────────────────
 
-    def _block_voronoi(self, net_pads: list[NetPad]) -> list[tuple[int, int]]:
-        if self.pin_voronoi is None:
-            return []
+    def _block_voronoi(self, net_pads: list[NetPad]) -> np.ndarray:
+        if not self._voronoi_flat_by_pin:
+            return np.array([], dtype=np.int32)
         net_pin_keys = {f"{pad.instance_id}:{pad.pin_id}" for pad in net_pads}
-        W = self.grid.width
-        blocked: list[tuple[int, int]] = []
-        for flat, pin_key in self.pin_voronoi.items():
-            if pin_key in net_pin_keys:
-                continue
-            gx = flat % W
-            gy = flat // W
-            if self.grid.is_free(gx, gy):
-                self.grid.block_cell(gx, gy)
-                blocked.append((gx, gy))
-        return blocked
+        foreign_arrs = [
+            arr for key, arr in self._voronoi_flat_by_pin.items()
+            if key not in net_pin_keys
+        ]
+        if not foreign_arrs:
+            return np.array([], dtype=np.int32)
+        foreign_flat = np.concatenate(foreign_arrs)
+        cells_np = np.frombuffer(self.grid._cells, dtype=np.uint8)
+        free_mask = cells_np[foreign_flat] == FREE
+        to_block = foreign_flat[free_mask]
+        cells_np[to_block] = BLOCKED
+        return to_block
 
-    def _unblock_voronoi(self, blocked: list[tuple[int, int]]) -> None:
-        for cx, cy in blocked:
-            self.grid.free_cell(cx, cy)
+    def _unblock_voronoi(self, blocked: np.ndarray) -> None:
+        if len(blocked) == 0:
+            return
+        cells_np = np.frombuffer(self.grid._cells, dtype=np.uint8)
+        cells_np[blocked] = FREE
 
     # ── Internal: output conversion ────────────────────────────
 
@@ -1176,6 +1196,7 @@ class Solution:
         self, routed_paths: dict[str, list[list[tuple[int, int]]]],
     ) -> list[Trace]:
         from shapely.geometry import Point
+        from shapely import contains_xy as _contains_xy
 
         outline = self.grid.outline_poly
         traces: list[Trace] = []
@@ -1184,16 +1205,19 @@ class Solution:
                 if len(grid_path) < 2:
                     continue
                 world_path = _simplify_path(grid_path, self.grid)
+                xs = np.array([wx for wx, _ in world_path])
+                ys = np.array([wy for _, wy in world_path])
+                inside = _contains_xy(outline, xs, ys)
                 clamped: list[tuple[float, float]] = []
-                for wx, wy in world_path:
-                    pt = Point(wx, wy)
-                    if not outline.contains(pt):
+                for i, (wx, wy) in enumerate(world_path):
+                    if inside[i]:
+                        clamped.append((wx, wy))
+                    else:
+                        pt = Point(wx, wy)
                         nearest = outline.exterior.interpolate(
                             outline.exterior.project(pt),
                         )
                         clamped.append((nearest.x, nearest.y))
-                    else:
-                        clamped.append((wx, wy))
                 traces.append(Trace(net_id=net_id, path=clamped))
         return traces
 
