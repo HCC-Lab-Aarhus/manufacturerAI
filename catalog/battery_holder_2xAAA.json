@@ -8,7 +8,7 @@
         "shape": "rect",
         "width_mm": 25.0,
         "length_mm": 48.0,
-        "height_mm": 12.0
+        "height_mm": 13.5
     },
     "mounting": {
         "style": "bottom",
