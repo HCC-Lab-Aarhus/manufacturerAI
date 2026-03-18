@@ -8,7 +8,8 @@ Supports:
 
 from __future__ import annotations
 
-import heapq
+import array as _array_mod
+from heapq import heappush as _heappush, heappop as _heappop
 
 import numpy as np
 
@@ -73,7 +74,7 @@ def find_path(
     heap: list[tuple[int, int, int, int, int]] = [(h0, counter, sx, sy, -1)]
 
     while heap:
-        f, _cnt, cx, cy, direction = heapq.heappop(heap)
+        f, _cnt, cx, cy, direction = _heappop(heap)
         key = cy * W + cx
 
         if closed[key]:
@@ -126,7 +127,7 @@ def find_path(
                 parent[nkey] = key
                 h = abs(nx - tx) + abs(ny - ty)
                 counter += 1
-                heapq.heappush(heap, (tentative_g + h, counter, nx, ny, d))
+                _heappush(heap, (tentative_g + h, counter, nx, ny, d))
 
     return None
 
@@ -173,33 +174,13 @@ def find_path_to_tree(
     for tx, ty in tree_list:
         tree_mask[ty * W + tx] = 1
 
-    # Precompute tree coordinates for heuristic
-    tree_xs = tuple(t[0] for t in tree_list)
-    tree_ys = tuple(t[1] for t in tree_list)
-    n_tree = len(tree_list)
-
-    if n_tree >= 16:
-        _tree_xs_np = np.array(tree_xs, dtype=np.int32)
-        _tree_ys_np = np.array(tree_ys, dtype=np.int32)
-
-        def min_h(x: int, y: int) -> int:
-            return int(np.min(np.abs(_tree_xs_np - x) + np.abs(_tree_ys_np - y)))
-    else:
-        def min_h(x: int, y: int) -> int:
-            best = abs(x - tree_xs[0]) + abs(y - tree_ys[0])
-            for i in range(1, n_tree):
-                d = abs(x - tree_xs[i]) + abs(y - tree_ys[i])
-                if d < best:
-                    best = d
-                    if d == 0:
-                        return 0
-            return best
+    # Precomputed distance transform: O(1) heuristic lookup
+    h_map = _manhattan_dt(W, H, tree_list)
 
     # ── Pre-allocated containers ───────────────────────────────
     g = [INF] * N
     parent = [-1] * N
     closed = bytearray(N)
-    source_mask = bytearray(N)
 
     # ── Seed heap with all valid source cells ──────────────────
     counter = 0
@@ -211,17 +192,16 @@ def find_path_to_tree(
         skey = sy * W + sx
         if cells[skey] != FREE and not tree_mask[skey]:
             continue
-        source_mask[skey] = 1
         g[skey] = 0
-        h0 = min_h(sx, sy)
-        heapq.heappush(heap, (h0, counter, sx, sy, -1))
+        h0 = h_map[skey]
+        _heappush(heap, (h0, counter, sx, sy, -1))
         counter += 1
 
     if not heap:
         return None
 
     while heap:
-        f, _cnt, cx, cy, direction = heapq.heappop(heap)
+        f, _cnt, cx, cy, direction = _heappop(heap)
         key = cy * W + cx
 
         if closed[key]:
@@ -270,11 +250,39 @@ def find_path_to_tree(
             if tentative_g < g[nkey]:
                 g[nkey] = tentative_g
                 parent[nkey] = key
-                h = min_h(nx, ny)
                 counter += 1
-                heapq.heappush(heap, (tentative_g + h, counter, nx, ny, d))
+                _heappush(heap, (tentative_g + h_map[nkey], counter, nx, ny, d))
 
     return None
+
+
+# ── Manhattan distance transform ──────────────────────────────────
+
+def _manhattan_dt(W: int, H: int, tree_cells: list[tuple[int, int]]) -> _array_mod.array:
+    """Return flat array of Manhattan distances to nearest tree cell.
+
+    Uses a separable 2-pass distance transform: O(W*H) total,
+    then O(1) per heuristic lookup during A*.
+    """
+    INF32 = np.int32(W + H + 2)
+    dist = np.full((H, W), INF32, dtype=np.int32)
+    n = len(tree_cells)
+    if n > 32:
+        tc = np.array(tree_cells, dtype=np.intp)
+        dist[tc[:, 1], tc[:, 0]] = 0
+    else:
+        for tx, ty in tree_cells:
+            dist[ty, tx] = 0
+    one = np.int32(1)
+    for x in range(1, W):
+        np.minimum(dist[:, x], dist[:, x - 1] + one, out=dist[:, x])
+    for x in range(W - 2, -1, -1):
+        np.minimum(dist[:, x], dist[:, x + 1] + one, out=dist[:, x])
+    for y in range(1, H):
+        np.minimum(dist[y], dist[y - 1] + one, out=dist[y])
+    for y in range(H - 2, -1, -1):
+        np.minimum(dist[y], dist[y + 1] + one, out=dist[y])
+    return _array_mod.array('i', dist.tobytes())
 
 
 # ── Fast L-shaped route ────────────────────────────────────────────

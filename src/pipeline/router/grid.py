@@ -282,47 +282,31 @@ class RoutingGrid:
                     (self.trace_width_mm / 2 + self.trace_clearance_mm) / self.resolution
                 ))
             )
-        if not path:
-            return
-
-        W = self.width
-        H = self.height
         path_set = set(path)
-        path_coords = np.array(list(path_set), dtype=np.int32)
-        path_flat = path_coords[:, 1] * W + path_coords[:, 0]
+        protected = self._protected
+        W = self.width
 
-        cells_np = np.frombuffer(self._cells, dtype=np.uint8)
+        for gx, gy in path_set:
+            if self.in_bounds(gx, gy):
+                flat = gy * W + gx
+                v = self._cells[flat]
+                if v == FREE or v == BLOCKED:
+                    self._cells[flat] = TRACE_PATH
+                self._trace_owner[flat] = net_id
 
-        states = cells_np[path_flat]
-        cells_np[path_flat[(states == FREE) | (states == BLOCKED)]] = TRACE_PATH
-        for f in path_flat:
-            self._trace_owner[int(f)] = net_id
-
-        r = clearance_cells
-        d1 = np.arange(-r, r + 1, dtype=np.int32)
-        ox, oy = np.meshgrid(d1, d1)
-        offsets = np.column_stack([ox.ravel(), oy.ravel()])
-
-        all_nb = (path_coords[:, None, :] + offsets[None, :, :]).reshape(-1, 2)
-        mask = (
-            (all_nb[:, 0] >= 0) & (all_nb[:, 0] < W)
-            & (all_nb[:, 1] >= 0) & (all_nb[:, 1] < H)
-        )
-        valid_flat = (all_nb[mask, 1] * W + all_nb[mask, 0]).astype(np.int32)
-        clearance_flat = np.setdiff1d(valid_flat, path_flat)
-
-        if self._protected:
-            prot_arr = np.array(
-                [(gx, gy) for gx, gy in self._protected], dtype=np.int32,
-            )
-            prot_flat = prot_arr[:, 1] * W + prot_arr[:, 0]
-            clearance_flat = np.setdiff1d(clearance_flat, prot_flat)
-
-        cl_states = cells_np[clearance_flat]
-        cells_np[clearance_flat[cl_states == FREE]] = BLOCKED
-
-        for f in clearance_flat[(cl_states == FREE) | (cl_states == BLOCKED)]:
-            self._clearance_owner.setdefault(int(f), set()).add(net_id)
+        for gx, gy in path_set:
+            for dy in range(-clearance_cells, clearance_cells + 1):
+                for dx in range(-clearance_cells, clearance_cells + 1):
+                    nx, ny = gx + dx, gy + dy
+                    if (nx, ny) in path_set or (nx, ny) in protected:
+                        continue
+                    if not self.in_bounds(nx, ny):
+                        continue
+                    flat = ny * W + nx
+                    if self._cells[flat] == FREE:
+                        self._cells[flat] = BLOCKED
+                    if self._cells[flat] == BLOCKED:
+                        self._clearance_owner.setdefault(flat, set()).add(net_id)
 
     def free_trace(
         self,
@@ -345,47 +329,32 @@ class RoutingGrid:
                     (self.trace_width_mm / 2 + self.trace_clearance_mm) / self.resolution
                 ))
             )
-        if not path:
-            return
-
         W = self.width
-        H = self.height
         path_set = set(path)
-        path_coords = np.array(list(path_set), dtype=np.int32)
-        path_flat = path_coords[:, 1] * W + path_coords[:, 0]
 
-        cells_np = np.frombuffer(self._cells, dtype=np.uint8)
+        for gx, gy in path_set:
+            if self.in_bounds(gx, gy):
+                flat = gy * W + gx
+                self._trace_owner.pop(flat, None)
+                if self._cells[flat] == TRACE_PATH:
+                    self._cells[flat] = FREE
 
-        trace_mask = cells_np[path_flat] == TRACE_PATH
-        cells_np[path_flat[trace_mask]] = FREE
-        for f in path_flat:
-            self._trace_owner.pop(int(f), None)
-
-        r = clearance_cells
-        d1 = np.arange(-r, r + 1, dtype=np.int32)
-        ox, oy = np.meshgrid(d1, d1)
-        offsets = np.column_stack([ox.ravel(), oy.ravel()])
-
-        all_nb = (path_coords[:, None, :] + offsets[None, :, :]).reshape(-1, 2)
-        mask = (
-            (all_nb[:, 0] >= 0) & (all_nb[:, 0] < W)
-            & (all_nb[:, 1] >= 0) & (all_nb[:, 1] < H)
-        )
-        valid_flat = (all_nb[mask, 1] * W + all_nb[mask, 0]).astype(np.int32)
-        clearance_flat = np.setdiff1d(valid_flat, path_flat)
-
-        cl_states = cells_np[clearance_flat]
-        blocked_flat = clearance_flat[cl_states == BLOCKED]
-
-        for f in blocked_flat:
-            fi = int(f)
-            owners = self._clearance_owner.get(fi)
-            if owners is None:
-                self._cells[fi] = FREE
-                continue
-            owners.discard(net_id)
-            if not owners:
-                del self._clearance_owner[fi]
-                self._cells[fi] = FREE
+        for gx, gy in path_set:
+            for dy in range(-clearance_cells, clearance_cells + 1):
+                for dx in range(-clearance_cells, clearance_cells + 1):
+                    nx, ny = gx + dx, gy + dy
+                    if (nx, ny) in path_set or not self.in_bounds(nx, ny):
+                        continue
+                    flat = ny * W + nx
+                    if self._cells[flat] != BLOCKED:
+                        continue
+                    owners = self._clearance_owner.get(flat)
+                    if owners is None:
+                        self._cells[flat] = FREE
+                        continue
+                    owners.discard(net_id)
+                    if not owners:
+                        del self._clearance_owner[flat]
+                        self._cells[flat] = FREE
 
 
