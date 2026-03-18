@@ -1,0 +1,690 @@
+{
+  "components": [
+    {
+      "instance_id": "btn_r1c1",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 20.0,
+      "y_mm": 35.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          16.5,
+          32.795
+        ],
+        "2": [
+          23.5,
+          32.795
+        ],
+        "3": [
+          16.5,
+          37.205
+        ],
+        "4": [
+          23.5,
+          37.205
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "btn_r1c2",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 48.0,
+      "y_mm": 35.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          44.5,
+          32.795
+        ],
+        "2": [
+          51.5,
+          32.795
+        ],
+        "3": [
+          44.5,
+          37.205
+        ],
+        "4": [
+          51.5,
+          37.205
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "btn_r1c3",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 76.0,
+      "y_mm": 35.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          72.5,
+          32.795
+        ],
+        "2": [
+          79.5,
+          32.795
+        ],
+        "3": [
+          72.5,
+          37.205
+        ],
+        "4": [
+          79.5,
+          37.205
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "btn_r1c4",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 104.0,
+      "y_mm": 35.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          100.5,
+          32.795
+        ],
+        "2": [
+          107.5,
+          32.795
+        ],
+        "3": [
+          100.5,
+          37.205
+        ],
+        "4": [
+          107.5,
+          37.205
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "btn_r1c5",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 132.0,
+      "y_mm": 35.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          128.5,
+          32.795
+        ],
+        "2": [
+          135.5,
+          32.795
+        ],
+        "3": [
+          128.5,
+          37.205
+        ],
+        "4": [
+          135.5,
+          37.205
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "btn_r1c6",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 158.0,
+      "y_mm": 35.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          154.5,
+          32.795
+        ],
+        "2": [
+          161.5,
+          32.795
+        ],
+        "3": [
+          154.5,
+          37.205
+        ],
+        "4": [
+          161.5,
+          37.205
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "btn_r2c1",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 20.0,
+      "y_mm": 70.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          16.5,
+          67.795
+        ],
+        "2": [
+          23.5,
+          67.795
+        ],
+        "3": [
+          16.5,
+          72.205
+        ],
+        "4": [
+          23.5,
+          72.205
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "btn_r2c2",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 48.0,
+      "y_mm": 70.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          44.5,
+          67.795
+        ],
+        "2": [
+          51.5,
+          67.795
+        ],
+        "3": [
+          44.5,
+          72.205
+        ],
+        "4": [
+          51.5,
+          72.205
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "btn_r2c3",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 76.0,
+      "y_mm": 70.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          72.5,
+          67.795
+        ],
+        "2": [
+          79.5,
+          67.795
+        ],
+        "3": [
+          72.5,
+          72.205
+        ],
+        "4": [
+          79.5,
+          72.205
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "btn_r2c4",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 104.0,
+      "y_mm": 70.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          100.5,
+          67.795
+        ],
+        "2": [
+          107.5,
+          67.795
+        ],
+        "3": [
+          100.5,
+          72.205
+        ],
+        "4": [
+          107.5,
+          72.205
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "btn_r2c5",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 132.0,
+      "y_mm": 70.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          128.5,
+          67.795
+        ],
+        "2": [
+          135.5,
+          67.795
+        ],
+        "3": [
+          128.5,
+          72.205
+        ],
+        "4": [
+          135.5,
+          72.205
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "btn_r2c6",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 158.0,
+      "y_mm": 70.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          154.5,
+          67.795
+        ],
+        "2": [
+          161.5,
+          67.795
+        ],
+        "3": [
+          154.5,
+          72.205
+        ],
+        "4": [
+          161.5,
+          72.205
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "led_1",
+      "catalog_id": "led_5mm",
+      "x_mm": 20.0,
+      "y_mm": 100.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "anode": [
+          21.0,
+          100.0
+        ],
+        "cathode": [
+          19.0,
+          100.0
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "led_2",
+      "catalog_id": "led_5mm",
+      "x_mm": 48.0,
+      "y_mm": 100.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "anode": [
+          49.0,
+          100.0
+        ],
+        "cathode": [
+          47.0,
+          100.0
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "led_3",
+      "catalog_id": "led_5mm",
+      "x_mm": 76.0,
+      "y_mm": 100.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "anode": [
+          77.0,
+          100.0
+        ],
+        "cathode": [
+          75.0,
+          100.0
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "led_4",
+      "catalog_id": "led_5mm",
+      "x_mm": 104.0,
+      "y_mm": 100.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "anode": [
+          105.0,
+          100.0
+        ],
+        "cathode": [
+          103.0,
+          100.0
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "led_5",
+      "catalog_id": "led_5mm",
+      "x_mm": 132.0,
+      "y_mm": 100.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "anode": [
+          133.0,
+          100.0
+        ],
+        "cathode": [
+          131.0,
+          100.0
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "led_6",
+      "catalog_id": "led_5mm",
+      "x_mm": 158.0,
+      "y_mm": 100.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "anode": [
+          159.0,
+          100.0
+        ],
+        "cathode": [
+          157.0,
+          100.0
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "bat_1",
+      "catalog_id": "battery_holder_2xAAA",
+      "x_mm": 94.92,
+      "y_mm": 130.91,
+      "rotation_deg": 180,
+      "pin_positions": {
+        "V+": [
+          88.67,
+          105.91
+        ],
+        "GND": [
+          101.17,
+          105.91
+        ]
+      },
+      "mounting_style": "bottom"
+    },
+    {
+      "instance_id": "mcu_1",
+      "catalog_id": "atmega328p_dip28",
+      "x_mm": 89.85,
+      "y_mm": 70.01,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "PC6": [
+          86.04,
+          53.76
+        ],
+        "PD0": [
+          86.04,
+          56.26
+        ],
+        "PD1": [
+          86.04,
+          58.76
+        ],
+        "PD2": [
+          86.04,
+          61.26
+        ],
+        "PD3": [
+          86.04,
+          63.76
+        ],
+        "PD4": [
+          86.04,
+          66.26
+        ],
+        "VCC1": [
+          86.04,
+          68.76
+        ],
+        "GND1": [
+          86.04,
+          71.26
+        ],
+        "PB6": [
+          86.04,
+          73.76
+        ],
+        "PB7": [
+          86.04,
+          76.26
+        ],
+        "PD5": [
+          86.04,
+          78.76
+        ],
+        "PD6": [
+          86.04,
+          81.26
+        ],
+        "PD7": [
+          86.04,
+          83.76
+        ],
+        "PB0": [
+          86.04,
+          86.26
+        ],
+        "PB1": [
+          93.66,
+          86.26
+        ],
+        "PB2": [
+          93.66,
+          83.76
+        ],
+        "PB3": [
+          93.66,
+          81.26
+        ],
+        "PB4": [
+          93.66,
+          78.76
+        ],
+        "PB5": [
+          93.66,
+          76.26
+        ],
+        "AVCC": [
+          93.66,
+          73.76
+        ],
+        "AREF": [
+          93.66,
+          71.26
+        ],
+        "GND2": [
+          93.66,
+          68.76
+        ],
+        "PC0": [
+          93.66,
+          66.26
+        ],
+        "PC1": [
+          93.66,
+          63.76
+        ],
+        "PC2": [
+          93.66,
+          61.26
+        ],
+        "PC3": [
+          93.66,
+          58.76
+        ],
+        "PC4": [
+          93.66,
+          56.26
+        ],
+        "PC5": [
+          93.66,
+          53.76
+        ]
+      },
+      "mounting_style": "internal"
+    },
+    {
+      "instance_id": "r_reset",
+      "catalog_id": "resistor_axial",
+      "x_mm": 79.35,
+      "y_mm": 58.18,
+      "rotation_deg": 270,
+      "pin_positions": {
+        "1": [
+          79.35,
+          61.88
+        ],
+        "2": [
+          79.35,
+          54.48
+        ]
+      },
+      "mounting_style": "internal"
+    },
+    {
+      "instance_id": "r_led1",
+      "catalog_id": "resistor_axial",
+      "x_mm": 26.91,
+      "y_mm": 83.41,
+      "rotation_deg": 90,
+      "pin_positions": {
+        "1": [
+          26.91,
+          79.71
+        ],
+        "2": [
+          26.91,
+          87.11
+        ]
+      },
+      "mounting_style": "internal"
+    },
+    {
+      "instance_id": "r_led2",
+      "catalog_id": "resistor_axial",
+      "x_mm": 62.79,
+      "y_mm": 95.22,
+      "rotation_deg": 90,
+      "pin_positions": {
+        "1": [
+          62.79,
+          91.52
+        ],
+        "2": [
+          62.79,
+          98.92
+        ]
+      },
+      "mounting_style": "internal"
+    },
+    {
+      "instance_id": "r_led3",
+      "catalog_id": "resistor_axial",
+      "x_mm": 86.03,
+      "y_mm": 94.89,
+      "rotation_deg": 180,
+      "pin_positions": {
+        "1": [
+          89.73,
+          94.89
+        ],
+        "2": [
+          82.33,
+          94.89
+        ]
+      },
+      "mounting_style": "internal"
+    },
+    {
+      "instance_id": "r_led4",
+      "catalog_id": "resistor_axial",
+      "x_mm": 98.87,
+      "y_mm": 94.13,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          95.17,
+          94.13
+        ],
+        "2": [
+          102.57,
+          94.13
+        ]
+      },
+      "mounting_style": "internal"
+    },
+    {
+      "instance_id": "r_led5",
+      "catalog_id": "resistor_axial",
+      "x_mm": 115.59,
+      "y_mm": 74.57,
+      "rotation_deg": 90,
+      "pin_positions": {
+        "1": [
+          115.59,
+          70.87
+        ],
+        "2": [
+          115.59,
+          78.27
+        ]
+      },
+      "mounting_style": "internal"
+    },
+    {
+      "instance_id": "r_led6",
+      "catalog_id": "resistor_axial",
+      "x_mm": 122.98,
+      "y_mm": 95.08,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          119.28,
+          95.08
+        ],
+        "2": [
+          126.68,
+          95.08
+        ]
+      },
+      "mounting_style": "internal"
+    }
+  ]
+}

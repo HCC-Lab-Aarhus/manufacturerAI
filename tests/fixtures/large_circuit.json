@@ -1,0 +1,367 @@
+{
+  "components": [
+    {
+      "catalog_id": "battery_holder_2xAAA",
+      "instance_id": "bat_1"
+    },
+    {
+      "catalog_id": "atmega328p_dip28",
+      "instance_id": "mcu_1"
+    },
+    {
+      "catalog_id": "resistor_axial",
+      "instance_id": "r_reset",
+      "config": {
+        "resistance_ohms": 10000
+      }
+    },
+    {
+      "catalog_id": "resistor_axial",
+      "instance_id": "r_led1",
+      "config": {
+        "resistance_ohms": 100
+      }
+    },
+    {
+      "catalog_id": "resistor_axial",
+      "instance_id": "r_led2",
+      "config": {
+        "resistance_ohms": 100
+      }
+    },
+    {
+      "catalog_id": "resistor_axial",
+      "instance_id": "r_led3",
+      "config": {
+        "resistance_ohms": 100
+      }
+    },
+    {
+      "catalog_id": "resistor_axial",
+      "instance_id": "r_led4",
+      "config": {
+        "resistance_ohms": 100
+      }
+    },
+    {
+      "catalog_id": "resistor_axial",
+      "instance_id": "r_led5",
+      "config": {
+        "resistance_ohms": 100
+      }
+    },
+    {
+      "catalog_id": "resistor_axial",
+      "instance_id": "r_led6",
+      "config": {
+        "resistance_ohms": 100
+      }
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_r1c1"
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_r1c2"
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_r1c3"
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_r1c4"
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_r1c5"
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_r1c6"
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_r2c1"
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_r2c2"
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_r2c3"
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_r2c4"
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_r2c5"
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_r2c6"
+    },
+    {
+      "catalog_id": "led_5mm",
+      "instance_id": "led_1",
+      "config": {
+        "wavelength_nm": 525,
+        "forward_voltage_v": 2.2
+      }
+    },
+    {
+      "catalog_id": "led_5mm",
+      "instance_id": "led_2",
+      "config": {
+        "wavelength_nm": 525,
+        "forward_voltage_v": 2.2
+      }
+    },
+    {
+      "catalog_id": "led_5mm",
+      "instance_id": "led_3",
+      "config": {
+        "wavelength_nm": 525,
+        "forward_voltage_v": 2.2
+      }
+    },
+    {
+      "catalog_id": "led_5mm",
+      "instance_id": "led_4",
+      "config": {
+        "wavelength_nm": 525,
+        "forward_voltage_v": 2.2
+      }
+    },
+    {
+      "catalog_id": "led_5mm",
+      "instance_id": "led_5",
+      "config": {
+        "wavelength_nm": 525,
+        "forward_voltage_v": 2.2
+      }
+    },
+    {
+      "catalog_id": "led_5mm",
+      "instance_id": "led_6",
+      "config": {
+        "wavelength_nm": 525,
+        "forward_voltage_v": 2.2
+      }
+    }
+  ],
+  "nets": [
+    {
+      "id": "VCC",
+      "pins": [
+        "bat_1:V+",
+        "mcu_1:power",
+        "r_reset:1"
+      ]
+    },
+    {
+      "id": "GND",
+      "pins": [
+        "bat_1:GND",
+        "mcu_1:ground",
+        "btn_r1c1:B",
+        "btn_r1c2:B",
+        "btn_r1c3:B",
+        "btn_r1c4:B",
+        "btn_r1c5:B",
+        "btn_r1c6:B",
+        "btn_r2c1:B",
+        "btn_r2c2:B",
+        "btn_r2c3:B",
+        "btn_r2c4:B",
+        "btn_r2c5:B",
+        "btn_r2c6:B",
+        "led_1:cathode",
+        "led_2:cathode",
+        "led_3:cathode",
+        "led_4:cathode",
+        "led_5:cathode",
+        "led_6:cathode"
+      ]
+    },
+    {
+      "id": "RESET",
+      "pins": [
+        "mcu_1:PC6",
+        "r_reset:2"
+      ]
+    },
+    {
+      "id": "BTN_R1C1",
+      "pins": [
+        "btn_r1c1:A",
+        "mcu_1:gpio"
+      ]
+    },
+    {
+      "id": "BTN_R1C2",
+      "pins": [
+        "btn_r1c2:A",
+        "mcu_1:gpio"
+      ]
+    },
+    {
+      "id": "BTN_R1C3",
+      "pins": [
+        "btn_r1c3:A",
+        "mcu_1:gpio"
+      ]
+    },
+    {
+      "id": "BTN_R1C4",
+      "pins": [
+        "btn_r1c4:A",
+        "mcu_1:gpio"
+      ]
+    },
+    {
+      "id": "BTN_R1C5",
+      "pins": [
+        "btn_r1c5:A",
+        "mcu_1:gpio"
+      ]
+    },
+    {
+      "id": "BTN_R1C6",
+      "pins": [
+        "btn_r1c6:A",
+        "mcu_1:gpio"
+      ]
+    },
+    {
+      "id": "BTN_R2C1",
+      "pins": [
+        "btn_r2c1:A",
+        "mcu_1:gpio"
+      ]
+    },
+    {
+      "id": "BTN_R2C2",
+      "pins": [
+        "btn_r2c2:A",
+        "mcu_1:gpio"
+      ]
+    },
+    {
+      "id": "BTN_R2C3",
+      "pins": [
+        "btn_r2c3:A",
+        "mcu_1:gpio"
+      ]
+    },
+    {
+      "id": "BTN_R2C4",
+      "pins": [
+        "btn_r2c4:A",
+        "mcu_1:gpio"
+      ]
+    },
+    {
+      "id": "BTN_R2C5",
+      "pins": [
+        "btn_r2c5:A",
+        "mcu_1:gpio"
+      ]
+    },
+    {
+      "id": "BTN_R2C6",
+      "pins": [
+        "btn_r2c6:A",
+        "mcu_1:gpio"
+      ]
+    },
+    {
+      "id": "LED1_CTRL",
+      "pins": [
+        "mcu_1:gpio",
+        "r_led1:1"
+      ]
+    },
+    {
+      "id": "LED1_OUT",
+      "pins": [
+        "r_led1:2",
+        "led_1:anode"
+      ]
+    },
+    {
+      "id": "LED2_CTRL",
+      "pins": [
+        "mcu_1:gpio",
+        "r_led2:1"
+      ]
+    },
+    {
+      "id": "LED2_OUT",
+      "pins": [
+        "r_led2:2",
+        "led_2:anode"
+      ]
+    },
+    {
+      "id": "LED3_CTRL",
+      "pins": [
+        "mcu_1:gpio",
+        "r_led3:1"
+      ]
+    },
+    {
+      "id": "LED3_OUT",
+      "pins": [
+        "r_led3:2",
+        "led_3:anode"
+      ]
+    },
+    {
+      "id": "LED4_CTRL",
+      "pins": [
+        "mcu_1:gpio",
+        "r_led4:1"
+      ]
+    },
+    {
+      "id": "LED4_OUT",
+      "pins": [
+        "r_led4:2",
+        "led_4:anode"
+      ]
+    },
+    {
+      "id": "LED5_CTRL",
+      "pins": [
+        "mcu_1:gpio",
+        "r_led5:1"
+      ]
+    },
+    {
+      "id": "LED5_OUT",
+      "pins": [
+        "r_led5:2",
+        "led_5:anode"
+      ]
+    },
+    {
+      "id": "LED6_CTRL",
+      "pins": [
+        "mcu_1:gpio",
+        "r_led6:1"
+      ]
+    },
+    {
+      "id": "LED6_OUT",
+      "pins": [
+        "r_led6:2",
+        "led_6:anode"
+      ]
+    }
+  ]
+}

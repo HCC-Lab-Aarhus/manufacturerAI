@@ -1,0 +1,150 @@
+{
+  "device_description": "A large button matrix control panel with 12 tactile push buttons arranged in a 6-column by 2-row grid, and 6 status LEDs along a row below the buttons. Each button triggers a distinct input to the microcontroller. The LEDs indicate channel or row states. The dense component layout with many independently routed signals is intentional and requires jumper wires to resolve trace crossings.",
+  "outline": [
+    {
+      "x": 0,
+      "y": 0,
+      "ease_in": 10,
+      "ease_out": 10
+    },
+    {
+      "x": 175,
+      "y": 0,
+      "ease_in": 10,
+      "ease_out": 10
+    },
+    {
+      "x": 175,
+      "y": 195,
+      "ease_in": 10,
+      "ease_out": 10
+    },
+    {
+      "x": 0,
+      "y": 195,
+      "ease_in": 10,
+      "ease_out": 10
+    }
+  ],
+  "enclosure": {
+    "height_mm": 16,
+    "edge_top": {
+      "type": "chamfer",
+      "size_mm": 2
+    },
+    "edge_bottom": {
+      "type": "fillet",
+      "size_mm": 2
+    }
+  },
+  "ui_placements": [
+    {
+      "instance_id": "btn_r1c1",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 20,
+      "y_mm": 35
+    },
+    {
+      "instance_id": "btn_r1c2",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 48,
+      "y_mm": 35
+    },
+    {
+      "instance_id": "btn_r1c3",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 76,
+      "y_mm": 35
+    },
+    {
+      "instance_id": "btn_r1c4",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 104,
+      "y_mm": 35
+    },
+    {
+      "instance_id": "btn_r1c5",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 132,
+      "y_mm": 35
+    },
+    {
+      "instance_id": "btn_r1c6",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 158,
+      "y_mm": 35
+    },
+    {
+      "instance_id": "btn_r2c1",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 20,
+      "y_mm": 70
+    },
+    {
+      "instance_id": "btn_r2c2",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 48,
+      "y_mm": 70
+    },
+    {
+      "instance_id": "btn_r2c3",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 76,
+      "y_mm": 70
+    },
+    {
+      "instance_id": "btn_r2c4",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 104,
+      "y_mm": 70
+    },
+    {
+      "instance_id": "btn_r2c5",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 132,
+      "y_mm": 70
+    },
+    {
+      "instance_id": "btn_r2c6",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 158,
+      "y_mm": 70
+    },
+    {
+      "instance_id": "led_1",
+      "catalog_id": "led_5mm",
+      "x_mm": 20,
+      "y_mm": 100
+    },
+    {
+      "instance_id": "led_2",
+      "catalog_id": "led_5mm",
+      "x_mm": 48,
+      "y_mm": 100
+    },
+    {
+      "instance_id": "led_3",
+      "catalog_id": "led_5mm",
+      "x_mm": 76,
+      "y_mm": 100
+    },
+    {
+      "instance_id": "led_4",
+      "catalog_id": "led_5mm",
+      "x_mm": 104,
+      "y_mm": 100
+    },
+    {
+      "instance_id": "led_5",
+      "catalog_id": "led_5mm",
+      "x_mm": 132,
+      "y_mm": 100
+    },
+    {
+      "instance_id": "led_6",
+      "catalog_id": "led_5mm",
+      "x_mm": 158,
+      "y_mm": 100
+    }
+  ]
+}
