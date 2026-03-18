@@ -33,15 +33,12 @@ FILAMENTS: dict[str, FilamentDef] = {
         id="prusament_pla",
         label="Prusament PLA",
         overrides={
-            # Prusament PLA prints well at 215 °C on MK3S / MK3S+.
-            # On the Core One HF nozzle 215 °C is the minimum before
-            # clogs — keep it as the safe baseline.
-            "temperature":                      "215",
-            "first_layer_temperature":          "215",
-            "filament_temperature":             "215",
-            "filament_first_layer_temperature":  "215",
-            "bed_temperature":                  "40",
-            "first_layer_bed_temperature":      "40",
+            "temperature":                      "230",
+            "first_layer_temperature":          "230",
+            "filament_temperature":             "230",
+            "filament_first_layer_temperature":  "230",
+            "bed_temperature":                  "60",
+            "first_layer_bed_temperature":      "60",
             # Standard cooling — fan on from layer 1.
             "disable_fan_first_layers":         "0",
             "full_fan_speed_layer":             "0",
