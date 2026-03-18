@@ -168,6 +168,16 @@ async def get_firmware(sid: str):
     return {"code": ino_path.read_text(encoding="utf-8")}
 
 
+@router.get("/sessions/{sid}/setup/sim-config")
+async def get_sim_config(sid: str):
+    """Return the simulation config for the device."""
+    sess = load_session_or_404(sid)
+    cfg_path = sess.path / "sim_config.json"
+    if not cfg_path.exists():
+        raise HTTPException(404, "No sim_config.json — run setup first")
+    return json.loads(cfg_path.read_text(encoding="utf-8"))
+
+
 @router.get("/sessions/{sid}/setup/conversation")
 async def get_setup_conversation(sid: str):
     """Return the setup agent conversation history."""

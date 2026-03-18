@@ -77,6 +77,38 @@ def generate_sim_config(
             port = net_to_port.get(net["id"])
             inst_net_port.setdefault(iid, []).append((net["id"], port))
 
+    # Identify resistor instance IDs for indirect tracing
+    resistor_ids: set[str] = set()
+    for comp in components:
+        cid = comp.get("catalog_id", "").lower()
+        if "resistor" in cid:
+            resistor_ids.add(comp["instance_id"])
+
+    # Build net membership: net_id → set of instance_ids on that net
+    net_members: dict[str, set[str]] = {}
+    for net in nets:
+        members: set[str] = set()
+        for pin_ref in net.get("pins", []):
+            members.add(pin_ref.split(":")[0])
+        net_members[net["id"]] = members
+
+    def _resolve_port_through_resistor(iid: str) -> str | None:
+        """Trace through series resistors to find the MCU port driving a component.
+
+        If *iid* shares a net with a resistor, and that resistor is also on
+        another net that has an MCU port assignment, return that port name.
+        """
+        # Nets that `iid` participates in
+        my_nets = {nid for nid, _ in inst_net_port.get(iid, [])}
+
+        for net_id in my_nets:
+            for res_id in net_members.get(net_id, set()) & resistor_ids:
+                # Follow the resistor to its other nets
+                for other_net_id, other_port in inst_net_port.get(res_id, []):
+                    if other_net_id != net_id and other_port and other_port in _PORT_MAP:
+                        return other_port
+        return None
+
     peripherals: list[dict[str, Any]] = []
 
     for comp in components:
@@ -84,40 +116,49 @@ def generate_sim_config(
         cat_id = comp.get("catalog_id", "")
         role = _classify(cat_id, catalog_map.get(cat_id, {}), iid)
 
-        if role == "mcu":
-            continue  # MCU is the simulation target, not a peripheral
+        if role == "mcu" or role == "other":
+            continue
 
+        # Find the MCU port for this peripheral – direct or through a resistor
         entries = inst_net_port.get(iid, [])
-        for net_id, port_name in entries:
-            if not port_name or port_name not in _PORT_MAP:
-                continue
+        port_name: str | None = None
+        for _net_id, pn in entries:
+            if pn and pn in _PORT_MAP:
+                port_name = pn
+                break
 
-            port_letter, pin_num = _PORT_MAP[port_name]
+        if not port_name:
+            port_name = _resolve_port_through_resistor(iid)
 
-            if role == "button":
-                peripherals.append({
-                    "instance_id": iid,
-                    "type": "button",
-                    "port": port_letter,
-                    "pin": pin_num,
-                    "active_low": True,
-                })
-            elif role == "led":
-                peripherals.append({
-                    "instance_id": iid,
-                    "type": "led",
-                    "port": port_letter,
-                    "pin": pin_num,
-                    "pwm": ATMEGA_TO_ARDUINO.get(port_name, -1) in {3, 5, 6, 9, 10, 11},
-                })
-            elif role == "ir_led":
-                peripherals.append({
-                    "instance_id": iid,
-                    "type": "ir_output",
-                    "port": port_letter,
-                    "pin": pin_num,
-                    "carrier_freq": 38000,
-                })
+        if not port_name or port_name not in _PORT_MAP:
+            continue
+
+        port_letter, pin_num = _PORT_MAP[port_name]
+
+        if role == "button":
+            peripherals.append({
+                "instance_id": iid,
+                "type": "button",
+                "port": port_letter,
+                "pin": pin_num,
+                "active_low": True,
+            })
+        elif role == "led":
+            peripherals.append({
+                "instance_id": iid,
+                "type": "led",
+                "port": port_letter,
+                "pin": pin_num,
+                "pwm": ATMEGA_TO_ARDUINO.get(port_name, -1) in {3, 5, 6, 9, 10, 11},
+            })
+        elif role == "ir_led":
+            peripherals.append({
+                "instance_id": iid,
+                "type": "ir_output",
+                "port": port_letter,
+                "pin": pin_num,
+                "carrier_freq": 38000,
+            })
 
     return {
         "mcu": "atmega328p",
