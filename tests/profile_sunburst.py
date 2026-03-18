@@ -579,7 +579,7 @@ def run_profiled_route():
                             best_score = after
                             stall = 0
                             pin_shift_tried = False
-                            print(f"  Iter {iteration+1}: improved {before} → {after}")
+                            print(f"  Iter {iteration+1}: improved {before} -> {after}")
                             if solution.is_perfect():
                                 print("  Perfect solution found!")
                                 break
