@@ -48,7 +48,7 @@ def run_gcode_pipeline(
     layer_height: float = 0.2,
     slicer_profile: Path | None = None,
     printer: str | None = None,
-    filament: str | None = None,
+    filament: str = "",
     silverink_only: bool = False,
 ) -> GcodePipelineResult:
     """Run the full G-code pipeline: slice → inject pauses → output.

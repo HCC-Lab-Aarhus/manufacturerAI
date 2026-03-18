@@ -126,19 +126,21 @@ FILAMENTS: dict[str, FilamentDef] = {
     ),
 }
 
-DEFAULT_FILAMENT = "overture_rockpla"
 
+def get_filament(filament_id: str) -> FilamentDef:
+    """Return the *FilamentDef* for *filament_id*.
 
-def get_filament(filament_id: str | None = None) -> FilamentDef:
-    """Return the *FilamentDef* for *filament_id* (falls back to default)."""
-    fid = (filament_id or DEFAULT_FILAMENT).lower().strip()
+    Raises ``ValueError`` if *filament_id* is empty or unknown.
+    """
+    if not filament_id:
+        raise ValueError("filament_id is required")
+    fid = filament_id.lower().strip()
     if fid not in FILAMENTS:
-        log.warning("Unknown filament '%s' — falling back to %s", fid, DEFAULT_FILAMENT)
-        fid = DEFAULT_FILAMENT
+        raise ValueError(f"Unknown filament '{filament_id}' — available: {', '.join(FILAMENTS)}")
     return FILAMENTS[fid]
 
 
-def write_filament_overrides(filament_id: str | None, output_dir: Path) -> Path | None:
+def write_filament_overrides(filament_id: str, output_dir: Path) -> Path | None:
     """Write a temporary ``.ini`` with filament overrides.
 
     Returns the path to the override file, or *None* if no overrides
