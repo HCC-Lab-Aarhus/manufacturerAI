@@ -1127,11 +1127,6 @@ class Solution:
             start = (src_wx, src_wy)
             end = (snk_wx, snk_wy)
             v = 0 if self.jumper_checker.is_wire_clear(start, end) else 1
-            if v:
-                log.warning(
-                    "  %-20s full-span jumper crosses pin keepout",
-                    net_id,
-                )
             jumper = {
                 "net_id": net_id,
                 "start": start,
