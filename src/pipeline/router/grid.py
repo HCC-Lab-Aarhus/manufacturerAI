@@ -62,6 +62,8 @@ class RoutingGrid:
         # still *pass through* protected cells, but block_trace() will skip
         # them so nearby pads stay reachable.
         self._protected: set[tuple[int, int]] = set()
+        self._protected_flats: set[int] | None = None
+        self._clearance_offsets: list[int] | None = None
 
         # Trace ownership: flat index → net_id that placed the trace
         self._trace_owner: dict[int, str] = {}
@@ -203,14 +205,9 @@ class RoutingGrid:
                     self.block_cell(gx, gy)
 
     def protect_cell(self, gx: int, gy: int) -> None:
-        """Mark a cell as a protected pin pad position.
-
-        Protected cells are not blocked by block_trace(), ensuring
-        that pin pads remain reachable even when adjacent traces are
-        placed nearby.
-        """
         if self.in_bounds(gx, gy):
             self._protected.add((gx, gy))
+            self._protected_flats = None
 
     def block_raised_floor(self, outline, enclosure) -> int:
         """Permanently block cells where the floor is raised above the trace zone.
@@ -267,14 +264,7 @@ class RoutingGrid:
         *,
         net_id: str,
     ) -> None:
-        """Block cells along a trace path, including clearance radius.
-
-        Path cells are marked TRACE_PATH and recorded in ``_trace_owner``.
-        Clearance-zone cells are marked BLOCKED and recorded in
-        ``_clearance_owner`` so that ``free_trace`` can remove only the
-        requesting net's contribution without damaging other nets.
-        Protected pin-pad cells are skipped for clearance.
-        """
+        """Block cells along a trace path, including clearance radius."""
         if clearance_cells is None:
             clearance_cells = max(
                 1,
@@ -282,31 +272,76 @@ class RoutingGrid:
                     (self.trace_width_mm / 2 + self.trace_clearance_mm) / self.resolution
                 ))
             )
-        path_set = set(path)
-        protected = self._protected
         W = self.width
+        H = self.height
+        N = W * H
+        cells = self._cells
+        trace_owner = self._trace_owner
+        clearance_owner = self._clearance_owner
+        cl = clearance_cells
 
-        for gx, gy in path_set:
-            if self.in_bounds(gx, gy):
+        # Mark path cells as TRACE_PATH
+        path_flats: set[int] = set()
+        for gx, gy in path:
+            if 0 <= gx < W and 0 <= gy < H:
                 flat = gy * W + gx
-                v = self._cells[flat]
+                path_flats.add(flat)
+                v = cells[flat]
                 if v == FREE or v == BLOCKED:
-                    self._cells[flat] = TRACE_PATH
-                self._trace_owner[flat] = net_id
+                    cells[flat] = TRACE_PATH
+                trace_owner[flat] = net_id
 
-        for gx, gy in path_set:
-            for dy in range(-clearance_cells, clearance_cells + 1):
-                for dx in range(-clearance_cells, clearance_cells + 1):
-                    nx, ny = gx + dx, gy + dy
-                    if (nx, ny) in path_set or (nx, ny) in protected:
+        # Use cached clearance offsets and protected flats
+        if self._clearance_offsets is None or len(self._clearance_offsets) != (2*cl+1)**2 - 1:
+            offsets = []
+            for dy in range(-cl, cl + 1):
+                for dx in range(-cl, cl + 1):
+                    if dx == 0 and dy == 0:
                         continue
-                    if not self.in_bounds(nx, ny):
+                    offsets.append(dy * W + dx)
+            self._clearance_offsets = offsets
+        flat_offsets = self._clearance_offsets
+
+        if self._protected_flats is None:
+            self._protected_flats = {gy * W + gx for gx, gy in self._protected}
+        protected_flats = self._protected_flats
+
+        # Collect all unique clearance flat indices
+        # Interior path cells (far from border) skip bounds checks
+        clearance_flats: set[int] = set()
+        W_cl = W - cl
+        H_cl = H - cl
+        for gx, gy in path:
+            base = gy * W + gx
+            if cl <= gx < W_cl and cl <= gy < H_cl:
+                for off in flat_offsets:
+                    clearance_flats.add(base + off)
+            else:
+                for dy in range(-cl, cl + 1):
+                    ny = gy + dy
+                    if not (0 <= ny < H):
                         continue
-                    flat = ny * W + nx
-                    if self._cells[flat] == FREE:
-                        self._cells[flat] = BLOCKED
-                    if self._cells[flat] == BLOCKED:
-                        self._clearance_owner.setdefault(flat, set()).add(net_id)
+                    row = ny * W
+                    for dx in range(-cl, cl + 1):
+                        if dx == 0 and dy == 0:
+                            continue
+                        nx = gx + dx
+                        if 0 <= nx < W:
+                            clearance_flats.add(row + nx)
+
+        # Exclude path and protected cells
+        clearance_flats -= path_flats
+        clearance_flats -= protected_flats
+
+        for flat in clearance_flats:
+            if cells[flat] == FREE:
+                cells[flat] = BLOCKED
+            if cells[flat] == BLOCKED:
+                owners = clearance_owner.get(flat)
+                if owners is None:
+                    clearance_owner[flat] = {net_id}
+                else:
+                    owners.add(net_id)
 
     def free_trace(
         self,
@@ -315,13 +350,7 @@ class RoutingGrid:
         *,
         net_id: str,
     ) -> None:
-        """Free cells belonging to *net_id* along a trace path.
-
-        Path cells (TRACE_PATH) are freed unconditionally.
-        Clearance cells (BLOCKED) are freed only when no other net
-        still claims them, preventing collateral damage to neighbours.
-        Permanently-blocked cells are never touched.
-        """
+        """Free cells belonging to *net_id* along a trace path."""
         if clearance_cells is None:
             clearance_cells = max(
                 1,
@@ -330,31 +359,67 @@ class RoutingGrid:
                 ))
             )
         W = self.width
-        path_set = set(path)
+        H = self.height
+        cells = self._cells
+        trace_owner = self._trace_owner
+        clearance_owner = self._clearance_owner
+        cl = clearance_cells
 
-        for gx, gy in path_set:
-            if self.in_bounds(gx, gy):
+        # Free path cells
+        path_flats: set[int] = set()
+        for gx, gy in path:
+            if 0 <= gx < W and 0 <= gy < H:
                 flat = gy * W + gx
-                self._trace_owner.pop(flat, None)
-                if self._cells[flat] == TRACE_PATH:
-                    self._cells[flat] = FREE
+                path_flats.add(flat)
+                trace_owner.pop(flat, None)
+                if cells[flat] == TRACE_PATH:
+                    cells[flat] = FREE
 
-        for gx, gy in path_set:
-            for dy in range(-clearance_cells, clearance_cells + 1):
-                for dx in range(-clearance_cells, clearance_cells + 1):
-                    nx, ny = gx + dx, gy + dy
-                    if (nx, ny) in path_set or not self.in_bounds(nx, ny):
+        # Use cached clearance offsets
+        if self._clearance_offsets is None or len(self._clearance_offsets) != (2*cl+1)**2 - 1:
+            offsets = []
+            for dy in range(-cl, cl + 1):
+                for dx in range(-cl, cl + 1):
+                    if dx == 0 and dy == 0:
                         continue
-                    flat = ny * W + nx
-                    if self._cells[flat] != BLOCKED:
+                    offsets.append(dy * W + dx)
+            self._clearance_offsets = offsets
+        flat_offsets = self._clearance_offsets
+
+        # Collect unique clearance flat indices
+        clearance_flats: set[int] = set()
+        W_cl = W - cl
+        H_cl = H - cl
+        for gx, gy in path:
+            base = gy * W + gx
+            if cl <= gx < W_cl and cl <= gy < H_cl:
+                for off in flat_offsets:
+                    clearance_flats.add(base + off)
+            else:
+                for dy in range(-cl, cl + 1):
+                    ny = gy + dy
+                    if not (0 <= ny < H):
                         continue
-                    owners = self._clearance_owner.get(flat)
-                    if owners is None:
-                        self._cells[flat] = FREE
-                        continue
-                    owners.discard(net_id)
-                    if not owners:
-                        del self._clearance_owner[flat]
-                        self._cells[flat] = FREE
+                    row = ny * W
+                    for dx in range(-cl, cl + 1):
+                        if dx == 0 and dy == 0:
+                            continue
+                        nx = gx + dx
+                        if 0 <= nx < W:
+                            clearance_flats.add(row + nx)
+
+        clearance_flats -= path_flats
+
+        for flat in clearance_flats:
+            if cells[flat] != BLOCKED:
+                continue
+            owners = clearance_owner.get(flat)
+            if owners is None:
+                cells[flat] = FREE
+                continue
+            owners.discard(net_id)
+            if not owners:
+                del clearance_owner[flat]
+                cells[flat] = FREE
 
 
