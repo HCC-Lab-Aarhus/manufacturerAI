@@ -110,9 +110,10 @@ class Session:
             "compile": (self.path / "enclosure.stl").exists(),
             "gcode": self.has_artifact("enclosure.gcode"),
             "firmware": self.has_artifact("firmware.ino"),
+            "setup": self.pipeline_state.get("setup") in ("complete", "compile_failed"),
         }
 
-    _PIPELINE_ORDER: ClassVar[list[str]] = ["design", "circuit", "placement", "routing", "scad", "gcode", "firmware"]
+    _PIPELINE_ORDER: ClassVar[list[str]] = ["design", "circuit", "placement", "routing", "scad", "gcode", "firmware", "setup"]
     _STAGE_ARTIFACTS: ClassVar[dict[str, list[str]]] = {
         "design": ["design.json", "design_conversation.json"],
         "circuit": ["circuit.json", "circuit_conversation.json"],
@@ -121,6 +122,7 @@ class Session:
         "scad": ["enclosure.scad", "enclosure.stl"],
         "gcode": ["enclosure.gcode"],
         "firmware": ["firmware.ino"],
+        "setup": ["firmware.ino", "setup_conversation.json"],
     }
 
     def invalidate_downstream(self, current_step: str) -> list[str]:

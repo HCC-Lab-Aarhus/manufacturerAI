@@ -381,3 +381,30 @@ CIRCUIT_TOOLS: list[dict[str, Any]] = [
         },
     },
 ]
+
+
+# ── Setup (firmware) agent tools ──────────────────────────────────
+
+SETUP_TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "submit_firmware",
+        "description": (
+            "Submit a complete Arduino sketch (.ino) for the device. "
+            "The code will be compiled with arduino-cli. If compilation "
+            "fails, you'll receive the compiler errors — fix and resubmit."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": (
+                        "The complete Arduino .ino file contents. Must be a "
+                        "single self-contained sketch with setup() and loop()."
+                    ),
+                },
+            },
+            "required": ["code"],
+        },
+    },
+]
