@@ -85,40 +85,30 @@
                 "label": "V+ dome contact window",
                 "position_mm": [6.25, 25.0],
                 "width_mm": 7.5,
-                "length_mm": 7.5,
-                "depth_mm": 12.1,
+                "length_mm": 4.0,
+                "depth_mm": 8.0,
                 "z_anchor": "cavity_start",
-                "description": "Window for 7.5mm dome contact on V+ plate to reach battery."
+                "description": "Window for 7.5mm dome on V+ plate. Reduced penetration (4mm) and height (8mm) — just enough for dome protrusion."
             },
             {
                 "shape": "rect",
                 "label": "GND dome contact window",
                 "position_mm": [-6.25, 25.0],
                 "width_mm": 7.5,
-                "length_mm": 7.5,
-                "depth_mm": 12.1,
+                "length_mm": 4.0,
+                "depth_mm": 8.0,
                 "z_anchor": "cavity_start",
-                "description": "Window for 7.5mm dome contact on GND plate to reach battery."
+                "description": "Window for 7.5mm dome on GND plate. Reduced penetration (4mm) and height (8mm) — just enough for dome protrusion."
             },
             {
                 "shape": "rect",
-                "label": "inter-cell dome contact window (+)",
-                "position_mm": [4.35, -25.0],
-                "width_mm": 7.5,
-                "length_mm": 7.5,
-                "depth_mm": 12.0,
+                "label": "inter-cell dome contact window",
+                "position_mm": [0, -25.0],
+                "width_mm": 21.6,
+                "length_mm": 4.0,
+                "depth_mm": 8.0,
                 "z_anchor": "cavity_start",
-                "description": "Window for first 7.5mm dome on wide plate. Dome center is 5.75mm from side wall (2mm clearance + 3.75mm radius). Domes are 8.7mm apart center-to-center with ~1.2mm cell divider between them."
-            },
-            {
-                "shape": "rect",
-                "label": "inter-cell dome contact window (-)",
-                "position_mm": [-4.35, -25.0],
-                "width_mm": 7.5,
-                "length_mm": 7.5,
-                "depth_mm": 12.0,
-                "z_anchor": "cavity_start",
-                "description": "Window for second 7.5mm dome on wide plate. Dome center is 5.75mm from side wall (2mm clearance + 3.75mm radius). Domes are 8.7mm apart center-to-center with ~1.2mm cell divider between them."
+                "description": "Single merged window for both 7.5mm domes on wide plate. 21.6mm wide to clear side-wall overhang and cell divider."
             },
             {
                 "shape": "rect",
