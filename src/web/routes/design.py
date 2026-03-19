@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from src.session import load_session
 from src.agent import (
     DesignAgent, DESIGN_TOOLS,
-    MODEL, THINKING_BUDGET, TOKEN_BUDGET,
+    MODEL, TOKEN_BUDGET,
     build_design_prompt, prune_messages,
 )
 from src.pipeline.design import parse_design, validate_design, parse_physical_design, validate_physical_design
@@ -340,7 +340,6 @@ def get_design_tokens(sid: str):
             messages=pruned,
             system=system,
             tools=DESIGN_TOOLS,
-            thinking={"type": "enabled", "budget_tokens": THINKING_BUDGET},
         )
         return {"input_tokens": result.input_tokens, "budget": TOKEN_BUDGET}
     except Exception:

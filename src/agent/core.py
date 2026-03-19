@@ -20,7 +20,7 @@ from src.pipeline.design import (
 from src.pipeline.circuit import validate_circuit
 from src.session import Session
 
-from .config import MODEL, MAX_TOKENS, THINKING_BUDGET, MAX_TURNS, TOKEN_BUDGET
+from .config import MODEL, MAX_TOKENS, MAX_TURNS, TOKEN_BUDGET
 from .tools import DESIGN_TOOLS, CIRCUIT_TOOLS, SETUP_TOOLS
 from .prompt import build_design_prompt, build_circuit_prompt, build_circuit_user_prompt, build_setup_prompt, catalog_summary
 from .messages import serialize_content, sanitize_messages, prune_messages
@@ -153,10 +153,6 @@ class _BaseAgent:
                     messages=api_messages,
                     system=system,
                     tools=tools,
-                    thinking={
-                        "type": "enabled",
-                        "budget_tokens": THINKING_BUDGET,
-                    },
                 )
                 yield AgentEvent("token_usage", {
                     "input_tokens": token_count.input_tokens,
