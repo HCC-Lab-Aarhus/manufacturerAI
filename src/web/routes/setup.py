@@ -6,13 +6,15 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 
 from src.agent import SetupAgent
 from src.catalog import _component_to_dict
 from src.pipeline.firmware.context_builder import build_firmware_context
 from src.pipeline.firmware.sim_config import generate_sim_config, write_sim_config
+from src.pipeline.firmware.simulation import get_or_create_simulation, stop_simulation
+from src.pipeline.firmware.arduino_cli import compile_sketch, find_arduino_cli
 from src.web.routes._deps import (
     get_catalog, load_session_or_404,
 )
@@ -28,7 +30,7 @@ def _build_catalog_map(catalog) -> dict[str, dict]:
     return {c.id: _component_to_dict(c) for c in catalog.components}
 
 
-async def _run_setup_background(sid: str, task: AgentTask):
+async def _run_setup_background(sid: str, prompt: str, task: AgentTask):
     """Run the setup agent in the background, accumulating events in *task*."""
     try:
         sess = load_session_or_404(sid)
@@ -53,12 +55,6 @@ async def _run_setup_background(sid: str, task: AgentTask):
             circuit=circuit, routing=routing, catalog_map=catalog_map,
         )
 
-        prompt = (
-            "Write the firmware for this device. Read the device context in your "
-            "system prompt carefully, then write a complete Arduino sketch that "
-            "implements the described behavior. Call submit_firmware when ready."
-        )
-
         async for event in agent.run(prompt, cancel_event=task.cancel_event):
             if event.type == "checkpoint":
                 task.last_save_cursor = len(task.events)
@@ -67,11 +63,11 @@ async def _run_setup_background(sid: str, task: AgentTask):
 
         # After agent finishes, generate sim_config if firmware compiled
         setup_state = sess.pipeline_state.get("setup")
-        if setup_state in ("complete", "compile_failed"):
+        if setup_state in ("complete", "compile_failed", "compile_skipped"):
             elf_path = sess.path / "firmware_build" / "firmware.ino.elf"
-            elf_str = str(elf_path) if elf_path.exists() else None
+            elf_rel = "firmware_build/firmware.ino.elf" if elf_path.exists() else None
             try:
-                sim_cfg = generate_sim_config(circuit, routing, catalog_map, elf_str)
+                sim_cfg = generate_sim_config(circuit, routing, catalog_map, elf_rel)
                 write_sim_config(sim_cfg, sess.path)
                 task.append_event("sim_config", {"ready": True})
             except Exception as e:
@@ -112,12 +108,44 @@ async def run_setup(sid: str, request: Request):
     if existing and existing.status == "running":
         raise HTTPException(409, "Setup agent is already running")
 
+    body: dict = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    feedback = body.get("feedback")
+    outline = body.get("outline")
+
+    if feedback:
+        prompt = (
+            "The user has feedback on the generated firmware:\n\n"
+            f"{feedback}\n\n"
+            "Please address the feedback and resubmit the firmware."
+        )
+    elif outline:
+        prompt = outline
+    else:
+        prompt = (
+            "Write the firmware for this device. Read the device context in your "
+            "system prompt carefully, then write a complete Arduino sketch that "
+            "implements the described behavior. Call submit_firmware when ready."
+        )
+
     task = AgentTask()
     set_agent_task(sid, "setup", task)
     task.asyncio_task = asyncio.create_task(
-        _run_setup_background(sid, task)
+        _run_setup_background(sid, prompt, task)
     )
     return {"status": "running"}
+
+
+@router.post("/sessions/{sid}/setup/stop")
+async def stop_setup(sid: str):
+    """Cancel the running setup agent."""
+    task = get_agent_task(sid, "setup")
+    if task and task.status == "running":
+        task.cancel()
+    return {"status": "stopped"}
 
 
 @router.get("/sessions/{sid}/setup/stream")
@@ -171,6 +199,57 @@ async def get_firmware(sid: str):
     return {"code": ino_path.read_text(encoding="utf-8")}
 
 
+@router.post("/sessions/{sid}/setup/recompile")
+async def recompile_firmware(sid: str):
+    """Recompile existing firmware.ino and regenerate sim_config."""
+    sess = load_session_or_404(sid)
+    ino_path = sess.path / "firmware.ino"
+    if not ino_path.exists():
+        raise HTTPException(400, "No firmware.ino — run the setup agent first")
+
+    if find_arduino_cli() is None:
+        raise HTTPException(
+            503,
+            "arduino-cli is not installed. "
+            "Install it and the arduino:avr core before recompiling.",
+        )
+
+    code = ino_path.read_text(encoding="utf-8")
+    result = compile_sketch(code, sess.path)
+
+    if not result.success:
+        sess.pipeline_state["setup"] = "compile_failed"
+        sess.save()
+        return {
+            "status": "compile_failed",
+            "stderr": result.stderr,
+            "stdout": result.stdout,
+        }
+
+    sess.pipeline_state["setup"] = "complete"
+    sess.save()
+
+    # Regenerate sim_config with the new ELF
+    circuit = sess.read_artifact("circuit.json")
+    routing = sess.read_artifact("routing.json")
+    if circuit and routing:
+        cat = get_catalog()
+        catalog_map = _build_catalog_map(cat)
+        elf_path = sess.path / "firmware_build" / "firmware.ino.elf"
+        elf_rel = "firmware_build/firmware.ino.elf" if elf_path.exists() else None
+        try:
+            sim_cfg = generate_sim_config(circuit, routing, catalog_map, elf_rel)
+            write_sim_config(sim_cfg, sess.path)
+        except Exception as e:
+            log.warning("sim_config generation failed: %s", e)
+
+    return {
+        "status": "complete",
+        "hex_path": str(result.hex_path) if result.hex_path else None,
+        "elf_path": str(result.elf_path) if result.elf_path else None,
+    }
+
+
 @router.get("/sessions/{sid}/setup/sim-config")
 async def get_sim_config(sid: str):
     """Return the simulation config for the device."""
@@ -187,3 +266,79 @@ async def get_setup_conversation(sid: str):
     sess = load_session_or_404(sid)
     data = sess.read_artifact("setup_conversation.json")
     return data if isinstance(data, list) else []
+
+
+@router.websocket("/sessions/{sid}/setup/simulate")
+async def simulate_ws(websocket: WebSocket, sid: str):
+    """WebSocket bridge to the simavr harness for real-time simulation."""
+    await websocket.accept()
+
+    sess = load_session_or_404(sid)
+    queue: asyncio.Queue[dict] = asyncio.Queue()
+
+    def on_event(event: dict) -> None:
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            pass
+
+    try:
+        mgr = await get_or_create_simulation(sess.path, sid)
+        mgr.add_listener(on_event)
+
+        if mgr.booted:
+            await websocket.send_json({"event": "boot_ok"})
+
+        # Send current state snapshot
+        for iid, st in mgr.state.items():
+            await websocket.send_json({
+                "event": "pin_change",
+                "instance_id": iid,
+                "on": st.get("on", False),
+            })
+
+        async def _forward_events() -> None:
+            while True:
+                event = await queue.get()
+                await websocket.send_json(event)
+
+        forward_task = asyncio.create_task(_forward_events())
+
+        try:
+            while True:
+                data = await websocket.receive_json()
+                cmd = data.get("cmd")
+                iid = data.get("instance_id", "")
+                if cmd == "press":
+                    await mgr.press(iid)
+                elif cmd == "release":
+                    await mgr.release(iid)
+                elif cmd == "stop":
+                    await mgr.stop()
+                    await websocket.send_json({"event": "stopped"})
+                elif cmd == "start":
+                    try:
+                        await mgr.start()
+                    except Exception as exc:
+                        await websocket.send_json({"event": "error", "message": str(exc)})
+                elif cmd == "restart":
+                    try:
+                        await mgr.restart()
+                    except Exception as exc:
+                        await websocket.send_json({"event": "error", "message": str(exc)})
+        except WebSocketDisconnect:
+            pass
+        finally:
+            forward_task.cancel()
+            mgr.remove_listener(on_event)
+            await stop_simulation(sid)
+
+    except (FileNotFoundError, ValueError, TimeoutError, RuntimeError) as exc:
+        try:
+            await websocket.send_json({"event": "error", "message": str(exc)})
+            await websocket.close()
+        except (WebSocketDisconnect, Exception):
+            pass
+        await stop_simulation(sid)
+    except WebSocketDisconnect:
+        await stop_simulation(sid)

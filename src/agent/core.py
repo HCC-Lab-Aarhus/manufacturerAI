@@ -475,13 +475,12 @@ class SetupAgent(_BaseAgent):
         from src.pipeline.firmware.arduino_cli import compile_sketch, find_arduino_cli
 
         if find_arduino_cli() is None:
-            # No arduino-cli available — save the code but skip compilation
-            self.session.pipeline_state["setup"] = "complete"
+            self.session.pipeline_state["setup"] = "compile_skipped"
             self.session.save()
             return (
                 "Firmware saved to firmware.ino. "
-                "Note: arduino-cli is not installed, so the sketch was not compiled. "
-                "Install arduino-cli to enable compilation verification.",
+                "Error: arduino-cli is not installed, so the sketch could not be compiled. "
+                "Install arduino-cli and the arduino:avr core, then recompile from the UI.",
                 True,
             )
 

@@ -30,7 +30,7 @@ def generate_sim_config(
     circuit: dict[str, Any],
     routing: dict[str, Any],
     catalog_map: dict[str, dict[str, Any]],
-    elf_path: str = "firmware_build/firmware.ino.elf",
+    elf_path: str | None = "firmware_build/firmware.ino.elf",
 ) -> dict[str, Any]:
     """Build a sim_config.json dict from pipeline artifacts.
 
