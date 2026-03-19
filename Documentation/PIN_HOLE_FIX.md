@@ -88,27 +88,35 @@ Resulting shaft sizes:
 
 **This is the key usability improvement.** The current pinhole has just two layers: a tight shaft and a single wider rectangle on top. That creates a hard ledge where pins catch. Instead, replace it with a **graduated multi-step funnel** — a staircase of progressively wider rectangles that approximates a smooth cone.
 
-#### Current (2 layers — abrupt step):
+#### Current (2 layers — abrupt step near ceiling):
 ```
-  ┌──────────┐  taper (1 layer, 0.5 mm)
-  │          │
-  └──┬────┬──┘  ← hard ledge — pins catch here
-     │    │     shaft (many layers)
+z=14.5 (ceiling)
+  ┌──────────┐  taper — way up near ceiling, useless
+  └──┬────┬──┘
+     │    │     shaft (12+ mm of open cavity — pocket already cut)
      │    │
-     └────┘
+z=3  │    │     ← CAVITY_START — pin enters solid floor here!
+     │    │     (no funnel at this critical transition)
+z=2  └────┘     ← FLOOR — trace layer
 ```
 
-#### Proposed (6 layers — smooth funnel):
+The funnel was at the ceiling (~z=14.5), but the pin enters solid material at z=3.0 (CAVITY_START_MM). The 11+ mm of cavity above is open pocket space — a funnel there does nothing.
+
+#### Proposed (funnel at CAVITY_START — where pin enters solid floor):
 ```
-  ┌──────────────┐  step 6 — widest (mouth)
-  └─┬──────────┬─┘  step 5
-    └─┬──────┬─┘    step 4
-      └─┬──┬─┘     step 3
-        │  │        step 2
-        │  │        step 1 — shaft width
-        │  │        shaft (constant width)
-        └──┘
+z=14.5 (ceiling)
+        │  │     shaft-width extension (open cavity, redundant with pocket)
+        │  │
+z=3.0   │  │     ← CAVITY_START — pin enters here
+  ┌─────┘  └─────┐  step 5 — widest (cavity entrance)
+  └──┬────────┬──┘  step 4
+     └──┬──┬──┘    step 3
+        │  │       step 2
+        │  │       step 1 — narrowest (trace contact)
+z=2.0   └──┘       ← FLOOR — trace layer / ink
 ```
+
+The funnel spans the 1.0 mm solid floor zone (z=2.0 to z=3.0). Wide at z=3.0 where the pin enters from the component pocket, narrow at z=2.0 for snug ink-trace contact.
 
 #### Implementation approach
 
@@ -116,48 +124,58 @@ Replace the current 2-fragment pinhole (shaft + taper) with a multi-fragment sta
 
 - **New constant:** `PINHOLE_TAPER_STEPS = 5` — number of graduated steps in the funnel zone
 - **Keep:** `PINHOLE_TAPER_EXTRA = 1.0 mm` — total extra width per side at the mouth (same as before)
-- **Keep:** `PINHOLE_TAPER_DEPTH = 1.5 mm` — total height of the funnel zone
+- **Note:** `PINHOLE_TAPER_DEPTH` is no longer used directly — the funnel spans the actual solid floor zone: FLOOR_MM (z=2.0) to CAVITY_START_MM (z=3.0) = **1.0 mm**.
 
-Each step `i` (0 to STEPS-1, bottom to top) gets:
-- Width per side = `shaft_size + TAPER_EXTRA × (i + 1) / STEPS`
-- Height = `TAPER_DEPTH / STEPS` (= 0.3 mm per step, ~1.5 print layers each)
-- Z base = `taper_z + i × step_height`
+Each step `i` (0 to STEPS-1, bottom to top of funnel) gets:
+- Width per side = `shaft_size + TAPER_EXTRA × (i+1)/STEPS` — narrowest at bottom, widest at top
+- Height = `actual_taper / STEPS` (= 0.2 mm per step at 1.0 mm zone, ~1 print layer each)
+- Z base = `FLOOR_MM + i × step_height`
 
-For a DIP pin (shaft = 1.5 mm), the 5 funnel steps would be:
+For a DIP pin (shaft = 1.5 mm), the 5 funnel steps through the solid floor zone:
 
-| Step | Width per side | Total opening | After shrinkage |
-|---|---|---|---|
-| Shaft | +0.0 mm | 1.5 mm | ~1.1 mm |
-| Step 1 | +0.2 mm | 1.9 mm | ~1.5 mm |
-| Step 2 | +0.4 mm | 2.3 mm | ~1.9 mm |
-| Step 3 | +0.6 mm | 2.7 mm | ~2.3 mm |
-| Step 4 | +0.8 mm | 3.1 mm | ~2.7 mm |
-| Step 5 (mouth) | +1.0 mm | 3.5 mm | ~3.1 mm |
+| Step | Extra per side | Total opening | After shrinkage | Z range |
+|---|---|---|---|---|
+| Step 1 (bottom) | +0.2 mm | 1.9 mm | ~1.5 mm | z=2.0–2.2 (trace layer) |
+| Step 2 | +0.4 mm | 2.3 mm | ~1.9 mm | z=2.2–2.4 |
+| Step 3 | +0.6 mm | 2.7 mm | ~2.3 mm | z=2.4–2.6 |
+| Step 4 | +0.8 mm | 3.1 mm | ~2.7 mm | z=2.6–2.8 |
+| Step 5 (top) | +1.0 mm | 3.5 mm | ~3.1 mm | z=2.8–3.0 (cavity entrance) |
+| Extension | +0.0 mm | 1.5 mm | ~1.1 mm | z=3.0–ceil (open cavity) |
 
-The pin just needs to hit the ~3 mm mouth and gravity + finger pressure slides it through the graduating steps into the shaft.
+You drop the pins into the pocket, they hit the ~3 mm wide funnel mouth at the cavity floor, and slide through the 1 mm graduated zone to the trace layer.
 
 #### Code change in `_pinhole_fragments()`
 
 The change is in `src/pipeline/scad/resolver.py`, method `_pinhole_fragments()`. Instead of emitting 2 fragments (shaft + taper), emit 1 shaft + N step fragments:
 
 ```python
-# Current: 2 fragments
-frags.append(shaft)   # floor → taper_z
-frags.append(taper)   # taper_z → z_top
+# Funnel spans the solid floor zone (FLOOR_MM → CAVITY_START_MM)
+funnel_top = CAVITY_START_MM          # z=3.0
+funnel_bottom = FLOOR_MM              # z=2.0
+actual_taper = funnel_top - funnel_bottom  # 1.0 mm
+step_h = actual_taper / PINHOLE_TAPER_STEPS
 
-# New: 1 shaft + N graduated steps
-frags.append(shaft)   # floor → taper_z
-step_h = PINHOLE_TAPER_DEPTH / PINHOLE_TAPER_STEPS
+# Graduated funnel: narrowest at bottom (trace layer),
+# widest at top (cavity entrance)
 for i in range(PINHOLE_TAPER_STEPS):
     frac = (i + 1) / PINHOLE_TAPER_STEPS
     extra = PINHOLE_TAPER_EXTRA * frac
-    step_geom = RectGeometry(px, py, pin_d + extra, pin_d + extra)
     frags.append(ScadFragment(
         type="cutout",
-        geometry=step_geom,
-        z_base=taper_z + i * step_h,
+        geometry=RectGeometry(px, py, pin_d + extra, pin_d + extra),
+        z_base=funnel_bottom + i * step_h,
         depth=step_h,
         label=f"pin funnel {self.cid}:{pin.id} step {i}",
+    ))
+
+# Shaft-width extension through the open cavity above
+if z_top > funnel_top:
+    frags.append(ScadFragment(
+        type="cutout",
+        geometry=RectGeometry(px, py, pin_d, pin_d),
+        z_base=funnel_top,
+        depth=z_top - funnel_top,
+        label=f"pin {self.cid}:{pin.id}",
     ))
 ```
 
