@@ -122,7 +122,7 @@ class _BaseAgent:
                 ) as stream:
                     async for event in stream:
                         if cancel_event and cancel_event.is_set():
-                            stream.close()
+                            await stream.close()
                             self._save_conversation()
                             yield AgentEvent("error", {"message": "Cancelled"})
                             return
