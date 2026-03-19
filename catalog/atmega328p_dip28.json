@@ -28,11 +28,11 @@
             "direction": "in",
             "voltage_v": 5.0,
             "current_max_ma": 1,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Reset pin (active low). Directly connect to VCC through 10k\u00ce\u00a9 pull-up for normal operation.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -46,11 +46,11 @@
             "direction": "bidirectional",
             "voltage_v": 5.0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Digital pin 0. Also UART receive (RXD). Avoid if UART not needed.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -64,11 +64,11 @@
             "direction": "bidirectional",
             "voltage_v": 5.0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Digital pin 1. Also UART transmit (TXD). Avoid if UART not needed.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -82,11 +82,11 @@
             "direction": "bidirectional",
             "voltage_v": 5.0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Digital pin 2. External interrupt 0. Good for buttons needing instant response.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -100,11 +100,11 @@
             "direction": "bidirectional",
             "voltage_v": 5.0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Digital pin 3. PWM output (Timer2B). External interrupt 1. Use for PWM-driven loads (IR LED modulation, LED brightness).",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -118,11 +118,11 @@
             "direction": "bidirectional",
             "voltage_v": 5.0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Digital pin 4. Timer0 external clock input. General purpose I/O.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -136,11 +136,11 @@
             "direction": "in",
             "voltage_v": 5.0,
             "current_max_ma": 200,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Power supply pin. Connect to +3-5V.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -154,11 +154,11 @@
             "direction": "in",
             "voltage_v": 0,
             "current_max_ma": 200,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Ground pin. Connect to ground plane.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -172,11 +172,11 @@
             "direction": "in",
             "voltage_v": 5.0,
             "current_max_ma": 1,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Crystal oscillator pin 1. Leave unconnected if using internal 8MHz RC oscillator.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -190,11 +190,11 @@
             "direction": "out",
             "voltage_v": 5.0,
             "current_max_ma": 1,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Crystal oscillator pin 2. Leave unconnected if using internal 8MHz RC oscillator.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -208,11 +208,11 @@
             "direction": "bidirectional",
             "voltage_v": 5.0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Digital pin 5. PWM output (Timer0B). General purpose I/O.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -226,11 +226,11 @@
             "direction": "bidirectional",
             "voltage_v": 5.0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Digital pin 6. PWM output (Timer0A). General purpose I/O.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -244,11 +244,11 @@
             "direction": "bidirectional",
             "voltage_v": 5.0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Digital pin 7. General purpose I/O only, no special functions.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -262,11 +262,11 @@
             "direction": "bidirectional",
             "voltage_v": 5.0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Digital pin 8. Input capture for Timer1. General purpose I/O.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -280,11 +280,11 @@
             "direction": "bidirectional",
             "voltage_v": 5.0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Digital pin 9. PWM output (Timer1A). 16-bit timer \u00e2\u20ac\u201d good for servo or precise timing.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -298,11 +298,11 @@
             "direction": "bidirectional",
             "voltage_v": 5.0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Digital pin 10. PWM output (Timer1B). SPI slave select. General purpose I/O.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -316,11 +316,11 @@
             "direction": "bidirectional",
             "voltage_v": 5.0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Digital pin 11. PWM (Timer2A). SPI MOSI. Used for ISP programming.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -334,11 +334,11 @@
             "direction": "bidirectional",
             "voltage_v": 5.0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Digital pin 12. SPI MISO. General purpose I/O.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -352,11 +352,11 @@
             "direction": "bidirectional",
             "voltage_v": 5.0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Digital pin 13. SPI clock. Built-in LED on Arduino boards.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -370,11 +370,11 @@
             "direction": "in",
             "voltage_v": 5.0,
             "current_max_ma": 200,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Analog power supply. Connect to VCC (tie together with VCC pin).",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -388,11 +388,11 @@
             "direction": "in",
             "voltage_v": 5.0,
             "current_max_ma": 1,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Analog reference voltage. Leave unconnected for default internal reference.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -406,11 +406,11 @@
             "direction": "in",
             "voltage_v": 0,
             "current_max_ma": 200,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Ground pin. Connect to ground plane.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -424,11 +424,11 @@
             "direction": "bidirectional",
             "voltage_v": 5.0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Analog pin A0. 10-bit ADC input. Also usable as digital I/O.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -442,11 +442,11 @@
             "direction": "bidirectional",
             "voltage_v": 5.0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Analog pin A1. 10-bit ADC input. Also usable as digital I/O.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -460,11 +460,11 @@
             "direction": "bidirectional",
             "voltage_v": 5.0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Analog pin A2. 10-bit ADC input. Also usable as digital I/O.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -478,11 +478,11 @@
             "direction": "bidirectional",
             "voltage_v": 5.0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Analog pin A3. 10-bit ADC input. Also usable as digital I/O.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -496,11 +496,11 @@
             "direction": "bidirectional",
             "voltage_v": 5.0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Analog pin A4. I2C data line (SDA). Use for I2C peripherals (screens, sensors).",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         },
@@ -514,11 +514,11 @@
             "direction": "bidirectional",
             "voltage_v": 5.0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Analog pin A5. I2C clock line (SCL). Use for I2C peripherals.",
             "shape": {
                 "type": "rect",
-                "width_mm": 0.5,
+                "width_mm": 0.6,
                 "length_mm": 0.3
             }
         }

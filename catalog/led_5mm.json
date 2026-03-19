@@ -28,7 +28,7 @@
             "direction": "in",
             "voltage_v": null,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Positive terminal. Connect through current-limiting resistor to V+."
         },
         {
@@ -41,7 +41,7 @@
             "direction": "in",
             "voltage_v": 0,
             "current_max_ma": 20,
-            "hole_diameter_mm": 0.5,
+            "hole_diameter_mm": 0.6,
             "description": "Negative terminal. Connect to ground."
         }
     ],

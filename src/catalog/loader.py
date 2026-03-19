@@ -153,7 +153,7 @@ def _parse_pin(data: dict) -> Pin:
         direction=data["direction"],
         voltage_v=data.get("voltage_v"),
         current_max_ma=data.get("current_max_ma"),
-        hole_diameter_mm=data.get("hole_diameter_mm", 0.8),
+        hole_diameter_mm=data.get("hole_diameter_mm", 1.0),
         description=data.get("description", ""),
         shape=shape,
     )

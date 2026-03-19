@@ -47,9 +47,9 @@ SURFACE_OVERSHOOT: float = 1.0  # extra depth so surface holes cleanly exit
 
 # ── Pinhole geometry ───────────────────────────────────────────────
 
-PINHOLE_CLEARANCE: float = 0.15   # added to catalog hole_diameter_mm
-PINHOLE_TAPER_D: float = 1.4      # wide entry funnel side length (mm)
-PINHOLE_TAPER_DEPTH: float = 0.5  # taper zone height
+PINHOLE_CLEARANCE: float = 1.0    # added to catalog hole_diameter_mm
+PINHOLE_TAPER_D: float = 3.5       # wide entry funnel mouth side length (mm)
+PINHOLE_TAPER_DEPTH: float = 1.5   # taper zone height
 
 # ── Trace / component dimensions  ──────────────────────────────────
 

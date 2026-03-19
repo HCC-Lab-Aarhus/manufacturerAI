@@ -21,10 +21,11 @@ from .fragment import (
 )
 
 SURFACE_OVERSHOOT: float = 1.0
-PINHOLE_CLEARANCE: float = 0.3
-PINHOLE_TAPER_EXTRA: float = 0.4   # extra width on each side for the funnel entry
-PINHOLE_TAPER_DEPTH: float = 0.5   # height of the funnel zone (mm)
-PIN_BRIDGE_WIDTH: float = 1.2
+PINHOLE_CLEARANCE: float = 1.0
+PINHOLE_TAPER_EXTRA: float = 1.0   # extra width on each side for the funnel mouth
+PINHOLE_TAPER_DEPTH: float = 1.5   # total height of the graduated funnel zone (mm)
+PINHOLE_TAPER_STEPS: int = 5       # number of graduated steps in the funnel
+PIN_BRIDGE_WIDTH: float = 1.6
 HATCH_LEDGE_WIDTH: float = 2.5
 
 
@@ -262,16 +263,19 @@ class ComponentResolver:
     # ── Pinholes ───────────────────────────────────────────────────
 
     def _pinhole_fragments(self) -> list[ScadFragment]:
-        """Pin shafts with funnel entry for every pin.
+        """Pin shafts with graduated funnel entry for every pin.
 
-        Each pinhole is a two-layer column:
-          - Shaft  (FLOOR_MM → taper_z): tight fit for press-fit contact.
-          - Taper  (taper_z → z_top):    wider funnel for guided insertion.
+        Each pinhole is a multi-layer column:
+          - Shaft  (FLOOR_MM → taper_z): constant-width channel.
+          - Funnel (taper_z → z_top):    graduated staircase of
+            progressively wider rectangles that approximate a cone,
+            guiding pin insertion.
         """
         frags: list[ScadFragment] = []
         z_top = self._component_z_top()
         taper_z = z_top - PINHOLE_TAPER_DEPTH
         shaft_h = max(taper_z - FLOOR_MM, 0.1)
+        step_h = PINHOLE_TAPER_DEPTH / PINHOLE_TAPER_STEPS
 
         for pin in self.catalog.pins:
             pos = self.placed.pin_positions.get(pin.id)
@@ -287,39 +291,36 @@ class ComponentResolver:
             pin_d = pin.hole_diameter_mm + PINHOLE_CLEARANCE
 
             if pin.shape and pin.shape.type in ("rect", "slot"):
-                w = (pin.shape.width_mm or pin_d) + PINHOLE_CLEARANCE
-                h = (pin.shape.length_mm or pin_d) + PINHOLE_CLEARANCE
-                shaft_geom = RectGeometry(px, py, w, h)
-                taper_geom = RectGeometry(
-                    px, py,
-                    w + PINHOLE_TAPER_EXTRA,
-                    h + PINHOLE_TAPER_EXTRA,
-                )
+                shaft_w = (pin.shape.width_mm or pin_d) + PINHOLE_CLEARANCE
+                shaft_h_dim = (pin.shape.length_mm or pin_d) + PINHOLE_CLEARANCE
             else:
-                shaft_geom = RectGeometry(px, py, pin_d, pin_d)
-                taper_geom = RectGeometry(
-                    px, py,
-                    pin_d + PINHOLE_TAPER_EXTRA,
-                    pin_d + PINHOLE_TAPER_EXTRA,
-                )
+                shaft_w = pin_d
+                shaft_h_dim = pin_d
 
-            # Tight shaft
+            # Constant-width shaft
             frags.append(ScadFragment(
                 type="cutout",
-                geometry=shaft_geom,
+                geometry=RectGeometry(px, py, shaft_w, shaft_h_dim),
                 z_base=FLOOR_MM,
                 depth=shaft_h,
                 label=f"pin {self.cid}:{pin.id}",
             ))
 
-            # Wider funnel entry
-            frags.append(ScadFragment(
-                type="cutout",
-                geometry=taper_geom,
-                z_base=taper_z,
-                depth=PINHOLE_TAPER_DEPTH,
-                label=f"pin taper {self.cid}:{pin.id}",
-            ))
+            # Graduated funnel steps
+            for i in range(PINHOLE_TAPER_STEPS):
+                frac = (i + 1) / PINHOLE_TAPER_STEPS
+                extra = PINHOLE_TAPER_EXTRA * frac
+                frags.append(ScadFragment(
+                    type="cutout",
+                    geometry=RectGeometry(
+                        px, py,
+                        shaft_w + extra,
+                        shaft_h_dim + extra,
+                    ),
+                    z_base=taper_z + i * step_h,
+                    depth=step_h,
+                    label=f"pin funnel {self.cid}:{pin.id} step {i}",
+                ))
 
         return frags
 

@@ -28,7 +28,7 @@ from src.pipeline.gcode.filaments import get_filament, FilamentDef
 from src.pipeline.manifest import generate_manifest
 from src.pipeline.scad.traces import TRACE_WIDTH as SCAD_TRACE_WIDTH
 
-PINHOLE_TAPER_D: float = 1.4
+PINHOLE_TAPER_D: float = 3.5
 
 router = APIRouter(prefix="/debug", tags=["debug"])
 
