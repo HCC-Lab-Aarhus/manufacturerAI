@@ -13,10 +13,11 @@ import anthropic
 from src.catalog import CatalogResult, _component_to_dict
 from src.pipeline.config import get_printer
 from src.pipeline.design import (
-    parse_design, validate_design, design_to_dict,
+    validate_design,
     parse_physical_design, validate_physical_design,
     parse_circuit, build_design_spec,
 )
+from src.pipeline.design.shape2d import validate_shape, tessellate_shape
 from src.pipeline.circuit import validate_circuit
 from src.session import Session
 
@@ -308,6 +309,12 @@ class DesignAgent(_BaseAgent):
 
     def _tool_submit_design(self, input_data: dict) -> tuple[str, bool]:
         """Validate and save a physical design (no components/nets)."""
+        if "shape" in input_data:
+            shape_errors = validate_shape(input_data["shape"])
+            if shape_errors:
+                error_list = "\n".join(f"  - {e}" for e in shape_errors)
+                return f"Shape validation failed:\n{error_list}", False
+
         try:
             physical = parse_physical_design(input_data)
         except (KeyError, TypeError, ValueError, IndexError) as e:
@@ -319,8 +326,12 @@ class DesignAgent(_BaseAgent):
             error_list = "\n".join(f"  - {e}" for e in errors)
             return f"Design validation failed:\n{error_list}", False
 
-        self._last_invalidated = self.session.invalidate_design_smart(input_data)
-        self.session.write_artifact("design.json", input_data)
+        save_data = dict(input_data)
+        if "shape" in input_data:
+            save_data["outline"] = [v.to_dict() for v in physical.outline.points]
+
+        self._last_invalidated = self.session.invalidate_design_smart(save_data)
+        self.session.write_artifact("design.json", save_data)
         self.session.pipeline_state["design"] = "complete"
         self.session.save()
 
@@ -339,8 +350,8 @@ class DesignAgent(_BaseAgent):
 
         if "device_description" in input_data:
             merged["device_description"] = input_data["device_description"]
-        if "outline" in input_data:
-            merged["outline"] = input_data["outline"]
+        if "shape" in input_data:
+            merged["shape"] = input_data["shape"]
         if "enclosure" in input_data:
             merged["enclosure"] = input_data["enclosure"]
 
@@ -364,6 +375,12 @@ class DesignAgent(_BaseAgent):
                     existing_placements[iid] = p
             merged["ui_placements"] = list(existing_placements.values())
 
+        if "shape" in merged:
+            shape_errors = validate_shape(merged["shape"])
+            if shape_errors:
+                error_list = "\n".join(f"  - {e}" for e in shape_errors)
+                return f"Shape validation failed:\n{error_list}", False
+
         try:
             physical = parse_physical_design(merged)
         except (KeyError, TypeError, ValueError, IndexError) as e:
@@ -374,6 +391,9 @@ class DesignAgent(_BaseAgent):
         if errors:
             error_list = "\n".join(f"  - {e}" for e in errors)
             return f"Design validation failed:\n{error_list}", False
+
+        if "shape" in merged:
+            merged["outline"] = [v.to_dict() for v in physical.outline.points]
 
         self._last_invalidated = self.session.invalidate_design_smart(merged)
         self.session.write_artifact("design.json", merged)

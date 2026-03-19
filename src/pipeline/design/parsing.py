@@ -7,19 +7,21 @@ from .models import (
     Enclosure, TopSurface, BottomSurface, EdgeProfile,
     PhysicalDesign, CircuitDesign,
 )
+from .shape2d import tessellate_shape
 
 
 def parse_design(data: dict) -> DesignSpec:
     """Parse a raw dict (from JSON / tool input) into a full DesignSpec.
 
-    Expects a dict with both physical (outline/enclosure/ui_placements)
+    Expects a dict with both physical (shape/enclosure/ui_placements)
     and circuit (components/nets) fields. For parsing just one side,
     use parse_physical_design() or parse_circuit().
     """
+    outline = tessellate_shape(data["shape"])
     return DesignSpec(
         components=_parse_components(data.get("components", [])),
         nets=_parse_nets(data.get("nets", [])),
-        outline=_parse_outline(data["outline"]),
+        outline=outline,
         ui_placements=_parse_ui_placements(data.get("ui_placements", [])),
         enclosure=_parse_enclosure(data.get("enclosure") or {}),
     )
@@ -155,8 +157,9 @@ def _parse_nets(data: list) -> list[Net]:
 
 def parse_physical_design(data: dict) -> PhysicalDesign:
     """Parse a design.json dict into a PhysicalDesign (no components/nets)."""
+    outline = tessellate_shape(data["shape"])
     return PhysicalDesign(
-        outline=_parse_outline(data["outline"]),
+        outline=outline,
         enclosure=_parse_enclosure(data.get("enclosure") or {}),
         ui_placements=_parse_ui_placements(data.get("ui_placements", [])),
         device_description=data.get("device_description", ""),

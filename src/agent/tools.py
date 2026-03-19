@@ -65,72 +65,114 @@ DESIGN_TOOLS: list[dict[str, Any]] = [
                         "This is passed to the circuit agent."
                     ),
                 },
-                "outline": {
-                    "type": "array",
+                "shape": {
+                    "type": "object",
                     "description": (
-                        "Device outline as a list of vertex objects (clockwise winding). "
-                        "Coordinate system: screen convention — x increases rightward, "
-                        "y increases downward (y=0 is the top of the device). "
-                        "Each vertex has x, y (mm), optional ease_in / ease_out "
-                        "(mm) for corner rounding, and optional z_top (mm) for "
-                        "per-vertex ceiling height. Omit z_top to inherit from "
-                        "the enclosure height_mm."
+                        "2D CSG shape tree defining the device silhouette. "
+                        "Use primitives (rectangle, ellipse) combined "
+                        "with boolean operations (union, difference, intersection)."
                     ),
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "x": {
-                                "type": "number",
-                                "description": "X coordinate in mm",
-                            },
-                            "y": {
-                                "type": "number",
-                                "description": "Y coordinate in mm",
-                            },
-                            "ease_in": {
-                                "type": "number",
-                                "description": (
-                                    "Distance in mm along the incoming edge "
-                                    "(from previous vertex) where the curve "
-                                    "begins. If omitted, defaults to ease_out "
-                                    "when ease_out is set, otherwise 0."
-                                ),
-                            },
-                            "ease_out": {
-                                "type": "number",
-                                "description": (
-                                    "Distance in mm along the outgoing edge "
-                                    "(toward next vertex) where the curve "
-                                    "ends. If omitted, defaults to ease_in "
-                                    "when ease_in is set, otherwise 0."
-                                ),
-                            },
-                            "z_top": {
-                                "type": "number",
-                                "description": (
-                                    "Ceiling height (mm) at this vertex. "
-                                    "Omit to inherit from enclosure.height_mm. "
-                                    "Must be >= floor(2mm) + tallest component + ceiling(2mm)."
-                                ),
-                            },
-                            "z_bottom": {
-                                "type": "number",
-                                "description": (
-                                    "Floor height (mm) at this vertex. "
-                                    "Omit or 0 for flat on build plate. "
-                                    "Raises the floor locally — areas with z_bottom > 0 "
-                                    "cannot hold traces or components."
-                                ),
-                            },
+                    "properties": {
+                        "type": {
+                            "type": "string",
+                            "description": "Primitive type: 'rectangle' or 'ellipse'",
                         },
-                        "required": ["x", "y"],
+                        "op": {
+                            "type": "string",
+                            "description": "Boolean operation: 'union', 'difference', or 'intersection'",
+                        },
+                        "children": {
+                            "type": "array",
+                            "items": {"type": "object"},
+                            "description": "Child nodes for boolean operations (at least 2)",
+                        },
+                        "center": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "description": "[x, y] center position in mm (rectangle, ellipse)",
+                        },
+                        "size": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "description": "[width, height] in mm (rectangle)",
+                        },
+                        "corner_radius": {
+                            "type": "number",
+                            "description": "Corner rounding radius in mm (rectangle, default 0)",
+                        },
+                        "size_end": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "description": (
+                                "[width, height] at the +axis end for tapered rectangles. "
+                                "Set cross-axis value to 0 for a pointed tip (triangle)."
+                            ),
+                        },
+                        "axis": {
+                            "type": "string",
+                            "description": "Taper direction: 'x' or 'y' (default 'y'). Used with size_end.",
+                        },
+                        "rotate": {
+                            "type": "number",
+                            "description": (
+                                "Rotation in degrees. Positive = top edge moves right (like clock hands). "
+                                "On primitives, rotates around center. "
+                                "On operations, rotates the entire boolean result around its center of mass."
+                            ),
+                        },
+                        "scale": {
+                            "description": (
+                                "Scale factor: number for uniform, [sx, sy] for per-axis. "
+                                "Applied around centroid. Works on any node (primitive or operation)."
+                            ),
+                        },
+                        "mirror": {
+                            "type": "string",
+                            "description": (
+                                "Reflection axis: 'x' (horizontal flip), 'y' (vertical flip), "
+                                "or 'xy' (both). Applied around centroid."
+                            ),
+                        },
+                        "radius": {
+                            "description": (
+                                "Radius: single number for circle, [rx, ry] for oval (ellipse)"
+                            ),
+                        },
+                        "end_center": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "description": (
+                                "[x, y] second center for a capsule/tapered ellipse shape. "
+                                "The result is the convex hull of the two circles."
+                            ),
+                        },
+                        "radius_end": {
+                            "description": (
+                                "Radius at end_center: number or [rx, ry]. "
+                                "Defaults to the start radius if omitted."
+                            ),
+                        },
+                        "z_top": {
+                            "type": "number",
+                            "description": (
+                                "Ceiling height (mm) for this primitive region. "
+                                "Omit to inherit from enclosure.height_mm."
+                            ),
+                        },
+                        "z_bottom": {
+                            "type": "number",
+                            "description": (
+                                "Floor height (mm) for this primitive region. "
+                                "Omit or 0 for flat on build plate."
+                            ),
+                        },
                     },
                 },
                 "enclosure": {
                     "type": "object",
                     "description": (
                         "3D enclosure shape descriptor. The floor is always flat. "
-                        "height_mm sets the default ceiling height for vertices without "
+                        "height_mm sets the default ceiling height for primitives without "
                         "z_top, and is the minimum height everywhere. "
                         "top_surface adds an optional smooth bump over the vertex heights."
                     ),
@@ -145,7 +187,7 @@ DESIGN_TOOLS: list[dict[str, Any]] = [
                         },
                         "top_surface": {
                             "type": "object",
-                            "description": "Optional smooth bump added over the per-vertex ceiling interpolation.",
+                            "description": "Optional smooth bump added over the per-primitive ceiling heights.",
                             "properties": {
                                 "type": {
                                     "type": "string",
@@ -257,8 +299,8 @@ DESIGN_TOOLS: list[dict[str, Any]] = [
                                 "description": (
                                     "Required for side-mount components. "
                                     "Which outline edge (0-based) to mount on. "
-                                    "Edge i goes from vertices[i] to "
-                                    "vertices[(i+1) % n]. The component "
+                                    "Edge i goes from outline point i to "
+                                    "point (i+1) % n. The component "
                                     "protrudes through this wall."
                                 ),
                             },
@@ -306,7 +348,7 @@ DESIGN_TOOLS: list[dict[str, Any]] = [
                     },
                 },
             },
-            "required": ["device_description", "outline", "enclosure", "ui_placements"],
+            "required": ["device_description", "shape", "enclosure", "ui_placements"],
         },
     },
     {
@@ -328,21 +370,11 @@ DESIGN_TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Updated device description. Omit to keep current.",
                 },
-                "outline": {
-                    "type": "array",
-                    "description": "Replacement outline vertices. Omit to keep current outline.",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "x": {"type": "number", "description": "X coordinate in mm"},
-                            "y": {"type": "number", "description": "Y coordinate in mm"},
-                            "ease_in": {"type": "number", "description": "Incoming edge curve radius (mm)"},
-                            "ease_out": {"type": "number", "description": "Outgoing edge curve radius (mm)"},
-                            "z_top": {"type": "number", "description": "Ceiling height (mm) at this vertex"},
-                            "z_bottom": {"type": "number", "description": "Floor height (mm) at this vertex"},
-                        },
-                        "required": ["x", "y"],
-                    },
+                "shape": {
+                    "type": "object",
+                    "description": (
+                        "Replacement CSG shape tree. Omit to keep current shape."
+                    ),
                 },
                 "enclosure": {
                     "type": "object",
