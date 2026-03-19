@@ -161,15 +161,24 @@ class _BaseAgent:
 
             tool_blocks = [b for b in content_blocks if b.get("type") == "tool_use"]
 
-            if stop_reason == "max_tokens" or not tool_blocks:
+            if stop_reason == "max_tokens":
+                if tool_blocks:
+                    self.messages[-1] = {
+                        "role": "assistant",
+                        "content": [b for b in content_blocks
+                                    if b.get("type") != "tool_use"],
+                    }
                 self._save_conversation()
                 yield AgentEvent("checkpoint", {})
-                if stop_reason == "max_tokens":
-                    yield AgentEvent("error", {
-                        "message": "Response truncated — output too long",
-                    })
-                else:
-                    yield AgentEvent("done", {})
+                yield AgentEvent("error", {
+                    "message": "Response truncated — output too long",
+                })
+                return
+
+            if not tool_blocks:
+                self._save_conversation()
+                yield AgentEvent("checkpoint", {})
+                yield AgentEvent("done", {})
                 return
 
             tool_results: list[dict] = []
@@ -182,7 +191,11 @@ class _BaseAgent:
                     "input": block["input"],
                 })
 
-                result_text, is_terminal = self._handle_tool(block["name"], block["input"])
+                try:
+                    result_text, is_terminal = self._handle_tool(block["name"], block["input"])
+                except Exception as exc:
+                    result_text = f"Internal error: {exc}"
+                    is_terminal = False
 
                 tool_results.append({
                     "type": "tool_result",
