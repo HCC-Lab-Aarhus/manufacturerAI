@@ -10,7 +10,7 @@ from .prompt import (
     build_setup_prompt,
 )
 from .messages import serialize_content, sanitize_messages, prune_messages
-from .config import MODEL, MAX_TOKENS, THINKING_BUDGET, MAX_TURNS, TOKEN_BUDGET
+from .config import MODEL, MAX_TOKENS, MAX_TURNS, TOKEN_BUDGET
 
 __all__ = [
     # Core
@@ -35,7 +35,6 @@ __all__ = [
     # Config
     "MODEL",
     "MAX_TOKENS",
-    "THINKING_BUDGET",
     "MAX_TURNS",
     "TOKEN_BUDGET",
 ]
