@@ -143,8 +143,6 @@ class _BaseAgent:
                 "role": "assistant",
                 "content": content_blocks,
             })
-            self._save_conversation()
-            yield AgentEvent("checkpoint", {})
 
             # Token counting (best-effort)
             try:
@@ -161,17 +159,17 @@ class _BaseAgent:
             except Exception:
                 pass
 
-            if stop_reason == "max_tokens":
-                self._save_conversation()
-                yield AgentEvent("error", {
-                    "message": "Response truncated — output too long",
-                })
-                return
-
             tool_blocks = [b for b in content_blocks if b.get("type") == "tool_use"]
-            if not tool_blocks:
+
+            if stop_reason == "max_tokens" or not tool_blocks:
                 self._save_conversation()
-                yield AgentEvent("done", {})
+                yield AgentEvent("checkpoint", {})
+                if stop_reason == "max_tokens":
+                    yield AgentEvent("error", {
+                        "message": "Response truncated — output too long",
+                    })
+                else:
+                    yield AgentEvent("done", {})
                 return
 
             tool_results: list[dict] = []
