@@ -334,7 +334,7 @@ def get_design_tokens(sid: str):
 
     cat = get_catalog()
     system = build_design_prompt(cat, printer=get_printer(s.printer_id))
-    pruned = prune_messages(conversation)
+    pruned = prune_messages(sanitize_messages(conversation))
     client = anthropic.Anthropic()
     try:
         result = client.messages.count_tokens(
