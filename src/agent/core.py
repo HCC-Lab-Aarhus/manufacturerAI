@@ -143,8 +143,6 @@ class _BaseAgent:
                 "role": "assistant",
                 "content": content_blocks,
             })
-            self._save_conversation()
-            yield AgentEvent("checkpoint", {})
 
             # Token counting (best-effort)
             try:
@@ -161,16 +159,25 @@ class _BaseAgent:
             except Exception:
                 pass
 
+            tool_blocks = [b for b in content_blocks if b.get("type") == "tool_use"]
+
             if stop_reason == "max_tokens":
+                if tool_blocks:
+                    self.messages[-1] = {
+                        "role": "assistant",
+                        "content": [b for b in content_blocks
+                                    if b.get("type") != "tool_use"],
+                    }
                 self._save_conversation()
+                yield AgentEvent("checkpoint", {})
                 yield AgentEvent("error", {
                     "message": "Response truncated — output too long",
                 })
                 return
 
-            tool_blocks = [b for b in content_blocks if b.get("type") == "tool_use"]
             if not tool_blocks:
                 self._save_conversation()
+                yield AgentEvent("checkpoint", {})
                 yield AgentEvent("done", {})
                 return
 
@@ -184,7 +191,11 @@ class _BaseAgent:
                     "input": block["input"],
                 })
 
-                result_text, is_terminal = self._handle_tool(block["name"], block["input"])
+                try:
+                    result_text, is_terminal = self._handle_tool(block["name"], block["input"])
+                except Exception as exc:
+                    result_text = f"Internal error: {exc}"
+                    is_terminal = False
 
                 tool_results.append({
                     "type": "tool_result",
@@ -282,11 +293,17 @@ class DesignAgent(_BaseAgent):
             return self._tool_get_component(input_data), False
         if name == "submit_design":
             return self._tool_submit_design(input_data)
+        if name == "update_design":
+            return self._tool_update_design(input_data)
         return f"Unknown tool: {name}", False
 
     def _terminal_event(self, tool_name: str, input_data: dict) -> AgentEvent | None:
         if tool_name == "submit_design":
             return AgentEvent("design", {"design": input_data})
+        if tool_name == "update_design":
+            merged = self.session.read_artifact("design.json")
+            if merged:
+                return AgentEvent("design", {"design": merged})
         return None
 
     def _tool_submit_design(self, input_data: dict) -> tuple[str, bool]:
@@ -308,6 +325,62 @@ class DesignAgent(_BaseAgent):
         self.session.save()
 
         return "Design validated successfully! Saved to session.", True
+
+    def _tool_update_design(self, input_data: dict) -> tuple[str, bool]:
+        """Merge partial changes into the existing design.json."""
+        existing = self.session.read_artifact("design.json")
+        if not existing:
+            return (
+                "No existing design to update — use submit_design first "
+                "to create an initial design."
+            ), False
+
+        merged = dict(existing)
+
+        if "device_description" in input_data:
+            merged["device_description"] = input_data["device_description"]
+        if "outline" in input_data:
+            merged["outline"] = input_data["outline"]
+        if "enclosure" in input_data:
+            merged["enclosure"] = input_data["enclosure"]
+
+        remove_ids = set(input_data.get("remove_placements", []))
+        if remove_ids:
+            merged["ui_placements"] = [
+                p for p in merged.get("ui_placements", [])
+                if p["instance_id"] not in remove_ids
+            ]
+
+        if "ui_placements" in input_data:
+            existing_placements = {
+                p["instance_id"]: p
+                for p in merged.get("ui_placements", [])
+            }
+            for p in input_data["ui_placements"]:
+                iid = p["instance_id"]
+                if iid in existing_placements:
+                    existing_placements[iid].update(p)
+                else:
+                    existing_placements[iid] = p
+            merged["ui_placements"] = list(existing_placements.values())
+
+        try:
+            physical = parse_physical_design(merged)
+        except (KeyError, TypeError, ValueError, IndexError) as e:
+            return f"Design parsing error: {e}", False
+
+        printer = get_printer(self.session.printer_id)
+        errors = validate_physical_design(physical, self.catalog, printer=printer)
+        if errors:
+            error_list = "\n".join(f"  - {e}" for e in errors)
+            return f"Design validation failed:\n{error_list}", False
+
+        self._last_invalidated = self.session.invalidate_design_smart(merged)
+        self.session.write_artifact("design.json", merged)
+        self.session.pipeline_state["design"] = "complete"
+        self.session.save()
+
+        return "Design updated and validated successfully! Saved to session.", True
 
 
 # ── Circuit agent ──────────────────────────────────────────────────

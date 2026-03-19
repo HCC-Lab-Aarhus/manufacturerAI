@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 
 import anthropic
 
-from src.agent import CircuitAgent, build_circuit_user_prompt, build_circuit_prompt, CIRCUIT_TOOLS, MODEL, TOKEN_BUDGET, prune_messages
+from src.agent import CircuitAgent, build_circuit_user_prompt, build_circuit_prompt, CIRCUIT_TOOLS, MODEL, TOKEN_BUDGET, prune_messages, sanitize_messages
 from src.pipeline.config import get_printer
 from src.pipeline.design import (
     parse_physical_design, parse_circuit, build_design_spec, validate_design,
@@ -226,7 +226,7 @@ def get_circuit_tokens(sid: str):
 
     cat = get_catalog()
     system = build_circuit_prompt(cat)
-    pruned = prune_messages(conversation)
+    pruned = prune_messages(sanitize_messages(conversation))
     client = anthropic.Anthropic()
     try:
         result = client.messages.count_tokens(

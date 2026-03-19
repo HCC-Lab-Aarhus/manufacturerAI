@@ -309,6 +309,91 @@ DESIGN_TOOLS: list[dict[str, Any]] = [
             "required": ["device_description", "outline", "enclosure", "ui_placements"],
         },
     },
+    {
+        "name": "update_design",
+        "description": (
+            "Update an existing design with partial changes. Only the "
+            "fields you provide are changed — omitted fields are kept "
+            "from the current design. Use this after submit_design to "
+            "iterate without re-specifying the entire design.\n\n"
+            "For ui_placements: provide only the placements you want to "
+            "add or modify (matched by instance_id). Existing placements "
+            "not mentioned are kept. Use remove_placements to delete "
+            "specific placements by instance_id."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "device_description": {
+                    "type": "string",
+                    "description": "Updated device description. Omit to keep current.",
+                },
+                "outline": {
+                    "type": "array",
+                    "description": "Replacement outline vertices. Omit to keep current outline.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x": {"type": "number", "description": "X coordinate in mm"},
+                            "y": {"type": "number", "description": "Y coordinate in mm"},
+                            "ease_in": {"type": "number", "description": "Incoming edge curve radius (mm)"},
+                            "ease_out": {"type": "number", "description": "Outgoing edge curve radius (mm)"},
+                            "z_top": {"type": "number", "description": "Ceiling height (mm) at this vertex"},
+                            "z_bottom": {"type": "number", "description": "Floor height (mm) at this vertex"},
+                        },
+                        "required": ["x", "y"],
+                    },
+                },
+                "enclosure": {
+                    "type": "object",
+                    "description": "Replacement enclosure. Omit to keep current enclosure.",
+                    "properties": {
+                        "height_mm": {"type": "number"},
+                        "top_surface": {"type": "object"},
+                        "bottom_surface": {"type": "object"},
+                        "edge_top": {"type": "object"},
+                        "edge_bottom": {"type": "object"},
+                    },
+                },
+                "ui_placements": {
+                    "type": "array",
+                    "description": (
+                        "Placements to add or update. Matched by instance_id: "
+                        "if the instance_id already exists, that placement is "
+                        "updated; otherwise a new placement is added. "
+                        "Existing placements not listed here are kept unchanged."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "instance_id": {"type": "string"},
+                            "catalog_id": {"type": "string"},
+                            "x_mm": {"type": "number"},
+                            "y_mm": {"type": "number"},
+                            "edge_index": {"type": "integer"},
+                            "conform_to_surface": {"type": "boolean"},
+                            "mounting_style": {"type": "string"},
+                            "button_outline": {
+                                "type": "array",
+                                "items": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                    "minItems": 2,
+                                    "maxItems": 2,
+                                },
+                            },
+                        },
+                        "required": ["instance_id"],
+                    },
+                },
+                "remove_placements": {
+                    "type": "array",
+                    "description": "List of instance_ids to remove from ui_placements.",
+                    "items": {"type": "string"},
+                },
+            },
+        },
+    },
 ]
 
 

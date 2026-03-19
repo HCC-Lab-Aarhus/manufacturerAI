@@ -63,6 +63,9 @@ def get_agent_task(sid: str, agent: str) -> AgentTask | None:
 
 def set_agent_task(sid: str, agent: str, task: AgentTask) -> None:
     with _lock:
+        old = _agent_tasks.get((sid, agent))
+        if old and old.asyncio_task and not old.asyncio_task.done():
+            old.cancel_event.set()
         _agent_tasks[(sid, agent)] = task
 
 

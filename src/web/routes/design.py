@@ -11,7 +11,7 @@ from src.session import load_session
 from src.agent import (
     DesignAgent, DESIGN_TOOLS,
     MODEL, TOKEN_BUDGET,
-    build_design_prompt, prune_messages,
+    build_design_prompt, prune_messages, sanitize_messages,
 )
 from src.pipeline.design import parse_design, validate_design, parse_physical_design, validate_physical_design
 from src.pipeline.config import get_printer
@@ -291,6 +291,8 @@ async def submit_design_to_conversation(sid: str, request: Request):
     if not isinstance(conversation, list):
         conversation = []
 
+    conversation = sanitize_messages(conversation)
+
     design = body.get("design", {})
 
     new_msg = {
@@ -332,7 +334,7 @@ def get_design_tokens(sid: str):
 
     cat = get_catalog()
     system = build_design_prompt(cat, printer=get_printer(s.printer_id))
-    pruned = prune_messages(conversation)
+    pruned = prune_messages(sanitize_messages(conversation))
     client = anthropic.Anthropic()
     try:
         result = client.messages.count_tokens(

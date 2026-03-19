@@ -449,6 +449,16 @@ This is read by the electronics engineer who designs the circuit.
 6. Submit with `submit_design`
 7. If validation fails, read errors, fix, and resubmit
 
+### Updating a Design
+When iterating on a design after the initial `submit_design`, prefer `update_design` over resubmitting everything. Only include the fields you are changing:
+- **Outline only changing?** Send just `outline` — enclosure and placements are kept.
+- **Moving a component?** Send `ui_placements` with just that one placement — others are kept.
+- **Adding a component?** Include the new placement in `ui_placements` — existing ones remain.
+- **Removing a component?** Use `remove_placements` with its `instance_id`.
+- **Multiple changes at once?** Include all changed fields in one `update_design` call.
+
+This avoids re-specifying complex outlines or large placement lists when only one aspect changed.
+
 ### Layout Blueprint (required before writing JSON)
 Before writing the final design JSON, produce a short blueprint covering:
 
