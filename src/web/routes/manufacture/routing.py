@@ -49,10 +49,8 @@ async def run_routing(sid: str):
                 }
                 # Write partial result so the viewport can display what was routed
                 s.write_artifact("routing.json", routing_to_dict(result))
-                # Clear downstream pipeline state from prior runs
-                s.pipeline_state.pop("bitmap", None)
                 s.pipeline_state.pop("routing", None)
-                s.delete_artifact("trace_bitmap.txt")
+                s.invalidate_downstream("routing")
                 s.set_step_error("routing", detail)
                 set_pipeline_task(sid, "routing", PipelineTask(status="error", error=detail["reason"], detail=detail))
                 return
@@ -70,10 +68,8 @@ async def run_routing(sid: str):
                 "reason": str(e),
                 "responsible_agent": "circuit",
             }
-            # Clear downstream pipeline state from prior runs
-            s.pipeline_state.pop("bitmap", None)
             s.pipeline_state.pop("routing", None)
-            s.delete_artifact("trace_bitmap.txt")
+            s.invalidate_downstream("routing")
             s.set_step_error("routing", detail)
             set_pipeline_task(sid, "routing", PipelineTask(status="error", error=str(e), detail=detail))
 

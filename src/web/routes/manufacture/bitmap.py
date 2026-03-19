@@ -26,16 +26,27 @@ def _bed_center_offset(outline_verts: list, pdef) -> tuple[float, float]:
     return pdef.nominal_bed_width / 2 - cx, pdef.nominal_bed_depth / 2 - cy
 
 
-def _generate_bitmap_lines(session) -> list[str]:
-    """Generate trace bitmap lines from routing + design artifacts (no disk persistence)."""
+def _generate_and_save_bitmap(session) -> None:
+    """Generate trace bitmap and write it to trace_bitmap.txt in the session folder."""
     routing_data = require_routing(session)
     physical = parse_physical_design(require_design(session))
     result = parse_routing(routing_data)
     pdef = get_printer(session.printer_id)
     grid = sweep_grid(pdef)
     model_to_bed = _bed_center_offset(physical.outline.vertices, pdef)
-    return generate_trace_bitmap(result, TRACE_RULES.trace_width_mm,
-                                 grid=grid, model_to_bed=model_to_bed)
+    lines = generate_trace_bitmap(result, TRACE_RULES.trace_width_mm,
+                                  grid=grid, model_to_bed=model_to_bed)
+    path = session.path / "trace_bitmap.txt"
+    path.write_text('\n'.join(lines), encoding='utf-8')
+    session.save()
+
+
+def _read_bitmap_lines(session) -> list[str]:
+    """Read the stored trace_bitmap.txt from the session folder."""
+    path = session.path / "trace_bitmap.txt"
+    if not path.exists():
+        raise HTTPException(404, "No trace_bitmap.txt — run the bitmap step first")
+    return path.read_text(encoding='utf-8').split('\n')
 
 
 @router.post("/sessions/{sid}/manufacture/bitmap")
@@ -52,9 +63,7 @@ async def run_bitmap(sid: str):
         try:
             require_placement(s)
             require_routing(s)
-            _generate_bitmap_lines(s)
-            s.pipeline_state["bitmap"] = "complete"
-            s.save()
+            _generate_and_save_bitmap(s)
             set_pipeline_task(sid, "bitmap", PipelineTask(status="done"))
         except Exception as e:
             set_pipeline_task(sid, "bitmap", PipelineTask(status="error", error=str(e)))
@@ -69,7 +78,7 @@ async def poll_bitmap(sid: str):
     if task:
         return {"status": task.status, "message": task.error or ""}
     s = load_session_or_404(sid)
-    if s.pipeline_state.get("bitmap") == "complete":
+    if s.has_artifact("trace_bitmap.txt"):
         return {"status": "done"}
     return {"status": "idle"}
 
@@ -93,7 +102,7 @@ async def get_bitmap(sid: str):
     outline_verts = [[p["x"], p["y"]] for p in outline] if outline else []
     bed_offset_x, bed_offset_y = _bed_center_offset(outline_verts, pdef) if outline_verts else (0.0, 0.0)
 
-    rows = _generate_bitmap_lines(s)
+    rows = _read_bitmap_lines(s)
     num_rows = len(rows)
     cols = len(rows[0]) if rows else 0
     byte_cols = (cols + 7) // 8
