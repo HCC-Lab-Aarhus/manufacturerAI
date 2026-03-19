@@ -76,9 +76,9 @@
                 "position_mm": [0, -26.0],
                 "width_mm": 27.2,
                 "length_mm": 1.46,
-                "depth_mm": 12.1,
+                "depth_mm": 13.5,
                 "z_anchor": "cavity_start",
-                "description": "Channel for wide connector plate (27.2mm wide, 1.46mm thick, 12.1mm tall). Bridges cells in series."
+                "description": "Channel for wide connector plate (27.2mm wide, 1.46mm thick). Depth matches full cavity height so the channel is open at the top during component insert pause, allowing the plate to slide in from above."
             },
             {
                 "shape": "rect",
@@ -102,23 +102,13 @@
             },
             {
                 "shape": "rect",
-                "label": "inter-cell dome contact window (+)",
-                "position_mm": [4.35, -22.0],
-                "width_mm": 9,
+                "label": "inter-cell dome contact window",
+                "position_mm": [0, -22.0],
+                "width_mm": 21.6,
                 "length_mm": 7.5,
-                "depth_mm": 12.1,
+                "depth_mm": 13.5,
                 "z_anchor": "cavity_start",
-                "description": "Window for first 7.5mm dome on wide plate. Two domes are 8.7mm apart center-to-center."
-            },
-            {
-                "shape": "rect",
-                "label": "inter-cell dome contact window (-)",
-                "position_mm": [-4.35, -22.0],
-                "width_mm": 9,
-                "length_mm": 7.5,
-                "depth_mm": 12.1,
-                "z_anchor": "cavity_start",
-                "description": "Window for second 7.5mm dome on wide plate. Two domes are 8.7mm apart center-to-center."
+                "description": "Single merged window for both 7.5mm domes on wide plate. 21.6mm wide clears side-wall overhang and cell divider. Full cavity depth so it is open at pause."
             },
             {
                 "shape": "rect",
