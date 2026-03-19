@@ -263,19 +263,32 @@ class ComponentResolver:
     # ── Pinholes ───────────────────────────────────────────────────
 
     def _pinhole_fragments(self) -> list[ScadFragment]:
-        """Pin shafts with graduated funnel entry for every pin.
+        """Pin shafts with graduated funnel at the cavity entrance.
 
-        Each pinhole is a multi-layer column:
-          - Shaft  (FLOOR_MM → taper_z): constant-width channel.
-          - Funnel (taper_z → z_top):    graduated staircase of
-            progressively wider rectangles that approximate a cone,
-            guiding pin insertion.
+        The pin enters from the component pocket (above CAVITY_START_MM)
+        and passes through solid floor material down to the trace layer.
+        The funnel is anchored at CAVITY_START_MM — wide where the pin
+        enters the solid zone, narrowing to shaft width at the floor.
+
+          - Funnel (FLOOR_MM → CAVITY_START_MM): graduated staircase,
+            widest at the top (cavity entrance) for easy pin insertion,
+            narrowest at the bottom (trace layer) for snug ink contact.
+          - Extension (CAVITY_START_MM → z_top): shaft-width hole
+            through the open cavity (mostly redundant with pocket
+            cutout, but ensures the hole is clear).
         """
         frags: list[ScadFragment] = []
         z_top = self._component_z_top()
-        taper_z = z_top - PINHOLE_TAPER_DEPTH
-        shaft_h = max(taper_z - FLOOR_MM, 0.1)
-        step_h = PINHOLE_TAPER_DEPTH / PINHOLE_TAPER_STEPS
+
+        # The funnel spans the solid floor zone between the trace
+        # layer and the cavity.  Clamp so it fits the available space.
+        funnel_top = CAVITY_START_MM
+        funnel_bottom = FLOOR_MM
+        actual_taper = funnel_top - funnel_bottom   # typically 1.0 mm
+        step_h = actual_taper / PINHOLE_TAPER_STEPS
+
+        # Extension above the funnel through the open cavity
+        ext_h = max(z_top - funnel_top, 0.0)
 
         for pin in self.catalog.pins:
             pos = self.placed.pin_positions.get(pin.id)
@@ -297,16 +310,9 @@ class ComponentResolver:
                 shaft_w = pin_d
                 shaft_h_dim = pin_d
 
-            # Constant-width shaft
-            frags.append(ScadFragment(
-                type="cutout",
-                geometry=RectGeometry(px, py, shaft_w, shaft_h_dim),
-                z_base=FLOOR_MM,
-                depth=shaft_h,
-                label=f"pin {self.cid}:{pin.id}",
-            ))
-
-            # Graduated funnel steps
+            # Graduated funnel through the solid floor zone.
+            # Step 0 is at the bottom (narrowest, trace layer),
+            # stepping up and widening toward the cavity entrance.
             for i in range(PINHOLE_TAPER_STEPS):
                 frac = (i + 1) / PINHOLE_TAPER_STEPS
                 extra = PINHOLE_TAPER_EXTRA * frac
@@ -317,9 +323,19 @@ class ComponentResolver:
                         shaft_w + extra,
                         shaft_h_dim + extra,
                     ),
-                    z_base=taper_z + i * step_h,
+                    z_base=funnel_bottom + i * step_h,
                     depth=step_h,
                     label=f"pin funnel {self.cid}:{pin.id} step {i}",
+                ))
+
+            # Shaft-width extension through the open cavity above
+            if ext_h > 0:
+                frags.append(ScadFragment(
+                    type="cutout",
+                    geometry=RectGeometry(px, py, shaft_w, shaft_h_dim),
+                    z_base=funnel_top,
+                    depth=ext_h,
+                    label=f"pin {self.cid}:{pin.id}",
                 ))
 
         return frags
