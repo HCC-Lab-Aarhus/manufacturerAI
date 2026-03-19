@@ -11,7 +11,7 @@ from src.session import load_session
 from src.agent import (
     DesignAgent, DESIGN_TOOLS,
     MODEL, TOKEN_BUDGET,
-    build_design_prompt, prune_messages,
+    build_design_prompt, prune_messages, sanitize_messages,
 )
 from src.pipeline.design import parse_design, validate_design, parse_physical_design, validate_physical_design
 from src.pipeline.config import get_printer
@@ -290,6 +290,8 @@ async def submit_design_to_conversation(sid: str, request: Request):
     conversation = s.read_artifact("design_conversation.json")
     if not isinstance(conversation, list):
         conversation = []
+
+    conversation = sanitize_messages(conversation)
 
     design = body.get("design", {})
 

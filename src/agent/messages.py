@@ -44,14 +44,84 @@ def serialize_content(content: list) -> list[dict]:
 
 def sanitize_messages(messages: list[dict]) -> list[dict]:
     """Clean a saved conversation so every content block only contains
-    fields the Anthropic API accepts."""
+    fields the Anthropic API accepts, and repair orphaned tool_use blocks.
+
+    If the conversation was interrupted (cancel, max_tokens, crash) while
+    the assistant had pending tool_use blocks, the saved history will end
+    with an assistant message containing tool_use ids that have no matching
+    tool_result in the next user message.  The Anthropic API rejects this.
+
+    We detect and fix this by scanning for any assistant tool_use ids that
+    are not answered by a tool_result in the immediately following user
+    message, and appending synthetic tool_result blocks.
+    """
     clean = []
     for msg in messages:
         content = msg.get("content")
         if isinstance(content, list):
             msg = {**msg, "content": serialize_content(content)}
         clean.append(msg)
+
+    _repair_orphaned_tool_uses(clean)
     return clean
+
+
+def _repair_orphaned_tool_uses(messages: list[dict]) -> None:
+    """Mutate *messages* in-place: for every assistant tool_use id that
+    lacks a matching tool_result in the next message, append (or extend)
+    a user message with synthetic tool_result blocks."""
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
+        if msg.get("role") != "assistant" or not isinstance(msg.get("content"), list):
+            i += 1
+            continue
+
+        tool_use_ids = [
+            b["id"]
+            for b in msg["content"]
+            if b.get("type") == "tool_use" and "id" in b
+        ]
+        if not tool_use_ids:
+            i += 1
+            continue
+
+        answered_ids: set[str] = set()
+        next_msg = messages[i + 1] if i + 1 < len(messages) else None
+        if (
+            next_msg
+            and next_msg.get("role") == "user"
+            and isinstance(next_msg.get("content"), list)
+        ):
+            for b in next_msg["content"]:
+                if b.get("type") == "tool_result" and "tool_use_id" in b:
+                    answered_ids.add(b["tool_use_id"])
+
+        missing_ids = [tid for tid in tool_use_ids if tid not in answered_ids]
+        if not missing_ids:
+            i += 1
+            continue
+
+        stub_results = [
+            {
+                "type": "tool_result",
+                "tool_use_id": tid,
+                "content": "[interrupted — tool was not executed]",
+            }
+            for tid in missing_ids
+        ]
+
+        if next_msg and next_msg.get("role") == "user" and isinstance(next_msg.get("content"), list):
+            next_msg["content"] = stub_results + next_msg["content"]
+        elif next_msg and next_msg.get("role") == "user":
+            messages[i + 1] = {
+                "role": "user",
+                "content": stub_results + [{"type": "text", "text": next_msg["content"]}],
+            }
+        else:
+            messages.insert(i + 1, {"role": "user", "content": stub_results})
+
+        i += 2
 
 
 def prune_messages(messages: list[dict], keep_recent_turns: int = 6) -> list[dict]:
