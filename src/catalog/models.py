@@ -46,6 +46,8 @@ class Mounting:
     keepout_margin_mm: float
     cap: Cap | None = None
     hatch: Hatch | None = None
+    installed_height_mm: float | None = None  # height of component top above cavity floor when installed (for through-hole DIP etc.)
+    pause_z_mm: float | None = None           # explicit pause Z (from build plate) at which this component is inserted
 
 
 @dataclass
@@ -122,6 +124,20 @@ class Component:
     configurable: dict | None = None
     scad_features: list[ScadFeature] = field(default_factory=list)
     source_file: str = ""               # path of the JSON file (for error reporting)
+
+    @property
+    def protrusion_height_mm(self) -> float:
+        """Tallest point above the cavity floor, including cap/actuator.
+
+        Used for pause-Z calculation so the nozzle clears the full
+        component (not just the body) after insertion.
+        """
+        base = self.mounting.installed_height_mm or self.body.height_mm
+        cap = self.mounting.cap
+        if cap is not None and cap.actuator is not None:
+            top = cap.actuator.total_height_mm + cap.height_mm
+            return max(top, base)
+        return base
 
 
 @dataclass

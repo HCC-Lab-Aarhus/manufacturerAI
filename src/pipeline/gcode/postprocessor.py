@@ -557,7 +557,7 @@ def postprocess_gcode(
     gcode_path: Path,
     output_path: Path | None,
     ink_z: float,
-    component_z: float,
+    component_pauses: list[tuple[float, str, list[str]]] | None = None,
     trace_segments: list[tuple[float, float, float, float]] | None = None,
     bed_offset: tuple[float, float] | None = None,
     silverink_only: bool = False,
@@ -573,8 +573,11 @@ def postprocess_gcode(
         ``<input>_staged.gcode``.
     ink_z : float
         Z-height for the ink layer (top of floor).
-    component_z : float
-        Z-height for component insertion (top of cavity).
+    component_pauses : list of (z, label, component_ids) or None
+        Component insertion pauses ordered by Z.  Each tuple contains
+        the pause Z-height, a human-readable label, and a list of
+        instance_ids to insert.  Falls back to a single pause at the
+        highest Z if *None*.
     trace_segments : list or None
         Trace path segments as ``(x1, y1, x2, y2)`` in mm.  Used to
         filter ironing moves over trace channels.
@@ -593,6 +596,12 @@ def postprocess_gcode(
 
     trace_segs = trace_segments or []
 
+    # Normalise component pauses into a sorted list of (z, label, ids)
+    pending_comp_pauses: list[tuple[float, str, list[str]]] = sorted(
+        component_pauses or [],
+        key=lambda t: t[0],
+    )
+
     raw_lines = gcode_path.read_text(encoding="utf-8").splitlines()
 
     # ── Apply bed offset ─────────────────────────────────────────
@@ -607,9 +616,9 @@ def postprocess_gcode(
     out: list[str] = []
     total_layers = 0
     ink_injected = False
-    component_injected = False
+    comp_pause_idx = 0           # index into pending_comp_pauses
     ink_layer_num = -1
-    comp_layer_num = -1
+    comp_layer_nums: list[int] = []
     ironing_moves_removed = 0
     ironing_layers_stripped = 0
     ironing_lines_stripped = 0
@@ -727,24 +736,36 @@ def postprocess_gcode(
                             break
                     break
 
-            # ── Component insertion pause (first Z >= component_z) ──
-            if not component_injected and z_val >= component_z - 0.001:
-                component_injected = True
-                comp_layer_num = total_layers
+            # ── Component insertion pauses (N stages) ──────────
+            while comp_pause_idx < len(pending_comp_pauses):
+                cp_z, cp_label, cp_ids = pending_comp_pauses[comp_pause_idx]
+                if z_val < cp_z - 0.001:
+                    break
+                comp_layer_nums.append(total_layers)
 
-                out.extend(_pause_block(
-                    "INSERT COMPONENTS",
-                    component_z,
-                    [
+                if cp_ids:
+                    comp_lines = [
+                        f"  - {cid}" for cid in cp_ids
+                    ]
+                    instructions = [
                         "Insert the following components into their pockets:",
-                        "  1. IR diode (LED) — into the round hole near the top edge",
-                        "  2. Tactile switches — into the square button pockets",
-                        "  3. ATmega328P — into the DIP-28 pocket",
+                        *comp_lines,
                         "Ensure all pins seat fully into their pin holes.",
                         "Press the knob when done to resume printing.",
-                    ],
+                    ]
+                else:
+                    instructions = [
+                        "Insert components into their pockets.",
+                        "Ensure all pins seat fully into their pin holes.",
+                        "Press the knob when done to resume printing.",
+                    ]
+                out.extend(_pause_block(
+                    f"INSERT COMPONENTS ({cp_label})",
+                    cp_z,
+                    instructions,
                 ))
-                stages.append(f"Component insertion pause at Z={component_z:.2f}")
+                stages.append(f"Component pause '{cp_label}' at Z={cp_z:.2f}")
+                comp_pause_idx += 1
 
         # ── Ink-layer ironing: keep as-is ──────────────────
         # The entire ink-layer floor must be ironed — including the
@@ -994,8 +1015,8 @@ def postprocess_gcode(
     output_path.write_text("\n".join(out) + "\n", encoding="utf-8")
 
     log.info(
-        "Post-processed G-code: %d layers, ink@L%d (Z=%.2f), components@L%d (Z=%.2f) → %s",
-        total_layers, ink_layer_num, ink_z, comp_layer_num, component_z, output_path,
+        "Post-processed G-code: %d layers, ink@L%d (Z=%.2f), %d component pauses → %s",
+        total_layers, ink_layer_num, ink_z, len(comp_layer_nums), output_path,
     )
     if ironing_moves_removed:
         log.info("  Removed %d ironing moves over trace channels", ironing_moves_removed)
@@ -1012,6 +1033,6 @@ def postprocess_gcode(
         output_path=output_path,
         total_layers=total_layers,
         ink_layer=ink_layer_num,
-        component_layer=comp_layer_num,
+        component_layer=comp_layer_nums[0] if comp_layer_nums else -1,
         stages=stages,
     )

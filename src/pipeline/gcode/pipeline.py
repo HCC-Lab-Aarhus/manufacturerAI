@@ -19,7 +19,7 @@ from pathlib import Path
 
 from src.pipeline.config import get_printer
 from src.pipeline.gcode.slicer import slice_stl
-from src.pipeline.gcode.pause_points import compute_pause_points, PausePoints
+from src.pipeline.gcode.pause_points import compute_pause_points, PausePoints, ComponentPauseInfo
 from src.pipeline.gcode.ink_traces import extract_trace_segments
 from src.pipeline.gcode.postprocessor import postprocess_gcode, PostProcessResult, compute_bed_offset
 from src.pipeline.gcode.filaments import get_filament, write_filament_overrides
@@ -50,6 +50,7 @@ def run_gcode_pipeline(
     printer: str | None = None,
     filament: str = "",
     silverink_only: bool = False,
+    component_infos: list[ComponentPauseInfo] | None = None,
 ) -> GcodePipelineResult:
     """Run the full G-code pipeline: slice → inject pauses → output.
 
@@ -93,16 +94,14 @@ def run_gcode_pipeline(
     pauses = compute_pause_points(
         shell_height=shell_height,
         layer_height=layer_height,
+        components=component_infos,
     )
-    stages.append(
-        f"Pause points: ink @ Z={pauses.ink_layer_z:.2f} (layer {pauses.ink_layer_number}), "
-        f"components @ Z={pauses.component_insert_z:.2f} (layer {pauses.component_layer_number})"
+
+    pause_summary = ", ".join(
+        f"{p.label} @ Z={p.z:.2f} (L{p.layer_number})" for p in pauses.pauses
     )
-    log.info(
-        "Pause points: ink Z=%.2f (L%d), components Z=%.2f (L%d)",
-        pauses.ink_layer_z, pauses.ink_layer_number,
-        pauses.component_insert_z, pauses.component_layer_number,
-    )
+    stages.append(f"Pause points: {pause_summary}")
+    log.info("Pause points: %s", pause_summary)
 
     # ── 1b. Prefer print_plate.stl (enclosure + battery hatch) ──
     print_plate = stl_path.parent / "print_plate.stl"
@@ -157,7 +156,9 @@ def run_gcode_pipeline(
         gcode_path=slicer_gcode_path,
         output_path=final_gcode,
         ink_z=pauses.ink_layer_z,
-        component_z=pauses.component_insert_z,
+        component_pauses=[
+            (p.z, p.label, p.components) for p in pauses.component_pauses
+        ],
         trace_segments=trace_segs,
         bed_offset=bed_offset,
         silverink_only=silverink_only,

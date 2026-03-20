@@ -17,6 +17,7 @@
         ],
         "blocks_routing": true,
         "keepout_margin_mm": 2.0,
+        "pause_z_mm": 16.0,
         "hatch": {
             "enabled": true,
             "clearance_mm": 0.3,

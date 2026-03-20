@@ -40,6 +40,8 @@ async def start_gcode(
 
     def _do_gcode():
         from src.pipeline.gcode.pipeline import run_gcode_pipeline
+        from src.pipeline.gcode.pause_points import ComponentPauseInfo
+        from src.catalog.loader import load_catalog
         try:
             shell_height = None
             design_data = s.read_artifact("design.json")
@@ -49,6 +51,24 @@ async def start_gcode(
                 except Exception:
                     pass
 
+            # Build component pause info from placement + catalog
+            comp_infos: list[ComponentPauseInfo] | None = None
+            placement_data = s.read_artifact("placement.json")
+            if placement_data:
+                cat = load_catalog()
+                cat_idx = {c.id: c for c in cat.components}
+                infos: list[ComponentPauseInfo] = []
+                for comp in placement_data.get("components", []):
+                    cat_entry = cat_idx.get(comp.get("catalog_id", ""))
+                    if cat_entry:
+                        infos.append(ComponentPauseInfo(
+                            instance_id=comp.get("instance_id", ""),
+                            body_height_mm=cat_entry.protrusion_height_mm,
+                            pause_z_mm=cat_entry.mounting.pause_z_mm,
+                        ))
+                if infos:
+                    comp_infos = infos
+
             result = run_gcode_pipeline(
                 stl_path=stl_path,
                 output_dir=s.path,
@@ -57,6 +77,7 @@ async def start_gcode(
                 printer=s.printer_id,
                 filament=filament,
                 silverink_only=silverink_only,
+                component_infos=comp_infos,
             )
             if result.success:
                 s.pipeline_state["gcode"] = "complete"
