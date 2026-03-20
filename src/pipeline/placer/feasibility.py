@@ -3,7 +3,7 @@ Lightweight placement feasibility check.
 
 Runs a fast coarse-grid scan on each auto-placed component individually,
 treating all UI-placed components as fixed obstacles.  Returns a text report
-the design agent can act on *before* calling submit_design.
+the design agent can act on before finalising the design.
 
 Differences from the real placer:
   - Grid step: 3 mm instead of 1 mm  (9x fewer cells → fast enough for a tool)
@@ -323,7 +323,7 @@ def run_feasibility_check(
         return (
             "No auto-placed components found in this design "
             "(all components are UI-placed or side-mounted). "
-            "Nothing to check — proceed to submit_design."
+            "Nothing to check — design looks good."
         )
 
     # Run per-component scans
@@ -394,7 +394,7 @@ def run_feasibility_check(
         lines.append(
             "All auto-placed components have candidate positions. "
             "The full placer may still reject due to inter-component overlap, "
-            "but the layout looks viable. You may call submit_design."
+            "but the layout looks viable."
         )
     else:
         fail_ids = ", ".join(r.instance_id for r in fails)

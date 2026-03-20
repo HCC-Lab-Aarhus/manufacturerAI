@@ -157,7 +157,12 @@ def _parse_nets(data: list) -> list[Net]:
 
 def parse_physical_design(data: dict) -> PhysicalDesign:
     """Parse a design.json dict into a PhysicalDesign (no components/nets)."""
-    outline = tessellate_shape(data["shape"])
+    if "shape" in data:
+        outline = tessellate_shape(data["shape"])
+    elif "outline" in data:
+        outline = _parse_outline(data["outline"])
+    else:
+        raise KeyError("design must contain 'shape' or 'outline'")
     return PhysicalDesign(
         outline=outline,
         enclosure=_parse_enclosure(data.get("enclosure") or {}),

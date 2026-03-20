@@ -17,7 +17,7 @@ from src.pipeline.design import (
     parse_physical_design, validate_physical_design,
     parse_circuit, build_design_spec,
 )
-from src.pipeline.design.shape2d import validate_shape, tessellate_shape
+from src.pipeline.design.shape2d import validate_shape
 from src.pipeline.circuit import validate_circuit
 from src.session import Session
 
@@ -25,6 +25,13 @@ from .config import MODEL, MAX_TOKENS, MAX_TURNS, TOKEN_BUDGET
 from .tools import DESIGN_TOOLS, CIRCUIT_TOOLS, SETUP_TOOLS
 from .prompt import build_design_prompt, build_circuit_prompt, build_circuit_user_prompt, build_setup_prompt, catalog_summary
 from .messages import serialize_content, sanitize_messages, prune_messages
+
+EMPTY_DESIGN: dict = {
+    "device_description": "",
+    "shape": None,
+    "enclosure": None,
+    "ui_placements": [],
+}
 
 
 # ── Agent events ───────────────────────────────────────────────────
@@ -72,10 +79,10 @@ class _BaseAgent:
     def _get_system_prompt(self) -> str:
         raise NotImplementedError
 
-    def _handle_tool(self, name: str, input_data: dict) -> tuple[str, bool]:
-        """Dispatch a tool call. Returns (result_text, is_terminal).
-
-        is_terminal=True means the agent should stop after this tool.
+    def _handle_tool(self, name: str, input_data: dict) -> tuple[str, bool] | str:
+        """Dispatch a tool call. Returns either:
+        - (result_text, is_terminal) for terminal-capable tools
+        - result_text for non-terminal tools
         """
         raise NotImplementedError
 
@@ -100,11 +107,15 @@ class _BaseAgent:
         self._save_conversation()
         yield AgentEvent("checkpoint", {})
 
+        _DESIGN_TOOLS = {"edit_design"}
+
         for turn in range(MAX_TURNS):
             if cancel_event and cancel_event.is_set():
                 self._save_conversation()
                 yield AgentEvent("error", {"message": "Cancelled"})
                 return
+
+            system = self._get_system_prompt()
 
             content_blocks: list[dict] = []
             stop_reason = None
@@ -193,7 +204,12 @@ class _BaseAgent:
                 })
 
                 try:
-                    result_text, is_terminal = self._handle_tool(block["name"], block["input"])
+                    result = self._handle_tool(block["name"], block["input"])
+                    if isinstance(result, tuple):
+                        result_text, is_terminal = result
+                    else:
+                        result_text = result
+                        is_terminal = False
                 except Exception as exc:
                     result_text = f"Internal error: {exc}"
                     is_terminal = False
@@ -208,8 +224,20 @@ class _BaseAgent:
                     "id": block["id"],
                     "name": block["name"],
                     "content": result_text,
-                    "is_error": not is_terminal and block["name"] in ("submit_design", "submit_circuit"),
+                    "is_error": not is_terminal and block["name"] in ("submit_circuit",),
                 })
+
+                if block["name"] in _DESIGN_TOOLS:
+                    design_event = self._design_event() if hasattr(self, '_design_event') else None
+                    if design_event:
+                        yield design_event
+                    if self._last_invalidated:
+                        yield AgentEvent("invalidated", {
+                            "invalidated_steps": self._last_invalidated,
+                            "artifacts": self.session.artifacts,
+                            "pipeline_errors": self.session.pipeline_errors,
+                        })
+                        self._last_invalidated = []
 
                 if is_terminal:
                     terminal_event = self._terminal_event(block["name"], block["input"])
@@ -276,131 +304,119 @@ class _BaseAgent:
 # ── Design agent ───────────────────────────────────────────────────
 
 class DesignAgent(_BaseAgent):
-    """Physical device designer — outline, enclosure, UI placements."""
+    """Physical device designer — outline, enclosure, UI placements.
+
+    The design is a living document that the agent modifies incrementally.
+    Each tool call updates the document, validates it, and returns
+    validation results. The agent stops by ending its turn without tool
+    calls (no terminal tool needed).
+    """
 
     conversation_file = "design_conversation.json"
+
+    def __init__(self, catalog, session):
+        super().__init__(catalog, session)
+        existing = session.read_artifact("design.json")
+        if existing:
+            self._design_text = json.dumps(existing, indent=2)
+        else:
+            self._design_text = json.dumps(EMPTY_DESIGN, indent=2)
 
     def _get_tools(self) -> list[dict]:
         return DESIGN_TOOLS
 
     def _get_system_prompt(self) -> str:
         printer = get_printer(self.session.printer_id)
-        return build_design_prompt(self.catalog, printer=printer)
+        return build_design_prompt(
+            self.catalog,
+            printer=printer,
+            design_text=self._design_text,
+        )
 
     def _handle_tool(self, name: str, input_data: dict) -> tuple[str, bool]:
         if name == "list_components":
             return self._tool_list_components(), False
         if name == "get_component":
             return self._tool_get_component(input_data), False
-        if name == "submit_design":
-            return self._tool_submit_design(input_data)
-        if name == "update_design":
-            return self._tool_update_design(input_data)
+        if name == "edit_design":
+            return self._tool_edit_design(input_data), False
         return f"Unknown tool: {name}", False
 
     def _terminal_event(self, tool_name: str, input_data: dict) -> AgentEvent | None:
-        if tool_name == "submit_design":
-            return AgentEvent("design", {"design": input_data})
-        if tool_name == "update_design":
-            merged = self.session.read_artifact("design.json")
-            if merged:
-                return AgentEvent("design", {"design": merged})
         return None
 
-    def _tool_submit_design(self, input_data: dict) -> tuple[str, bool]:
-        """Validate and save a physical design (no components/nets)."""
-        if "shape" in input_data:
-            shape_errors = validate_shape(input_data["shape"])
-            if shape_errors:
-                error_list = "\n".join(f"  - {e}" for e in shape_errors)
-                return f"Shape validation failed:\n{error_list}", False
-
+    def _design_event(self) -> AgentEvent:
         try:
-            physical = parse_physical_design(input_data)
-        except (KeyError, TypeError, ValueError, IndexError) as e:
-            return f"Design parsing error: {e}", False
+            design = json.loads(self._design_text)
+        except json.JSONDecodeError:
+            design = {}
+        return AgentEvent("design", {"design": design})
 
-        printer = get_printer(self.session.printer_id)
-        errors = validate_physical_design(physical, self.catalog, printer=printer)
-        if errors:
-            error_list = "\n".join(f"  - {e}" for e in errors)
-            return f"Design validation failed:\n{error_list}", False
+    def _tool_edit_design(self, input_data: dict) -> str:
+        old_string = input_data["old_string"]
+        new_string = input_data["new_string"]
 
-        save_data = dict(input_data)
-        if "shape" in input_data:
-            save_data["outline"] = [v.to_dict() for v in physical.outline.points]
-
-        self._last_invalidated = self.session.invalidate_design_smart(save_data)
-        self.session.write_artifact("design.json", save_data)
-        self.session.pipeline_state["design"] = "complete"
-        self.session.save()
-
-        return "Design validated successfully! Saved to session.", True
-
-    def _tool_update_design(self, input_data: dict) -> tuple[str, bool]:
-        """Merge partial changes into the existing design.json."""
-        existing = self.session.read_artifact("design.json")
-        if not existing:
+        if old_string not in self._design_text:
             return (
-                "No existing design to update — use submit_design first "
-                "to create an initial design."
-            ), False
+                "Error: old_string not found in the design document. "
+                "Make sure you match the exact text including whitespace "
+                "and indentation."
+            )
 
-        merged = dict(existing)
+        count = self._design_text.count(old_string)
+        if count > 1:
+            return (
+                f"Error: old_string matches {count} locations. "
+                "Include more surrounding context to match exactly one."
+            )
 
-        if "device_description" in input_data:
-            merged["device_description"] = input_data["device_description"]
-        if "shape" in input_data:
-            merged["shape"] = input_data["shape"]
-        if "enclosure" in input_data:
-            merged["enclosure"] = input_data["enclosure"]
-
-        remove_ids = set(input_data.get("remove_placements", []))
-        if remove_ids:
-            merged["ui_placements"] = [
-                p for p in merged.get("ui_placements", [])
-                if p["instance_id"] not in remove_ids
-            ]
-
-        if "ui_placements" in input_data:
-            existing_placements = {
-                p["instance_id"]: p
-                for p in merged.get("ui_placements", [])
-            }
-            for p in input_data["ui_placements"]:
-                iid = p["instance_id"]
-                if iid in existing_placements:
-                    existing_placements[iid].update(p)
-                else:
-                    existing_placements[iid] = p
-            merged["ui_placements"] = list(existing_placements.values())
-
-        if "shape" in merged:
-            shape_errors = validate_shape(merged["shape"])
-            if shape_errors:
-                error_list = "\n".join(f"  - {e}" for e in shape_errors)
-                return f"Shape validation failed:\n{error_list}", False
+        new_text = self._design_text.replace(old_string, new_string, 1)
 
         try:
-            physical = parse_physical_design(merged)
+            design = json.loads(new_text)
+        except json.JSONDecodeError as e:
+            self._design_text = new_text
+            return (
+                f"Edit applied but result is not valid JSON: {e}. "
+                "The document is shown in your next system prompt — "
+                "fix the syntax error with another edit_design call."
+            )
+
+        self._design_text = new_text
+        return self._save_and_validate(design)
+
+    def _save_and_validate(self, design: dict) -> str:
+        """Persist the design, compute outline, validate, return status."""
+        self.session.write_artifact("design.json", design)
+
+        if not design.get("shape"):
+            return "Design saved. Shape is not set yet — no validation performed."
+
+        shape_errors = validate_shape(design["shape"])
+        if shape_errors:
+            error_list = "\n".join(f"  - {e}" for e in shape_errors)
+            return f"Design saved. Shape validation errors:\n{error_list}"
+
+        try:
+            physical = parse_physical_design(design)
         except (KeyError, TypeError, ValueError, IndexError) as e:
-            return f"Design parsing error: {e}", False
+            return f"Design saved. Parsing error: {e}"
+
+        outline_data = [v.to_dict() for v in physical.outline.points]
+        self.session.write_artifact("outline.json", outline_data)
 
         printer = get_printer(self.session.printer_id)
         errors = validate_physical_design(physical, self.catalog, printer=printer)
-        if errors:
-            error_list = "\n".join(f"  - {e}" for e in errors)
-            return f"Design validation failed:\n{error_list}", False
 
-        if "shape" in merged:
-            merged["outline"] = [v.to_dict() for v in physical.outline.points]
-
-        self._last_invalidated = self.session.invalidate_design_smart(merged)
-        self.session.write_artifact("design.json", merged)
+        self._last_invalidated = self.session.invalidate_design_smart(design)
         self.session.pipeline_state["design"] = "complete"
         self.session.save()
 
-        return "Design updated and validated successfully! Saved to session.", True
+        if errors:
+            error_list = "\n".join(f"  - {e}" for e in errors)
+            return f"Design saved. Validation errors:\n{error_list}"
+
+        return "Design saved and validated successfully."
 
 
 # ── Circuit agent ──────────────────────────────────────────────────
@@ -557,7 +573,8 @@ class SetupAgent(_BaseAgent):
                 )
 
         # Save the .ino file
-        ino_path = self.session.path / "firmware.ino"
+        ino_path = self.session.artifact_path("firmware.ino")
+        ino_path.parent.mkdir(parents=True, exist_ok=True)
         ino_path.write_text(code, encoding="utf-8")
 
         # Try to compile
@@ -573,7 +590,7 @@ class SetupAgent(_BaseAgent):
                 True,
             )
 
-        result = compile_sketch(code, self.session.path)
+        result = compile_sketch(code, self.session.artifact_path("firmware.ino").parent)
 
         if result.success:
             self.session.pipeline_state["setup"] = "complete"
