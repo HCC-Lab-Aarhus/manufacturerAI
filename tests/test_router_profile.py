@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 import time
 import unittest
+
+import pytest
 import functools
 from pathlib import Path
 from collections import defaultdict
@@ -76,6 +78,7 @@ def timed_phase(name: str, results: dict):
     results[name] = elapsed
 
 
+@pytest.mark.slow
 class TestRouterProfile(unittest.TestCase):
     """Profile the router on the flashlight fixture."""
 
@@ -435,6 +438,7 @@ def _load_large_fixture():
 
 
 @unittest.skipUnless(FIXTURE_DIR.exists(), "Large fixture data not available")
+@pytest.mark.slow
 class TestLargeDesignProfile(unittest.TestCase):
     """Profile the router on a 27-component, 27-net button matrix design."""
 
@@ -1115,6 +1119,7 @@ class TestLargeDesignProfile(unittest.TestCase):
 
 
 @unittest.skipUnless(FIXTURE_DIR.exists(), "Large fixture data not available")
+@pytest.mark.slow
 class TestAStarInternals(unittest.TestCase):
     """Profile the internal breakdown of A* pathfinding calls."""
 
