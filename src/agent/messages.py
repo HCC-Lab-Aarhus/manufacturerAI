@@ -14,6 +14,9 @@ _ALLOWED_FIELDS = {
 # Lookup tools whose results are safe to prune from old turns
 _LOOKUP_TOOLS = {"list_components", "get_component"}
 
+# Design tools whose old results are replaced with a short stub
+_DESIGN_TOOLS = {"edit_design"}
+
 # Submit tools whose results must always be kept verbatim
 _KEEP_VERBATIM = {"submit_circuit"}
 
@@ -141,19 +144,19 @@ def prune_messages(messages: list[dict], keep_recent_turns: int = 6) -> list[dic
 
     cutoff_msg_index = assistant_indices[-keep_recent_turns]
 
-    # Collect tool_use ids for lookup tools in OLD turns only
+    # Collect tool_use ids for prunable tools in OLD turns only
     prunable_ids: set[str] = set()
+    design_prunable_ids: set[str] = set()
     for msg in messages[:cutoff_msg_index]:
         if msg["role"] == "assistant" and isinstance(msg.get("content"), list):
             for block in msg["content"]:
-                if (
-                    block.get("type") == "tool_use"
-                    and block.get("name") in _LOOKUP_TOOLS
-                    and "id" in block
-                ):
-                    prunable_ids.add(block["id"])
+                if block.get("type") == "tool_use" and "id" in block:
+                    if block.get("name") in _LOOKUP_TOOLS:
+                        prunable_ids.add(block["id"])
+                    elif block.get("name") in _DESIGN_TOOLS:
+                        design_prunable_ids.add(block["id"])
 
-    if not prunable_ids:
+    if not prunable_ids and not design_prunable_ids:
         return messages
 
     result = []
@@ -164,14 +167,14 @@ def prune_messages(messages: list[dict], keep_recent_turns: int = 6) -> list[dic
 
         content = msg.get("content")
         if msg["role"] == "user" and isinstance(content, list):
-            new_content = [
-                (
-                    {"type": "tool_result", "tool_use_id": b["tool_use_id"], "content": "[pruned]"}
-                    if b.get("type") == "tool_result" and b.get("tool_use_id") in prunable_ids
-                    else b
-                )
-                for b in content
-            ]
+            new_content = []
+            for b in content:
+                if b.get("type") == "tool_result" and b.get("tool_use_id") in prunable_ids:
+                    new_content.append({"type": "tool_result", "tool_use_id": b["tool_use_id"], "content": "[pruned]"})
+                elif b.get("type") == "tool_result" and b.get("tool_use_id") in design_prunable_ids:
+                    new_content.append({"type": "tool_result", "tool_use_id": b["tool_use_id"], "content": "[design updated]"})
+                else:
+                    new_content.append(b)
             result.append({**msg, "content": new_content})
         else:
             result.append(msg)

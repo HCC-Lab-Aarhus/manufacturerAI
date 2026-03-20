@@ -86,6 +86,10 @@ class _BaseAgent:
         """
         raise NotImplementedError
 
+    def _build_user_message(self, user_prompt: str) -> str:
+        """Build the user message content. Subclasses may prepend context."""
+        return user_prompt
+
     def _terminal_event(self, tool_name: str, input_data: dict) -> AgentEvent | None:
         """Return the event to emit when a terminal tool succeeds, or None."""
         return None
@@ -103,7 +107,7 @@ class _BaseAgent:
         """
         system = self._get_system_prompt()
         tools = self._get_tools()
-        self.messages.append({"role": "user", "content": user_prompt})
+        self.messages.append({"role": "user", "content": self._build_user_message(user_prompt)})
         self._save_conversation()
         yield AgentEvent("checkpoint", {})
 
@@ -330,7 +334,13 @@ class DesignAgent(_BaseAgent):
         return build_design_prompt(
             self.catalog,
             printer=printer,
-            design_text=self._design_text,
+        )
+
+    def _build_user_message(self, user_prompt: str) -> str:
+        return (
+            f"Current design document:\n"
+            f"```json\n{self._design_text}\n```\n\n"
+            f"{user_prompt}"
         )
 
     def _handle_tool(self, name: str, input_data: dict) -> tuple[str, bool]:
@@ -360,14 +370,18 @@ class DesignAgent(_BaseAgent):
             return (
                 "Error: old_string not found in the design document. "
                 "Make sure you match the exact text including whitespace "
-                "and indentation."
+                "and indentation.\n\n"
+                "Current design document:\n"
+                f"```json\n{self._design_text}\n```"
             )
 
         count = self._design_text.count(old_string)
         if count > 1:
             return (
                 f"Error: old_string matches {count} locations. "
-                "Include more surrounding context to match exactly one."
+                "Include more surrounding context to match exactly one.\n\n"
+                "Current design document:\n"
+                f"```json\n{self._design_text}\n```"
             )
 
         new_text = self._design_text.replace(old_string, new_string, 1)
@@ -378,29 +392,35 @@ class DesignAgent(_BaseAgent):
             self._design_text = new_text
             return (
                 f"Edit applied but result is not valid JSON: {e}. "
-                "The document is shown in your next system prompt — "
-                "fix the syntax error with another edit_design call."
+                "Fix the syntax error with another edit_design call.\n\n"
+                "Current design document:\n"
+                f"```\n{self._design_text}\n```"
             )
 
         self._design_text = new_text
         return self._save_and_validate(design)
 
     def _save_and_validate(self, design: dict) -> str:
-        """Persist the design, compute outline, validate, return status."""
+        """Persist the design, compute outline, validate, return status + current document."""
         self.session.write_artifact("design.json", design)
 
+        doc_footer = (
+            "\n\nCurrent design document:\n"
+            f"```json\n{self._design_text}\n```"
+        )
+
         if not design.get("shape"):
-            return "Design saved. Shape is not set yet — no validation performed."
+            return "Design saved. Shape is not set yet — no validation performed." + doc_footer
 
         shape_errors = validate_shape(design["shape"])
         if shape_errors:
             error_list = "\n".join(f"  - {e}" for e in shape_errors)
-            return f"Design saved. Shape validation errors:\n{error_list}"
+            return f"Design saved. Shape validation errors:\n{error_list}" + doc_footer
 
         try:
             physical = parse_physical_design(design)
         except (KeyError, TypeError, ValueError, IndexError) as e:
-            return f"Design saved. Parsing error: {e}"
+            return f"Design saved. Parsing error: {e}" + doc_footer
 
         outline_data = [v.to_dict() for v in physical.outline.points]
         self.session.write_artifact("outline.json", outline_data)
@@ -414,9 +434,9 @@ class DesignAgent(_BaseAgent):
 
         if errors:
             error_list = "\n".join(f"  - {e}" for e in errors)
-            return f"Design saved. Validation errors:\n{error_list}"
+            return f"Design saved. Validation errors:\n{error_list}" + doc_footer
 
-        return "Design saved and validated successfully."
+        return "Design saved and validated successfully." + doc_footer
 
 
 # ── Circuit agent ──────────────────────────────────────────────────

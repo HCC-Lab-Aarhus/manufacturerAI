@@ -51,7 +51,7 @@ DESIGN_TOOLS: list[dict[str, Any]] = [
         "name": "edit_design",
         "description": (
             "Edit the design document by finding and replacing text. "
-            "The design is a JSON document shown in your system prompt. "
+            "The current design document is returned in every response. "
             "Find the exact text you want to change (old_string) and "
             "provide the replacement (new_string). The result must be "
             "valid JSON. The design is validated and saved after every edit."
