@@ -234,7 +234,8 @@ def run_scad_step(
         log.info("Custom buttons: %d generated", len(button_configs))
 
     # ── 9. Write to session folder ────────────────────────────────
-    scad_path: Path = session.path / "enclosure.scad"
+    scad_path: Path = session.artifact_path("enclosure.scad")
+    scad_path.parent.mkdir(parents=True, exist_ok=True)
     scad_path.write_text(scad_str, encoding="utf-8")
 
     log.info(
@@ -249,7 +250,7 @@ def run_scad_step(
 
     # ── 10. Optional: compile to STL ──────────────────────────────
     if compile_stl:
-        stl_path = session.path / "enclosure.stl"
+        stl_path = session.artifact_path("enclosure.stl")
         ok, msg, out = compile_scad(scad_path, stl_path)
         if ok:
             log.info("STL rendered: %s", stl_path.name)

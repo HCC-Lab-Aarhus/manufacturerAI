@@ -15,7 +15,7 @@ _ALLOWED_FIELDS = {
 _LOOKUP_TOOLS = {"list_components", "get_component"}
 
 # Submit tools whose results must always be kept verbatim
-_KEEP_VERBATIM = {"submit_design", "submit_circuit"}
+_KEEP_VERBATIM = {"submit_circuit"}
 
 
 def serialize_content(content: list) -> list[dict]:
@@ -131,7 +131,7 @@ def prune_messages(messages: list[dict], keep_recent_turns: int = 6) -> list[dic
     For assistant turns older than `keep_recent_turns`:
     - list_components / get_component tool_result content is replaced
       with "[pruned]" (the pairing id is preserved so the API stays happy)
-    - submit_design / submit_circuit tool calls + results are always kept
+    - submit_circuit tool calls + results are always kept
     - All user text prompts and assistant text / thinking blocks are kept
     """
     assistant_indices = [i for i, m in enumerate(messages) if m["role"] == "assistant"]

@@ -86,6 +86,17 @@ def invalidate_downstream(session: Session, current_step: str) -> list[str]:
 
 # ── Session artifact readers (raw dicts) ──
 
+def _read_outline(session: Session) -> list:
+    """Read outline.json, falling back to design.json['outline'] for older sessions."""
+    data = session.read_artifact("outline.json")
+    if data is not None:
+        return data
+    design = session.read_artifact("design.json")
+    if design and "outline" in design:
+        return design["outline"]
+    return []
+
+
 def require_design(session: Session) -> dict:
     data = session.read_artifact("design.json")
     if data is None:
@@ -198,11 +209,13 @@ def _add_shape_fields(data: dict, outline_data, enclosure_data) -> None:
                 data[k] = fields[k]
 
 
-def enrich_design(data: dict, cat) -> None:
+def enrich_design(data: dict, cat, session: Session | None = None) -> None:
     """Enrich a design dict: component bodies/pins + 3D height fields + surface data."""
     enrich_components(data.get("ui_placements", []), cat)
-    outline_data = data.get("outline", [])
+    outline_data = _read_outline(session) if session else data.get("outline", [])
     enclosure_data = data.get("enclosure", {})
+    if outline_data:
+        data["outline"] = outline_data
     _add_shape_fields(data, outline_data, enclosure_data)
 
     fields = _get_shape_fields(outline_data, enclosure_data)
@@ -233,18 +246,44 @@ def enrich_design(data: dict, cat) -> None:
 # These functions assemble the full picture for API responses
 # by combining upstream artifacts.
 
+_ENRICHED_PLACEMENT_FIELDS = {
+    "body", "pins", "ui_placement", "cap_diameter_mm", "cap_clearance_mm",
+    "z_at_position", "surface_normal", "pin_positions",
+}
+
+
+def strip_enriched_fields(design: dict) -> dict:
+    """Return a copy of the design dict with only agent-authored fields.
+
+    Removes catalog-derived metadata (body, pins, etc.) from ui_placements
+    and top-level computed fields (outline, height_grid, etc.) so that
+    design.json stores only what the agent produced.
+    """
+    clean = {
+        "device_description": design.get("device_description", ""),
+        "shape": design.get("shape"),
+        "enclosure": design.get("enclosure"),
+        "ui_placements": [],
+    }
+    for p in design.get("ui_placements", []):
+        clean_p = {k: v for k, v in p.items() if k not in _ENRICHED_PLACEMENT_FIELDS}
+        clean["ui_placements"].append(clean_p)
+    return clean
+
+
 def build_placement_response(session: Session, cat) -> dict:
     """Assemble a full placement response from design + circuit + placement artifacts."""
     design = require_design(session)
     placement = require_placement(session)
+    outline_data = _read_outline(session)
 
     response = {
-        "outline": design.get("outline", []),
+        "outline": outline_data,
         "enclosure": design.get("enclosure", {}),
         "components": placement["components"],
     }
     enrich_components(response["components"], cat)
-    _add_shape_fields(response, response["outline"], response["enclosure"])
+    _add_shape_fields(response, outline_data, response["enclosure"])
     return response
 
 
@@ -253,10 +292,11 @@ def build_routing_response(session: Session, cat) -> dict:
     design = require_design(session)
     placement = require_placement(session)
     routing = require_routing(session)
+    outline_data = _read_outline(session)
 
     from src.pipeline.config import TRACE_RULES
     response = {
-        "outline": design.get("outline", []),
+        "outline": outline_data,
         "enclosure": design.get("enclosure", {}),
         "components": placement["components"],
         "traces": routing.get("traces", []),

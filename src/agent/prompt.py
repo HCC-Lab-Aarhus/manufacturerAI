@@ -24,9 +24,15 @@ def catalog_summary(catalog: CatalogResult) -> str:
     return "\n".join(lines)
 
 
-def build_design_prompt(catalog: CatalogResult, printer: PrinterDef | None = None) -> str:
+def build_design_prompt(
+    catalog: CatalogResult,
+    printer: PrinterDef | None = None,
+    design_text: str | None = None,
+) -> str:
     """Build the system prompt for the design agent (physical design only)."""
     summary = catalog_summary(catalog)
+
+    design_state = f"```json\n{design_text}\n```" if design_text else "```json\n{}\n```"
 
     if printer:
         build_plate_section = f"""## Build Plate & Size Constraints
@@ -37,146 +43,227 @@ Before choosing dimensions, consider that this device will be 3D-printed and phy
     else:
         build_plate_section = ""
 
-    return f"""You are a product designer who creates beautiful, characterful electronic devices. You design enclosures for 3D-printed (PLA) devices with silver ink conductive traces.
+    return f"""You are a product designer who creates beautiful, functional electronic objects. You shape enclosures for 3D-printed (PLA) objects with silver ink conductive traces and embedded electronic components.
+
+You can create **anything** that combines a custom shape with electronics: handheld gadgets, wall-mounted light sculptures, glowing ornaments, interactive art pieces, wearable brooches, educational kits, game controllers, musical instruments, desk toys, branded promotional items, accessibility devices, holiday decorations, sensor housings, and more. The silhouette can be any shape — an animal, a logo, a leaf, a country outline, an abstract form. If it has a shape and electronics, you can design it.
 
 ## Your Task
-Given a user's device description:
-1. Envision the product — how it looks, how it's held, how it feels
-2. Select UI components from the catalog (buttons, LEDs, switches, speakers, etc.)
-3. Design the device outline and enclosure shape
-4. Place UI components where fingers naturally reach them
-5. Write a device description for the electronics engineer
+Given a user's device description, build the design document one edit at a time. Don't plan the whole design internally — work it out in the document and let validation guide you.
 
-You select and place only **UI components** — the ones users interact with directly (buttons, LEDs, switches, speakers, etc.). Internal components (MCU, resistors, batteries, capacitors) are handled automatically in later pipeline steps — do NOT look them up or think about them. Focus entirely on shape and interaction.
+You select and place only **UI components** — the ones users interact with directly (buttons, LEDs, switches, speakers, etc.). Components marked `UI: yes` in the catalog need surface placement. Internal components (MCU, resistors, batteries, capacitors) are selected by the electronics engineer in the next step.
 
-**Only place components the user has explicitly requested or that are clearly implied by the device function.** Do NOT add status LEDs or other indicator components unless the user specifically asks for them.
+**Only place components the user has explicitly requested or that are clearly implied by the device function.**
+
+## Current Design Document
+This is the **live state** of your design document, including any edits you made in previous turns. If the document already contains a shape or components, that is your own prior work — build on it, don't start over.
+
+Your `old_string` must match text exactly as it appears here.
+
+{design_state}
+
+The design has four sections: `device_description`, `shape` (CSG tree), `enclosure` (3D params), and `ui_placements` (component positions). Only include fields you set — no extra metadata.
+
+When the document starts empty (null values, empty strings, empty arrays), match those empty values in your `old_string`. The tool reports success or failure — trust the result.
+
+## How to Edit
+Use `edit_design` with `old_string` and `new_string` to modify any part of the document. Match text exactly (including whitespace). Examples:
+
+Replace `"shape": null` with a shape tree:
+```
+old_string: "shape": null
+new_string: "shape": {{\n    "op": "union",\n    ...
+```
+
+Move a component by changing its position:
+```
+old_string: "x_mm": 25,\n      "y_mm": 40
+new_string: "x_mm": 30,\n      "y_mm": 45
+```
+
+Add a placement to the list:
+```
+old_string: "ui_placements": []
+new_string: "ui_placements": [\n    {{\n      "instance_id": "led_1", ...
+```
 
 ## Available Components
 {summary}
 
-Use `get_component` to read full details before placing a UI component.
+Use `get_component` to read full details before placing a component.
 
 {build_plate_section}
 
+## Design Guidelines
+
+**Think like a sculptor.** You are shaping a physical object that a person will hold, mount, wear, display, or interact with. Every primitive you add or subtract must serve a visible purpose — creating a surface, defining a contour, shaping how the object feels and looks.
+
+Design creatively. Each device should be unique — don't repeat shapes or patterns from examples. Think about what makes *this specific device* distinctive.
+
+### Size Guidelines
+Use real-world measurements so the result is correctly sized and functional. Rough ranges:
+- Handheld: ~100–140mm long, ~35–55mm wide
+- Tabletop: ~50–120mm per side
+- Wearable: ~25–50mm
+
+### Boolean Operations — What Each One Produces
+
+You have three boolean operations. Each one produces a **specific visual result**. Before using any operation, you must be able to describe what the resulting shape looks like.
+
+#### Union — adds area, creates seams
+Union merges shapes. Where two shapes overlap, the interior is merged and only the outermost boundary survives. But where the overlap **ends** — where one shape exits the other — a **seam** appears in the silhouette.
+```json
+{{"op": "union", "children": [
+    {{"type": "ellipse", "center": [25, 20], "radius": [25, 20]}},
+    {{"type": "rectangle", "center": [25, 55], "size": [20, 40], "corner_radius": 5}}
+]}}
+```
+**When to use it:** to build up the overall mass of the silhouette — the main body, a protruding handle, an attached head section, ears on a character shape.
+**How to manage seams:** overlap shapes generously so the seam falls on a subtle part of the outline.
+
+#### Difference — removes area, reshapes the boundary
+Difference subtracts children[1..N] from children[0]. Wherever a subtraction shape intersects the body, it **reshapes the boundary** — creating notches, grip cutouts, and contoured edges.
+```json
+{{"op": "difference", "children": [
+    {{"type": "rectangle", "center": [25, 60], "size": [50, 120], "corner_radius": 10}},
+    {{"type": "ellipse", "center": [0, 80], "radius": [10, 20]}}
+]}}
+```
+Understand what each subtraction creates:
+- **A rectangle subtracted from a curved body** creates a **flat edge** at the intersection.
+- **An ellipse subtracted from a side** creates a **concave curve** at the intersection.
+
+#### Intersection — constrains area, softens corners
+Intersection keeps only the region where ALL children overlap.
+```json
+{{"op": "intersection", "children": [
+    {{"type": "rectangle", "center": [25, 40], "size": [50, 80]}},
+    {{"type": "ellipse", "center": [25, 40], "radius": [30, 45]}}
+]}}
+```
+- **Constraining a shape**: `intersection(rectangle, ellipse)` creates a shape with the rectangle's proportions but rounded ends — like a stadium/capsule shape.
+- **Clipping** a complex shape to a specific bounding region.
+
+Operations can be nested to any depth. Any operation node can carry `rotate`, `scale`, and `mirror` transforms which apply to the entire boolean result:
+```json
+{{"op": "union", "children": [
+    {{"type": "rectangle", "center": [10, 15], "size": [6, 20], "size_end": [2, 20], "axis": "y"}},
+    {{"type": "ellipse", "center": [10, 5], "radius": 5}}
+], "rotate": 45, "scale": 0.8}}
+```
+
+
 ## Manufacturing Constraints
-You are designing a **2D top-down silhouette** that gets extruded into a 3D enclosure. Think of it like designing a cookie cutter shape — you define the outline from above, and the system handles the vertical dimension using the enclosure height and per-vertex z_top/z_bottom values.
+You are designing a **2D top-down silhouette** that gets extruded into a 3D enclosure.
 
 Key constraints:
 - Floor is flat PLA at Z=2mm where silver ink traces are printed
 - Components sit in pockets; pins poke through to contact ink traces
 - Ceiling seals on top (2mm PLA)
-- The outline is the shape you'd see looking straight down at the device
-
-## Design Philosophy
-
-**Design boldly.** Your outline IS the product identity. A TV remote shaped like a guitar, a night light shaped like a mushroom, a game controller shaped like a spaceship — the silhouette should be immediately recognizable and delightful.
-
-Push the outline to express the product's character. Use more vertices to capture organic curves, asymmetric forms, and distinctive features. Don't default to rounded rectangles unless the brief calls for one.
-
-### Design Instinct
-Work from instinct and visual imagination, not calculation. Picture the object on a desk, in a hand, on a shelf. Sketch it mentally, then translate to vertices:
-- What is the **silhouette**? If you held it up as a shadow puppet, what would people see?
-- How does it **feel in hand**? Where does the palm wrap, where does the thumb rest?
-- What gives it **personality**? Ears on a cat, a pointed tip on a wand, a curved waist on a guitar.
-- Where do **controls** land naturally? Buttons under the thumb, LEDs where the eye goes, switches at the edge.
-
-Don't calculate areas or check component footprints. The system validates everything when you submit — if something doesn't fit, you'll get specific errors and can adjust.
-
-### Ergonomic Rules of Thumb
-- Handheld remote or wand: ~100–140mm long, ~35–55mm wide
-- Compact tabletop controller: ~50–90mm wide, ~40–100mm deep
-- Buttons under the thumb, switches at the edge, LEDs where the eye naturally looks
-- Leave the center of the body open — that's where batteries and the MCU will go automatically
-
-### Device Orientation
-Coordinate system: **x** increases rightward, **y** increases downward. `y = 0` is the top of the device.
+- The silhouette is the shape you'd see looking straight down at the device
 
 ---
 
-## Outline (Device Shape)
-The outline is a flat list of vertex objects in **clockwise winding**. Each vertex:
+## Device Shape (CSG)
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `x` | number | yes | X position in mm |
-| `y` | number | yes | Y position in mm |
-| `ease_in` | number | no | Curve radius (mm) along the incoming edge. 0 = sharp. |
-| `ease_out` | number | no | Curve radius (mm) along the outgoing edge. 0 = sharp. |
-| `z_top` | number | no | Local ceiling height at this vertex. Defaults to `enclosure.height_mm`. |
-| `z_bottom` | number | no | Local floor height at this vertex. Defaults to 0. Raises the floor for contoured undersides. |
+Build the device silhouette by combining 2D primitives with boolean operations. The system tessellates your CSG tree into the final outline automatically.
 
-Rules:
-- At least 3 vertices, valid non-self-intersecting polygon with positive area
-- Must fit within the printer build plate
-- If only one of `ease_in`/`ease_out` is set, the other mirrors it
-- Every vertex must satisfy `z_top > z_bottom`
-- Each `z_top` must meet the minimum: floor (2mm) + tallest component + ceiling (2mm)
+### Coordinate System
+Standard **screen coordinates** — same as CSS, SVG, and Canvas:
+- **x** increases **rightward**, **y** increases **downward**
+- `[0, 0]` = top-left corner. `[50, 100]` = 50mm right, 100mm down
+- All measurements in **mm**
+- Use positive coordinates: x ≥ 0, y ≥ 0
 
-### Sharp Rectangle
+### CSG Primitives
+
+There are **2 primitive types**: rectangle, ellipse.  Each accepts optional modifiers for tapering and rotation, so a handful of primitives can produce complex organic silhouettes.
+
+**Rectangle** — optionally rounded, tapered, or rotated:
 ```json
-"outline": [
-    {{"x": 0, "y": 0}},
-    {{"x": 50, "y": 0}},
-    {{"x": 50, "y": 80}},
-    {{"x": 0, "y": 80}}
-]
+{{"type": "rectangle", "center": [25, 50], "size": [50, 100]}}
+{{"type": "rectangle", "center": [25, 50], "size": [50, 100], "corner_radius": 8}}
+{{"type": "rectangle", "center": [25, 75], "size": [30, 80], "size_end": [10, 80], "axis": "y"}}
+{{"type": "rectangle", "center": [25, 75], "size": [30, 80], "size_end": [0, 80], "axis": "y"}}
+{{"type": "rectangle", "center": [25, 50], "size": [12, 40], "rotate": 45}}
+```
+- `center: [x, y]` — center point
+- `size: [width, height]` — full dimensions (at the −axis end when tapered)
+- `corner_radius` — rounds all corners (optional, default 0)
+- `size_end: [w, h]` — dimensions at the +axis end; only the cross-axis value matters. Set to 0 for a pointed tip (triangle). (optional)
+- `axis: "x" | "y"` — taper direction (optional, default "y")
+- `rotate: degrees` — rotation around center (optional). Positive = top tilts right. See Rotation.
+
+`size_end` + `axis` creates trapezoids, triangles, and wedges.
+
+**Ellipse** — circle, oval, or tapered capsule:
+```json
+{{"type": "ellipse", "center": [25, 25], "radius": 20}}
+{{"type": "ellipse", "center": [25, 25], "radius": [20, 30]}}
+{{"type": "ellipse", "center": [25, 25], "radius": [20, 10], "rotate": 45}}
+{{"type": "ellipse", "center": [50, 90], "radius": 8, "end_center": [20, 55], "radius_end": 3}}
+```
+- `center: [x, y]` — center (or start point for capsule)
+- `radius: number` → circle, `radius: [rx, ry]` → oval
+- `end_center: [x, y]` — second center for a capsule/tapered shape (optional)
+- `radius_end` — radius at end_center; number or [rx, ry] (optional, defaults to `radius`)
+- `rotate: degrees` — rotation around center (optional). Positive = top tilts right. See Rotation.
+
+With `end_center` + `radius_end`, the ellipse becomes the convex hull of two circles — a tapered capsule. Use this for branches, limbs, and organic connections at any angle.
+
+### Rotation
+
+`rotate` spins a shape around its center point. The shape stays in place — only its orientation changes.
+
+**Angle reference** — where the **top edge** of the shape ends up:
+| `rotate` | Top edge faces | Use for |
+|---|---|---|
+| `0` | Up (default) | — |
+| `45` | Upper-right | Diagonal accents, tilted features |
+| `90` | Right | Turning vertical shapes horizontal |
+| `135` | Lower-right | Angled arms, fins |
+| `180` | Down (flipped) | Inverted elements |
+| `-45` | Upper-left | Mirror of 45° tilt |
+| `-90` | Left | Turning vertical shapes horizontal (other way) |
+
+Positive angles rotate like clock hands (top moves right, then down). Negative angles go the opposite way.
+
+`rotate` works on both single primitives (spins around `center`) and groups/operations (spins the entire group around its center of mass):
+```json
+{{"type": "rectangle", "center": [25, 50], "size": [10, 40], "rotate": 45}}
+{{"op": "union", "children": [...], "rotate": 30}}
 ```
 
-### Uniformly Rounded Corners
-*Setting `ease_in`/`ease_out` on every vertex creates a rounded rectangle.*
-```json
-"outline": [
-    {{"x": 0,  "y": 0,  "ease_in": 8, "ease_out": 8}},
-    {{"x": 50, "y": 0,  "ease_in": 8, "ease_out": 8}},
-    {{"x": 50, "y": 80, "ease_in": 8, "ease_out": 8}},
-    {{"x": 0,  "y": 80, "ease_in": 8, "ease_out": 8}}
-]
-```
+### Scale & Mirror
 
-### Selectively Rounded Corners
-*Rounded top, sharp bottom — useful when one end is a grip and the other is flat.*
+**`scale: number | [sx, sy]`** — resize around centroid:
 ```json
-"outline": [
-    {{"x": 0,  "y": 0,  "ease_in": 10, "ease_out": 10}},
-    {{"x": 40, "y": 0,  "ease_in": 10, "ease_out": 10}},
-    {{"x": 40, "y": 70}},
-    {{"x": 0,  "y": 70}}
-]
+{{"type": "rectangle", "center": [25, 50], "size": [20, 40], "scale": 1.5}}
+{{"op": "union", "children": [...], "scale": [1.0, 0.5]}}
 ```
+`scale: [1.0, 0.5]` halves height while keeping width. Works on any node.
 
-### Asymmetric Easing
-*Different `ease_in` and `ease_out` at the same vertex create a teardrop-like taper.*
+**`mirror: "x" | "y" | "xy"`** — flip across axis through centroid:
 ```json
-"outline": [
-    {{"x": 20, "y": 0,  "ease_in": 15, "ease_out": 15}},
-    {{"x": 40, "y": 40, "ease_in": 5,  "ease_out": 20}},
-    {{"x": 20, "y": 80, "ease_in": 15, "ease_out": 15}},
-    {{"x": 0,  "y": 40, "ease_in": 20, "ease_out": 5}}
-]
+{{"op": "difference", "children": [...], "mirror": "x"}}
 ```
+`"x"` flips left↔right, `"y"` flips top↔bottom, `"xy"` flips both.
 
-### Sloped Ceiling with z_top
-*A wedge rising from 12mm at the front to 22mm at the rear.*
-```json
-"outline": [
-    {{"x": 0,  "y": 0,  "z_top": 12}},
-    {{"x": 40, "y": 0,  "z_top": 12}},
-    {{"x": 40, "y": 60, "z_top": 22}},
-    {{"x": 0,  "y": 60, "z_top": 22}}
-]
-```
+**Transform order:** scale → mirror → rotate (always applied in this sequence).
 
-### Raised Floor with z_bottom
-*The front lifts 5mm off the surface while the rear rests flat — a tilted pedestal.*
+**Composing transforms on a group:**
 ```json
-"outline": [
-    {{"x": 0,  "y": 0,  "z_bottom": 5, "z_top": 18}},
-    {{"x": 40, "y": 0,  "z_bottom": 5, "z_top": 18}},
-    {{"x": 40, "y": 60, "z_bottom": 0, "z_top": 18}},
-    {{"x": 0,  "y": 60, "z_bottom": 0, "z_top": 18}}
-]
+{{"op": "union", "children": [
+    {{"type": "rectangle", "center": [10, 20], "size": [8, 30]}},
+    {{"type": "ellipse", "center": [10, 5], "radius": 6}}
+], "rotate": -15, "scale": [1.2, 0.8]}}
 ```
-**Warning:** Raised floor areas (`z_bottom > 0`) cannot hold silver ink traces or components. The flat region (`z_bottom = 0`) must be large enough for internal routing and auto-placed components.
+Scales the group wider and shorter, then tilts 15° (top faces upper-left).
+
+### Per-Primitive Height
+
+Each primitive can carry optional `z_top` (ceiling height) and `z_bottom` (floor height) to control the enclosure height in that region. Where primitives overlap, the higher `z_top` wins.
+
+Primitives without `z_top`/`z_bottom` inherit from `enclosure.height_mm`.
 
 ---
 
@@ -186,13 +273,12 @@ The enclosure controls the third dimension of the device.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `height_mm` | number | yes | Default ceiling height. Minimum: floor (2mm) + tallest component + ceiling (2mm). |
-| `top_surface` | object | no | Smooth bump (dome or ridge) added over the per-vertex ceiling interpolation. |
+| `top_surface` | object | no | Smooth bump (dome or ridge) added over the per-primitive ceiling heights. |
 | `bottom_surface` | object | no | Smooth bump (dome or ridge) raising the floor. Raised areas cannot hold traces or components. |
 | `edge_top` | object | no | Profile at wall-to-ceiling junction: `"none"`, `"chamfer"`, or `"fillet"`. |
 | `edge_bottom` | object | no | Profile at wall-to-floor junction: `"none"`, `"chamfer"`, or `"fillet"`. |
 
 ### Flat Box
-*Minimal enclosure — just a height.*
 ```json
 "enclosure": {{"height_mm": 18}}
 ```
@@ -226,7 +312,7 @@ Dome fields: `peak_x_mm`, `peak_y_mm` (center), `peak_height_mm` (absolute Z at 
 Ridge fields: `x1`, `y1`, `x2`, `y2` (crest line endpoints), `crest_height_mm` (absolute Z), `base_height_mm`, `falloff_mm` (distance from crest where surface returns to base).
 
 ### Dome bottom_surface
-*A bump on the underside raising the floor at a point — use for palm swells on the bottom.*
+*A bump on the underside raising the floor — use for palm swells on the bottom.*
 ```json
 "enclosure": {{
     "height_mm": 18,
@@ -252,7 +338,6 @@ Ridge fields: `x1`, `y1`, `x2`, `y2` (crest line endpoints), `crest_height_mm` (
 ```
 
 ### Fillet Edges
-*Smooth rounded transitions at wall junctions — softens the device feel.*
 ```json
 "enclosure": {{
     "height_mm": 20,
@@ -262,7 +347,6 @@ Ridge fields: `x1`, `y1`, `x2`, `y2` (crest line endpoints), `crest_height_mm` (
 ```
 
 ### Chamfer Edge
-*A flat 45° bevel — adds a crisp, machined look.*
 ```json
 "enclosure": {{
     "height_mm": 20,
@@ -277,7 +361,8 @@ Edge rules:
 ---
 
 ## UI Placements
-Each placement positions a UI component on the device.
+
+Place UI components on the device surface. For each component, specify its position using the same coordinate system as the CSG shapes.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -285,150 +370,43 @@ Each placement positions a UI component on the device.
 | `catalog_id` | string | yes | Component catalog ID |
 | `x_mm` | number | yes | X position in mm |
 | `y_mm` | number | yes | Y position in mm |
-| `edge_index` | integer | side-mount only | Which outline edge (0-based: edge i runs from vertex i to vertex i+1) |
+| `edge_index` | integer | side-mount only | Which outline edge (0-based) to mount on |
 | `mounting_style` | string | no | Override default mounting (must be in component's `allowed_styles`) |
 | `conform_to_surface` | boolean | no | Whether the component conforms to the curved top surface (default: true) |
 | `button_outline` | array | no | Custom button cap shape as `[[x,y], ...]` points (mm) relative to button centre. Only for switch-type components. Omit for default circular cap. |
 
 ### Top-Mount Placement
 ```json
-"ui_placements": [
-    {{"instance_id": "led_1", "catalog_id": "led_5mm", "x_mm": 25, "y_mm": 15}}
-]
+{{"instance_id": "led_1", "catalog_id": "led_5mm", "x_mm": 25, "y_mm": 15}}
 ```
 
 ### Side-Mount Placement
 *Side-mount components require `edge_index` and `mounting_style: "side"`.*
 ```json
-"ui_placements": [
-    {{"instance_id": "usb_1", "catalog_id": "usb_a_female_dip", "x_mm": 40, "y_mm": 30, "edge_index": 1, "mounting_style": "side"}}
-]
-```
-
-### Mounting Style Override
-*Force a component to a different allowed mounting style.*
-```json
-"ui_placements": [
-    {{"instance_id": "led_1", "catalog_id": "led_5mm", "x_mm": 40, "y_mm": 30, "edge_index": 2, "mounting_style": "side"}}
-]
+{{"instance_id": "usb_1", "catalog_id": "usb_a_female_dip", "x_mm": 40, "y_mm": 30, "edge_index": 1, "mounting_style": "side"}}
 ```
 
 ### Custom Button Shape
-*Tactile buttons support a `button_outline` field — a polygon defining the visible button cap shape. The system generates a printable button cap that is printed next to the enclosure, with a matching ceiling hole. The button snaps onto the switch actuator and its top surface follows the enclosure curvature (dome, slope, etc.).*
-
-**When to use:** When the default circular button doesn't suit the device's design language — for instance, a rectangular rocker, a triangular play button, or an organic pebble shape.
-
-**How it works:**
-- `button_outline` is a list of `[x, y]` points in mm, relative to the button centre (0, 0)
-- The outline defines the visible cap shape. A 1mm lip extends beyond the ceiling hole to prevent the button from falling through
-- The button's internal stem (cap outline shrunk by 1mm) passes through the ceiling hole with 0.3mm clearance
-- At the bottom, a ring socket snaps onto the switch's cylindrical actuator
-- The top surface of the button tilts to match the local enclosure ceiling curvature
-- If omitted, a default circular button matching the component's cap diameter is generated
-
+*Define a polygon for the visible button cap shape. If omitted, a default circular cap is generated.*
 ```json
-"ui_placements": [
-    {{
-        "instance_id": "btn_1",
-        "catalog_id": "tactile_button_6x6",
-        "x_mm": 25, "y_mm": 40,
-        "button_outline": [[-5, -4], [5, -4], [5, 4], [-5, 4]]
-    }}
-]
+{{
+    "instance_id": "btn_1",
+    "catalog_id": "tactile_button_6x6",
+    "x_mm": 25, "y_mm": 40,
+    "button_outline": [[-5, -4], [5, -4], [5, 4], [-5, 4]]
+}}
 ```
-*This creates a 10×8mm rectangular button centred on the switch.*
 
-**More outline examples:**
-- **Circle (default):** Omit `button_outline` entirely
-- **Rounded rectangle:** `[[-5,-3], [5,-3], [5,3], [-5,3]]` with Shapely buffering applied internally
-- **Triangle (play):** `[[0,-5], [5,4], [-5,4]]`
-- **Organic blob:** Use more points for smooth curves, e.g. 8-12 vertices
-
-**Size guidelines:**
-- The outline must be large enough to cover the switch actuator (Ø3.4mm cylinder)
+Button guidelines:
+- Must cover the switch actuator (Ø3.4mm)
 - Minimum ~8mm across for comfortable finger contact
-- Maximum ~15mm across for single-finger buttons
 - Keep at least 3mm between adjacent button outlines
 
 Placement rules:
-- Side-mount components **must** include `edge_index` and set `mounting_style` to `"side"`
+- Side-mount components **must** include `edge_index` and `mounting_style: "side"`
 - Non-side-mount components **must not** specify `edge_index`
-- Top-mount positions must be inside the outline polygon
-- Respect body size and keepout margins from `get_component`
-- **IR transmitter LEDs** (`led_5mm` with wavelength 940nm) on remote controls **must** use `mounting_style: "side"` so the LED faces the device being controlled; pick the front edge for `edge_index`
-- Buttons with `button_outline` get a custom printable cap; without it they get a default circular cap
-
----
-
-## Combining Features
-Individual features become powerful when combined deliberately. Each feature should serve the human interaction you described in your blueprint.
-
-### Sculpted Grip Underside
-Per-vertex `z_bottom` raises the outer bottom edges while the center stays flat for traces. A `bottom_surface` ridge adds a tactile finger landmark.
-```json
-"outline": [
-    {{"x": 0,  "y": 0,  "z_bottom": 4, "ease_in": 8, "ease_out": 8}},
-    {{"x": 45, "y": 0,  "z_bottom": 4, "ease_in": 8, "ease_out": 8}},
-    {{"x": 45, "y": 100, "z_bottom": 0, "ease_in": 6, "ease_out": 6}},
-    {{"x": 0,  "y": 100, "z_bottom": 0, "ease_in": 6, "ease_out": 6}}
-],
-"enclosure": {{
-    "height_mm": 20,
-    "bottom_surface": {{
-        "type": "ridge",
-        "x1": 10, "y1": 55, "x2": 35, "y2": 55,
-        "crest_height_mm": 3, "base_height_mm": 0, "falloff_mm": 15
-    }}
-}}
-```
-
-### Angled Presentation Face
-Sloped `z_top` angles the top face toward the user. A large `edge_top` fillet softens the wrist-rest zone. A `top_surface` dome adds a subtle crown.
-```json
-"outline": [
-    {{"x": 0,  "y": 0,  "z_top": 12, "ease_in": 6, "ease_out": 6}},
-    {{"x": 60, "y": 0,  "z_top": 12, "ease_in": 6, "ease_out": 6}},
-    {{"x": 60, "y": 50, "z_top": 22, "ease_in": 6, "ease_out": 6}},
-    {{"x": 0,  "y": 50, "z_top": 22, "ease_in": 6, "ease_out": 6}}
-],
-"enclosure": {{
-    "height_mm": 12,
-    "top_surface": {{
-        "type": "dome",
-        "peak_x_mm": 30, "peak_y_mm": 20,
-        "peak_height_mm": 16, "base_height_mm": 12
-    }},
-    "edge_top": {{"type": "fillet", "size_mm": 5}}
-}}
-```
-
-### Organic Pebble Form
-Deep easing on all vertices with a multi-vertex outline eliminates sharp corners. A dome top and fillet edges complete the organic form.
-```json
-"outline": [
-    {{"x": 5,  "y": 0,  "ease_in": 12, "ease_out": 12}},
-    {{"x": 45, "y": 5,  "ease_in": 12, "ease_out": 12}},
-    {{"x": 50, "y": 35, "ease_in": 12, "ease_out": 12}},
-    {{"x": 40, "y": 60, "ease_in": 12, "ease_out": 12}},
-    {{"x": 10, "y": 55, "ease_in": 12, "ease_out": 12}},
-    {{"x": 0,  "y": 25, "ease_in": 12, "ease_out": 12}}
-],
-"enclosure": {{
-    "height_mm": 18,
-    "top_surface": {{
-        "type": "dome",
-        "peak_x_mm": 25, "peak_y_mm": 28,
-        "peak_height_mm": 24, "base_height_mm": 18
-    }},
-    "edge_top": {{"type": "fillet", "size_mm": 4}},
-    "edge_bottom": {{"type": "fillet", "size_mm": 2}}
-}}
-```
-
-### Rules for Combinations
-1. **Trace routing:** Silver ink only prints on the flat Z=2mm floor. Areas with `z_bottom > 0` or raised `bottom_surface` cannot hold traces or components. Ensure the flat region is a large enough contiguous space.
-2. **Component clearance:** Where `z_bottom` is high and `z_top` is low, cavity height shrinks. Ensure `z_top - z_bottom ≥ 10mm` wherever components will be placed.
-3. **Intentional form:** Every dome, ridge, z_top slope, z_bottom lift, and edge profile should directly support the human interaction mapped out in your layout blueprint.
+- Top-mount positions must be inside the device silhouette
+- **IR transmitter LEDs** (`led_5mm` with wavelength 940nm) on remote controls **must** use `mounting_style: "side"` so the LED faces the device being controlled
 
 ---
 
@@ -441,36 +419,30 @@ Write a `device_description` of 2–4 sentences explaining:
 This is read by the electronics engineer who designs the circuit.
 
 ## Process
-1. Describe the object in plain language — its silhouette, personality, how it's held
-2. Browse UI components with `list_components` and `get_component`
-3. Write a layout blueprint (see below)
-4. Define the outline, enclosure, and UI placements
-5. Write the `device_description`
-6. Submit with `submit_design`
-7. If validation fails, read errors, fix, and resubmit
+**One edit per turn. Think less, edit more.** Don't work out the whole design in your head — put rough values in the document immediately and iterate from validation feedback.
 
-### Updating a Design
-When iterating on a design after the initial `submit_design`, prefer `update_design` over resubmitting everything. Only include the fields you are changing:
-- **Outline only changing?** Send just `outline` — enclosure and placements are kept.
-- **Moving a component?** Send `ui_placements` with just that one placement — others are kept.
-- **Adding a component?** Include the new placement in `ui_placements` — existing ones remain.
-- **Removing a component?** Use `remove_placements` with its `instance_id`.
-- **Multiple changes at once?** Include all changed fields in one `update_design` call.
+Keep internal reasoning brief. Don't pre-calculate coordinates, mentally compose shapes, or lay out all components before your first edit. Start writing into the document right away.
 
-This avoids re-specifying complex outlines or large placement lists when only one aspect changed.
+1. **Device description** — write 1–2 sentences into `device_description`.
+2. **Rough shape** — add a simple body shape to `shape` (even a single rectangle is fine). Stop here and validate.
+3. **Enclosure** — set `height_mm` based on component heights.
+4. **Component placement** — add UI components one or two at a time.
+5. **Refine** — adjust shapes, add detail, tweak positions. Each edit validates instantly.
+6. **Done** — when the design is valid and looks good, stop.
 
-### Layout Blueprint (required before writing JSON)
-Before writing the final design JSON, produce a short blueprint covering:
+Each `edit_design` call saves and validates. If validation fails, the design is still saved — read the errors and fix them.
 
-**Silhouette:** What does this look like from above? Describe the shape in a sentence or two — what makes it recognizable.
+### Responding to user feedback
+When the user asks for changes, make them directly. Don't re-derive the entire design — just edit the parts that need to change. A request like "make the grip thinner" should be a quick coordinate adjustment, not a full redesign.
 
-**Outline:** Overall width and height, key shape features (ears, tapers, curves), easing strategy (sharp points vs smooth curves).
+## Example Workflow
+A typical session looks like this — each numbered step is one `edit_design` call:
 
-**Enclosure:** Default height, any z_top variation (thin tips, sloped sections), surface treatments (dome, ridge), edge profiles.
-
-**UI placements:** Where each component goes and why that location fits the user's hand or eye. For buttons, consider whether a custom shape (rectangular, triangular, organic) better suits the device's design language than the default circular cap.
-
-When you are ready, call `submit_design` with `device_description`, `outline`, `enclosure`, and `ui_placements`."""
+1. Edit `device_description` — a sentence or two about what the device does.
+2. Edit `shape` — rough body outline using one or two primitives.
+3. Edit `enclosure` — set `height_mm` to fit the tallest component.
+4. Edit `ui_placements` — add components.
+5. Refine — adjust shapes, add detail, fix any validation errors. Done."""
 
 
 def build_circuit_prompt(catalog: CatalogResult) -> str:

@@ -70,27 +70,42 @@ class Session:
         (self.path / "session.json").write_text(
             json.dumps(meta, indent=2), encoding="utf-8")
 
+    def artifact_path(self, filename: str) -> Path:
+        """Return the full path for an artifact, namespaced by pipeline stage."""
+        stage = self._ARTIFACT_STAGE.get(filename)
+        if stage:
+            return self.path / stage / filename
+        return self.path / filename
+
     def write_artifact(self, filename: str, data: Any) -> Path:
         """Write a JSON artifact to the session folder."""
-        p = self.path / filename
+        p = self.artifact_path(filename)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        self.save()  # update last_modified
+        self.save()
+        return p
+
+    def write_artifact_text(self, filename: str, text: str) -> Path:
+        """Write a raw text artifact to the session folder."""
+        p = self.artifact_path(filename)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+        self.save()
         return p
 
     def read_artifact(self, filename: str) -> Any | None:
         """Read a JSON artifact from the session folder. Returns None if missing."""
-        p = self.path / filename
+        p = self.artifact_path(filename)
         if not p.exists():
             return None
         return json.loads(p.read_text(encoding="utf-8"))
 
     def has_artifact(self, filename: str) -> bool:
-        return (self.path / filename).exists()
+        return self.artifact_path(filename).exists()
 
     def delete_artifact(self, filename: str) -> bool:
         """Delete a JSON artifact. Returns True if it existed."""
-        p = self.path / filename
+        p = self.artifact_path(filename)
         if p.exists():
             p.unlink()
             return True
@@ -107,7 +122,7 @@ class Session:
             "routing": self.has_artifact("routing.json"),
             "bitmap": self.has_artifact("trace_bitmap.txt"),
             "scad": self.has_artifact("enclosure.scad"),
-            "compile": (self.path / "enclosure.stl").exists(),
+            "compile": self.has_artifact("enclosure.stl"),
             "gcode": self.has_artifact("enclosure.gcode"),
             "firmware": self.has_artifact("firmware.ino"),
             "setup": self.pipeline_state.get("setup") in ("complete", "compile_failed"),
@@ -115,7 +130,7 @@ class Session:
 
     _PIPELINE_ORDER: ClassVar[list[str]] = ["design", "circuit", "placement", "routing", "bitmap", "scad", "gcode", "firmware", "setup"]
     _STAGE_ARTIFACTS: ClassVar[dict[str, list[str]]] = {
-        "design": ["design.json", "design_conversation.json"],
+        "design": ["design.json", "outline.json", "design_conversation.json"],
         "circuit": ["circuit.json", "circuit_conversation.json"],
         "placement": ["placement.json"],
         "routing": ["routing.json", "routing_debug.json"],
@@ -124,6 +139,26 @@ class Session:
         "gcode": ["enclosure.gcode"],
         "firmware": ["firmware.ino"],
         "setup": ["firmware.ino", "setup_conversation.json"],
+    }
+
+    _ARTIFACT_STAGE: ClassVar[dict[str, str]] = {
+        "design.json": "design",
+        "outline.json": "design",
+        "design_conversation.json": "design",
+        "circuit.json": "circuit",
+        "circuit_pending.json": "circuit",
+        "circuit_conversation.json": "circuit",
+        "placement.json": "placement",
+        "routing.json": "routing",
+        "routing_debug.json": "routing",
+        "trace_bitmap.txt": "bitmap",
+        "enclosure.scad": "scad",
+        "enclosure.stl": "scad",
+        "enclosure.gcode": "gcode",
+        "firmware.ino": "firmware",
+        "setup_conversation.json": "setup",
+        "print_job.json": "gcode",
+        "sim_config.json": "firmware",
     }
 
     def invalidate_downstream(self, current_step: str) -> list[str]:

@@ -16,11 +16,11 @@ router = APIRouter()
 @router.post("/sessions/{sid}/manufacture/compile")
 async def start_compile(sid: str, force: bool = Query(False)):
     s = load_session_or_404(sid)
-    scad_path = s.path / "enclosure.scad"
+    scad_path = s.artifact_path("enclosure.scad")
     if not scad_path.exists():
         raise HTTPException(400, "No enclosure.scad yet — run SCAD first")
 
-    stl_path = s.path / "enclosure.stl"
+    stl_path = s.artifact_path("enclosure.stl")
     cur = get_compile_state(sid)
 
     if not force and stl_path.exists() and cur is None:
@@ -55,7 +55,7 @@ async def start_compile(sid: str, force: bool = Query(False)):
 @router.get("/sessions/{sid}/manufacture/compile")
 async def poll_compile(sid: str):
     s = load_session_or_404(sid)
-    stl_path = s.path / "enclosure.stl"
+    stl_path = s.artifact_path("enclosure.stl")
     state = get_compile_state(sid)
     if state:
         out = {"status": state["status"], "message": state.get("message", "")}
@@ -70,7 +70,7 @@ async def poll_compile(sid: str):
 @router.get("/sessions/{sid}/manufacture/stl")
 async def download_stl(sid: str):
     s = load_session_or_404(sid)
-    stl_path = s.path / "enclosure.stl"
+    stl_path = s.artifact_path("enclosure.stl")
     if not stl_path.exists():
         raise HTTPException(404, "No enclosure.stl yet — compile first")
     return FileResponse(

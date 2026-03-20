@@ -36,14 +36,15 @@ def _generate_and_save_bitmap(session) -> None:
     model_to_bed = _bed_center_offset(physical.outline.vertices, pdef)
     lines = generate_trace_bitmap(result, TRACE_RULES.trace_width_mm,
                                   grid=grid, model_to_bed=model_to_bed)
-    path = session.path / "trace_bitmap.txt"
+    path = session.artifact_path("trace_bitmap.txt")
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('\n'.join(lines), encoding='utf-8')
     session.save()
 
 
 def _read_bitmap_lines(session) -> list[str]:
     """Read the stored trace_bitmap.txt from the session folder."""
-    path = session.path / "trace_bitmap.txt"
+    path = session.artifact_path("trace_bitmap.txt")
     if not path.exists():
         raise HTTPException(404, "No trace_bitmap.txt — run the bitmap step first")
     return path.read_text(encoding='utf-8').split('\n')
@@ -83,6 +84,18 @@ async def poll_bitmap(sid: str):
     return {"status": "idle"}
 
 
+@router.get("/sessions/{sid}/manufacture/bitmap/download")
+async def download_bitmap(sid: str):
+    from fastapi.responses import PlainTextResponse
+    s = load_session_or_404(sid)
+    rows = _read_bitmap_lines(s)
+    return PlainTextResponse(
+        '\n'.join(rows),
+        media_type='text/plain',
+        headers={'Content-Disposition': 'attachment; filename="trace_bitmap.txt"'},
+    )
+
+
 @router.get("/sessions/{sid}/manufacture/bitmap")
 async def get_bitmap(sid: str):
     s = load_session_or_404(sid)
@@ -92,7 +105,8 @@ async def get_bitmap(sid: str):
     routing_data = require_routing(s)
     pdef = get_printer(s.printer_id)
 
-    outline = design_data.get("outline", [])
+    from src.web.routes._deps import _read_outline
+    outline = _read_outline(s)
     components = placement_data.get("components", [])
     traces = routing_data.get("traces", [])
 

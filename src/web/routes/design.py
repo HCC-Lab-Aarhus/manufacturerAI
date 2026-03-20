@@ -21,7 +21,7 @@ import anthropic
 
 from src.web.routes._deps import (
     get_catalog, load_session_or_404, invalidate_downstream,
-    enrich_design,
+    enrich_design, _read_outline, strip_enriched_fields,
 )
 from src.web.tasks import AgentTask, get_agent_task, set_agent_task
 
@@ -44,7 +44,7 @@ async def _run_design_background(sid: str, prompt: str, task: AgentTask):
             if event.type == "design" and event.data:
                 design = event.data.get("design")
                 if design:
-                    enrich_design(design, cat)
+                    enrich_design(design, cat, session=sess)
             task.append_event(event.type, event.data or {})
             if event.type == "design":
                 name = generate_session_name(sess)
@@ -134,7 +134,7 @@ async def get_design(sid: str):
     if data is None:
         raise HTTPException(404, "No design yet")
     cat = get_catalog()
-    enrich_design(data, cat)
+    enrich_design(data, cat, session=s)
     return data
 
 
@@ -154,11 +154,15 @@ async def put_design(sid: str, request: Request):
         raise HTTPException(422, detail={"errors": errors})
 
     invalidated = s.invalidate_design_smart(body)
-    s.write_artifact("design.json", body)
+    clean = strip_enriched_fields(body)
+    s.write_artifact("design.json", clean)
+
+    outline_data = [v.to_dict() for v in physical.outline.points]
+    s.write_artifact("outline.json", outline_data)
     s.pipeline_state["design"] = "complete"
     s.save()
 
-    enrich_design(body, cat)
+    enrich_design(body, cat, session=s)
     body["invalidated_steps"] = invalidated
     body["artifacts"] = s.artifacts
     body["pipeline_errors"] = s.pipeline_errors
@@ -187,7 +191,7 @@ async def patch_enclosure(sid: str, request: Request):
 
     s.write_artifact("design.json", data)
     cat = get_catalog()
-    enrich_design(data, cat)
+    enrich_design(data, cat, session=s)
     return data
 
 
@@ -214,7 +218,7 @@ async def validate_ui_placement(sid: str, request: Request):
     )
     cat_comp = cat_map.get(comp_entry["catalog_id"]) if comp_entry else None
 
-    outline = data.get("outline", [])
+    outline = _read_outline(s)
     if len(outline) < 3:
         return {"valid": False, "errors": ["Outline has fewer than 3 vertices"]}
 
@@ -333,7 +337,10 @@ def get_design_tokens(sid: str):
         return {"input_tokens": 0, "budget": TOKEN_BUDGET}
 
     cat = get_catalog()
-    system = build_design_prompt(cat, printer=get_printer(s.printer_id))
+    design = s.read_artifact("design.json")
+    import json as _json
+    design_text = _json.dumps(design, indent=2) if design else None
+    system = build_design_prompt(cat, printer=get_printer(s.printer_id), design_text=design_text)
     pruned = prune_messages(sanitize_messages(conversation))
     client = anthropic.Anthropic()
     try:

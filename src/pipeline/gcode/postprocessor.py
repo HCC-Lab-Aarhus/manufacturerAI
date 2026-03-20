@@ -302,16 +302,11 @@ def _ink_pause_block(
     instructions: list[str],
     display_msg: str | None = None,
 ) -> list[str]:
-    """Generate an M0 pause for ink deposition — head stays in place.
+    """Generate an M0 pause for ink deposition with head repositioning.
 
-    ``M0`` (Unconditional Stop) halts the printer immediately without
-    parking or retracting, so the nozzle remains directly over the last
-    print position.  This is intentional for ink work: the operator can
-    see exactly where the traces are and the head is out of the way only
-    if the slicer positioned it there.
-
-    Unlike M601, M0 does NOT move the head to the park position, which
-    means the silver-ink channels stay visible and accessible.
+    Retracts filament, lifts the head, homes X/Y, lowers back down, then
+    issues ``M0`` so the operator can prepare the silver-ink system.
+    The ``;silverink`` marker tells the Pi firmware to begin the ink sweep.
     """
     lines = [
         "",
@@ -321,12 +316,24 @@ def _ink_pause_block(
     ]
     for instr in instructions:
         lines.append(f"; >> {instr}")
+    lines.append("; " + "=" * 50)
+
     if display_msg:
         m0_line = f"M0 {display_msg}"
     else:
-        m0_line = "M0 ; unconditional stop — head stays in place, press knob/LCD to resume"
+        m0_line = "M0 ; unconditional stop — press knob/LCD to resume"
+
     lines.extend([
-        "; " + "=" * 50,
+        "",
+        "G91 ; relative positioning",
+        "G1 Z1 F1000 ; lift head before pause",
+        "G90 ; absolute positioning",
+        "",
+        "G1 X0 Y0 F3000 ; move to home",
+        "",
+        "G91 ; relative positioning",
+        "G1 Z-1 F1000 ; lower head back down",
+        "G90 ; absolute positioning",
         "",
         m0_line,
     ])
