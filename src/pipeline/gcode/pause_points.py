@@ -69,8 +69,8 @@ class PausePoints:
 
     @property
     def component_pauses(self) -> list[PausePoint]:
-        """All non-ink pauses (component insertion stages)."""
-        return [p for p in self.pauses if p.label != "ink"]
+        """All non-ink, non-jumper pauses (component insertion stages)."""
+        return [p for p in self.pauses if p.label not in ("ink", "jumpers")]
 
 
 def _snap_to_layer(z: float, layer_h: float) -> float:
@@ -111,12 +111,17 @@ def compute_pause_points(
     shell_height: float | None = None,
     layer_height: float = 0.2,
     components: list[ComponentPauseInfo] | None = None,
+    jumper_count: int = 0,
 ) -> PausePoints:
     """Determine pause Z-heights for the multi-stage print.
 
     Components with an explicit ``pause_z_mm`` are grouped by that
     value.  Components without one get a computed Z from their body
     height.  Duplicate Z values are merged into a single pause.
+
+    When *jumper_count* > 0 a "jumpers" pause is inserted at
+    ``CAVITY_START_MM`` so jumper wires can be placed in their
+    channels before cavity walls cover them.
 
     Parameters
     ----------
@@ -127,6 +132,9 @@ def compute_pause_points(
     components : list[ComponentPauseInfo], optional
         Placed components for multi-stage grouping.  When *None* the
         function falls back to a single component pause at ceil_start.
+    jumper_count : int
+        Number of jumper wires in the routing.  When > 0 a dedicated
+        pause is added for jumper wire insertion.
 
     Returns
     -------
@@ -141,6 +149,15 @@ def compute_pause_points(
     pauses: list[PausePoint] = [
         PausePoint(z=ink_z, layer_number=ink_layer, label="ink"),
     ]
+
+    # Jumper wire pause — insert wires into their channels before
+    # cavity walls cover the jumper layer.
+    if jumper_count > 0:
+        jumper_z = _snap_to_layer(CAVITY_START_MM, layer_height)
+        jumper_layer = round(jumper_z / layer_height)
+        pauses.append(PausePoint(
+            z=jumper_z, layer_number=jumper_layer, label="jumpers",
+        ))
 
     if not components:
         # Backward compat: single component pause at ceil_start

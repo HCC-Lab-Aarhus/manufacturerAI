@@ -91,10 +91,12 @@ def run_gcode_pipeline(
 
     # ── 1. Compute pause points ────────────────────────────────────
     log.info("Computing pause points...")
+    jumper_count = len(routing_result.get("jumpers", []))
     pauses = compute_pause_points(
         shell_height=shell_height,
         layer_height=layer_height,
         components=component_infos,
+        jumper_count=jumper_count,
     )
 
     pause_summary = ", ".join(
@@ -157,7 +159,7 @@ def run_gcode_pipeline(
         output_path=final_gcode,
         ink_z=pauses.ink_layer_z,
         component_pauses=[
-            (p.z, p.label, p.components) for p in pauses.component_pauses
+            (p.z, p.label, p.components) for p in pauses.pauses if p.label != "ink"
         ],
         trace_segments=trace_segs,
         bed_offset=bed_offset,

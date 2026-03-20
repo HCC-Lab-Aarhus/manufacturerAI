@@ -750,7 +750,13 @@ def postprocess_gcode(
                     break
                 comp_layer_nums.append(total_layers)
 
-                if cp_ids:
+                if cp_label == "jumpers":
+                    instructions = [
+                        "Insert jumper wires into their channels.",
+                        "Press each wire endpoint into its pinhole.",
+                        "Press the knob when done to resume printing.",
+                    ]
+                elif cp_ids:
                     comp_lines = [
                         f"  - {cid}" for cid in cp_ids
                     ]
