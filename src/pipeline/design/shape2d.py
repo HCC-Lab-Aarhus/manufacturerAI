@@ -4,21 +4,31 @@ Primitives: rectangle, ellipse.
 Operations: union, difference, intersection.
 
 Primitives support optional modifiers:
-  - rectangle: size_end + axis (taper), corner_radius, rotate
-  - ellipse: end_center + radius_end (tapered capsule), rotate
+  - rectangle: size_end + axis (taper), corner_radius
+  - ellipse: end_center + radius_end (tapered capsule)
 
 Node-level transforms (apply to any primitive or operation result):
-  - rotate: degrees  — positive = top tilts right (screen-coords convention);
-                        around center (primitives) or center-of-mass (ops)
-  - scale: number | [sx, sy]  — uniform or per-axis scaling around centroid
-  - mirror: "x" | "y" | "xy"  — reflection across axis through centroid
+  - rotate: degrees  — positive = counter-clockwise (CCW), standard CAD
+                        convention; around center (primitives) or
+                        origin/centroid (ops)
+  - scale: number | [sx, sy]  — uniform or per-axis scaling
+  - mirror: "x" | "y" | "xy"  — reflection across axis
+  - translate: [dx, dy]  — offset applied after all other transforms
+  - origin: [x, y]  — pivot point for rotate/scale/mirror on operations
+                       (defaults to centroid if omitted)
+
+Transform order: scale → mirror → rotate → translate.
 
 Each primitive can carry optional z_top / z_bottom values.
 """
 
 from __future__ import annotations
 
-from shapely.affinity import rotate as _shapely_rotate, scale as _shapely_scale
+from shapely.affinity import (
+    rotate as _shapely_rotate,
+    scale as _shapely_scale,
+    translate as _shapely_translate,
+)
 from shapely.geometry import Polygon, Point, box
 from shapely.validation import make_valid
 
@@ -69,7 +79,7 @@ def _validate_node(node: dict, errors: list[str], depth: int) -> None:
 
 
 def _validate_transforms(node: dict, errors: list[str]) -> None:
-    """Validate node-level transforms (rotate, scale, mirror)."""
+    """Validate node-level transforms (rotate, scale, mirror, translate, origin)."""
     rotate = node.get("rotate")
     if rotate is not None and not isinstance(rotate, (int, float)):
         errors.append("'rotate' must be a number (degrees)")
@@ -88,6 +98,18 @@ def _validate_transforms(node: dict, errors: list[str]) -> None:
     mirror = node.get("mirror")
     if mirror is not None and mirror not in ("x", "y", "xy"):
         errors.append("'mirror' must be 'x', 'y', or 'xy'")
+    translate = node.get("translate")
+    if translate is not None:
+        if not isinstance(translate, list) or len(translate) != 2:
+            errors.append("'translate' must be [dx, dy]")
+        elif not all(isinstance(v, (int, float)) for v in translate):
+            errors.append("'translate' values must be numbers")
+    origin = node.get("origin")
+    if origin is not None:
+        if not isinstance(origin, list) or len(origin) != 2:
+            errors.append("'origin' must be [x, y]")
+        elif not all(isinstance(v, (int, float)) for v in origin):
+            errors.append("'origin' values must be numbers")
 
 
 def _validate_rectangle(node: dict, errors: list[str]) -> None:
@@ -193,28 +215,43 @@ def _eval_csg(node: dict) -> Polygon:
     return geom
 
 
+def _get_transform_origin(geom: Polygon, node: dict):
+    """Return the pivot point for transforms: explicit origin or centroid."""
+    origin_spec = node.get("origin")
+    if origin_spec:
+        return (origin_spec[0], origin_spec[1])
+    return geom.centroid
+
+
 def _apply_transforms(geom: Polygon, node: dict) -> Polygon:
-    """Apply node-level transforms: scale, mirror, rotate (in that order)."""
+    """Apply node-level transforms: scale → mirror → rotate → translate."""
+    if "type" in node:
+        cx, cy = node["center"]
+        pivot = (cx, cy)
+    else:
+        pivot = _get_transform_origin(geom, node)
+
     scale_val = node.get("scale")
     if scale_val is not None:
-        centroid = geom.centroid
         if isinstance(scale_val, (int, float)):
             sx = sy = float(scale_val)
         else:
             sx, sy = float(scale_val[0]), float(scale_val[1])
-        geom = _shapely_scale(geom, xfact=sx, yfact=sy, origin=centroid)
+        geom = _shapely_scale(geom, xfact=sx, yfact=sy, origin=pivot)
 
     mirror = node.get("mirror")
     if mirror:
-        centroid = geom.centroid
         mx = -1.0 if "x" in mirror else 1.0
         my = -1.0 if "y" in mirror else 1.0
-        geom = _shapely_scale(geom, xfact=mx, yfact=my, origin=centroid)
+        geom = _shapely_scale(geom, xfact=mx, yfact=my, origin=pivot)
 
     rotate = node.get("rotate")
     if rotate:
-        if "type" not in node:
-            geom = _shapely_rotate(geom, rotate, origin="centroid")
+        geom = _shapely_rotate(geom, -rotate, origin=pivot)
+
+    translate = node.get("translate")
+    if translate:
+        geom = _shapely_translate(geom, xoff=translate[0], yoff=translate[1])
 
     return geom
 
@@ -227,11 +264,6 @@ def _make_primitive(node: dict) -> Polygon:
         geom = _make_ellipse(node)
     else:
         raise ValueError(f"Unknown primitive type: {ptype}")
-
-    rotate = node.get("rotate")
-    if rotate:
-        cx, cy = node["center"]
-        geom = _shapely_rotate(geom, rotate, origin=(cx, cy))
     return geom
 
 
@@ -257,7 +289,8 @@ def _collect_primitives(node: dict, default_z_top: float | None,
         combined = result[0].geom
         for tp in result[1:]:
             combined = combined.union(tp.geom)
-        origin = combined.centroid
+        origin_spec = node.get("origin")
+        origin = (origin_spec[0], origin_spec[1]) if origin_spec else combined.centroid
         result = [
             _TaggedPoly(
                 _apply_node_transforms(tp.geom, node, origin),
@@ -271,32 +304,41 @@ def _collect_primitives(node: dict, default_z_top: float | None,
 
 def _has_transforms(node: dict) -> bool:
     return (node.get("rotate") or node.get("scale") is not None
-            or node.get("mirror"))
+            or node.get("mirror") or node.get("translate"))
 
 
 def _apply_prim_transforms(geom: Polygon, node: dict) -> Polygon:
-    """Apply scale and mirror to a primitive (rotate already applied in _make_primitive)."""
+    """Apply scale → mirror → rotate → translate to a primitive around its center."""
+    cx, cy = node["center"]
+    pivot = (cx, cy)
+
     scale_val = node.get("scale")
     if scale_val is not None:
-        centroid = geom.centroid
         if isinstance(scale_val, (int, float)):
             sx = sy = float(scale_val)
         else:
             sx, sy = float(scale_val[0]), float(scale_val[1])
-        geom = _shapely_scale(geom, xfact=sx, yfact=sy, origin=centroid)
+        geom = _shapely_scale(geom, xfact=sx, yfact=sy, origin=pivot)
 
     mirror = node.get("mirror")
     if mirror:
-        centroid = geom.centroid
         mx = -1.0 if "x" in mirror else 1.0
         my = -1.0 if "y" in mirror else 1.0
-        geom = _shapely_scale(geom, xfact=mx, yfact=my, origin=centroid)
+        geom = _shapely_scale(geom, xfact=mx, yfact=my, origin=pivot)
+
+    rotate = node.get("rotate")
+    if rotate:
+        geom = _shapely_rotate(geom, -rotate, origin=pivot)
+
+    translate = node.get("translate")
+    if translate:
+        geom = _shapely_translate(geom, xoff=translate[0], yoff=translate[1])
 
     return geom
 
 
 def _apply_node_transforms(geom: Polygon, node: dict, origin) -> Polygon:
-    """Apply scale, mirror, rotate to a geometry using a shared origin."""
+    """Apply scale, mirror, rotate, translate to a geometry using a shared origin."""
     scale_val = node.get("scale")
     if scale_val is not None:
         if isinstance(scale_val, (int, float)):
@@ -313,7 +355,11 @@ def _apply_node_transforms(geom: Polygon, node: dict, origin) -> Polygon:
 
     rotate = node.get("rotate")
     if rotate:
-        geom = _shapely_rotate(geom, rotate, origin=origin)
+        geom = _shapely_rotate(geom, -rotate, origin=origin)
+
+    translate = node.get("translate")
+    if translate:
+        geom = _shapely_translate(geom, xoff=translate[0], yoff=translate[1])
 
     return geom
 

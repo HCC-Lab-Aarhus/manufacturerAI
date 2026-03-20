@@ -122,9 +122,8 @@ Use `get_component` to read full details before placing a component.
 Build the device silhouette by combining 2D primitives with boolean operations. The system tessellates your CSG tree into the final outline automatically.
 
 ### Coordinate System
-Standard **screen coordinates** (same as CSS/SVG):
-- **x** increases **rightward**, **y** increases **downward**
-- `[0, 0]` = top-left corner. All measurements in **mm**. Use positive coordinates.
+- **x** increases **rightward**, **y** increases **downward**. Origin `[0, 0]` = top-left. All values in **mm**. Use positive coordinates.
+- **Rotation** follows **standard CAD convention**: positive = **counter-clockwise** (CCW), negative = **clockwise** (CW). See the rotation table below.
 
 ### Primitives
 
@@ -193,27 +192,62 @@ Keeps only the region where ALL children overlap.
 ```
 **Use for:** creating capsule/stadium shapes, clipping complex shapes to a bounding region, rounding proportions.
 
-Operations nest to any depth. Any operation node can carry `rotate`, `scale`, and `mirror` transforms:
+Operations nest to any depth. Any operation node can carry `rotate`, `scale`, `mirror`, and `translate` transforms.
+
+Specify `origin` on an operation to set the pivot point for rotation/scale/mirror (defaults to centroid if omitted):
 ```json
 {{"op": "union", "children": [
     {{"type": "rectangle", "center": [10, 15], "size": [6, 20], "size_end": [2, 20], "axis": "y"}},
     {{"type": "ellipse", "center": [10, 5], "radius": 5}}
-], "rotate": 45, "scale": 0.8}}
+], "rotate": 45, "origin": [10, 25]}}
 ```
 
+### Hierarchical Nesting
+For branching or articulated structures (trees, creatures, mechanisms), nest operation groups so each branch is a child of its parent. Set `origin` at the junction point — rotating the parent will carry all sub-branches naturally:
+```json
+{{"op": "union", "children": [
+    {{"type": "ellipse", "center": [50, 100], "radius": 8, "end_center": [50, 60], "radius_end": 5}},
+    {{"op": "union", "rotate": -20, "origin": [50, 60], "children": [
+        {{"type": "ellipse", "center": [50, 60], "radius": 5, "end_center": [30, 35], "radius_end": 2}},
+        {{"type": "ellipse", "center": [30, 35], "radius": 2, "end_center": [20, 18], "radius_end": 1}}
+    ]}}
+]}}
+```
+Changing `"rotate": -20` on the branch group swings all its sub-branches together around the junction at `[50, 60]`.
+
 ### Rotation
-`rotate` spins around the center point. Positive angles go clockwise (top moves right). Works on primitives and groups.
-| `rotate` | Top edge faces |
-|---|---|
-| `0` | Up (default) |
-| `45` | Upper-right |
-| `90` | Right |
-| `-45` | Upper-left |
+`rotate: degrees` — spins around the pivot point. **Positive = counter-clockwise (CCW)**, **negative = clockwise (CW)** — same as standard CAD (OpenSCAD, FreeCAD, etc.).
+
+For primitives, the pivot is the `center`. For operations, the pivot is `origin` (if specified) or the centroid.
+
+| `rotate` | Top edge faces | Direction |
+|---|---|---|
+| `0` | Up (default) | — |
+| `45` | Upper-left | CCW |
+| `90` | Left | CCW |
+| `-45` | Upper-right | CW |
+| `-90` | Right | CW |
+
+### Origin
+- **`origin: [x, y]`** — pivot point for `rotate`, `scale`, and `mirror` on operation nodes. Omit to use centroid.
+- Set `origin` at the junction point where a sub-shape connects to its parent (e.g. where a branch meets a trunk). This makes rotation swing the group around that point.
+
+### Translate
+- **`translate: [dx, dy]`** — shifts the geometry after all other transforms. Works on any node.
+- Useful for positioning a rotated group, or nudging a component.
 
 ### Scale & Mirror
-- **`scale: number | [sx, sy]`** — resize around centroid. `[1.0, 0.5]` halves height.
-- **`mirror: "x" | "y" | "xy"`** — flip across axis. `"x"` flips left↔right.
-- **Transform order:** scale → mirror → rotate.
+- **`scale: number | [sx, sy]`** — resize around pivot. `[1.0, 0.5]` halves height.
+- **`mirror: "x" | "y" | "xy"`** — flip across axis through pivot. `"x"` flips left\u2194right.
+
+### Transform Order
+All transforms apply in a fixed order regardless of JSON key order:
+1. **scale** — resize around pivot
+2. **mirror** — flip around pivot
+3. **rotate** — spin around pivot (positive = CCW)
+4. **translate** — shift position
+
+For **primitives**, the pivot is always `center`. For **operations**, the pivot is `origin` (if specified) or the centroid of the combined children.
 
 ### Per-Primitive Height
 Each primitive can carry optional `z_top` (ceiling height) and `z_bottom` (floor height). Where primitives overlap, the higher `z_top` wins. Primitives without these inherit from `enclosure.height_mm`.
