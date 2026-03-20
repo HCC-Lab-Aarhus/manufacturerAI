@@ -109,48 +109,42 @@
       "catalog_id": "led_5mm",
       "instance_id": "led_1",
       "config": {
-        "wavelength_nm": 525,
-        "forward_voltage_v": 2.2
+        "color": "green"
       }
     },
     {
       "catalog_id": "led_5mm",
       "instance_id": "led_2",
       "config": {
-        "wavelength_nm": 525,
-        "forward_voltage_v": 2.2
+        "color": "green"
       }
     },
     {
       "catalog_id": "led_5mm",
       "instance_id": "led_3",
       "config": {
-        "wavelength_nm": 525,
-        "forward_voltage_v": 2.2
+        "color": "green"
       }
     },
     {
       "catalog_id": "led_5mm",
       "instance_id": "led_4",
       "config": {
-        "wavelength_nm": 525,
-        "forward_voltage_v": 2.2
+        "color": "green"
       }
     },
     {
       "catalog_id": "led_5mm",
       "instance_id": "led_5",
       "config": {
-        "wavelength_nm": 525,
-        "forward_voltage_v": 2.2
+        "color": "green"
       }
     },
     {
       "catalog_id": "led_5mm",
       "instance_id": "led_6",
       "config": {
-        "wavelength_nm": 525,
-        "forward_voltage_v": 2.2
+        "color": "green"
       }
     }
   ],

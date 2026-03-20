@@ -18,8 +18,41 @@ def catalog_to_dict(result: CatalogResult) -> dict:
     }
 
 
+def resolve_config(config: dict, configurable: dict) -> dict:
+    """Expand enum selections into their resolved property values.
+
+    Given config {"color": "red"} and a configurable with an enum field,
+    returns {"color": "red", "wavelength_nm": 620, "forward_voltage_v": 2.0}.
+    """
+    resolved: dict[str, Any] = {}
+    for key, value in config.items():
+        resolved[key] = value
+        field_def = configurable.get(key)
+        if isinstance(field_def, dict) and field_def.get("type") == "enum":
+            options = field_def.get("options", {})
+            if isinstance(value, str) and value in options:
+                resolved.update(options[value])
+    return resolved
+
+
+def _design_configurable(configurable: dict) -> dict | None:
+    """Extract design-relevant config fields, simplifying enums to option lists."""
+    result: dict[str, Any] = {}
+    for key, field_def in configurable.items():
+        if isinstance(field_def, dict) and field_def.get("type") == "enum":
+            result[key] = {
+                "description": field_def.get("description", ""),
+                "options": list(field_def["options"].keys()),
+            }
+        elif isinstance(field_def, dict) and not field_def.get("agent_decides"):
+            continue
+        else:
+            result[key] = field_def
+    return result or None
+
+
 def component_to_design_dict(c: Component) -> dict:
-    """Serialize a Component for the design agent — no dimensions or pin details."""
+    """Serialize a Component for the design agent — no dimensions, pins, or electrical details."""
     d: dict[str, Any] = {
         "id": c.id,
         "name": c.name,
@@ -31,7 +64,9 @@ def component_to_design_dict(c: Component) -> dict:
         },
     }
     if c.configurable:
-        d["configurable"] = c.configurable
+        filtered = _design_configurable(c.configurable)
+        if filtered:
+            d["configurable"] = filtered
     return d
 
 

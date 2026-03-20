@@ -5,7 +5,7 @@ from .models import (
     ValidationError, CatalogResult,
 )
 from .loader import load_catalog, get_component, CATALOG_DIR
-from .serialization import catalog_to_dict, component_to_dict, component_to_design_dict
+from .serialization import catalog_to_dict, component_to_dict, component_to_design_dict, resolve_config
 
 # Back-compat alias (old code used the underscore-prefixed name)
 _component_to_dict = component_to_dict
@@ -18,5 +18,5 @@ __all__ = [
     "load_catalog", "get_component", "CATALOG_DIR",
     # Serialization
     "catalog_to_dict", "component_to_dict", "component_to_design_dict",
-    "_component_to_dict",
+    "resolve_config", "_component_to_dict",
 ]

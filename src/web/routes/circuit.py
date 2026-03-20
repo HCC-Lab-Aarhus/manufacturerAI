@@ -88,7 +88,7 @@ async def run_circuit(sid: str, request: Request):
         prompt = outline
         invalidated = invalidate_downstream(sess, "design")
     else:
-        prompt = build_circuit_user_prompt(design_data)
+        prompt = build_circuit_user_prompt(design_data, catalog=get_catalog())
         invalidated = invalidate_downstream(sess, "design")
     sess.save()
 

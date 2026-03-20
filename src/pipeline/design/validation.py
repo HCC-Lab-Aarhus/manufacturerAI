@@ -230,11 +230,20 @@ def validate_design(
                     f"'{ci.catalog_id}' has no configurable fields"
                 )
             else:
-                for key in ci.config:
+                for key, value in ci.config.items():
                     if key not in cat.configurable:
                         errors.append(
                             f"Component '{ci.instance_id}': unknown config key '{key}'"
                         )
+                        continue
+                    field_def = cat.configurable[key]
+                    if isinstance(field_def, dict) and field_def.get("type") == "enum":
+                        options = field_def.get("options", {})
+                        if value not in options:
+                            errors.append(
+                                f"Component '{ci.instance_id}': config '{key}' "
+                                f"value '{value}' not in options: {list(options.keys())}"
+                            )
 
     # ── Net pin references ──
     for net in spec.nets:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.catalog import CatalogResult
+from src.catalog import CatalogResult, resolve_config
 from src.pipeline.config import PrinterDef
 
 
@@ -465,7 +465,7 @@ Placed UI components: led_1 (led_5mm), btn_1 (tactile_button_6x6)
     "components": [
         {{"catalog_id": "battery_holder_2xAAA", "instance_id": "bat_1"}},
         {{"catalog_id": "resistor_axial", "instance_id": "r_1", "config": {{"resistance_ohms": 150}}}},
-        {{"catalog_id": "led_5mm", "instance_id": "led_1", "config": {{"wavelength_nm": 620, "forward_voltage_v": 2.0}}}},
+        {{"catalog_id": "led_5mm", "instance_id": "led_1", "config": {{"color": "red"}}}},
         {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_1"}}
     ],
     "nets": [
@@ -488,7 +488,7 @@ Placed UI components: btn_1 (tactile_button_6x6), btn_2 (tactile_button_6x6), le
         {{"catalog_id": "capacitor_100nf", "instance_id": "c_bypass"}},
         {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_1"}},
         {{"catalog_id": "tactile_button_6x6", "instance_id": "btn_2"}},
-        {{"catalog_id": "led_5mm", "instance_id": "led_status", "config": {{"wavelength_nm": 525, "forward_voltage_v": 2.2}}}},
+        {{"catalog_id": "led_5mm", "instance_id": "led_status", "config": {{"color": "green"}}}},
         {{"catalog_id": "resistor_axial", "instance_id": "r_led", "config": {{"resistance_ohms": 68}}}}
     ],
     "nets": [
@@ -503,10 +503,14 @@ Placed UI components: btn_1 (tactile_button_6x6), btn_2 (tactile_button_6x6), le
 ```"""
 
 
-def build_circuit_user_prompt(design_data: dict) -> str:
+def build_circuit_user_prompt(design_data: dict, catalog: CatalogResult | None = None) -> str:
     """Generate the user message for the circuit agent from design.json."""
     desc = design_data.get("device_description", "")
     placements = design_data.get("ui_placements", [])
+
+    catalog_map: dict[str, object] = {}
+    if catalog:
+        catalog_map = {c.id: c for c in catalog.components}
 
     parts = [
         "Design the circuit for this device.",
@@ -520,7 +524,13 @@ def build_circuit_user_prompt(design_data: dict) -> str:
         cid = p.get("catalog_id", p.get("instance_id", "?"))
         iid = p.get("instance_id", "?")
         face = "side" if p.get("edge_index") is not None else "top"
-        parts.append(f"- {iid} ({cid}) — {face} face")
+        config = p.get("config")
+        if config and cid in catalog_map:
+            cat = catalog_map[cid]
+            if cat.configurable:
+                config = resolve_config(config, cat.configurable)
+        config_str = f", config: {config}" if config else ""
+        parts.append(f"- {iid} ({cid}) — {face} face{config_str}")
 
     parts.append("")
     parts.append(
