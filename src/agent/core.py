@@ -10,7 +10,7 @@ from typing import AsyncGenerator
 
 import anthropic
 
-from src.catalog import CatalogResult, _component_to_dict
+from src.catalog import CatalogResult, _component_to_dict, component_to_design_dict
 from src.pipeline.config import get_printer
 from src.pipeline.design import (
     validate_design,
@@ -328,6 +328,17 @@ class DesignAgent(_BaseAgent):
 
     def _get_tools(self) -> list[dict]:
         return DESIGN_TOOLS
+
+    def _tool_get_component(self, input_data: dict) -> str:
+        component_id = input_data.get("component_id", "")
+        for c in self.catalog.components:
+            if c.id == component_id:
+                return json.dumps(component_to_design_dict(c), indent=2)
+        available = [c.id for c in self.catalog.components]
+        return (
+            f"Component '{component_id}' not found. "
+            f"Available: {', '.join(available)}"
+        )
 
     def _get_system_prompt(self) -> str:
         printer = get_printer(self.session.printer_id)

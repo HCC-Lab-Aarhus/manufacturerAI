@@ -18,6 +18,23 @@ def catalog_to_dict(result: CatalogResult) -> dict:
     }
 
 
+def component_to_design_dict(c: Component) -> dict:
+    """Serialize a Component for the design agent — no dimensions or pin details."""
+    d: dict[str, Any] = {
+        "id": c.id,
+        "name": c.name,
+        "description": c.description,
+        "ui_placement": c.ui_placement,
+        "mounting": {
+            "style": c.mounting.style,
+            "allowed_styles": c.mounting.allowed_styles,
+        },
+    }
+    if c.configurable:
+        d["configurable"] = c.configurable
+    return d
+
+
 def component_to_dict(c: Component) -> dict:
     """Serialize a Component to a JSON-safe dict."""
     d: dict[str, Any] = {
