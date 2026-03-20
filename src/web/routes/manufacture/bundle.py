@@ -14,11 +14,11 @@ router = APIRouter()
 @router.get("/sessions/{sid}/manufacture/bundle")
 async def download_bundle(sid: str):
     s = load_session_or_404(sid)
-    gcode_path = s.path / "enclosure.gcode"
+    gcode_path = s.artifact_path("enclosure.gcode")
     if not gcode_path.exists():
         raise HTTPException(404, "Missing manufacturing file: enclosure_staged.gcode")
 
-    bitmap_path = s.path / "trace_bitmap.txt"
+    bitmap_path = s.artifact_path("trace_bitmap.txt")
     if not bitmap_path.exists():
         raise HTTPException(404, "Missing trace_bitmap.txt — run the bitmap step first")
 
@@ -41,7 +41,7 @@ async def download_bundle(sid: str):
 @router.get("/sessions/{sid}/manufacture/print-job")
 async def download_print_job(sid: str):
     s = load_session_or_404(sid)
-    path = s.path / "print_job.json"
+    path = s.artifact_path("print_job.json")
     if not path.exists():
         raise HTTPException(404, "print_job.json not found")
     return FileResponse(path, filename="print_job.json", media_type="application/json")

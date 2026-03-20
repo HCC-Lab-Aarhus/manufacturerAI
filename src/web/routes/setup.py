@@ -64,11 +64,11 @@ async def _run_setup_background(sid: str, prompt: str, task: AgentTask):
         # After agent finishes, generate sim_config if firmware compiled
         setup_state = sess.pipeline_state.get("setup")
         if setup_state in ("complete", "compile_failed", "compile_skipped"):
-            elf_path = sess.path / "firmware_build" / "firmware.ino.elf"
+            elf_path = sess.artifact_path("firmware.ino").parent / "firmware_build" / "firmware.ino.elf"
             elf_rel = "firmware_build/firmware.ino.elf" if elf_path.exists() else None
             try:
                 sim_cfg = generate_sim_config(circuit, routing, catalog_map, elf_rel)
-                write_sim_config(sim_cfg, sess.path)
+                write_sim_config(sim_cfg, sess.artifact_path("sim_config.json").parent)
                 task.append_event("sim_config", {"ready": True})
             except Exception as e:
                 log.warning("sim_config generation failed: %s", e)
@@ -193,7 +193,7 @@ async def setup_agent_status(sid: str):
 async def get_firmware(sid: str):
     """Return the generated firmware source code."""
     sess = load_session_or_404(sid)
-    ino_path = sess.path / "firmware.ino"
+    ino_path = sess.artifact_path("firmware.ino")
     if not ino_path.exists():
         raise HTTPException(404, "No firmware generated yet")
     return {"code": ino_path.read_text(encoding="utf-8")}
@@ -203,7 +203,7 @@ async def get_firmware(sid: str):
 async def recompile_firmware(sid: str):
     """Recompile existing firmware.ino and regenerate sim_config."""
     sess = load_session_or_404(sid)
-    ino_path = sess.path / "firmware.ino"
+    ino_path = sess.artifact_path("firmware.ino")
     if not ino_path.exists():
         raise HTTPException(400, "No firmware.ino — run the setup agent first")
 
@@ -215,7 +215,7 @@ async def recompile_firmware(sid: str):
         )
 
     code = ino_path.read_text(encoding="utf-8")
-    result = compile_sketch(code, sess.path)
+    result = compile_sketch(code, sess.artifact_path("firmware.ino").parent)
 
     if not result.success:
         sess.pipeline_state["setup"] = "compile_failed"
@@ -235,11 +235,11 @@ async def recompile_firmware(sid: str):
     if circuit and routing:
         cat = get_catalog()
         catalog_map = _build_catalog_map(cat)
-        elf_path = sess.path / "firmware_build" / "firmware.ino.elf"
+        elf_path = sess.artifact_path("firmware.ino").parent / "firmware_build" / "firmware.ino.elf"
         elf_rel = "firmware_build/firmware.ino.elf" if elf_path.exists() else None
         try:
             sim_cfg = generate_sim_config(circuit, routing, catalog_map, elf_rel)
-            write_sim_config(sim_cfg, sess.path)
+            write_sim_config(sim_cfg, sess.artifact_path("sim_config.json").parent)
         except Exception as e:
             log.warning("sim_config generation failed: %s", e)
 
@@ -254,7 +254,7 @@ async def recompile_firmware(sid: str):
 async def get_sim_config(sid: str):
     """Return the simulation config for the device."""
     sess = load_session_or_404(sid)
-    cfg_path = sess.path / "sim_config.json"
+    cfg_path = sess.artifact_path("sim_config.json")
     if not cfg_path.exists():
         raise HTTPException(404, "No sim_config.json — run setup first")
     return json.loads(cfg_path.read_text(encoding="utf-8"))
@@ -283,7 +283,7 @@ async def simulate_ws(websocket: WebSocket, sid: str):
             pass
 
     try:
-        mgr = await get_or_create_simulation(sess.path, sid)
+        mgr = await get_or_create_simulation(sess.artifact_path("sim_config.json").parent, sid)
         mgr.add_listener(on_event)
 
         if mgr.booted:

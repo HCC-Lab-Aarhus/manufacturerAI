@@ -24,7 +24,7 @@ async def start_gcode(
     silverink_only: bool = Query(False),
 ):
     s = load_session_or_404(sid)
-    stl_path = s.path / "enclosure.stl"
+    stl_path = s.artifact_path("enclosure.stl")
     if not stl_path.exists():
         raise HTTPException(400, "No enclosure.stl — compile SCAD first")
 
@@ -51,7 +51,7 @@ async def start_gcode(
 
             result = run_gcode_pipeline(
                 stl_path=stl_path,
-                output_dir=s.path,
+                output_dir=s.artifact_path("enclosure.gcode").parent,
                 routing_result=routing_data,
                 shell_height=shell_height,
                 printer=s.printer_id,
@@ -87,7 +87,7 @@ async def poll_gcode(sid: str):
     cur = get_gcode_state(sid)
     if cur:
         return cur
-    gcode = s.path / "enclosure.gcode"
+    gcode = s.artifact_path("enclosure.gcode")
     if gcode.exists():
         return {
             "status": "done",
@@ -101,7 +101,7 @@ async def poll_gcode(sid: str):
 @router.get("/sessions/{sid}/manufacture/gcode/download")
 async def download_gcode(sid: str):
     s = load_session_or_404(sid)
-    path = s.path / "enclosure.gcode"
+    path = s.artifact_path("enclosure.gcode")
     if not path.exists():
         raise HTTPException(404, "No enclosure.gcode — run the G-code pipeline first")
     return FileResponse(path, media_type="text/plain", filename="enclosure.gcode",

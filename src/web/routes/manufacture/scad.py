@@ -49,7 +49,7 @@ async def poll_scad(sid: str):
             resp["detail"] = task.detail
         return resp
     s = load_session_or_404(sid)
-    if (s.path / "enclosure.scad").exists():
+    if s.has_artifact("enclosure.scad"):
         return {"status": "done"}
     return {"status": "idle"}
 
@@ -57,7 +57,7 @@ async def poll_scad(sid: str):
 @router.get("/sessions/{sid}/manufacture/scad")
 async def get_scad(sid: str):
     s = load_session_or_404(sid)
-    scad_path = s.path / "enclosure.scad"
+    scad_path = s.artifact_path("enclosure.scad")
     if not scad_path.exists():
         raise HTTPException(404, "No enclosure.scad yet")
     scad_text = scad_path.read_text(encoding="utf-8")

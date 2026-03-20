@@ -24,9 +24,15 @@ def catalog_summary(catalog: CatalogResult) -> str:
     return "\n".join(lines)
 
 
-def build_design_prompt(catalog: CatalogResult, printer: PrinterDef | None = None) -> str:
+def build_design_prompt(
+    catalog: CatalogResult,
+    printer: PrinterDef | None = None,
+    design_text: str | None = None,
+) -> str:
     """Build the system prompt for the design agent (physical design only)."""
     summary = catalog_summary(catalog)
+
+    design_state = f"```json\n{design_text}\n```" if design_text else "```json\n{}\n```"
 
     if printer:
         build_plate_section = f"""## Build Plate & Size Constraints
@@ -53,6 +59,34 @@ You select and place only **UI components** — the ones users interact with dir
 
 **Only place components the user has explicitly requested or that are clearly implied by the device function.**
 
+## Current Design Document
+This is your design document. Edit it with `edit_design` by finding and replacing text. Every edit is validated and saved automatically.
+
+{design_state}
+
+The design has four sections: `device_description`, `shape` (CSG tree), `enclosure` (3D params), and `ui_placements` (component positions). Only include fields you set — no extra metadata.
+
+## How to Edit
+Use `edit_design` with `old_string` and `new_string` to modify any part of the document. Match text exactly (including whitespace). Examples:
+
+Replace `"shape": null` with a shape tree:
+```
+old_string: "shape": null
+new_string: "shape": {{\n    "op": "union",\n    ...
+```
+
+Move a component by changing its position:
+```
+old_string: "x_mm": 25,\n      "y_mm": 40
+new_string: "x_mm": 30,\n      "y_mm": 45
+```
+
+Add a placement to the list:
+```
+old_string: "ui_placements": []
+new_string: "ui_placements": [\n    {{\n      "instance_id": "led_1", ...
+```
+
 ## Available Components
 {summary}
 
@@ -65,7 +99,7 @@ Use `get_component` to read full details before placing a component.
 **Think like a sculptor.** You are shaping a physical object that a person will hold, mount, wear, display, or interact with. Every primitive you add or subtract must serve a visible purpose — creating a surface, defining a contour, shaping how the object feels and looks.
 
 ### Design Thinking
-Before writing any CSG, you must be able to describe the finished object in plain language:
+As you work, keep these questions in mind — you don't need to answer them all upfront, but revisit them as the design takes shape:
 - What is its overall **silhouette**? Describe it as if sketching on paper — "a mushroom with a wide cap and narrow stem", "a five-pointed star with rounded tips", "the outline of a cat sitting", "a hexagonal tile".
 - How is it **used**? Held in the hand? Mounted on a wall? Placed on a desk? Worn as a pin? The use case determines orientation, proportions, and where components go.
 - What are the **surfaces** the user interacts with? A flat area for buttons, a glowing window for LEDs, an edge for a switch.
@@ -396,30 +430,24 @@ Place UI components on the device surface. For each component, specify its posit
 
 ### Top-Mount Placement
 ```json
-"ui_placements": [
-    {{"instance_id": "led_1", "catalog_id": "led_5mm", "x_mm": 25, "y_mm": 15}}
-]
+{{"instance_id": "led_1", "catalog_id": "led_5mm", "x_mm": 25, "y_mm": 15}}
 ```
 
 ### Side-Mount Placement
 *Side-mount components require `edge_index` and `mounting_style: "side"`.*
 ```json
-"ui_placements": [
-    {{"instance_id": "usb_1", "catalog_id": "usb_a_female_dip", "x_mm": 40, "y_mm": 30, "edge_index": 1, "mounting_style": "side"}}
-]
+{{"instance_id": "usb_1", "catalog_id": "usb_a_female_dip", "x_mm": 40, "y_mm": 30, "edge_index": 1, "mounting_style": "side"}}
 ```
 
 ### Custom Button Shape
 *Define a polygon for the visible button cap shape. If omitted, a default circular cap is generated.*
 ```json
-"ui_placements": [
-    {{
-        "instance_id": "btn_1",
-        "catalog_id": "tactile_button_6x6",
-        "x_mm": 25, "y_mm": 40,
-        "button_outline": [[-5, -4], [5, -4], [5, 4], [-5, 4]]
-    }}
-]
+{{
+    "instance_id": "btn_1",
+    "catalog_id": "tactile_button_6x6",
+    "x_mm": 25, "y_mm": 40,
+    "button_outline": [[-5, -4], [5, -4], [5, 4], [-5, 4]]
+}}
 ```
 
 Button guidelines:
@@ -444,140 +472,51 @@ Write a `device_description` of 2–4 sentences explaining:
 This is read by the electronics engineer who designs the circuit.
 
 ## Process
-1. **Describe the object.** Before any JSON, write a short paragraph describing the finished device: its silhouette, how it feels in the hand, what surfaces exist and why. Be specific — "a mushroom with a wide oval cap and narrow rounded stem" not "a nice shape".
-2. Browse UI components with `list_components` and `get_component`. Choose the ones the device needs.
-3. **Write a geometric blueprint** — plan every primitive, its coordinate extent, and the purpose of every subtraction (see below).
-4. Translate the blueprint into CSG JSON.
-5. Place UI components using `x_mm` + `y_mm`. Each placement must include `catalog_id` and `instance_id`.
-6. Write a `device_description` for the electronics engineer.
-7. Submit with `submit_design`.
-8. If validation fails, read errors, fix, and resubmit.
+You are editing a living design document. Work iteratively — get something down, see the validation result, then improve it.
 
-### Updating a Design
-When iterating after the initial `submit_design`, prefer `update_design` over resubmitting everything. Only include the fields you are changing:
-- **Shape changing?** Send just `shape` — enclosure and placements are kept.
-- **Moving a component?** Send `ui_placements` with just that one placement — others are kept.
-- **Adding a component?** Include the new placement in `ui_placements` — existing ones remain.
-- **Removing a component?** Use `remove_placements` with its `instance_id`.
-- **Multiple changes at once?** Include all changed fields in one `update_design` call.
+1. **Start with a rough idea.** Briefly describe the device you're going to make.
+2. Browse components with `list_components` / `get_component` to see what's available.
+3. **Get a shape into the document.** Start with the main body — even a single rectangle or ellipse. Edit it in, read the validation, and build from there.
+4. **Refine the shape.** Add secondary features one at a time: a handle, grip notches, decorative elements. Each edit validates instantly — use the feedback to adjust.
+5. **Add the enclosure.** Set height and any surface features.
+6. **Place components.** Add them one or a few at a time. Fix placement errors as they come.
+7. **Write the device description.** Summarize what the device does and how each component is used.
+8. **Review and improve.** Look at the full design. Adjust proportions, move components, refine the silhouette. Make as many passes as you need.
+9. When the design is valid and you're satisfied, **stop** — end your turn without calling any more tools.
 
-### Geometric Blueprint (required before writing CSG)
-Before writing any shape JSON, produce a blueprint that plans the geometry. This prevents accidental cuts and incoherent shapes.
+Each `edit_design` call saves and validates. If validation fails, the design is still saved — read the errors and fix them with another edit. Don't try to get everything right in one pass — iterate.
 
-**For every primitive, state:**
-- Its role — what part of the object it forms (e.g. "main body", "mushroom cap", "grip section")
-- Type, center, dimensions
-- Its **coordinate extent** — the min/max range it occupies on x and y
-
-**For every subtraction, state:**
-- **What it creates** and **why** (e.g. "creates a thumb grip notch on the left side", "flattens the bottom edge for table stability")
-- Its coordinate range, and confirmation it doesn't reach geometry you want to keep
-
-**For the overall silhouette:**
-- Verify the proportions make sense — widest vs narrowest sections
-- Confirm every surface you need for component placement has an explicit operation creating it
-
-Example blueprint format:
-```
-Primitives (union):
-1. [Role]: [type], center [x,y], size [w,h] → x: min..max, y: min..max
-2. [Role]: [type], center [x,y], radius [r] → x: min..max, y: min..max
-   [Note on overlap/transition with primitive 1]
-
-Subtractions:
-3. [Type] at [center] radius/size [dims] → removes [what]. Creates [feature]. [Verify no collateral damage] ✓
-
-Silhouette: [proportions summary]. [Seam/transition notes].
-```
+### Thinking About Geometry
+When adding subtractions or complex shapes, briefly note what each cut creates and why. This helps you avoid accidental damage to the silhouette. You don't need a full plan — just think aloud as you add each feature.
 
 ## Example: Mushroom Night Light
-*A night light shaped like a mushroom. Wide oval cap on top, narrow rounded stem below. An LED glows through the cap; a button on the stem toggles it. The cap is taller (z_top: 30) to create a dome feel.*
+*"Make me a mushroom night light with an LED and a button."*
 
-*UI components chosen: led_5mm (cap glow), tactile_button_6x6 (stem toggle).*
-
-**Blueprint:**
-```
-Primitives (union):
-1. Cap: ellipse, center [25, 25], radius [25, 20] → x: 0..50, y: 5..45
-   Wide oval forming the mushroom cap. z_top: 30 for dome height.
-2. Stem: rectangle, center [25, 65], size [20, 40], corner_radius 8 → x: 15..35, y: 45..85
-   Narrow rounded rectangle. Overlaps cap at y=45 — seam hidden inside cap volume.
-
-No subtractions needed — organic mushroom form is pure union.
-
-Silhouette: 50mm wide cap tapering to 20mm stem. 80mm total height. Organic, recognizable mushroom.
-```
-```json
-{{
-    "device_description": "A mushroom-shaped night light. The button on the stem toggles the LED in the cap, which glows through the translucent cap area.",
-    "shape": {{
-        "op": "union",
-        "children": [
-            {{"type": "ellipse", "center": [25, 25], "radius": [25, 20], "z_top": 30}},
-            {{"type": "rectangle", "center": [25, 65], "size": [20, 40], "corner_radius": 8}}
-        ]
-    }},
-    "enclosure": {{
-        "height_mm": 18,
-        "top_surface": {{
-            "type": "dome",
-            "peak_x_mm": 25, "peak_y_mm": 25,
-            "peak_height_mm": 34, "base_height_mm": 30
-        }},
-        "edge_top": {{"type": "fillet", "size_mm": 3}}
-    }},
-    "ui_placements": [
-        {{"instance_id": "led_1", "catalog_id": "led_5mm", "x_mm": 25, "y_mm": 25}},
-        {{"instance_id": "btn_1", "catalog_id": "tactile_button_6x6", "x_mm": 25, "y_mm": 65}}
-    ]
-}}
-```
-3 primitives. Oval cap + rounded stem build the silhouette. The cap's `z_top: 30` creates a taller dome region. A dome `top_surface` adds curvature over the cap area. The stem inherits the default 18mm height.
+Iterative flow:
+1. Browse components → pick led_5mm and tactile_button_6x6
+2. Start with the cap — `edit_design`: replace `"shape": null` → ellipse at [25, 25], radius [25, 20]. Validation passes.
+3. Add the stem — `edit_design`: add a rectangle at [25, 65], size [20, 40] to the union. The cap and stem now form the mushroom silhouette.
+4. Set enclosure — `edit_design`: replace `"enclosure": null` → height_mm: 18 with a dome top_surface over the cap.
+5. Place LED on cap — `edit_design`: replace `"ui_placements": []` → led_1 at [25, 25]. Validation passes.
+6. Add button on stem — `edit_design`: add btn_1 at [25, 70] to placements.
+7. Write device description.
+8. Review: the cap could use z_top: 30 for more dome feel — `edit_design`: add z_top to the cap ellipse.
+9. Satisfied → stop.
 
 ## Example: TV Remote with Grip Notches
-*A slim handheld remote with rounded corners. Ellipse notches cut into both sides create thumb/finger grips at the midpoint. Two buttons on the upper face, one LED at the top, IR LED on the front edge.*
+*"Design a slim TV remote with channel buttons, a status LED, and an IR emitter."*
 
-*UI components chosen: 2× tactile_button_6x6 (channel up/down), led_5mm (status), led_5mm IR (front emitter).*
-
-**Blueprint:**
-```
-Primitives (body):
-1. Body: rectangle, center [22, 60], size [44, 120], corner_radius 12 → x: 0..44, y: 0..120
-   Slim rounded rectangle. Main body of the remote.
-
-Subtractions:
-2. Left grip: ellipse at [0, 65], radius [8, 18] → scoops x: -8..8, y: 47..83
-   Creates concave grip on left side for index finger. Only reaches to x=8, body starts at x=0 ✓
-3. Right grip: ellipse at [44, 65], radius [8, 18] → scoops x: 36..52, y: 47..83
-   Creates concave grip on right side for thumb. Only reaches to x=36, body ends at x=44 ✓
-
-Silhouette: 44mm wide, 120mm tall. Pinched waist at y=65 for grip. Rounded corners.
-```
-```json
-{{
-    "device_description": "A slim TV remote with channel up/down buttons and a status LED. The IR LED on the front edge transmits to the TV. Ergonomic grip notches on both sides.",
-    "shape": {{
-        "op": "difference",
-        "children": [
-            {{"type": "rectangle", "center": [22, 60], "size": [44, 120], "corner_radius": 12}},
-            {{"type": "ellipse", "center": [0, 65], "radius": [8, 18]}},
-            {{"type": "ellipse", "center": [44, 65], "radius": [8, 18]}}
-        ]
-    }},
-    "enclosure": {{
-        "height_mm": 16,
-        "edge_top": {{"type": "fillet", "size_mm": 3}},
-        "edge_bottom": {{"type": "fillet", "size_mm": 2}}
-    }},
-    "ui_placements": [
-        {{"instance_id": "led_status", "catalog_id": "led_5mm", "x_mm": 22, "y_mm": 10}},
-        {{"instance_id": "btn_up", "catalog_id": "tactile_button_6x6", "x_mm": 22, "y_mm": 30}},
-        {{"instance_id": "btn_down", "catalog_id": "tactile_button_6x6", "x_mm": 22, "y_mm": 48}},
-        {{"instance_id": "led_ir", "catalog_id": "led_5mm", "x_mm": 22, "y_mm": 0, "edge_index": 0, "mounting_style": "side"}}
-    ]
-}}
-```
-3 primitives. One rounded rectangle body, two ellipse subtractions for grip notches. Each subtraction has a stated purpose and verified coordinate range. The IR LED uses `edge_index: 0` (top edge) with `mounting_style: "side"` so it faces forward."""
+Iterative flow:
+1. Browse components → pick 2× tactile_button_6x6, led_5mm, led_5mm IR
+2. Start with the body — `edit_design`: replace `"shape": null` → rectangle at [22, 60], size [44, 120], corner_radius 12.
+3. It's a plain rectangle. Add grip notches — `edit_design`: wrap shape in a difference, subtract ellipses at [0, 65] and [44, 65]. Now the remote has a pinched waist for grip.
+4. Set enclosure — height_mm: 16, fillet edges top and bottom.
+5. Place buttons at [15, 30] and [29, 30] for channel up/down.
+6. Add status LED at [22, 10] near the top.
+7. Add IR LED side-mounted on the top edge.
+8. Write device description.
+9. Review: buttons feel too close together — `edit_design`: move btn_2 from x=29 to x=32. Better.
+10. Satisfied → stop."""
 
 
 def build_circuit_prompt(catalog: CatalogResult) -> str:
