@@ -33,10 +33,10 @@ FILAMENTS: dict[str, FilamentDef] = {
         id="prusament_pla",
         label="Prusament PLA",
         overrides={
-            "temperature":                      "230",
-            "first_layer_temperature":          "230",
-            "filament_temperature":             "230",
-            "filament_first_layer_temperature":  "230",
+            "temperature":                      "215",
+            "first_layer_temperature":          "215",
+            "filament_temperature":             "215",
+            "filament_first_layer_temperature":  "215",
             "bed_temperature":                  "60",
             "first_layer_bed_temperature":      "60",
             # Standard cooling — fan on from layer 1.
