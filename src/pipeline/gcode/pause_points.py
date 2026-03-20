@@ -1,51 +1,76 @@
 """
-Compute pause Z-heights from the enclosure geometry and cutout data.
+Compute pause Z-heights from the enclosure geometry and component data.
 
-Analyses the known Z-layer stack and returns the two critical heights
-where the print must be paused:
+The print has multiple pause stages:
 
 1. **Ink layer** — the top of the solid floor, where traces start.
    The printer irons this surface, then conductive ink is deposited.
 
-2. **Component insertion** — the Z where all component pockets
-   (diode, switches, ATmega328P) are open and components can be
-   dropped in before the ceiling closes over them.
+2. **Component insertion pauses** — one or more pauses at increasing
+   Z-heights where groups of components are inserted.  Short
+   components go in early (low walls, easy access); tall components
+   wait for later pauses.
 
-These heights are expressed in mm from Z=0 (build plate) and are
-snapped to the nearest layer boundary for the configured layer height.
+Heights are in mm from Z=0 (build plate) and snapped to the nearest
+layer boundary for the configured layer height.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from src.pipeline.config import FLOOR_MM, CAVITY_START_MM, CEILING_MM
+from src.pipeline.config import (
+    FLOOR_MM,
+    CAVITY_START_MM,
+    CEILING_MM,
+    PAUSE_NOZZLE_CLEARANCE_MM,
+)
 
 DEFAULT_SHELL_HEIGHT_MM = 19.0  # typical: 15.0 cavity + 2.0 floor + 2.0 ceiling
 
 
 @dataclass
+class ComponentPauseInfo:
+    """Minimal data needed for pause-point grouping."""
+
+    instance_id: str
+    body_height_mm: float
+    pause_z_mm: float | None = None  # explicit override from catalog
+
+
+@dataclass
+class PausePoint:
+    """A single pause in the multi-stage print."""
+
+    z: float
+    layer_number: int
+    label: str
+    components: list[str] = field(default_factory=list)
+
+
+@dataclass
 class PausePoints:
-    """Z-heights (mm) where the print must pause."""
+    """All pause points for a multi-stage print."""
 
-    ink_layer_z: float
-    """Top of the solid floor — iron this, then deposit ink."""
-
-    component_insert_z: float
-    """Top of component pockets — insert diode, switches, ATmega."""
-
+    pauses: list[PausePoint]
     total_height: float
-    """Overall enclosure height."""
-
     layer_height: float
-    """Configured layer height (for snapping)."""
 
-    ink_layer_number: int
-    """Layer number (0-based) for the ink pause."""
+    # ── Convenience properties (backward-compat) ──────────────
 
-    component_layer_number: int
-    """Layer number (0-based) for the component insertion pause."""
+    @property
+    def ink_layer_z(self) -> float:
+        return self.pauses[0].z
+
+    @property
+    def ink_layer_number(self) -> int:
+        return self.pauses[0].layer_number
+
+    @property
+    def component_pauses(self) -> list[PausePoint]:
+        """All non-ink, non-jumper pauses (component insertion stages)."""
+        return [p for p in self.pauses if p.label not in ("ink", "jumpers")]
 
 
 def _snap_to_layer(z: float, layer_h: float) -> float:
@@ -53,42 +78,114 @@ def _snap_to_layer(z: float, layer_h: float) -> float:
     return math.floor(z / layer_h) * layer_h
 
 
+def _fallback_pause_z(
+    body_height_mm: float,
+    shell_height: float,
+    layer_height: float,
+) -> float:
+    """Compute a pause Z when no explicit pause_z_mm is set."""
+    ceil_start = shell_height - CEILING_MM
+    z = CAVITY_START_MM + body_height_mm + PAUSE_NOZZLE_CLEARANCE_MM
+    return _snap_to_layer(min(z, ceil_start), layer_height)
+
+
+def pause_z_for_component(
+    body_height_mm: float,
+    all_components: list[ComponentPauseInfo],
+    shell_height: float,
+    layer_height: float = 0.2,
+    pause_z_mm: float | None = None,
+) -> float:
+    """Return the pause Z at which a component is inserted.
+
+    If *pause_z_mm* is provided (from catalog), it is snapped to the
+    nearest layer boundary and used directly.  Otherwise falls back to
+    a computed value from body height + nozzle clearance.
+    """
+    if pause_z_mm is not None:
+        return _snap_to_layer(pause_z_mm, layer_height)
+    return _fallback_pause_z(body_height_mm, shell_height, layer_height)
+
+
 def compute_pause_points(
     shell_height: float | None = None,
     layer_height: float = 0.2,
+    components: list[ComponentPauseInfo] | None = None,
+    jumper_count: int = 0,
 ) -> PausePoints:
-    """Determine the two pause Z-heights for the multi-stage print.
+    """Determine pause Z-heights for the multi-stage print.
+
+    Components with an explicit ``pause_z_mm`` are grouped by that
+    value.  Components without one get a computed Z from their body
+    height.  Duplicate Z values are merged into a single pause.
+
+    When *jumper_count* > 0 a "jumpers" pause is inserted at
+    ``CAVITY_START_MM`` so jumper wires can be placed in their
+    channels before cavity walls cover them.
 
     Parameters
     ----------
     shell_height : float, optional
-        Total enclosure height.  Defaults to ``DEFAULT_HEIGHT_MM``.
+        Total enclosure height.  Defaults to ``DEFAULT_SHELL_HEIGHT_MM``.
     layer_height : float
         Slicer layer height in mm.  Default ``0.2``.
+    components : list[ComponentPauseInfo], optional
+        Placed components for multi-stage grouping.  When *None* the
+        function falls back to a single component pause at ceil_start.
+    jumper_count : int
+        Number of jumper wires in the routing.  When > 0 a dedicated
+        pause is added for jumper wire insertion.
 
     Returns
     -------
     PausePoints
     """
     h = shell_height or DEFAULT_SHELL_HEIGHT_MM
-
-    CAVITY_END = h - CEILING_MM
+    ceil_start = h - CEILING_MM
 
     ink_z = _snap_to_layer(FLOOR_MM, layer_height)
-
-    # 2. Component insertion: just before the ceiling closes.
-    #    CAVITY_END is where the solid ceiling starts.  Components
-    #    must be in place before we print past this height.
-    comp_z = _snap_to_layer(CAVITY_END, layer_height)
-
     ink_layer = round(ink_z / layer_height)
-    comp_layer = round(comp_z / layer_height)
+
+    pauses: list[PausePoint] = [
+        PausePoint(z=ink_z, layer_number=ink_layer, label="ink"),
+    ]
+
+    # Jumper wire pause — insert wires into their channels before
+    # cavity walls cover the jumper layer.
+    if jumper_count > 0:
+        jumper_z = _snap_to_layer(CAVITY_START_MM, layer_height)
+        jumper_layer = round(jumper_z / layer_height)
+        pauses.append(PausePoint(
+            z=jumper_z, layer_number=jumper_layer, label="jumpers",
+        ))
+
+    if not components:
+        # Backward compat: single component pause at ceil_start
+        comp_z = _snap_to_layer(ceil_start, layer_height)
+        comp_layer = round(comp_z / layer_height)
+        pauses.append(PausePoint(
+            z=comp_z, layer_number=comp_layer,
+            label="components",
+        ))
+    else:
+        # Group components by their resolved pause Z
+        z_groups: dict[float, list[str]] = {}
+        for c in components:
+            z = pause_z_for_component(
+                c.body_height_mm, components, h, layer_height, c.pause_z_mm,
+            )
+            z_groups.setdefault(z, []).append(c.instance_id)
+
+        for z in sorted(z_groups):
+            layer_num = round(z / layer_height)
+            pauses.append(PausePoint(
+                z=z, layer_number=layer_num,
+                label="components",
+                components=z_groups[z],
+            ))
 
     return PausePoints(
-        ink_layer_z=ink_z,
-        component_insert_z=comp_z,
+        pauses=pauses,
         total_height=h,
         layer_height=layer_height,
-        ink_layer_number=ink_layer,
-        component_layer_number=comp_layer,
     )

@@ -38,6 +38,7 @@ class ResolverContext:
     ceil_start: float
     cavity_depth: float
     blended_height_fn: Callable[..., float]
+    pause_z: float | None = None  # per-component insertion pause Z (caps pin grooves)
 
 
 class ComponentResolver:
@@ -265,20 +266,28 @@ class ComponentResolver:
     def _pinhole_fragments(self) -> list[ScadFragment]:
         """Pin shafts with graduated funnel at the cavity entrance.
 
-        The pin enters from the component pocket (above CAVITY_START_MM)
-        and passes through solid floor material down to the trace layer.
-        The funnel is anchored at CAVITY_START_MM — wide where the pin
-        enters the solid zone, narrowing to shaft width at the floor.
+        Each pin gets two vertical zones:
 
-          - Funnel (FLOOR_MM → CAVITY_START_MM): graduated staircase,
-            widest at the top (cavity entrance) for easy pin insertion,
-            narrowest at the bottom (trace layer) for snug ink contact.
-          - Extension (CAVITY_START_MM → z_top): shaft-width hole
-            through the open cavity (mostly redundant with pocket
-            cutout, but ensures the hole is clear).
+          1. **Graduated funnel** (FLOOR_MM -> CAVITY_START_MM): staircase
+             widening upward for easy pin insertion.  The bottom sits
+             on the ironed floor surface so ink contact is preserved.
+          2. **Full-height shaft** (CAVITY_START_MM -> ceil_start):
+             shaft-width hole through the full cavity so the pinhole
+             is never blocked by material.  The comb-like groove
+             problem was caused by the wide pin *bridges*, which are
+             still capped at pause_z.
+
+        The funnel does NOT extend below FLOOR_MM so the ironed
+        surface stays intact.  Trace channels (built separately) cut
+        to z=1.6 where they overlap with pin positions, so ink
+        naturally pools at the funnel bottom without extra cutouts.
         """
         frags: list[ScadFragment] = []
-        z_top = self._component_z_top()
+        # Pin holes always extend through the full cavity so they
+        # are never covered by material.  The shorter pause_z cap
+        # only applies to pin *bridges* (the connecting channels
+        # that create comb walls between adjacent pins).
+        z_top = self.ctx.ceil_start
 
         # The funnel spans the solid floor zone between the trace
         # layer and the cavity.  Clamp so it fits the available space.
@@ -311,7 +320,7 @@ class ComponentResolver:
                 shaft_h_dim = pin_d
 
             # Graduated funnel through the solid floor zone.
-            # Step 0 is at the bottom (narrowest, trace layer),
+            # Step 0 is at the bottom (narrowest, at the ironed floor),
             # stepping up and widening toward the cavity entrance.
             for i in range(PINHOLE_TAPER_STEPS):
                 frac = (i + 1) / PINHOLE_TAPER_STEPS
@@ -329,6 +338,7 @@ class ComponentResolver:
                 ))
 
             # Shaft-width extension through the open cavity above
+            # (capped at pause_z instead of ceil_start)
             if ext_h > 0:
                 frags.append(ScadFragment(
                     type="cutout",

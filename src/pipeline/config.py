@@ -215,6 +215,25 @@ COMPONENT_OFFSET_MM: float = 1.0
 CAVITY_START_MM: float = FLOOR_MM + COMPONENT_OFFSET_MM
 CEILING_MM: float = 2.0
 
+# ── Pause-group thresholds ────────────────────────────────────────
+#
+# Components are assigned to insertion-pause groups based on their
+# total standing height (tip-to-top when seated in the cavity).
+# Group 1 (early) gets the shortest components, Group 2 (mid) gets
+# medium-height ones, and everything else waits for the late pause.
+
+PAUSE_NOZZLE_CLEARANCE_MM: float = 2.0
+"""Minimum gap between the tallest component in a pause group and the
+Z height at which the nozzle resumes printing."""
+
+EARLY_GROUP_MAX_TOTAL_HEIGHT_MM: float = 5.0
+"""Components with total_height ≤ this go to Group 1 (early pause).
+ATmega (1.45 mm body above pins), resistors (2.4 mm body)."""
+
+MID_GROUP_MAX_TOTAL_HEIGHT_MM: float = 10.0
+"""Components with total_height ≤ this go to Group 2 (mid pause).
+Buttons (7.9 mm total)."""
+
 
 # ── Printer definitions ────────────────────────────────────────────
 

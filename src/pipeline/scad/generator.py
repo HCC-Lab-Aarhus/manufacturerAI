@@ -23,6 +23,9 @@ from src.pipeline.design.height_field import blended_height, blended_bottom_heig
 from src.pipeline.placer.serialization import assemble_full_placement
 from src.pipeline.router.models import RoutingResult
 from src.pipeline.router.serialization import parse_routing
+from src.pipeline.gcode.pause_points import (
+    ComponentPauseInfo, pause_z_for_component,
+)
 from src.session import Session
 
 from .outline import tessellate_outline
@@ -143,6 +146,17 @@ def run_scad_step(
     cat_index: dict[str, Component] = {c.id: c for c in catalog.components}
     all_fragments: list[ScadFragment] = []
 
+    # Build component pause info for multi-stage pause grouping
+    comp_pause_infos: list[ComponentPauseInfo] = []
+    for comp in placement.components:
+        cat = cat_index.get(comp.catalog_id)
+        if cat is not None:
+            comp_pause_infos.append(ComponentPauseInfo(
+                instance_id=comp.instance_id,
+                body_height_mm=cat.protrusion_height_mm,
+                pause_z_mm=cat.mounting.pause_z_mm,
+            ))
+
     # Copy button outlines from UI placements to placed components
     ui_outline_map = {
         up.instance_id: up.button_outline
@@ -158,9 +172,14 @@ def run_scad_step(
         if cat is None:
             log.warning("Unknown catalog entry '%s' — skipping", comp.catalog_id)
             continue
+        # Set per-component pause_z so pin grooves are capped
+        ctx.pause_z = pause_z_for_component(
+            cat.protrusion_height_mm, comp_pause_infos, base_h,
+            pause_z_mm=cat.mounting.pause_z_mm,
+        )
         frags = resolve_component(comp, cat, ctx)
         all_fragments.extend(frags)
-        log.debug("Component %s: %d fragments", comp.instance_id, len(frags))
+        log.debug("Component %s: %d fragments (pause_z=%.1f)", comp.instance_id, len(frags), ctx.pause_z)
 
     # ── 6. Trace channel fragments ────────────────────────────────
     trace_frags = build_trace_fragments(routing, ceil_start)

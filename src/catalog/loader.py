@@ -133,6 +133,8 @@ def _parse_mounting(data: dict) -> Mounting:
         keepout_margin_mm=data["keepout_margin_mm"],
         cap=_parse_cap(data.get("cap")),
         hatch=_parse_hatch(data.get("hatch")),
+        installed_height_mm=data.get("installed_height_mm"),
+        pause_z_mm=data.get("pause_z_mm"),
     )
 
 

@@ -5,7 +5,7 @@
     "ui_placement": false,
     "body": {
         "shape": "rect",
-        "width_mm": 7.2,
+        "width_mm": 8.7,
         "length_mm": 35.2,
         "height_mm": 3.3
     },
@@ -15,7 +15,9 @@
             "internal"
         ],
         "blocks_routing": false,
-        "keepout_margin_mm": 5.0
+        "keepout_margin_mm": 5.0,
+        "installed_height_mm": 6.1,
+        "pause_z_mm": 12.0
     },
     "pins": [
         {
