@@ -84,6 +84,18 @@ async def poll_bitmap(sid: str):
     return {"status": "idle"}
 
 
+@router.get("/sessions/{sid}/manufacture/bitmap/download")
+async def download_bitmap(sid: str):
+    from fastapi.responses import PlainTextResponse
+    s = load_session_or_404(sid)
+    rows = _read_bitmap_lines(s)
+    return PlainTextResponse(
+        '\n'.join(rows),
+        media_type='text/plain',
+        headers={'Content-Disposition': 'attachment; filename="trace_bitmap.txt"'},
+    )
+
+
 @router.get("/sessions/{sid}/manufacture/bitmap")
 async def get_bitmap(sid: str):
     s = load_session_or_404(sid)
