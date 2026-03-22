@@ -374,29 +374,65 @@ class DesignAgent(_BaseAgent):
             design = {}
         return AgentEvent("design", {"design": design})
 
+    @staticmethod
+    def _normalize_json_whitespace(text: str) -> str:
+        """Collapse JSON-insignificant whitespace for fuzzy matching.
+
+        Removes all whitespace around JSON structural characters so that
+        ``"center": [\\n  65,\\n  97\\n]`` and ``"center": [65, 97]``
+        both become ``"center":[65,97]``.
+        """
+        import re
+        t = text
+        t = re.sub(r'\s*([{}\[\]:,])\s*', r'\1', t)
+        t = re.sub(r'\s+', ' ', t)
+        return t
+
     def _tool_edit_design(self, input_data: dict) -> str:
         old_string = input_data["old_string"]
         new_string = input_data["new_string"]
 
-        if old_string not in self._design_text:
-            return (
-                "Error: old_string not found in the design document. "
-                "Make sure you match the exact text including whitespace "
-                "and indentation.\n\n"
-                "Current design document:\n"
-                f"```json\n{self._design_text}\n```"
-            )
+        if old_string in self._design_text:
+            count = self._design_text.count(old_string)
+            if count > 1:
+                return (
+                    f"Error: old_string matches {count} locations. "
+                    "Include more surrounding context to match exactly one.\n\n"
+                    "Current design document:\n"
+                    f"```json\n{self._design_text}\n```"
+                )
+            new_text = self._design_text.replace(old_string, new_string, 1)
+        else:
+            norm_doc = self._normalize_json_whitespace(self._design_text)
+            norm_old = self._normalize_json_whitespace(old_string)
 
-        count = self._design_text.count(old_string)
-        if count > 1:
-            return (
-                f"Error: old_string matches {count} locations. "
-                "Include more surrounding context to match exactly one.\n\n"
-                "Current design document:\n"
-                f"```json\n{self._design_text}\n```"
-            )
+            if norm_old not in norm_doc:
+                return (
+                    "Error: old_string not found in the design document. "
+                    "Make sure you match the exact text including whitespace "
+                    "and indentation.\n\n"
+                    "Current design document:\n"
+                    f"```json\n{self._design_text}\n```"
+                )
 
-        new_text = self._design_text.replace(old_string, new_string, 1)
+            count = norm_doc.count(norm_old)
+            if count > 1:
+                return (
+                    f"Error: old_string matches {count} locations. "
+                    "Include more surrounding context to match exactly one.\n\n"
+                    "Current design document:\n"
+                    f"```json\n{self._design_text}\n```"
+                )
+
+            try:
+                patched = json.loads(
+                    norm_doc.replace(norm_old,
+                                    self._normalize_json_whitespace(new_string), 1)
+                )
+                new_text = json.dumps(patched, indent=2)
+            except json.JSONDecodeError:
+                norm_new = self._normalize_json_whitespace(new_string)
+                new_text = norm_doc.replace(norm_old, norm_new, 1)
 
         try:
             design = json.loads(new_text)
@@ -409,7 +445,7 @@ class DesignAgent(_BaseAgent):
                 f"```\n{self._design_text}\n```"
             )
 
-        self._design_text = new_text
+        self._design_text = json.dumps(design, indent=2)
         return self._save_and_validate(design)
 
     def _save_and_validate(self, design: dict) -> str:
