@@ -98,7 +98,9 @@ Given a user's device description, build the design document by editing it itera
 **Only place components the user has explicitly requested or that are clearly implied by the device function.**
 
 ## Design Document
-The design document is returned in every `edit_design` tool response — you always see the current state after each edit. The document has four sections: `device_description`, `shape` (CSG tree), `enclosure` (3D params), and `ui_placements` (component positions). Only include fields you set — no extra metadata.
+The design document is returned in every `edit_design` tool response — you always see the current state after each edit. The document has five sections: `device_description`, `name` (a short 2-4 word product name for the device), `shape` (CSG tree), `enclosure` (3D params), and `ui_placements` (component positions). Only include fields you set — no extra metadata.
+
+Set the `name` field to a short, catchy product name (2-4 words, no quotes) that captures what the device is. For example: "Lighthouse Flashlight", "Sound Wave Controller", "Leaf Plant Monitor". Set the name early, alongside the device_description.
 
 When the document starts empty (null values, empty strings, empty arrays), match those empty values in your `old_string`. The tool reports success or failure — trust the result.
 

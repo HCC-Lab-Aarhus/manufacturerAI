@@ -28,6 +28,7 @@ from .messages import serialize_content, sanitize_messages, prune_messages
 
 EMPTY_DESIGN: dict = {
     "device_description": "",
+    "name": "",
     "shape": None,
     "enclosure": None,
     "ui_placements": [],
@@ -414,6 +415,10 @@ class DesignAgent(_BaseAgent):
     def _save_and_validate(self, design: dict) -> str:
         """Persist the design, compute outline, validate, return status + current document."""
         self.session.write_artifact("design.json", design)
+
+        name = design.get("name") or ""
+        if name:
+            self.session.name = name
 
         doc_footer = (
             "\n\nCurrent design document:\n"

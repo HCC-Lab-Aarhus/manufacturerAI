@@ -15,7 +15,6 @@ from src.agent import (
 )
 from src.pipeline.design import parse_design, validate_design, parse_physical_design, validate_physical_design
 from src.pipeline.config import get_printer
-from src.web.naming import generate_session_name
 
 import anthropic
 
@@ -47,9 +46,13 @@ async def _run_design_background(sid: str, prompt: str, task: AgentTask):
                     enrich_design(design, cat, session=sess)
             task.append_event(event.type, event.data or {})
             if event.type == "design":
-                name = generate_session_name(sess)
-                if name:
-                    task.append_event("session_named", {"name": name})
+                design = event.data.get("design") if event.data else None
+                if design:
+                    name = design.get("name") or ""
+                    if name:
+                        sess.name = name
+                        sess.save()
+                        task.append_event("session_named", {"name": name})
         task.finish("done")
     except asyncio.CancelledError:
         task.finish("done", error="Cancelled")
@@ -156,6 +159,10 @@ async def put_design(sid: str, request: Request):
     invalidated = s.invalidate_design_smart(body)
     clean = strip_enriched_fields(body)
     s.write_artifact("design.json", clean)
+
+    name = clean.get("name") or ""
+    if name:
+        s.name = name
 
     outline_data = [v.to_dict() for v in physical.outline.points]
     outline_json: dict = {"outline": outline_data}

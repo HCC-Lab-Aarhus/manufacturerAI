@@ -266,6 +266,7 @@ def strip_enriched_fields(design: dict) -> dict:
     """
     clean = {
         "device_description": design.get("device_description", ""),
+        "name": design.get("name", ""),
         "shape": design.get("shape"),
         "enclosure": design.get("enclosure"),
         "ui_placements": [],

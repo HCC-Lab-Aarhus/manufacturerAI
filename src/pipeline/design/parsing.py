@@ -177,6 +177,7 @@ def parse_physical_design(data: dict) -> PhysicalDesign:
         enclosure=_parse_enclosure(data.get("enclosure") or {}),
         ui_placements=_parse_ui_placements(data.get("ui_placements", [])),
         device_description=data.get("device_description", ""),
+        name=data.get("name", ""),
     )
 
 

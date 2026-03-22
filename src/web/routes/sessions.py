@@ -72,6 +72,10 @@ class RenameBody(BaseModel):
 async def rename_session(sid: str, body: RenameBody):
     s = load_session_or_404(sid)
     s.name = body.name
+    design = s.read_artifact("design.json")
+    if design is not None:
+        design["name"] = body.name
+        s.write_artifact("design.json", design)
     s.save()
     return {"id": s.id, "name": s.name}
 

@@ -256,6 +256,7 @@ class PhysicalDesign:
     enclosure: Enclosure = field(default_factory=Enclosure)
     ui_placements: list[UIPlacement] = field(default_factory=list)
     device_description: str = ""
+    name: str = ""
 
 
 @dataclass
