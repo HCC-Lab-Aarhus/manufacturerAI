@@ -334,6 +334,23 @@ FILAMENTS: dict[str, FilamentDef] = {
             "min_print_speed":                  "15",
         },
     ),
+    "generic_abs": FilamentDef(
+        id="generic_abs",
+        label="Generic ABS",
+        overrides={
+            "temperature":                      "255",
+            "first_layer_temperature":          "255",
+            "filament_temperature":             "255",
+            "filament_first_layer_temperature":  "255",
+            "bed_temperature":                  "110",
+            "first_layer_bed_temperature":      "100",
+            "fan_always_on":                    "0",
+            "min_fan_speed":                    "15",
+            "max_fan_speed":                    "15",
+            "disable_fan_first_layers":         "3",
+            "full_fan_speed_layer":             "4",
+        },
+    ),
 }
 
 
