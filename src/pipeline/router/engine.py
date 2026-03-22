@@ -49,7 +49,10 @@ def route_traces(
         config = RouterConfig()
 
     catalog_map = {c.id: c for c in catalog.components}
-    outline_poly = Polygon(placement.outline.vertices)
+    outline_poly = Polygon(
+        placement.outline.vertices,
+        placement.outline.hole_vertices or None,
+    )
 
     log.info("Router: %d components, %d nets, area=%.1f mmÂ²",
              len(placement.components), len(placement.nets), outline_poly.area)

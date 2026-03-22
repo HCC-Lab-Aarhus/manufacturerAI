@@ -6,6 +6,11 @@ of the straight wall section.  Because every vertex in a ring can sit at a
 different Z, the ceiling and floor can follow per-vertex heights defined in
 the design outline.
 
+Outline holes are built directly into the polyhedron: the caps are
+triangulated as a polygon-with-holes (via earcut bridging), and each hole
+boundary gets its own inner wall surface.  This avoids fragile CSG
+``difference()`` operations for through-cuts.
+
 Edge profiles (chamfer / fillet) are applied via miter-normal insets computed
 in pure Python — preserving the exact vertex count across all rings so the
 face index table stays consistent.
@@ -20,23 +25,20 @@ from __future__ import annotations
 import math
 import logging
 
+from shapely.geometry import Polygon as ShapelyPolygon
+
 from src.pipeline.design.models import Outline, Enclosure
-from src.pipeline.design.height_field import blended_height as _blended_height
+from src.pipeline.design.height_field import (
+    blended_height as _blended_height,
+    blended_bottom_height as _blended_bottom_height,
+)
+from src.pipeline.scad.outline import tessellate_outline
 
 log = logging.getLogger(__name__)
 
 # Number of profile steps per chamfer / fillet zone.
 # 6 gives adequate fillet quality for 3D printing (~15° per step).
 _CURVE_STEPS = 6
-
-# Number of concentric rings inside the top/bottom caps (between the
-# perimeter ring and the centroid point).  More rings give smoother height
-# transitions on the visible surface for variable-height shells.
-_CAP_RINGS = 14
-
-# Height variation threshold: when per-vertex heights differ by more than
-# this, cap-ring interpolation is enabled for smooth surface transitions.
-_VARIABLE_HEIGHT_THRESHOLD = 0.1
 
 # Minimum vertical gap between the last bottom-profile ring and the first
 # top-profile ring.  Prevents coincident vertices at the chamfer/fillet
@@ -126,6 +128,157 @@ def _inset_polygon_pts(
     return result
 
 
+def _safe_inset_polygon_pts(
+    pts: list[list[float]],
+    inset: float,
+    _area: float | None = None,
+) -> list[list[float]]:
+    """Miter-inset polygon with self-intersection guard.
+
+    If the requested inset produces a self-intersecting polygon (common
+    for non-convex shapes with thin features), binary-searches for the
+    largest safe inset that keeps the ring valid.
+    """
+    if inset < 1e-9:
+        return [[x, y] for x, y in pts]
+
+    result = _inset_polygon_pts(pts, inset, _area=_area)
+    if ShapelyPolygon(result).is_valid:
+        return result
+
+    lo, hi = 0.0, inset
+    best: list[list[float]] = [[x, y] for x, y in pts]
+    for _ in range(8):
+        mid = (lo + hi) * 0.5
+        candidate = _inset_polygon_pts(pts, mid, _area=_area)
+        if ShapelyPolygon(candidate).is_valid:
+            best = candidate
+            lo = mid
+        else:
+            hi = mid
+    return best
+
+
+# ── Ear-clipping polygon triangulation ─────────────────────────────────────────
+
+
+def _point_in_triangle(
+    px: float, py: float,
+    ax: float, ay: float,
+    bx: float, by: float,
+    cx: float, cy: float,
+) -> bool:
+    """Return True if (px,py) is strictly inside triangle (a,b,c)."""
+    d1 = (px - bx) * (ay - by) - (ax - bx) * (py - by)
+    d2 = (px - cx) * (by - cy) - (bx - cx) * (py - cy)
+    d3 = (px - ax) * (cy - ay) - (cx - ax) * (py - ay)
+    has_neg = (d1 < 0) or (d2 < 0) or (d3 < 0)
+    has_pos = (d1 > 0) or (d2 > 0) or (d3 > 0)
+    return not (has_neg and has_pos)
+
+
+def _earclip(pts_2d: list[list[float]]) -> list[tuple[int, int, int]]:
+    """Triangulate a simple polygon via ear clipping.
+
+    Returns a list of index triples into *pts_2d*.  Works for any simple
+    (non-self-intersecting) polygon regardless of convexity or winding.
+    The output triangles inherit the winding orientation of the input.
+    """
+    n = len(pts_2d)
+    if n < 3:
+        return []
+    if n == 3:
+        return [(0, 1, 2)]
+
+    area = _polygon_signed_area(pts_2d)
+    ccw = area > 0
+
+    remaining = list(range(n))
+    tris: list[tuple[int, int, int]] = []
+    max_iter = n * n
+
+    for _ in range(max_iter):
+        m = len(remaining)
+        if m < 3:
+            break
+        if m == 3:
+            tris.append((remaining[0], remaining[1], remaining[2]))
+            break
+
+        ear_found = False
+        for i in range(m):
+            p = remaining[(i - 1) % m]
+            c = remaining[i]
+            nx = remaining[(i + 1) % m]
+
+            ax, ay = pts_2d[p]
+            bx, by = pts_2d[c]
+            cx, cy = pts_2d[nx]
+
+            cross = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+            if ccw and cross <= 1e-12:
+                continue
+            if not ccw and cross >= -1e-12:
+                continue
+
+            ear_ok = True
+            for j in range(m):
+                if j == (i - 1) % m or j == i or j == (i + 1) % m:
+                    continue
+                qx, qy = pts_2d[remaining[j]]
+                if _point_in_triangle(qx, qy, ax, ay, bx, by, cx, cy):
+                    ear_ok = False
+                    break
+
+            if ear_ok:
+                tris.append((p, c, nx))
+                remaining.pop(i)
+                ear_found = True
+                break
+
+        if not ear_found:
+            for i in range(1, m - 1):
+                tris.append((remaining[0], remaining[i], remaining[i + 1]))
+            break
+
+    return tris
+
+
+def _earclip_with_holes(
+    outer_pts: list[list[float]],
+    hole_pts_list: list[list[list[float]]],
+) -> list[tuple[int, int, int]]:
+    """Triangulate a polygon with holes.
+
+    Uses the mapbox earcut algorithm, which handles any simple polygon with
+    any number of holes.
+
+    Returns index triples into the combined vertex array:
+    ``[outer_0 .. outer_N-1, hole0_0 .. hole0_H0-1, hole1_0 .. ...]``.
+
+    The output triangles inherit the winding of the outer polygon, matching
+    ``_earclip``'s behaviour.
+    """
+    if not hole_pts_list:
+        return _earclip(outer_pts)
+
+    import numpy as np
+    import mapbox_earcut
+
+    combined = list(outer_pts)
+    ring_ends = [len(outer_pts)]
+    for hpts in hole_pts_list:
+        combined.extend(hpts)
+        ring_ends.append(ring_ends[-1] + len(hpts))
+
+    coords = np.array(combined, dtype=np.float64)
+    rings = np.array(ring_ends, dtype=np.uint32)
+    indices = mapbox_earcut.triangulate_float64(coords, rings)
+    n = len(indices) // 3
+    return [(int(indices[i * 3]), int(indices[i * 3 + 1]),
+             int(indices[i * 3 + 2])) for i in range(n)]
+
+
 # ── Polyhedron ring builder ───────────────────────────────────────────────────
 
 
@@ -160,101 +313,6 @@ def _smooth_top_zs(
         arr = [max(orig[i], new_arr[i]) for i in range(N)]
 
     return arr
-
-
-def _smooth_ring_z(
-    zs: list[float],
-    sigma: float = 4.0,
-    passes: int = 2,
-) -> list[float]:
-    """Circular Gaussian blur along a cap ring — NO clamping.
-
-    Unlike ``_smooth_top_zs`` this helper does **not** enforce a floor,
-    so high-z spokes (horn tips) can be blended downward into their
-    neighbours.  Applied after IDW z computation to break the spoke-aligned
-    ridge that IDW with a radial-spoke layout would otherwise create.
-    """
-    N    = len(zs)
-    arr  = list(zs)
-    half = int(math.ceil(3.0 * sigma))
-
-    for _ in range(passes):
-        new_arr: list[float] = []
-        for i in range(N):
-            wsum = 0.0
-            vsum = 0.0
-            for di in range(-half, half + 1):
-                j = (i + di) % N
-                w = math.exp(-0.5 * (di / sigma) ** 2)
-                vsum += arr[j] * w
-                wsum += w
-            new_arr.append(vsum / wsum)
-        arr = new_arr
-
-    return arr
-
-
-def _idw_cap_z(
-    bx: float,
-    by: float,
-    perim: list[list[float]],
-    power: float = 2.0,
-    eps: float = 0.01,
-) -> float:
-    """Inverse-distance weighted z at interior cap point (bx, by).
-
-    Weights each perimeter ring vertex ``[x, y, z]`` by ``1 / dist**power``.
-    The result is a weighted mean of all ceiling heights, which:
-
-    * Is naturally smooth (no discontinuities)
-    * Is bounded between ``min(z)`` and ``max(z)`` of the perimeter ring
-      so it can never raise a valley above its ceiling height
-    * Converges exactly to ``perim[i][2]`` as (bx, by) → perim[i]
-
-    These properties make IDW safer than Gaussian blur + clamp for cap
-    surfaces: smooth hills form around peaks, flat valleys stay flat, and
-    cutout cylinder depths are never violated.
-    """
-    w_sum  = 0.0
-    wz_sum = 0.0
-    for p in perim:
-        d = math.hypot(bx - p[0], by - p[1])
-        if d < eps:
-            return p[2]          # coincident vertex → return exact ceiling z
-        w = 1.0 / d ** power
-        wz_sum += w * p[2]
-        w_sum  += w
-    return wz_sum / w_sum
-
-
-def _gauss2d_cap_z(
-    bx: float,
-    by: float,
-    perim: list[list[float]],
-    sigma_mm: float = 20.0,
-) -> float:
-    """2D Gaussian-weighted mean of perimeter z heights.
-
-    Unlike IDW (Shepard's method), Gaussian weights decay exponentially
-    and do **not** create sharp radial ridges along each perimeter spoke.
-    The result is a smoothly undulating interior surface that blends all
-    ceiling heights without any per-vertex discontinuities.
-
-    With ``sigma_mm=20`` the influence of each perimeter vertex extends
-    ~40 mm (≈2σ), covering typical enclosure widths without over-smoothing
-    the height differences between, e.g., horn peaks and flat sides.
-    """
-    sig2   = 2.0 * sigma_mm * sigma_mm
-    w_sum  = 0.0
-    wz_sum = 0.0
-    for p in perim:
-        d2 = (bx - p[0]) ** 2 + (by - p[1]) ** 2
-        w  = math.exp(-d2 / sig2)
-        wz_sum += w * p[2]
-        w_sum  += w
-    if w_sum < 1e-12:
-        return sum(p[2] for p in perim) / len(perim)
-    return wz_sum / w_sum
 
 
 def _build_rings(
@@ -313,7 +371,7 @@ def _build_rings(
                 inset_frac = 1.0 - frac
                 z_frac     = frac
             inset = bot_size * inset_frac
-            ipts = _inset_polygon_pts(flat_pts, inset, _area=area)
+            ipts = _safe_inset_polygon_pts(flat_pts, inset, _area=area)
             ring = []
             for i in range(N):
                 # Clamp bot_size so the bottom profile doesn't exceed available wall
@@ -337,7 +395,7 @@ def _build_rings(
             else:  # chamfer
                 inset    = top_size * frac
                 z_offset = top_size * frac
-            ipts = _inset_polygon_pts(flat_pts, inset, _area=area)
+            ipts = _safe_inset_polygon_pts(flat_pts, inset, _area=area)
             ring = []
             for i in range(N):
                 last_bot_z = (bottom_zs[i] + bot_size) if has_bot else bottom_zs[i]
@@ -359,255 +417,107 @@ def _polyhedron_shell(
     enclosure: Enclosure,
     outline: Outline | None = None,
     bottom_zs: list[float] | None = None,
-    cap_rings: int = _CAP_RINGS,
+    hole_pts_list: list[list[list[float]]] | None = None,
+    hole_top_zs_list: list[list[float]] | None = None,
+    hole_bot_zs_list: list[list[float]] | None = None,
 ) -> list[str]:
     """Emit an OpenSCAD ``polyhedron()`` for the shell body.
 
-    Each outline vertex can have a different ceiling height (from ``top_zs``)
-    and/or a different floor height (from ``bottom_zs``).  When heights are
-    uniform, ``cap_rings=0`` produces a simple centroid fan for the caps.
-    Edge profiles (chamfer / fillet) are applied via per-vertex miter insets
-    so the ring vertex count is always identical — a requirement for building
-    a valid polyhedron face table.
+    Outline holes are integrated directly: their boundaries appear as inner
+    wall surfaces in the polyhedron, and the caps are triangulated as a
+    polygon-with-holes.  This produces a single watertight mesh without
+    relying on CSG ``difference()`` for through-cuts.
 
-    Face winding follows OpenSCAD's left-hand/CW-from-outside convention so
-    all outward normals point away from the interior.  The ``convexity``
-    parameter is set to 10 to assist CGAL in evaluating the CSG tree even
-    for non-convex shapes.
+    Face winding follows OpenSCAD's left-hand / CW-from-outside convention.
     """
     N = len(flat_pts)
     if bottom_zs is None:
         bottom_zs = [0.0] * N
-    n_cap_rings = cap_rings
-    rings = _build_rings(flat_pts, top_zs, enclosure, bottom_zs=bottom_zs)
-    R = len(rings)
 
-    # Flat point list (ring-major, vertex-minor order)
-    all_pts: list[list[float]] = [pt for ring in rings for pt in ring]
+    # Normalise to CCW so all downstream winding logic can assume positive area.
+    if _polygon_signed_area(flat_pts) < 0:
+        flat_pts = list(reversed(flat_pts))
+        top_zs   = list(reversed(top_zs))
+        bottom_zs = list(reversed(bottom_zs))
+    holes = hole_pts_list or []
+    hole_sizes = [len(h) for h in holes]
+    N_total = N + sum(hole_sizes)
 
-    # ── Build concentric cap rings for the top surface ─────────────────────────
-    # XY: linearly interpolated from perimeter ring to centroid.
-    # Z: IDW (Shepard's method) with power varying from 3 (outer) to 2 (inner).
-    # High power near the perimeter keeps the first cap ring tight to each
-    # wall-top z; lower power for inner rings gives smooth transitions.
-    last_ring = rings[-1]
-    cx = sum(p[0] for p in last_ring) / N
-    cy = sum(p[1] for p in last_ring) / N
+    # ── Build outer rings ──────────────────────────────────────────────────────
+    outer_rings = _build_rings(flat_pts, top_zs, enclosure, bottom_zs=bottom_zs)
+    R = len(outer_rings)
 
-    top_cap_list: list[list[list[float]]] = []
-    for k in range(n_cap_rings):
-        t = (k + 1) / (n_cap_rings + 1)
-        idw_power = 2.0 + 1.0 * (1.0 - k / (n_cap_rings - 1 or 1))
+    # ── Build hole rings ───────────────────────────────────────────────────────
+    # Hole vertices keep constant XY (no edge profile) with Z linearly
+    # distributed from floor to ceiling at each vertex position.
+    hole_ring_data: list[list[list[list[float]]]] = []
+    for hi, hpts in enumerate(holes):
+        H = len(hpts)
+        h_top = hole_top_zs_list[hi] if hole_top_zs_list else [max(top_zs)] * H
+        h_bot = hole_bot_zs_list[hi] if hole_bot_zs_list else [0.0] * H
+        h_rings: list[list[list[float]]] = []
+        for ri in range(R):
+            frac = ri / max(R - 1, 1)
+            ring = [[hpts[vi][0], hpts[vi][1],
+                      h_bot[vi] + frac * (h_top[vi] - h_bot[vi])]
+                     for vi in range(H)]
+            h_rings.append(ring)
+        hole_ring_data.append(h_rings)
 
-        cap_ring: list[list[float]] = []
-        for i in range(N):
-            bx = last_ring[i][0] * (1.0 - t) + cx * t
-            by = last_ring[i][1] * (1.0 - t) + cy * t
-            bz = _idw_cap_z(bx, by, last_ring, power=idw_power)
-            cap_ring.append([bx, by, bz])
+    # ── Assemble combined point array (ring-major) ─────────────────────────────
+    all_pts: list[list[float]] = []
+    for ri in range(R):
+        all_pts.extend(outer_rings[ri])
+        for hi in range(len(holes)):
+            all_pts.extend(hole_ring_data[hi][ri])
 
-        if k == 0:
-            cap_ring = [
-                [cap_ring[j][0], cap_ring[j][1],
-                 min(cap_ring[j][2], last_ring[j][2])]
-                for j in range(N)
-            ]
-        top_cap_list.append(cap_ring)
+    # ── Winding (always CCW after normalisation above) ──────────────────────
+    # area = _polygon_signed_area(flat_pts)  →  guaranteed ≥ 0
 
-    cz = _idw_cap_z(cx, cy, last_ring, power=2.0)
-
-    for cap_ring in top_cap_list:
-        all_pts.extend(cap_ring)
-    all_pts.append([cx, cy, cz])
-
-    # Bottom cap rings — concentric rings for variable-height bottom surface
-    bot_ring = rings[0]
-    bot_cx = sum(p[0] for p in bot_ring) / N
-    bot_cy = sum(p[1] for p in bot_ring) / N
-
-    bot_z_range = max(p[2] for p in bot_ring) - min(p[2] for p in bot_ring)
-    variable_bot = bot_z_range >= _VARIABLE_HEIGHT_THRESHOLD
-
-    if variable_bot:
-        bot_cap_list: list[list[list[float]]] = []
-        for k in range(n_cap_rings):
-            t = (k + 1) / (n_cap_rings + 1)
-            idw_power = 2.0 + 1.0 * (1.0 - k / (n_cap_rings - 1 or 1))
-            bcp_ring: list[list[float]] = []
-            for i in range(N):
-                bx = bot_ring[i][0] * (1.0 - t) + bot_cx * t
-                by = bot_ring[i][1] * (1.0 - t) + bot_cy * t
-                bz = _idw_cap_z(bx, by, bot_ring, power=idw_power)
-                bcp_ring.append([bx, by, bz])
-            if k == 0:
-                bcp_ring = [
-                    [bcp_ring[j][0], bcp_ring[j][1],
-                     max(bcp_ring[j][2], bot_ring[j][2])]
-                    for j in range(N)
-                ]
-            bot_cap_list.append(bcp_ring)
-
-        bot_cz = _idw_cap_z(bot_cx, bot_cy, bot_ring, power=2.0)
-
-        for bcp_ring in bot_cap_list:
-            all_pts.extend(bcp_ring)
-        all_pts.append([bot_cx, bot_cy, bot_cz])
-
-        n_bot_cap_rings = n_cap_rings
+    # ── Cap triangulation (polygon with holes) ─────────────────────────────────
+    if holes:
+        cap_tris = _earclip_with_holes(flat_pts, holes)
     else:
-        bot_cz = sum(p[2] for p in bot_ring) / N
-        all_pts.append([bot_cx, bot_cy, bot_cz])
-        n_bot_cap_rings = 0
-
-    # Index helpers
-    # Main rings: 0 … R*N-1  (ring ri, vertex vi → ri*N + vi%N)
-    # Top cap ring k: R*N + k*N … R*N + k*N + N-1
-    # Top centroid: R*N + n_cap_rings*N
-    # Bottom cap ring k: R*N + n_cap_rings*N + 1 + k*N … (+ N-1)
-    # Bottom centroid: R*N + n_cap_rings*N + 1 + n_bot_cap_rings*N
-    center_idx = R * N + n_cap_rings * N
-    bot_cap_base_offset = center_idx + 1
-
-    def bot_cap_base(k: int) -> int:
-        return bot_cap_base_offset + k * N
-
-    bot_center_idx = bot_cap_base_offset + n_bot_cap_rings * N
-
-    def cap_base(k: int) -> int:
-        return R * N + k * N
-
-    def idx(ri: int, vi: int) -> int:
-        return ri * N + (vi % N)
-
-    # Determine winding: OpenSCAD uses CW-from-outside (left-hand) convention.
-    # For a CCW polygon (area > 0 in math / Y-up coordinates):
-    #   bottom cap:  list as-is (CCW in XY = CW from below = CW from outside ✓)
-    #   top cap:     reversed   (CW in XY  = CW from above = CW from outside ✓)
-    #   side faces:  [a, d, c], [a, c, b]  (CW from the outer right side)
-    # For a CW polygon (area < 0): all three are flipped.
-    area = _polygon_signed_area(flat_pts)
-    ccw = area >= 0
+        cap_tris = _earclip(flat_pts)
 
     faces: list[list[int]] = []
 
+    def idx(ri: int, vi: int) -> int:
+        """Map (ring, combined-vertex-index) to flat point index."""
+        return ri * N_total + vi
+
     # ── Bottom cap ─────────────────────────────────────────────────────────────
-    if n_bot_cap_rings > 0:
-        # Concentric ring layers for variable-height bottom surface.
-        # Winding for bottom-facing outward normals (CW from below):
-        #   For each quad (a=outer_vi, b=outer_nxt, c=inner_nxt, d=inner_vi):
-        #     CCW polygon: [d,a,b], [d,b,c]   (opposite of top cap)
-        #     CW  polygon: [d,b,a], [d,c,b]
-        def _bot_cap_quad(a: int, b: int, c: int, d: int) -> None:
-            if ccw:
-                faces.append([d, a, b])
-                faces.append([d, b, c])
-            else:
-                faces.append([d, b, a])
-                faces.append([d, c, b])
+    for a, b, c in cap_tris:
+        faces.append([a, b, c])
 
-        # Layer 0: first main ring → first bottom cap ring
-        for vi in range(N):
-            a = idx(0, vi)
-            b = idx(0, vi + 1)
-            c = bot_cap_base(0) + (vi + 1) % N
-            d = bot_cap_base(0) + vi
-            _bot_cap_quad(a, b, c, d)
+    # ── Top cap ────────────────────────────────────────────────────────────────
+    top_base = (R - 1) * N_total
+    for a, b, c in cap_tris:
+        faces.append([top_base + a, top_base + c, top_base + b])
 
-        for k in range(n_bot_cap_rings - 1):
-            for vi in range(N):
-                a = bot_cap_base(k)     + vi
-                b = bot_cap_base(k)     + (vi + 1) % N
-                c = bot_cap_base(k + 1) + (vi + 1) % N
-                d = bot_cap_base(k + 1) + vi
-                _bot_cap_quad(a, b, c, d)
-
-        # Final layer: innermost bottom cap ring → centroid fan
-        innermost_bot = bot_cap_base(n_bot_cap_rings - 1)
-        for vi in range(N):
-            curr = innermost_bot + vi
-            nxt  = innermost_bot + (vi + 1) % N
-            if ccw:
-                faces.append([bot_center_idx, curr, nxt])
-            else:
-                faces.append([bot_center_idx, nxt, curr])
-    else:
-        # Simple centroid fan for flat bottom
-        for vi in range(N):
-            curr = vi
-            nxt  = (vi + 1) % N
-            if ccw:
-                faces.append([bot_center_idx, curr, nxt])
-            else:
-                faces.append([bot_center_idx, nxt, curr])
-
-    # ── Top cap — concentric ring layers + final centroid fan ──────────────────
-    # Winding for top-facing outward normals (CW from above = CW from outside):
-    #   For each quad (a=outer_vi, b=outer_nxt, c=inner_nxt, d=inner_vi):
-    #     CCW polygon: [d,b,a], [d,c,b]
-    #     CW  polygon: [d,a,b], [d,b,c]
-
-    if n_cap_rings > 0:
-        def _cap_quad(a: int, b: int, c: int, d: int) -> None:
-            """Emit two triangles for a top-cap quad (outer→inner, inward-facing up)."""
-            if ccw:
-                faces.append([d, b, a])
-                faces.append([d, c, b])
-            else:
-                faces.append([d, a, b])
-                faces.append([d, b, c])
-
-        # Layer 0: last main ring → first cap ring
-        for vi in range(N):
-            a = idx(R - 1, vi)
-            b = idx(R - 1, vi + 1)
-            c = cap_base(0) + (vi + 1) % N
-            d = cap_base(0) + vi
-            _cap_quad(a, b, c, d)
-
-        for k in range(n_cap_rings - 1):
-            for vi in range(N):
-                a = cap_base(k)     + vi
-                b = cap_base(k)     + (vi + 1) % N
-                c = cap_base(k + 1) + (vi + 1) % N
-                d = cap_base(k + 1) + vi
-                _cap_quad(a, b, c, d)
-
-        # Final layer: innermost cap ring → centroid fan
-        innermost = cap_base(n_cap_rings - 1)
-        for vi in range(N):
-            curr = innermost + vi
-            nxt  = innermost + (vi + 1) % N
-            if ccw:
-                faces.append([center_idx, nxt, curr])
-            else:
-                faces.append([center_idx, curr, nxt])
-    else:
-        # No cap rings: last main ring → centroid fan directly
-        for vi in range(N):
-            curr = idx(R - 1, vi)
-            nxt  = idx(R - 1, (vi + 1) % N)
-            if ccw:
-                faces.append([center_idx, nxt, curr])
-            else:
-                faces.append([center_idx, curr, nxt])
-
-    # ── Side faces (triangulated quads, two triangles per ring-edge pair) ──────
-    # Quad vertices: a = ring_i[j],   b = ring_i[j+1],
-    #                c = ring_{i+1}[j+1], d = ring_{i+1}[j]
-    # CCW polygon:  CW-from-outside winding → [a,d,c] + [a,c,b]
-    # CW  polygon:  opposite              → [a,b,c] + [a,c,d]
+    # ── Outer side faces ───────────────────────────────────────────────────────
     for ri in range(R - 1):
         for vi in range(N):
             a = idx(ri,     vi)
-            b = idx(ri,     vi + 1)
-            c = idx(ri + 1, vi + 1)
+            b = idx(ri,     (vi + 1) % N)
+            c = idx(ri + 1, (vi + 1) % N)
             d = idx(ri + 1, vi)
-            if ccw:
-                faces.append([a, d, c])
-                faces.append([a, c, b])
-            else:
+            faces.append([a, d, c])
+            faces.append([a, c, b])
+
+    # ── Inner hole wall faces ─────────────────────────────────────────────────
+    base_in_ring = N
+    for hi in range(len(holes)):
+        H = hole_sizes[hi]
+        for ri in range(R - 1):
+            for vi in range(H):
+                a = idx(ri,     base_in_ring + vi)
+                b = idx(ri,     base_in_ring + (vi + 1) % H)
+                c = idx(ri + 1, base_in_ring + (vi + 1) % H)
+                d = idx(ri + 1, base_in_ring + vi)
                 faces.append([a, b, c])
                 faces.append([a, c, d])
+        base_in_ring += H
 
     # ── Format as OpenSCAD source ──────────────────────────────────────────────
     min_z = min(top_zs)
@@ -619,6 +529,7 @@ def _polyhedron_shell(
     bot_type = (edge_bot.type    if edge_bot else "none") or "none"
     bot_size = (edge_bot.size_mm if edge_bot else 0.0)    or 0.0
 
+    n_holes = len(holes)
     pts_str   = ", ".join(
         f"[{x:.4f}, {y:.4f}, {z:.4f}]" for x, y, z in all_pts
     )
@@ -627,15 +538,18 @@ def _polyhedron_shell(
     )
 
     log.info(
-        "Shell body (polyhedron): %d rings, %d pts, %d faces, z=%.1f..%.1f mm",
-        R, len(all_pts), len(faces), min(bottom_zs), max_z,
+        "Shell body (polyhedron): %d rings, %d outer + %d hole verts/ring, "
+        "%d pts, %d faces, %d holes, z=%.1f..%.1f mm",
+        R, N, sum(hole_sizes), len(all_pts), len(faces), n_holes,
+        min(bottom_zs), max_z,
     )
 
     return [
         f"// Shell body — polyhedron",
         f"// ceiling z: {min_z:.1f}..{max_z:.1f} mm  floor z: {min(bottom_zs):.1f}..{max(bottom_zs):.1f} mm"
         f"  bottom={bot_type}({bot_size:.1f}mm)  top={top_type}({top_size:.1f}mm)",
-        f"// {N} footprint verts, {R} rings, {len(all_pts)} pts, {len(faces)} faces",
+        f"// {N} outer + {sum(hole_sizes)} hole verts, {R} rings, "
+        f"{len(all_pts)} pts, {len(faces)} faces, {n_holes} holes",
         f"polyhedron(",
         f"  points   = [{pts_str}],",
         f"  faces    = [{faces_str}],",
@@ -656,28 +570,35 @@ def shell_body_lines(
 ) -> list[str]:
     """Return OpenSCAD lines for the shell body as a single ``polyhedron()``.
 
-    Parameters
-    ----------
-    outline   : Outline   The design outline (used only for logging context).
-    enclosure : Enclosure Edge-profile settings and default height.
-    flat_pts  : list      Bézier-expanded 2-D footprint vertices [[x, y], ...].
-    top_zs    : list | None
-        Per-vertex ceiling heights, one per ``flat_pts`` vertex.
-        Defaults to ``enclosure.height_mm`` for all vertices.
-    bottom_zs : list | None
-        Per-vertex floor heights, one per ``flat_pts`` vertex.
-        Defaults to 0.0 for all vertices.
+    If the outline contains holes, they are tessellated and built directly
+    into the polyhedron as inner wall surfaces with triangulated caps.
     """
     N = len(flat_pts)
 
     eff_top = top_zs if (top_zs is not None and len(top_zs) == N) else [enclosure.height_mm] * N
     eff_bot = bottom_zs if (bottom_zs is not None and len(bottom_zs) == N) else [0.0] * N
 
-    # Use full cap-ring interpolation when heights vary across vertices;
-    # flat surfaces need only a simple centroid fan (cap_rings=0).
-    top_varies = (max(eff_top) - min(eff_top)) >= _VARIABLE_HEIGHT_THRESHOLD
-    bot_varies = (max(eff_bot) - min(eff_bot)) >= _VARIABLE_HEIGHT_THRESHOLD or max(eff_bot) >= _VARIABLE_HEIGHT_THRESHOLD
-    cap_rings = _CAP_RINGS if (top_varies or bot_varies) else 0
+    hole_pts_list: list[list[list[float]]] | None = None
+    hole_top_zs_list: list[list[float]] | None = None
+    hole_bot_zs_list: list[list[float]] | None = None
 
-    return _polyhedron_shell(flat_pts, eff_top, enclosure, outline=outline,
-                             bottom_zs=eff_bot, cap_rings=cap_rings)
+    if outline and outline.holes:
+        hole_pts_list = []
+        hole_top_zs_list = []
+        hole_bot_zs_list = []
+        for h in outline.holes:
+            hpts = tessellate_outline(Outline(points=h))
+            hole_pts_list.append(hpts)
+            hole_top_zs_list.append([
+                _blended_height(x, y, outline, enclosure) for x, y in hpts
+            ])
+            hole_bot_zs_list.append([
+                _blended_bottom_height(x, y, outline, enclosure) for x, y in hpts
+            ])
+
+    return _polyhedron_shell(
+        flat_pts, eff_top, enclosure, outline=outline, bottom_zs=eff_bot,
+        hole_pts_list=hole_pts_list,
+        hole_top_zs_list=hole_top_zs_list,
+        hole_bot_zs_list=hole_bot_zs_list,
+    )

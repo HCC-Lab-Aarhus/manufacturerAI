@@ -172,7 +172,17 @@ def tessellate_shape(node: dict, default_z_top: float | None = None,
 
     primitives = _collect_primitives(node, default_z_top, default_z_bottom)
     vertices = _attribute_vertices(geom, primitives)
-    return Outline(points=vertices)
+
+    holes: list[list[OutlineVertex]] = []
+    for interior in geom.interiors:
+        coords = list(interior.coords)[:-1]
+        hole_verts = [
+            OutlineVertex(x=round(x, 2), y=round(y, 2))
+            for x, y in coords
+        ]
+        holes.append(hole_verts)
+
+    return Outline(points=vertices, holes=holes)
 
 
 # -- Internal types -----------------------------------------------------------

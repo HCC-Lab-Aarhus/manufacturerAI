@@ -20,6 +20,7 @@ from src.catalog.models import Component
 from src.pipeline.config import CAVITY_START_MM, CEILING_MM
 from src.pipeline.design.parsing import parse_physical_design, parse_circuit, build_design_spec
 from src.pipeline.design.height_field import blended_height, blended_bottom_height, sample_height_grid
+from src.pipeline.design.models import Outline
 from src.pipeline.placer.serialization import assemble_full_placement
 from src.pipeline.router.models import RoutingResult
 from src.pipeline.router.serialization import parse_routing
@@ -34,7 +35,7 @@ from .emit import generate_scad
 from .compiler import compile_scad
 from .traces import build_trace_fragments, build_jumper_fragments
 from .resolver import resolve_component, ResolverContext
-from .fragment import ScadFragment
+from .fragment import ScadFragment, PolygonGeometry
 from .buttons import build_button_configs, generate_all_buttons_scad
 
 log = logging.getLogger(__name__)
@@ -188,6 +189,10 @@ def run_scad_step(
     # ── 6b. Jumper wire pinhole fragments ─────────────────────────
     jumper_frags = build_jumper_fragments(routing, ceil_start)
     all_fragments.extend(jumper_frags)
+
+    # ── 6c. Outline holes ───────────────────────────────────────
+    # Holes are built directly into the shell body polyhedron by
+    # shell_body_lines() — no cutout fragments needed.
 
     log.info("Fragments: %d component + %d trace + %d jumper = %d total",
              len(all_fragments) - len(trace_frags) - len(jumper_frags),

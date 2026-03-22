@@ -158,7 +158,12 @@ async def put_design(sid: str, request: Request):
     s.write_artifact("design.json", clean)
 
     outline_data = [v.to_dict() for v in physical.outline.points]
-    s.write_artifact("outline.json", outline_data)
+    outline_json: dict = {"outline": outline_data}
+    if physical.outline.holes:
+        outline_json["holes"] = [
+            [v.to_dict() for v in hole] for hole in physical.outline.holes
+        ]
+    s.write_artifact("outline.json", outline_json)
     s.pipeline_state["design"] = "complete"
     s.save()
 
@@ -340,7 +345,7 @@ def get_design_tokens(sid: str):
     design = s.read_artifact("design.json")
     import json as _json
     design_text = _json.dumps(design, indent=2) if design else None
-    system = build_design_prompt(cat, printer=get_printer(s.printer_id), design_text=design_text)
+    system = build_design_prompt(cat, printer=get_printer(s.printer_id))
     pruned = prune_messages(sanitize_messages(conversation))
     client = anthropic.Anthropic()
     try:

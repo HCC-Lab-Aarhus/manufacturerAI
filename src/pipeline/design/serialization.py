@@ -28,6 +28,10 @@ def design_to_dict(spec: DesignSpec) -> dict:
             for n in spec.nets
         ],
         "outline": [p.to_dict() for p in spec.outline.points],
+        **({"holes": [
+            [p.to_dict() for p in hole]
+            for hole in spec.outline.holes
+        ]} if spec.outline.holes else {}),
         "ui_placements": [
             {
                 "instance_id": p.instance_id,

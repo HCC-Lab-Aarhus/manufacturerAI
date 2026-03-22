@@ -39,7 +39,10 @@ def build_debug_grids(
 
     if grid is None:
         catalog_map = {c.id: c for c in catalog.components}
-        outline_poly = Polygon(placement.outline.vertices)
+        outline_poly = Polygon(
+            placement.outline.vertices,
+            placement.outline.hole_vertices or None,
+        )
 
         if not outline_poly.is_valid or outline_poly.area <= 0:
             return []
