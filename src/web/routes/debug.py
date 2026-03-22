@@ -1797,7 +1797,7 @@ def _trace_width_bitmap(
     ink_cells: set[tuple[int, int]] = set()
 
     c_pos = c_start
-    for width in range(1, 11):
+    for width in [5, 10, 15, 20, 25, 30]:
         if c_pos >= cols:
             break
         for dc in range(width):
