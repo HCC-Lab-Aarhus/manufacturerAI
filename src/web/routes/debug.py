@@ -1256,23 +1256,25 @@ def _progressive_trace_gcode(
     nom_w = pdef.nominal_bed_width
     nom_d = pdef.nominal_bed_depth
 
+    reps = 3
     gap = pad
     total_h = 3 * rect_h + 2 * gap
+    total_w = reps * rect_w + (reps - 1) * gap
     y_base = (nom_d - total_h) / 2
     x_left = abs(pdef.inkjet_offset_x) + pad
 
-    corners = [
-        (x_left, y_base),
-        (x_left, y_base + rect_h + gap),
-        (x_left, y_base + 2 * (rect_h + gap)),
-    ]
+    corners = []
+    for rep in range(reps):
+        x_off = x_left + rep * (rect_w + gap)
+        for row in range(3):
+            corners.append((x_off, y_base + row * (rect_h + gap)))
 
     bw_i, bd_i = int(nom_w), int(nom_d)
     lines = [
-        "; Progressive-trace test - 3 rectangles",
+        f"; Progressive-trace test - 3x{reps} rectangles",
         f"; Printer: {pdef.label}  Filament: {fdef.label}",
         f"; bed {nom_w}x{nom_d}  pad {pad}",
-        f"; rect {rect_w}x{rect_h} mm, {layers} layers, ironing on top",
+        f"; rect {rect_w}x{rect_h} mm x {reps} reps, {layers} layers, ironing on top",
         f"; printer_model = {pdef.id}",
         f"; bed_shape = 0x0,{bw_i}x0,{bw_i}x{bd_i},0x{bd_i}",
         f"; nozzle_diameter = {nozzle_d}",
@@ -1416,23 +1418,24 @@ def _progressive_trace_bitmap(
     trace_width_nozzles = max(1, int(round(TRACE_RULES.trace_width_mm / px)))
     half_trace = trace_width_nozzles // 2
 
+    reps = 3
     nom_d = pdef.nominal_bed_depth
     gap = pad
     total_h = 3 * rect_h + 2 * gap
     y_base = (nom_d - total_h) / 2
     x_left = abs(pdef.inkjet_offset_x) + pad
 
-    corners_bed = [
-        (x_left, y_base),
-        (x_left, y_base + rect_h + gap),
-        (x_left, y_base + 2 * (rect_h + gap)),
-    ]
+    corners_bed: list[tuple[float, float, int]] = []
+    for rep in range(reps):
+        x_off = x_left + rep * (rect_w + gap)
+        for row in range(3):
+            corners_bed.append((x_off, y_base + row * (rect_h + gap), row))
 
     ink_cells: set[tuple[int, int]] = set()
 
-    for i, (bed_x, bed_y) in enumerate(corners_bed):
-        if i >= trace_count:
-            break
+    for bed_x, bed_y, row in corners_bed:
+        if row >= trace_count:
+            continue
         center_x = bed_x + rect_w / 2
         bx_center, by0 = grid.bed_to_bitmap(center_x, bed_y)
         _, by1 = grid.bed_to_bitmap(center_x, bed_y + rect_h)
@@ -1479,8 +1482,10 @@ async def generate_progressive_trace(
         bitmaps[f"bitmap_{n}"] = _progressive_trace_bitmap(
             pdef, grid, padding, rect_width, rect_height, n)
 
+    reps = 3
     gap = padding
     total_h = 3 * rect_height + 2 * gap
+    total_w = reps * rect_width + (reps - 1) * gap
     part_origin_x = abs(pdef.inkjet_offset_x) + padding
     part_origin_y = (pdef.nominal_bed_depth - total_h) / 2
 
@@ -1488,7 +1493,7 @@ async def generate_progressive_trace(
         grid=grid,
         part_origin_x_mm=part_origin_x,
         part_origin_y_mm=part_origin_y,
-        part_width_mm=rect_width,
+        part_width_mm=total_w,
         part_depth_mm=total_h,
         gcode_file="progressive_trace.gcode",
         bitmap_file="progressive_trace_1.txt",
