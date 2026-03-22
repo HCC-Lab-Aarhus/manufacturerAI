@@ -302,11 +302,10 @@ def _ink_pause_block(
     instructions: list[str],
     display_msg: str | None = None,
 ) -> list[str]:
-    """Generate an M0 pause for ink deposition with head repositioning.
+    """Generate an ink deposition block with head repositioning.
 
-    Retracts filament, lifts the head, homes X/Y, lowers back down, then
-    issues ``M0`` so the operator can prepare the silver-ink system.
-    The ``;silverink`` marker tells the Pi firmware to begin the ink sweep.
+    Lifts the head, homes X/Y, lowers back down, then emits
+    the ``;silverink`` marker that tells the Pi firmware to begin the ink sweep.
     """
     lines = [
         "",
@@ -317,11 +316,6 @@ def _ink_pause_block(
     for instr in instructions:
         lines.append(f"; >> {instr}")
     lines.append("; " + "=" * 50)
-
-    if display_msg:
-        m0_line = f"M0 {display_msg}"
-    else:
-        m0_line = "M0 ; unconditional stop — press knob/LCD to resume"
 
     lines.extend([
         "",
@@ -335,7 +329,6 @@ def _ink_pause_block(
         "G1 Z-1 F1000 ; lower head back down",
         "G90 ; absolute positioning",
         "",
-        m0_line,
     ])
     if display_msg:
         lines.append(";silverink")
