@@ -24,6 +24,7 @@
             "thickness_mm": 1.5
         }
     },
+    "pin_length_mm": 7.5,
     "pins": [
         {
             "id": "V+",

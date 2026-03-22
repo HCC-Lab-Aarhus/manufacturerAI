@@ -8,6 +8,8 @@ Conditionally connected pins (center to center):
 
 Pin dimentions:
 0.75mm x 0.3mm (rectangle)
+max pin lenght:
+3.7mm
 
 Body:
 6mm w x 6mm l x 3mm h (rectangle)
@@ -22,6 +24,8 @@ pins (center to center):
 
 pin dimentions:
 0.5mm (cylinder)
+max pin length:
+26.45mm
 
 body:
 4.8mm w x 4.8mm l x 8.5mm h (cylinder)
@@ -36,6 +40,8 @@ pins (center to center):
 
 pin dimentions:
 0.6mm (cylinder)
+max pin length:
+24.7mm
 
 body:
 2.3 mm w x 8.3mm l x 2.3 mm h (cylinder)
@@ -50,6 +56,8 @@ pins (center to center):
 
 pin dimentions:
 0.3mm x 0.5mm (rectangle)
+max pin length:
+3.7mm
 
 body:
 3.3mm h x 8.7mm w x 35.3 mm l (rectangle)

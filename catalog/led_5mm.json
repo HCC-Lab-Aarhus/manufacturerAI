@@ -17,6 +17,7 @@
         "blocks_routing": false,
         "keepout_margin_mm": 1.0
     },
+    "pin_length_mm": 26.45,
     "pins": [
         {
             "id": "anode",
