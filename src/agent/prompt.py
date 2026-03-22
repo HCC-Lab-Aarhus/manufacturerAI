@@ -401,10 +401,12 @@ When the user asks for changes, edit only the parts that need to change. "Make t
 
 ### Sizing
 This device will be 3D-printed and physically used. Use accurate real-world measurements:
-- Handheld devices: roughly 100–140mm long, 35–55mm wide
-- Tabletop: roughly 50–120mm per side
-- Wearable: roughly 25–50mm
-These are guidelines, not rules — let the device's purpose drive the size."""
+- Handheld devices: roughly 120–160mm long, **55–75mm wide**
+- Tabletop: roughly 70–140mm per side
+- Wearable: roughly 30–55mm
+These are guidelines, not rules — let the device's purpose drive the size.
+
+**Size generously.** After your design, an electronics engineer adds internal components (battery holder ~25×48mm, microcontroller ~9×35mm, resistors, capacitors) that must all fit inside the outline with routing space between them. If the outline is too narrow or too small, components won't fit and the design will fail at manufacturing. The **narrowest usable width** of the outline (after edge clearance) must be at least **55mm** for typical devices with a battery. When in doubt, make it bigger — a slightly larger device is always better than one that can't be built."""
 
 
 def build_circuit_prompt(catalog: CatalogResult) -> str:
