@@ -155,6 +155,8 @@ def run_scad_step(
             comp_pause_infos.append(ComponentPauseInfo(
                 instance_id=comp.instance_id,
                 body_height_mm=cat.protrusion_height_mm,
+                mounting_style=comp.mounting_style or cat.mounting.style,
+                pin_length_mm=cat.pin_length_mm,
                 pause_z_mm=cat.mounting.pause_z_mm,
             ))
 
@@ -177,6 +179,8 @@ def run_scad_step(
         ctx.pause_z = pause_z_for_component(
             cat.protrusion_height_mm, comp_pause_infos, base_h,
             pause_z_mm=cat.mounting.pause_z_mm,
+            mounting_style=comp.mounting_style or cat.mounting.style,
+            pin_length_mm=cat.pin_length_mm,
         )
         frags = resolve_component(comp, cat, ctx)
         all_fragments.extend(frags)

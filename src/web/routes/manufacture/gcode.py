@@ -64,6 +64,8 @@ async def start_gcode(
                         infos.append(ComponentPauseInfo(
                             instance_id=comp.get("instance_id", ""),
                             body_height_mm=cat_entry.protrusion_height_mm,
+                            mounting_style=comp.get("mounting_style") or cat_entry.mounting.style,
+                            pin_length_mm=cat_entry.pin_length_mm,
                             pause_z_mm=cat_entry.mounting.pause_z_mm,
                         ))
                 if infos:

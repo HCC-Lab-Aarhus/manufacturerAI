@@ -215,24 +215,50 @@ COMPONENT_OFFSET_MM: float = 1.0
 CAVITY_START_MM: float = FLOOR_MM + COMPONENT_OFFSET_MM
 CEILING_MM: float = 2.0
 
-# ── Pause-group thresholds ────────────────────────────────────────
-#
-# Components are assigned to insertion-pause groups based on their
-# total standing height (tip-to-top when seated in the cavity).
-# Group 1 (early) gets the shortest components, Group 2 (mid) gets
-# medium-height ones, and everything else waits for the late pause.
-
 PAUSE_NOZZLE_CLEARANCE_MM: float = 2.0
 """Minimum gap between the tallest component in a pause group and the
 Z height at which the nozzle resumes printing."""
 
-EARLY_GROUP_MAX_TOTAL_HEIGHT_MM: float = 5.0
-"""Components with total_height ≤ this go to Group 1 (early pause).
-ATmega (1.45 mm body above pins), resistors (2.4 mm body)."""
 
-MID_GROUP_MAX_TOTAL_HEIGHT_MM: float = 10.0
-"""Components with total_height ≤ this go to Group 2 (mid pause).
-Buttons (7.9 mm total)."""
+def component_z_range(
+    mounting_style: str,
+    body_height_mm: float,
+    pin_length_mm: float | None,
+    ceil_start: float,
+) -> tuple[float, float]:
+    """Compute (body_floor_z, body_top_z) for a component.
+
+    Top-mounted components (buttons, LEDs) are placed as high as
+    possible so that the body top is flush with the ceiling.  Internal
+    components sit at FLOOR_MM + pin_length, letting pins extend
+    downward into deeper holes.  Bottom and side mounts stay at
+    CAVITY_START_MM.
+
+    Pin length is treated as a maximum (pins can be cut shorter).
+    If pin_length_mm is None the body sits at CAVITY_START_MM.
+    """
+    if mounting_style in ("bottom", "side"):
+        body_top = min(CAVITY_START_MM + body_height_mm, ceil_start)
+        return CAVITY_START_MM, body_top
+
+    effective_pin = pin_length_mm if pin_length_mm is not None else (CAVITY_START_MM - FLOOR_MM)
+
+    if mounting_style == "top":
+        body_floor = ceil_start - body_height_mm
+        body_floor = max(body_floor, CAVITY_START_MM)
+        needed_pin = body_floor - FLOOR_MM
+        if needed_pin > effective_pin:
+            body_floor = FLOOR_MM + effective_pin
+            body_floor = max(body_floor, CAVITY_START_MM)
+    else:
+        body_floor = FLOOR_MM + effective_pin
+        body_floor = max(body_floor, CAVITY_START_MM)
+        if body_floor + body_height_mm > ceil_start:
+            body_floor = ceil_start - body_height_mm
+            body_floor = max(body_floor, CAVITY_START_MM)
+
+    body_top = min(body_floor + body_height_mm, ceil_start)
+    return body_floor, body_top
 
 
 # ── Printer definitions ────────────────────────────────────────────

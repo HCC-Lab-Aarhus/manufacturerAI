@@ -207,6 +207,7 @@ def _parse_component(data: dict, source_file: str = "") -> Component:
         body=_parse_body(data["body"]),
         mounting=_parse_mounting(data["mounting"]),
         pins=[_parse_pin(p) for p in data["pins"]],
+        pin_length_mm=data.get("pin_length_mm"),
         internal_nets=data.get("internal_nets", []),
         pin_groups=[_parse_pin_group(g) for g in data["pin_groups"]] if data.get("pin_groups") else None,
         configurable=data.get("configurable"),

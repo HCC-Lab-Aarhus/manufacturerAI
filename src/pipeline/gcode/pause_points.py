@@ -25,6 +25,7 @@ from src.pipeline.config import (
     CAVITY_START_MM,
     CEILING_MM,
     PAUSE_NOZZLE_CLEARANCE_MM,
+    component_z_range,
 )
 
 DEFAULT_SHELL_HEIGHT_MM = 19.0  # typical: 15.0 cavity + 2.0 floor + 2.0 ceiling
@@ -36,6 +37,8 @@ class ComponentPauseInfo:
 
     instance_id: str
     body_height_mm: float
+    mounting_style: str = "internal"
+    pin_length_mm: float | None = None
     pause_z_mm: float | None = None  # explicit override from catalog
 
 
@@ -82,10 +85,13 @@ def _fallback_pause_z(
     body_height_mm: float,
     shell_height: float,
     layer_height: float,
+    mounting_style: str = "internal",
+    pin_length_mm: float | None = None,
 ) -> float:
     """Compute a pause Z when no explicit pause_z_mm is set."""
     ceil_start = shell_height - CEILING_MM
-    z = CAVITY_START_MM + body_height_mm + PAUSE_NOZZLE_CLEARANCE_MM
+    _, body_top = component_z_range(mounting_style, body_height_mm, pin_length_mm, ceil_start)
+    z = body_top + PAUSE_NOZZLE_CLEARANCE_MM
     return _snap_to_layer(min(z, ceil_start), layer_height)
 
 
@@ -95,6 +101,8 @@ def pause_z_for_component(
     shell_height: float,
     layer_height: float = 0.2,
     pause_z_mm: float | None = None,
+    mounting_style: str = "internal",
+    pin_length_mm: float | None = None,
 ) -> float:
     """Return the pause Z at which a component is inserted.
 
@@ -104,7 +112,10 @@ def pause_z_for_component(
     """
     if pause_z_mm is not None:
         return _snap_to_layer(pause_z_mm, layer_height)
-    return _fallback_pause_z(body_height_mm, shell_height, layer_height)
+    return _fallback_pause_z(
+        body_height_mm, shell_height, layer_height,
+        mounting_style=mounting_style, pin_length_mm=pin_length_mm,
+    )
 
 
 def compute_pause_points(
@@ -173,6 +184,7 @@ def compute_pause_points(
         for c in components:
             z = pause_z_for_component(
                 c.body_height_mm, components, h, layer_height, c.pause_z_mm,
+                mounting_style=c.mounting_style, pin_length_mm=c.pin_length_mm,
             )
             z_groups.setdefault(z, []).append(c.instance_id)
 

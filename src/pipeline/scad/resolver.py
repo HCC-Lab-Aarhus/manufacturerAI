@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from src.catalog.models import Component
-from src.pipeline.config import CAVITY_START_MM, FLOOR_MM
+from src.pipeline.config import CAVITY_START_MM, FLOOR_MM, component_z_range
 from src.pipeline.design.models import Outline, Enclosure
 from src.pipeline.placer.models import PlacedComponent
 
@@ -24,7 +24,6 @@ SURFACE_OVERSHOOT: float = 1.0
 PINHOLE_CLEARANCE: float = 1.0
 PINHOLE_TAPER_EXTRA: float = 1.0   # extra width on each side for the funnel mouth
 PINHOLE_TAPER_DEPTH: float = 1.5   # total height of the graduated funnel zone (mm)
-PINHOLE_TAPER_STEPS: int = 5       # number of graduated steps in the funnel
 PIN_BRIDGE_WIDTH: float = 1.6
 HATCH_LEDGE_WIDTH: float = 2.5
 
@@ -142,6 +141,22 @@ class ComponentResolver:
             ))
 
         frags.append(self._body_pocket())
+
+        _, body_top = self._z_range()
+        gap = self.ctx.ceil_start - body_top
+        if gap > 0:
+            if body.shape == "circle":
+                geom = CylinderGeometry(self.cx, self.cy, body.diameter_mm / 2)
+            else:
+                geom = self._rect_geom(body.width_mm, body.length_mm)
+            frags.append(ScadFragment(
+                type="cutout",
+                geometry=geom,
+                z_base=body_top,
+                depth=gap,
+                label=f"top-mount upper cavity — {self.cid}",
+            ))
+
         return frags
 
     def _bottom_mount(self) -> list[ScadFragment]:
@@ -232,6 +247,8 @@ class ComponentResolver:
 
     def _body_pocket(self) -> ScadFragment:
         body = self.catalog.body
+        body_floor, body_top = self._z_range()
+        pocket_depth = body_top - body_floor
         if body.shape == "circle":
             geom = CylinderGeometry(self.cx, self.cy, body.diameter_mm / 2)
         else:
@@ -239,65 +256,68 @@ class ComponentResolver:
         return ScadFragment(
             type="cutout",
             geometry=geom,
-            z_base=CAVITY_START_MM,
-            depth=self.ctx.cavity_depth,
+            z_base=body_floor,
+            depth=pocket_depth,
             label=f"body pocket — {self.cid}",
+        )
+
+    def _z_range(self) -> tuple[float, float]:
+        """Return (body_floor_z, body_top_z) for this component."""
+        style = self.placed.mounting_style or self.catalog.mounting.style
+        return component_z_range(
+            style,
+            self.catalog.body.height_mm,
+            self.catalog.pin_length_mm,
+            self.ctx.ceil_start,
         )
 
     def _component_z_top(self) -> float:
         """Z where this component's body cutout ends."""
         style = self.placed.mounting_style or self.catalog.mounting.style
-        if style != "side":
-            return self.ctx.ceil_start
-        body = self.catalog.body
-        is_reoriented = self.catalog.mounting.style != "side"
-        if is_reoriented:
-            if body.shape == "circle":
-                z_ext = body.diameter_mm
+        if style == "side":
+            body = self.catalog.body
+            is_reoriented = self.catalog.mounting.style != "side"
+            if is_reoriented:
+                if body.shape == "circle":
+                    z_ext = body.diameter_mm
+                else:
+                    z_ext = body.length_mm
+                z_ext = min(z_ext, self.ctx.cavity_depth)
             else:
-                z_ext = body.length_mm
-            z_ext = min(z_ext, self.ctx.cavity_depth)
-        else:
-            z_ext = min(body.height_mm, self.ctx.cavity_depth)
-        return CAVITY_START_MM + z_ext
+                z_ext = min(body.height_mm, self.ctx.cavity_depth)
+            return CAVITY_START_MM + z_ext
+        _, body_top = self._z_range()
+        return body_top
 
     # ── Pinholes ───────────────────────────────────────────────────
 
     def _pinhole_fragments(self) -> list[ScadFragment]:
-        """Pin shafts with graduated funnel at the cavity entrance.
+        """Pin shafts with smooth tapered funnel just below the body floor.
 
-        Each pin gets two vertical zones:
+        Each pin gets up to two vertical zones:
 
-          1. **Graduated funnel** (FLOOR_MM -> CAVITY_START_MM): staircase
-             widening upward for easy pin insertion.  The bottom sits
-             on the ironed floor surface so ink contact is preserved.
-          2. **Full-height shaft** (CAVITY_START_MM -> ceil_start):
-             shaft-width hole through the full cavity so the pinhole
-             is never blocked by material.  The comb-like groove
-             problem was caused by the wide pin *bridges*, which are
-             still capped at pause_z.
+          1. **Shaft** (FLOOR_MM → funnel_bottom): straight hole from
+             the trace surface up to the start of the funnel.
+          2. **Tapered funnel** (funnel_bottom → body_floor_z): smooth
+             cone/pyramid widening downward for easy pin insertion.
+             The funnel sits directly below the body pocket so the
+             narrow end feeds into the cavity.  The funnel is clamped
+             to the body pocket width so it does not cut into adjacent
+             walls.
 
-        The funnel does NOT extend below FLOOR_MM so the ironed
-        surface stays intact.  Trace channels (built separately) cut
-        to z=1.6 where they overlap with pin positions, so ink
-        naturally pools at the funnel bottom without extra cutouts.
+        Pin holes stop at body_floor_z because the body pocket itself
+        provides the opening above that level.
         """
         frags: list[ScadFragment] = []
-        # Pin holes always extend through the full cavity so they
-        # are never covered by material.  The shorter pause_z cap
-        # only applies to pin *bridges* (the connecting channels
-        # that create comb walls between adjacent pins).
-        z_top = self.ctx.ceil_start
+        body = self.catalog.body
+        body_floor, _ = self._z_range()
 
-        # The funnel spans the solid floor zone between the trace
-        # layer and the cavity.  Clamp so it fits the available space.
-        funnel_top = CAVITY_START_MM
-        funnel_bottom = FLOOR_MM
-        actual_taper = funnel_top - funnel_bottom   # typically 1.0 mm
-        step_h = actual_taper / PINHOLE_TAPER_STEPS
+        funnel_top = body_floor
+        funnel_bottom = max(funnel_top - PINHOLE_TAPER_DEPTH, FLOOR_MM)
+        actual_taper = funnel_top - funnel_bottom
 
-        # Extension above the funnel through the open cavity
-        ext_h = max(z_top - funnel_top, 0.0)
+        shaft_bottom = FLOOR_MM
+        shaft_h = max(funnel_bottom - shaft_bottom, 0.0)
 
         for pin in self.catalog.pins:
             pos = self.placed.pin_positions.get(pin.id)
@@ -319,33 +339,27 @@ class ComponentResolver:
                 shaft_w = pin_d
                 shaft_h_dim = pin_d
 
-            # Graduated funnel through the solid floor zone.
-            # Step 0 is at the bottom (narrowest, at the ironed floor),
-            # stepping up and widening toward the cavity entrance.
-            for i in range(PINHOLE_TAPER_STEPS):
-                frac = (i + 1) / PINHOLE_TAPER_STEPS
-                extra = PINHOLE_TAPER_EXTRA * frac
-                frags.append(ScadFragment(
-                    type="cutout",
-                    geometry=RectGeometry(
-                        px, py,
-                        shaft_w + extra,
-                        shaft_h_dim + extra,
-                    ),
-                    z_base=funnel_bottom + i * step_h,
-                    depth=step_h,
-                    label=f"pin funnel {self.cid}:{pin.id} step {i}",
-                ))
-
-            # Shaft-width extension through the open cavity above
-            # (capped at pause_z instead of ceil_start)
-            if ext_h > 0:
+            if shaft_h > 0:
                 frags.append(ScadFragment(
                     type="cutout",
                     geometry=RectGeometry(px, py, shaft_w, shaft_h_dim),
-                    z_base=funnel_top,
-                    depth=ext_h,
+                    z_base=shaft_bottom,
+                    depth=shaft_h,
                     label=f"pin {self.cid}:{pin.id}",
+                ))
+
+            if actual_taper > 0:
+                extra = PINHOLE_TAPER_EXTRA
+                scale_x = (shaft_w + extra) / shaft_w
+                scale_y = (shaft_h_dim + extra) / shaft_h_dim
+                taper = max(scale_x, scale_y)
+                frags.append(ScadFragment(
+                    type="cutout",
+                    geometry=RectGeometry(px, py, shaft_w, shaft_h_dim),
+                    z_base=funnel_bottom,
+                    depth=actual_taper,
+                    taper_scale=taper,
+                    label=f"pin funnel {self.cid}:{pin.id}",
                 ))
 
         return frags
@@ -408,7 +422,8 @@ class ComponentResolver:
         """Bridge channels for pins that fall outside the body pocket."""
         frags: list[ScadFragment] = []
         body = self.catalog.body
-        channel_depth = self._component_z_top() - CAVITY_START_MM
+        body_floor, body_top = self._z_range()
+        channel_depth = body_top - body_floor
 
         for pin in self.catalog.pins:
             pos = self.placed.pin_positions.get(pin.id)
@@ -465,7 +480,7 @@ class ComponentResolver:
                 geometry=SegmentGeometry(
                     pin_wx, pin_wy, face_wx, face_wy, PIN_BRIDGE_WIDTH,
                 ),
-                z_base=CAVITY_START_MM,
+                z_base=body_floor,
                 depth=channel_depth,
                 label=f"pin bridge {self.cid}:{pin.id}",
             ))

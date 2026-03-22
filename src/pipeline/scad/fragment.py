@@ -119,6 +119,7 @@ class ScadFragment:
     rotate_cy: float = 0.0             # rotation pivot Y (world coords)
     tilt_deg: float = 0.0              # 3-D tilt (0 = upright, 90 = horizontal)
     tilt_length: float = 0.0           # pre-tilt extrusion length (body height)
+    taper_scale: float = 0.0           # >0: linear_extrude scale at top (smooth funnel)
 
 
 # ── Helpers ────────────────────────────────────────────────────────

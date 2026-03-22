@@ -119,6 +119,7 @@ class Component:
     body: Body
     mounting: Mounting
     pins: list[Pin]
+    pin_length_mm: float | None = None
     internal_nets: list[list[str]] = field(default_factory=list)
     pin_groups: list[PinGroup] | None = None
     configurable: dict | None = None

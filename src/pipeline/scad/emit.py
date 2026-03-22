@@ -286,9 +286,12 @@ def generate_scad(
     # Split cutouts: tilted go separate; everything else merges as polygons
     tilted_cuts: list[ScadFragment] = []
     polygon_cuts: list[ScadFragment] = []
+    tapered_cuts: list[ScadFragment] = []
     for f in cutouts:
         if f.tilt_deg:
             tilted_cuts.append(f)
+        elif f.taper_scale:
+            tapered_cuts.append(f)
         else:
             polygon_cuts.append(f)
 
@@ -334,7 +337,14 @@ def generate_scad(
             out_lines.append("    " + comment.lstrip())
             out_lines += _indent(scad_lines, "    ")
 
-        # Tilted cutouts (side-mounted reoriented bodies)
+        if tapered_cuts:
+            out_lines.append("")
+            out_lines.append(f"    // --- Tapered cutouts ({len(tapered_cuts)}) ---")
+            for c in tapered_cuts:
+                if c.label:
+                    out_lines.append(f"    // {c.label}")
+                out_lines += _indent(_tapered_scad_lines(c), "    ")
+
         if tilted_cuts:
             out_lines.append("")
             out_lines.append(f"    // --- Tilted cutouts ({len(tilted_cuts)}) ---")
@@ -347,6 +357,31 @@ def generate_scad(
 
     body = "\n".join(_indent(out_lines, "  "))
     return header + f"mirror([0, 1, 0]) {{\n{body}\n}}\n"
+
+
+def _tapered_scad_lines(frag: ScadFragment) -> list[str]:
+    """Emit a smooth tapered extrusion (pinhole funnel).
+
+    Uses ``linear_extrude(scale=...)`` so the shape at z_base is the
+    narrow end and it widens to ``taper_scale`` at the top.
+    """
+    g = frag.geometry
+    _EPS = 0.001
+    scale = frag.taper_scale
+
+    if isinstance(g, RectGeometry):
+        return [
+            f"translate([{g.cx:.3f}, {g.cy:.3f}, {frag.z_base - _EPS:.3f}])",
+            f"  linear_extrude(height = {frag.depth + 2 * _EPS:.3f}, scale = [{scale:.4f}, {scale:.4f}])",
+            f"    square([{g.width + 2 * _EPS:.3f}, {g.height + 2 * _EPS:.3f}], center = true);",
+        ]
+    elif isinstance(g, CylinderGeometry):
+        r_top = g.r * scale
+        return [
+            f"translate([{g.cx:.3f}, {g.cy:.3f}, {frag.z_base - _EPS:.3f}])",
+            f"  cylinder(h = {frag.depth + 2 * _EPS:.3f}, r1 = {g.r + _EPS:.3f}, r2 = {r_top + _EPS:.3f});",
+        ]
+    return [f"// unsupported tapered geometry: {frag.label}"]
 
 
 def _tilted_scad_lines(frag: ScadFragment) -> list[str]:
