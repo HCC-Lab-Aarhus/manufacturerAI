@@ -7,6 +7,23 @@ from src.pipeline.config import PrinterDef
 from .models import DesignSpec, PhysicalDesign
 
 
+def _fmt_indices(idxs: list[int]) -> str:
+    if len(idxs) == 1:
+        return f"Vertex {idxs[0]}"
+    # Compress into contiguous ranges
+    ranges: list[str] = []
+    start = idxs[0]
+    prev = start
+    for v in idxs[1:]:
+        if v == prev + 1:
+            prev = v
+        else:
+            ranges.append(f"{start}–{prev}" if prev != start else str(start))
+            start = prev = v
+    ranges.append(f"{start}–{prev}" if prev != start else str(start))
+    return f"Vertices {', '.join(ranges)} ({len(idxs)} vertices)"
+
+
 def validate_physical_design(
     physical: PhysicalDesign,
     catalog: CatalogResult,
@@ -64,18 +81,26 @@ def validate_physical_design(
             f"(floor {FLOOR_MM}mm + tallest component {tallest_mm:.1f}mm + ceiling {CEILING_MM}mm)"
         )
 
+    too_short: dict[float, list[int]] = {}
+    too_tall: dict[float, list[int]] = {}
     for i, pt in enumerate(physical.outline.points):
         eff_z = pt.z_top if pt.z_top is not None else physical.enclosure.height_mm
         if eff_z < min_required_z:
-            errors.append(
-                f"Vertex {i} z_top ({eff_z:.1f}mm) is too short — "
-                f"needs at least {min_required_z:.1f}mm"
-            )
+            too_short.setdefault(eff_z, []).append(i)
         if eff_z > pdef.max_z_mm:
-            errors.append(
-                f"Vertex {i} z_top ({eff_z:.1f}mm) exceeds printer max Z "
-                f"({pdef.max_z_mm:.0f}mm)"
-            )
+            too_tall.setdefault(eff_z, []).append(i)
+    for eff_z, idxs in too_short.items():
+        verts = _fmt_indices(idxs)
+        errors.append(
+            f"{verts} z_top ({eff_z:.1f}mm) is too short — "
+            f"needs at least {min_required_z:.1f}mm"
+        )
+    for eff_z, idxs in too_tall.items():
+        verts = _fmt_indices(idxs)
+        errors.append(
+            f"{verts} z_top ({eff_z:.1f}mm) exceeds printer max Z "
+            f"({pdef.max_z_mm:.0f}mm)"
+        )
 
     if physical.enclosure.height_mm > pdef.max_z_mm:
         errors.append(
@@ -537,18 +562,26 @@ def validate_design(
             f"(floor {FLOOR_MM}mm + tallest component {tallest_mm:.1f}mm + ceiling {CEILING_MM}mm)"
         )
 
+    too_short: dict[float, list[int]] = {}
+    too_tall: dict[float, list[int]] = {}
     for i, pt in enumerate(spec.outline.points):
         eff_z = pt.z_top if pt.z_top is not None else spec.enclosure.height_mm
         if eff_z < min_required_z_vertex:
-            errors.append(
-                f"Vertex {i} z_top ({eff_z:.1f}mm) is too short — "
-                f"needs at least {min_required_z_vertex:.1f}mm to fit the tallest component"
-            )
+            too_short.setdefault(eff_z, []).append(i)
         if eff_z > pdef.max_z_mm:
-            errors.append(
-                f"Vertex {i} z_top ({eff_z:.1f}mm) exceeds printer max Z "
-                f"({pdef.max_z_mm:.0f}mm)"
-            )
+            too_tall.setdefault(eff_z, []).append(i)
+    for eff_z, idxs in too_short.items():
+        verts = _fmt_indices(idxs)
+        errors.append(
+            f"{verts} z_top ({eff_z:.1f}mm) is too short — "
+            f"needs at least {min_required_z_vertex:.1f}mm to fit the tallest component"
+        )
+    for eff_z, idxs in too_tall.items():
+        verts = _fmt_indices(idxs)
+        errors.append(
+            f"{verts} z_top ({eff_z:.1f}mm) exceeds printer max Z "
+            f"({pdef.max_z_mm:.0f}mm)"
+        )
 
     if spec.enclosure.height_mm > pdef.max_z_mm:
         errors.append(
