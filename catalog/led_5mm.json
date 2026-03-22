@@ -47,21 +47,6 @@
         }
     ],
     "internal_nets": [],
-    "scad": {
-        "features": [
-            {
-                "shape": "circle",
-                "label": "collar flange recess",
-                "position_mm": [
-                    0,
-                    0
-                ],
-                "diameter_mm": 6.0,
-                "depth_mm": 1.0,
-                "z_anchor": "ceil_start"
-            }
-        ]
-    },
     "configurable": {
         "color": {
             "type": "enum",
