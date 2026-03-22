@@ -184,6 +184,117 @@ def validate_physical_design(
     return errors
 
 
+def _check_board_capacity(
+    poly,  # Shapely Polygon
+    spec: DesignSpec,
+    catalog_map: dict,
+    instance_to_catalog: dict,
+    errors: list[str],
+) -> None:
+    """Check whether the outline is large enough for all components.
+
+    Adds errors if the board area is too small or the narrowest
+    dimension can't fit the largest component.
+    """
+    import math
+    from src.pipeline.config import TRACE_RULES
+    from src.pipeline.placer.geometry import footprint_envelope_halfdims
+
+    edge_clr = TRACE_RULES.min_edge_clearance_mm
+
+    # Erode outline by edge clearance to get usable placement area
+    eroded = poly.buffer(-edge_clr)
+    if eroded.is_empty or eroded.area <= 0:
+        errors.append(
+            f"Outline is too narrow — after {edge_clr:.1f}mm edge clearance "
+            f"there is no usable area for components"
+        )
+        return
+
+    usable_area = eroded.area
+
+    # Compute the narrowest usable dimension via minimum rotated rectangle
+    min_dim = 0.0
+    try:
+        min_rect = eroded.minimum_rotated_rectangle
+        if min_rect and not min_rect.is_empty:
+            coords = list(min_rect.exterior.coords)
+            side1 = math.hypot(
+                coords[1][0] - coords[0][0], coords[1][1] - coords[0][1])
+            side2 = math.hypot(
+                coords[2][0] - coords[1][0], coords[2][1] - coords[1][1])
+            min_dim = min(side1, side2)
+    except Exception:
+        pass
+
+    # Resolve effective mounting style for each component
+    up_style_map = {
+        up.instance_id: up.mounting_style
+        for up in spec.ui_placements if up.mounting_style
+    }
+
+    total_footprint_area = 0.0
+    largest_min_span = 0.0
+    largest_min_span_id = ""
+
+    for ci in spec.components:
+        if ci.catalog_id not in catalog_map:
+            continue
+        cat = catalog_map[ci.catalog_id]
+
+        # Resolve effective mounting style
+        eff_style = (
+            up_style_map.get(ci.instance_id)
+            or ci.mounting_style
+            or cat.mounting.style
+        )
+        if eff_style == "side":
+            continue  # side-mount components live on the edge
+
+        keepout = cat.mounting.keepout_margin_mm
+
+        # Compute footprint area and minimum axis span across all rotations
+        best_min_span = float("inf")
+        best_area = float("inf")
+        for rot in (0, 90, 180, 270):
+            ehw, ehh = footprint_envelope_halfdims(cat, rot)
+            span_x = 2 * ehw + 2 * keepout
+            span_y = 2 * ehh + 2 * keepout
+            this_min = min(span_x, span_y)
+            this_area = span_x * span_y
+            if this_min < best_min_span:
+                best_min_span = this_min
+            if this_area < best_area:
+                best_area = this_area
+
+        total_footprint_area += best_area
+
+        if best_min_span > largest_min_span:
+            largest_min_span = best_min_span
+            largest_min_span_id = ci.instance_id
+
+    # ── Minimum dimension check ──
+    if min_dim > 0 and largest_min_span > 0 and largest_min_span > min_dim:
+        errors.append(
+            f"Outline is too narrow for component '{largest_min_span_id}': "
+            f"narrowest usable width is {min_dim:.1f}mm but the component "
+            f"needs at least {largest_min_span:.1f}mm (envelope + keepout). "
+            f"Widen the outline."
+        )
+
+    # ── Total area check (packing factor accounts for routing channels) ──
+    PACKING_FACTOR = 2.0
+    required_area = total_footprint_area * PACKING_FACTOR
+    if required_area > usable_area:
+        errors.append(
+            f"Outline is likely too small for all {len(spec.components)} "
+            f"components: footprint area is {total_footprint_area:.0f}mm² "
+            f"and with routing space needs ~{required_area:.0f}mm², "
+            f"but usable outline area is only {usable_area:.0f}mm². "
+            f"Enlarge the outline or simplify the circuit."
+        )
+
+
 def validate_design(
     spec: DesignSpec,
     catalog: CatalogResult,
@@ -526,6 +637,11 @@ def validate_design(
                                 f"(body half-size {half_size:.1f}mm + "
                                 f"keepout {cat.mounting.keepout_margin_mm:.1f}mm)"
                             )
+
+                # ── Board area / minimum dimension check ──
+                _check_board_capacity(
+                    poly, spec, catalog_map, instance_to_catalog, errors,
+                )
         except ImportError:
             pass  # Shapely optional for polygon checks
 
