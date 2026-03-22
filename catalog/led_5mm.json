@@ -67,14 +67,38 @@
             "type": "enum",
             "description": "LED color",
             "options": {
-                "ir":     {"wavelength_nm": 940, "forward_voltage_v": 1.2},
-                "red":    {"wavelength_nm": 620, "forward_voltage_v": 2.0},
-                "orange": {"wavelength_nm": 600, "forward_voltage_v": 2.1},
-                "yellow": {"wavelength_nm": 590, "forward_voltage_v": 2.1},
-                "green":  {"wavelength_nm": 525, "forward_voltage_v": 2.2},
-                "blue":   {"wavelength_nm": 470, "forward_voltage_v": 3.2},
-                "white":  {"wavelength_nm": 0,   "forward_voltage_v": 3.3},
-                "uv":     {"wavelength_nm": 400, "forward_voltage_v": 3.4}
+                "ir": {
+                    "wavelength_nm": 940,
+                    "forward_voltage_v": 1.2
+                },
+                "red": {
+                    "wavelength_nm": 620,
+                    "forward_voltage_v": 2.0
+                },
+                "orange": {
+                    "wavelength_nm": 600,
+                    "forward_voltage_v": 2.1
+                },
+                "yellow": {
+                    "wavelength_nm": 590,
+                    "forward_voltage_v": 2.1
+                },
+                "green": {
+                    "wavelength_nm": 525,
+                    "forward_voltage_v": 2.2
+                },
+                "blue": {
+                    "wavelength_nm": 470,
+                    "forward_voltage_v": 3.2
+                },
+                "white": {
+                    "wavelength_nm": 0,
+                    "forward_voltage_v": 3.3
+                },
+                "uv": {
+                    "wavelength_nm": 400,
+                    "forward_voltage_v": 3.4
+                }
             }
         }
     }
