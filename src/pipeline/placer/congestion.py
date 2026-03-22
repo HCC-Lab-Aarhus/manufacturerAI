@@ -91,12 +91,21 @@ class CongestionGrid:
         # Use ray-casting point-in-polygon (avoids Shapely Point overhead).
         verts = list(outline_poly.exterior.coords)
         n_verts = len(verts)
+        hole_rings = [
+            (list(ring.coords), len(list(ring.coords)))
+            for ring in outline_poly.interiors
+        ]
         for ty in range(self.rows):
             cy = ymin + (ty + 0.5) * tile_size
             for tx in range(self.cols):
                 cx = xmin + (tx + 0.5) * tile_size
                 if _point_in_poly(cx, cy, verts, n_verts):
-                    self._capacity[ty * self.cols + tx] = base_cap
+                    in_hole = any(
+                        _point_in_poly(cx, cy, hv, hn)
+                        for hv, hn in hole_rings
+                    )
+                    if not in_hole:
+                        self._capacity[ty * self.cols + tx] = base_cap
 
         # Component body blocks (stored for undo)
         self._body_blocks: dict[str, list[int]] = {}

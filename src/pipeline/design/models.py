@@ -61,13 +61,24 @@ class OutlineVertex:
 
 @dataclass
 class Outline:
-    """Device outline as a list of vertices, each with its own corner easing."""
+    """Device outline as a list of vertices, each with its own corner easing.
+
+    holes: optional interior cutout rings.  Each hole is a closed polygon
+    that is subtracted from the outer boundary, creating a through-hole in
+    the enclosure (e.g. between tree branches, decorative openings).
+    """
     points: list[OutlineVertex]
+    holes: list[list[OutlineVertex]] = field(default_factory=list)
 
     @property
     def vertices(self) -> list[tuple[float, float]]:
-        """List of (x, y) tuples for polygon operations."""
+        """List of (x, y) tuples for the outer ring."""
         return [(p.x, p.y) for p in self.points]
+
+    @property
+    def hole_vertices(self) -> list[list[tuple[float, float]]]:
+        """List of (x, y) tuple lists for each interior hole."""
+        return [[(p.x, p.y) for p in hole] for hole in self.holes]
 
 
 # ── 3D shape descriptors ───────────────────────────────────────────────────────

@@ -4,9 +4,9 @@ Coverage
 --------
 * ``_polygon_signed_area``         — correct sign for CCW and CW polygons.
 * ``_inset_polygon_pts``           — vertex count preserved; inset moves inward.
+* ``_earclip``                     — correct triangulation for convex and non-convex polygons.
 * ``_build_rings``                 — correct ring count for all edge-profile combinations.
-* ``shell_body_lines`` (uniform)   — polyhedron with cap_rings=0 for flat heights.
-* ``shell_body_lines`` (variable)  — polyhedron with cap rings for varying heights.
+* ``shell_body_lines``             — polyhedron with ear-clipped caps.
 * polyhedron output structure      — correct point/face counts, valid index range.
 * Edge profiles in polyhedron path — extra rings are emitted for chamfer/fillet.
 * Winding sanity                   — bottom-cap and top-cap face indices are reversed
@@ -31,10 +31,9 @@ from src.pipeline.design.models import (
     TopSurface,
 )
 from src.pipeline.scad.layers import (
-    _CAP_RINGS,
     _CURVE_STEPS,
-    _VARIABLE_HEIGHT_THRESHOLD,
     _build_rings,
+    _earclip,
     _inset_polygon_pts,
     _polygon_signed_area,
     shell_body_lines,
@@ -253,8 +252,47 @@ class TestBuildRings(unittest.TestCase):
 # ── shell_body_lines: uniform path ────────────────────────────────────────────
 
 
+class TestEarclip(unittest.TestCase):
+    """Validate the ear-clipping polygon triangulation."""
+
+    def test_triangle(self):
+        pts = [[0.0, 0.0], [10.0, 0.0], [5.0, 10.0]]
+        tris = _earclip(pts)
+        self.assertEqual(len(tris), 1)
+        self.assertEqual(tris[0], (0, 1, 2))
+
+    def test_square(self):
+        pts = [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]
+        tris = _earclip(pts)
+        self.assertEqual(len(tris), 2)
+
+    def test_l_shape_nonconvex(self):
+        """Non-convex L-shape should produce N-2=4 triangles."""
+        pts = [[0, 0], [10, 0], [10, 5], [5, 5], [5, 10], [0, 10]]
+        tris = _earclip(pts)
+        self.assertEqual(len(tris), 4)
+        for a, b, c in tris:
+            self.assertGreaterEqual(min(a, b, c), 0)
+            self.assertLess(max(a, b, c), 6)
+
+    def test_cw_polygon(self):
+        """CW winding should also triangulate correctly."""
+        pts = [[0.0, 0.0], [0.0, 10.0], [10.0, 10.0], [10.0, 0.0]]
+        tris = _earclip(pts)
+        self.assertEqual(len(tris), 2)
+
+    def test_all_indices_unique_per_triangle(self):
+        pts = [[0, 0], [20, 0], [20, 10], [15, 10], [15, 20], [0, 20]]
+        tris = _earclip(pts)
+        for a, b, c in tris:
+            self.assertEqual(len({a, b, c}), 3)
+
+
+# ── shell_body_lines: uniform path ────────────────────────────────────────────
+
+
 class TestShellBodyUniformHeight(unittest.TestCase):
-    """Shell body uses polyhedron for uniform heights (cap_rings=0)."""
+    """Shell body uses polyhedron for all height configurations."""
 
     def setUp(self):
         self.pts = _rect_pts(30, 50)
@@ -275,9 +313,8 @@ class TestShellBodyUniformHeight(unittest.TestCase):
         self.assertIn("polyhedron", scad)
 
     def test_near_threshold_variation_still_polyhedron(self):
-        """Heights within _VARIABLE_HEIGHT_THRESHOLD still use the polyhedron path."""
-        delta = _VARIABLE_HEIGHT_THRESHOLD * 0.9
-        top_zs = [25.0, 25.0 + delta, 25.0, 25.0]
+        """Small height variation still uses the polyhedron path."""
+        top_zs = [25.0, 25.09, 25.0, 25.0]
         lines = shell_body_lines(self.outline, _plain_enclosure(25.0), self.pts, top_zs=top_zs)
         scad = self._joined(lines)
         self.assertIn("polyhedron", scad)
@@ -301,7 +338,7 @@ class TestShellBodyUniformHeight(unittest.TestCase):
 
 
 class TestShellBodyPolyhedronPath(unittest.TestCase):
-    """shell_body_lines uses cap-ring interpolation when heights vary."""
+    """shell_body_lines uses ear-clipped caps for all height configurations."""
 
     def setUp(self):
         # Simple 4-vertex rectangle with variable ceiling heights
@@ -323,9 +360,8 @@ class TestShellBodyPolyhedronPath(unittest.TestCase):
     def test_no_linear_extrude(self):
         self.assertNotIn("linear_extrude", self._get_scad())
 
-    def test_above_threshold_uses_cap_rings(self):
-        delta = _VARIABLE_HEIGHT_THRESHOLD * 1.1
-        top_zs = [25.0, 25.0 + delta, 25.0, 25.0]
+    def test_variable_height_uses_polyhedron(self):
+        top_zs = [25.0, 25.2, 25.0, 25.0]
         self.assertIn("polyhedron(", self._get_scad(top_zs=top_zs))
 
     # ── points= field ──────────────────────────────────────────────────────────
@@ -353,18 +389,18 @@ class TestShellBodyPolyhedronPath(unittest.TestCase):
         return faces
 
     def test_point_count_no_profiles(self):
-        """No profiles → 2 main rings + _CAP_RINGS concentric top cap rings + 2 centroids."""
+        """No profiles → R*N ring points (no cap rings or centroids)."""
         N = len(self.pts)
+        R = 2  # 1 bottom ring + 1 top ring
         scad = self._get_scad()
         pts = self._parse_points(scad)
-        # R=2 main rings + _CAP_RINGS top cap rings (flat bot → 0 bot cap rings)
-        # + top centroid + bot centroid = (R + CAP)*N + 2
-        self.assertEqual(len(pts), (2 + _CAP_RINGS) * N + 2)
+        self.assertEqual(len(pts), R * N)
 
     def test_point_count_with_both_fillets(self):
-        """Both profiles → 2*(CS+1) main rings + _CAP_RINGS cap rings + 2 centroids."""
+        """Both profiles → 2*(CS+1) main rings × N points."""
         N = len(self.pts)
-        expected_pts = (2 * (_CURVE_STEPS + 1) + _CAP_RINGS) * N + 2
+        R = 2 * (_CURVE_STEPS + 1)
+        expected_pts = R * N
         scad = self._get_scad(enc=_fillet_enclosure(20.0, 2.0))
         pts = self._parse_points(scad)
         self.assertEqual(len(pts), expected_pts)
@@ -402,20 +438,19 @@ class TestShellBodyPolyhedronPath(unittest.TestCase):
     # ── faces= field ───────────────────────────────────────────────────────────
 
     def test_face_count_no_profiles(self):
-        """2 main rings → N bottom fan tris + (2*CAP_RINGS+1)*N top cap tris + (R-1)*N*2 side tris."""
+        """2 main rings → (N-2) bottom + (N-2) top ear-clip tris + (R-1)*N*2 side tris."""
         N = len(self.pts)
-        R = 2  # no-profiles: 1 bottom ring + 1 top ring
-        # Bottom fan: N tris, Top cap: (2*CAP+1)*N tris, Sides: (R-1)*N*2 tris
-        expected_faces = N + (R - 1) * N * 2 + (2 * _CAP_RINGS + 1) * N
+        R = 2
+        expected_faces = 2 * (N - 2) + (R - 1) * N * 2
         scad = self._get_scad()
         faces = self._parse_faces(scad)
         self.assertEqual(len(faces), expected_faces)
 
     def test_face_count_with_both_fillets(self):
-        """2*(CS+1) main rings + cap rings → N bot tris + (R-1)*N*2 side + (2*CAP_RINGS+1)*N top."""
+        """Both fillets → (N-2) bot + (N-2) top + (R-1)*N*2 sides."""
         N = len(self.pts)
         R = 2 * (_CURVE_STEPS + 1)
-        expected_faces = N + (R - 1) * N * 2 + (2 * _CAP_RINGS + 1) * N
+        expected_faces = 2 * (N - 2) + (R - 1) * N * 2
         scad = self._get_scad(enc=_fillet_enclosure(20.0, 2.0))
         faces = self._parse_faces(scad)
         self.assertEqual(len(faces), expected_faces)
@@ -433,59 +468,44 @@ class TestShellBodyPolyhedronPath(unittest.TestCase):
                 self.assertLess(idx, total_pts,
                                 f"face index {idx} out of range (max {total_pts-1})")
 
-    def test_bottom_and_top_caps_use_all_bottom_top_indices(self):
-        """The bottom triangles reference the bottom ring; the N centroid-fan triangles
-        together reference every vertex of the innermost cap ring exactly once."""
+    def test_bottom_and_top_caps_cover_all_ring_vertices(self):
+        """Bottom cap triangles reference all first-ring vertices; top cap
+        triangles reference all last-ring vertices."""
         N = len(self.pts)
+        R = 2
         scad = self._get_scad()
         pts   = self._parse_points(scad)
         faces = self._parse_faces(scad)
 
-        # Bottom centroid is always the very last point
-        bot_center_idx = len(pts) - 1
-        # Top centroid is second-to-last (when no bottom cap rings)
-        center_idx = len(pts) - 2
+        bot_indices = set(range(N))
+        top_indices = set(range((R - 1) * N, R * N))
 
-        # Bottom cap: N triangles each containing the bottom centroid
-        bot_tris = [f for f in faces if len(f) == 3 and bot_center_idx in f]
-        self.assertEqual(len(bot_tris), N, "Expected N bottom centroid fan triangles")
-        bot_rim = {v for tri in bot_tris for v in tri if v != bot_center_idx}
-        self.assertEqual(bot_rim, set(range(N)),
-                         "Bottom fan should reference all vertices of the first ring")
+        bot_tris = [f for f in faces if all(i in bot_indices for i in f)]
+        bot_verts = {v for tri in bot_tris for v in tri}
+        self.assertEqual(bot_verts, bot_indices)
+        self.assertEqual(len(bot_tris), N - 2)
 
-        # Innermost top cap ring: the N points immediately before the top centroid
-        innermost_indices = set(range(center_idx - N, center_idx))
-
-        # Final fan: N triangles each containing the top centroid
-        centroid_tris = [f for f in faces if len(f) == 3 and center_idx in f]
-        self.assertEqual(len(centroid_tris), N, "Expected N centroid fan triangles")
-        rim_from_fans = {v for tri in centroid_tris for v in tri if v != center_idx}
-        self.assertEqual(rim_from_fans, innermost_indices)
+        top_tris = [f for f in faces if all(i in top_indices for i in f)]
+        top_verts = {v for tri in top_tris for v in tri}
+        self.assertEqual(top_verts, top_indices)
+        self.assertEqual(len(top_tris), N - 2)
 
     def test_bottom_and_top_caps_are_reversed_from_each_other(self):
-        """The bottom cap triangles and the top centroid fan triangles must have
-        opposite 2-D signed areas, ensuring outward normals point in opposite
-        Z directions (OpenSCAD CW-from-outside convention)."""
+        """Bottom and top cap triangles must have opposite 2-D signed areas,
+        ensuring outward normals point in opposite Z directions."""
         N = len(self.pts)
+        R = 2
         scad = self._get_scad()
         pts   = self._parse_points(scad)
         faces = self._parse_faces(scad)
 
-        # Bottom centroid is always the very last point
-        bot_center_idx = len(pts) - 1
-        # Top centroid is second-to-last (when no bottom cap rings)
-        center_idx = len(pts) - 2
+        bot_indices = set(range(N))
+        top_indices = set(range((R - 1) * N, R * N))
 
-        # Bottom fan triangles (each contains the bottom centroid index)
-        bot_fans = [f for f in faces if len(f) == 3 and bot_center_idx in f]
-        self.assertEqual(len(bot_fans), N)
-
-        # Top fan triangles (each contains the top centroid index)
-        top_fans = [f for f in faces if len(f) == 3 and center_idx in f]
-        self.assertEqual(len(top_fans), N)
+        bot_tris = [f for f in faces if all(i in bot_indices for i in f)]
+        top_tris = [f for f in faces if all(i in top_indices for i in f)]
 
         def _signed_area_face(face_indices, all_pts):
-            """Shoelace signed area for a face defined by a list of point indices."""
             n = len(face_indices)
             return 0.5 * sum(
                 all_pts[face_indices[i]][0] * all_pts[face_indices[(i + 1) % n]][1]
@@ -493,15 +513,13 @@ class TestShellBodyPolyhedronPath(unittest.TestCase):
                 for i in range(n)
             )
 
-        # Sum the signed areas of all bottom and top triangles
-        bot_area = sum(_signed_area_face(t, pts) for t in bot_fans)
-        top_area = sum(_signed_area_face(t, pts) for t in top_fans)
+        bot_area = sum(_signed_area_face(t, pts) for t in bot_tris)
+        top_area = sum(_signed_area_face(t, pts) for t in top_tris)
 
-        # Bottom and top must differ in sign.
         self.assertNotEqual(
             bot_area > 0, top_area > 0,
-            f"Bottom cap and top fan must have opposite winding "
-            f"(bot_area={bot_area:.2f}, top_fan_area={top_area:.2f})"
+            f"Bottom and top caps must have opposite winding "
+            f"(bot_area={bot_area:.2f}, top_area={top_area:.2f})"
         )
 
     # ── Edge profiles in polyhedron path ───────────────────────────────────────
@@ -522,23 +540,17 @@ class TestShellBodyPolyhedronPath(unittest.TestCase):
         self.assertEqual(len(pts_f), len(pts_c))
 
     def test_top_zs_are_reflected_in_top_profile_ring(self):
-        """With a top fillet, the last main ring z must exactly match top_zs.
-
-        Cap rings sit above the main rings; the last MAIN ring (at frac=1 of
-        the fillet) still lands exactly at top_zs[i].
-        """
+        """With a top fillet, the last ring z must exactly match top_zs."""
         enc = _fillet_enclosure(20.0, 2.0)
         N = len(self.pts)
         scad = self._get_scad(enc=enc)
         pts = self._parse_points(scad)
-        # Total points = (R_main + _CAP_RINGS)*N + 2 centroids; find R_main:
-        R_total = (len(pts) - 2) // N
-        R_main  = R_total - _CAP_RINGS
-        top_ring_start = (R_main - 1) * N
+        R = len(pts) // N
+        top_ring_start = (R - 1) * N
         top_ring = pts[top_ring_start:top_ring_start + N]
         for i, tz in enumerate(self.top_zs):
             self.assertAlmostEqual(top_ring[i][2], tz, places=3,
-                                   msg=f"vertex {i}: fillet last main ring z != top_zs")
+                                   msg=f"vertex {i}: fillet last ring z != top_zs")
 
 
 # ── More polygons: 8-vertex octagon and 3-vertex triangle ─────────────────────
@@ -703,8 +715,8 @@ class TestVariableBottomSurface(unittest.TestCase):
                 for fs in re.findall(r"\[([^\]]+)\]", m.group(1))]
 
     def test_variable_bottom_activates_polyhedron(self):
-        """Variable bottom_zs should enable cap-ring interpolation even with
-        uniform top_zs."""
+        """Variable bottom_zs should produce a polyhedron even with uniform
+        top_zs."""
         lines = shell_body_lines(
             self.outline, _plain_enclosure(25.0), self.pts,
             top_zs=self.top_zs, bottom_zs=self.bottom_zs)
@@ -737,25 +749,19 @@ class TestVariableBottomSurface(unittest.TestCase):
                 self.assertGreaterEqual(idx, 0)
                 self.assertLess(idx, len(pts))
 
-    def test_variable_bottom_has_bottom_cap_rings(self):
-        """With variable bottom heights, the polyhedron should have bottom cap
-        rings (more points than the flat-bottom case)."""
-        N = len(self.pts)
-        # Flat bottom baseline
+    def test_variable_vs_flat_bottom_same_point_count(self):
+        """Variable and flat bottom use the same ring structure (R*N points)."""
         flat_lines = shell_body_lines(
             self.outline, _plain_enclosure(25.0), self.pts,
             top_zs=[20.0, 25.0, 30.0, 22.0])
         flat_pts = self._parse_points(self._joined(flat_lines))
 
-        # Variable bottom
         var_lines = shell_body_lines(
             self.outline, _plain_enclosure(25.0), self.pts,
             top_zs=[20.0, 25.0, 30.0, 22.0], bottom_zs=self.bottom_zs)
         var_pts = self._parse_points(self._joined(var_lines))
 
-        # Variable bottom adds _CAP_RINGS * N bottom cap ring points
-        self.assertGreater(len(var_pts), len(flat_pts))
-        self.assertEqual(len(var_pts) - len(flat_pts), _CAP_RINGS * N)
+        self.assertEqual(len(var_pts), len(flat_pts))
 
     def test_uniform_bottom_nonzero_uses_polyhedron(self):
         """Uniform but non-zero bottom_zs should still trigger polyhedron."""

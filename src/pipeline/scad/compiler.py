@@ -23,6 +23,7 @@ def _find_openscad() -> str | None:
     if path:
         return path
     for candidate in [
+        r"C:\Program Files\OpenSCAD (Nightly)\openscad.exe",
         r"C:\Program Files\OpenSCAD\openscad.exe",
         r"C:\Program Files (x86)\OpenSCAD\openscad.exe",
     ]:

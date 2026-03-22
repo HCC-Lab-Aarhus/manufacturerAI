@@ -130,7 +130,10 @@ def place_components(
         If a component cannot be legally placed.
     """
     catalog_map = {c.id: c for c in catalog.components}
-    outline_poly = Polygon(design.outline.vertices)
+    outline_poly = Polygon(
+        design.outline.vertices,
+        design.outline.hole_vertices or None,
+    )
     outline_verts = design.outline.vertices
     xmin, ymin, xmax, ymax = outline_poly.bounds
     outline_bounds = (xmin, ymin, xmax, ymax)

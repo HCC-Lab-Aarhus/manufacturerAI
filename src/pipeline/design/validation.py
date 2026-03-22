@@ -125,7 +125,10 @@ def validate_physical_design(
     if len(physical.outline.vertices) >= 3:
         try:
             from shapely.geometry import Polygon, Point
-            poly = Polygon(physical.outline.vertices)
+            poly = Polygon(
+                physical.outline.vertices,
+                physical.outline.hole_vertices or None,
+            )
             if not poly.is_valid:
                 errors.append("Outline polygon is self-intersecting or invalid")
             elif poly.area <= 0:
@@ -595,7 +598,10 @@ def validate_design(
     if len(spec.outline.vertices) >= 3:
         try:
             from shapely.geometry import Polygon, Point
-            poly = Polygon(spec.outline.vertices)
+            poly = Polygon(
+                spec.outline.vertices,
+                spec.outline.hole_vertices or None,
+            )
             if not poly.is_valid:
                 errors.append("Outline polygon is self-intersecting or invalid")
             elif poly.area <= 0:

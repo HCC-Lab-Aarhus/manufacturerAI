@@ -6,4 +6,5 @@ requests==2.32.3
 pydantic>=2.0
 shapely>=2.0
 scipy>=1.11
+mapbox-earcut>=1.0
 plotly>=6.6.0

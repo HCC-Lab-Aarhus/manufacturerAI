@@ -87,14 +87,19 @@ def invalidate_downstream(session: Session, current_step: str) -> list[str]:
 # ── Session artifact readers (raw dicts) ──
 
 def _read_outline(session: Session) -> list:
-    """Read outline.json, falling back to design.json['outline'] for older sessions."""
+    """Return the outline vertex list from outline.json."""
     data = session.read_artifact("outline.json")
-    if data is not None:
-        return data
-    design = session.read_artifact("design.json")
-    if design and "outline" in design:
-        return design["outline"]
-    return []
+    if data is None:
+        return []
+    return data.get("outline", [])
+
+
+def _read_outline_full(session: Session) -> dict:
+    """Return outline points and holes from outline.json for API responses."""
+    data = session.read_artifact("outline.json")
+    if data is None:
+        return {"points": [], "holes": []}
+    return {"points": data.get("outline", []), "holes": data.get("holes", [])}
 
 
 def require_design(session: Session) -> dict:
@@ -215,7 +220,7 @@ def enrich_design(data: dict, cat, session: Session | None = None) -> None:
     outline_data = _read_outline(session) if session else data.get("outline", [])
     enclosure_data = data.get("enclosure", {})
     if outline_data:
-        data["outline"] = outline_data
+        data["outline"] = _read_outline_full(session) if session else outline_data
     _add_shape_fields(data, outline_data, enclosure_data)
 
     fields = _get_shape_fields(outline_data, enclosure_data)
@@ -278,7 +283,7 @@ def build_placement_response(session: Session, cat) -> dict:
     outline_data = _read_outline(session)
 
     response = {
-        "outline": outline_data,
+        "outline": _read_outline_full(session),
         "enclosure": design.get("enclosure", {}),
         "components": placement["components"],
     }
@@ -296,7 +301,7 @@ def build_routing_response(session: Session, cat) -> dict:
 
     from src.pipeline.config import TRACE_RULES
     response = {
-        "outline": outline_data,
+        "outline": _read_outline_full(session),
         "enclosure": design.get("enclosure", {}),
         "components": placement["components"],
         "traces": routing.get("traces", []),
@@ -306,5 +311,5 @@ def build_routing_response(session: Session, cat) -> dict:
         "trace_width_mm": TRACE_RULES.trace_width_mm,
     }
     enrich_components(response["components"], cat)
-    _add_shape_fields(response, response["outline"], response["enclosure"])
+    _add_shape_fields(response, outline_data, response["enclosure"])
     return response

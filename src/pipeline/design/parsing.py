@@ -27,7 +27,7 @@ def parse_design(data: dict) -> DesignSpec:
     )
 
 
-def _parse_outline(data: list) -> Outline:
+def _parse_outline(data: list, holes_data: list | None = None) -> Outline:
     """Parse outline from a flat list of vertex objects.
 
     Format:
@@ -35,11 +35,20 @@ def _parse_outline(data: list) -> Outline:
         or with per-vertex ceiling heights:
         [{"x": 0, "y": 0, "z_top": 30}, {"x": 30, "y": 0, "z_top": 20}, ...]
     """
+    points = _parse_vertex_list(data)
+    holes: list[list[OutlineVertex]] = []
+    if holes_data:
+        for hole_ring in holes_data:
+            holes.append(_parse_vertex_list(hole_ring))
+    return Outline(points=points, holes=holes)
+
+
+def _parse_vertex_list(data: list) -> list[OutlineVertex]:
+    """Parse a list of vertex dicts into OutlineVertex objects."""
     points = []
     for v in data:
         raw_in = v.get("ease_in")
         raw_out = v.get("ease_out")
-        # If only one side is given, mirror it to the other
         if raw_in is not None and raw_out is None:
             raw_out = raw_in
         elif raw_out is not None and raw_in is None:
@@ -54,7 +63,7 @@ def _parse_outline(data: list) -> Outline:
             z_top=float(z_top_raw) if z_top_raw is not None else None,
             z_bottom=float(z_bottom_raw) if z_bottom_raw is not None else None,
         ))
-    return Outline(points=points)
+    return points
 
 
 def _parse_top_surface(data: dict) -> TopSurface:
@@ -160,7 +169,7 @@ def parse_physical_design(data: dict) -> PhysicalDesign:
     if "shape" in data:
         outline = tessellate_shape(data["shape"])
     elif "outline" in data:
-        outline = _parse_outline(data["outline"])
+        outline = _parse_outline(data["outline"], data.get("holes"))
     else:
         raise KeyError("design must contain 'shape' or 'outline'")
     return PhysicalDesign(

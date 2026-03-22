@@ -434,7 +434,12 @@ class DesignAgent(_BaseAgent):
             return f"Design saved. Parsing error: {e}" + doc_footer
 
         outline_data = [v.to_dict() for v in physical.outline.points]
-        self.session.write_artifact("outline.json", outline_data)
+        outline_json: dict = {"outline": outline_data}
+        if physical.outline.holes:
+            outline_json["holes"] = [
+                [v.to_dict() for v in hole] for hole in physical.outline.holes
+            ]
+        self.session.write_artifact("outline.json", outline_json)
 
         printer = get_printer(self.session.printer_id)
         errors = validate_physical_design(physical, self.catalog, printer=printer)
