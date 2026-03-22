@@ -19,13 +19,27 @@ from typing import Any
 
 from fastapi import APIRouter, Query
 
+from dataclasses import dataclass
+
+from src.catalog.loader import load_catalog, get_component
+from src.catalog.models import Component
 from src.pipeline.config import (
     get_printer, PrinterDef,
     SweepGrid, sweep_grid,
     TRACE_RULES,
+    component_z_range, FLOOR_MM, CAVITY_START_MM, CEILING_MM, TRACE_HEIGHT_MM,
 )
 from src.pipeline.gcode.filaments import get_filament, FilamentDef
 from src.pipeline.manifest import generate_manifest
+from src.pipeline.placer.models import PlacedComponent
+from src.pipeline.design.models import Outline, Enclosure, OutlineVertex
+from src.pipeline.scad.resolver import (
+    PINHOLE_CLEARANCE, ResolverContext, resolve_component,
+)
+from src.pipeline.scad.fragment import (
+    ScadFragment, RectGeometry, CylinderGeometry,
+    PolygonGeometry, SegmentGeometry, CapsuleGeometry,
+)
 from src.pipeline.scad.traces import TRACE_WIDTH as SCAD_TRACE_WIDTH
 
 PINHOLE_TAPER_D: float = 3.5
@@ -580,24 +594,202 @@ async def generate_silverink_test(
 
 # ── Cube-trace test ───────────────────────────────────────────────
 #
-# A flat rectangular plate where the right half is extruded upward
-# into a cube.  Two pin-holes descend through the cube to the plate
-# surface.  Trace cutouts run from the flat-plate edge of the cube
-# inward to each pin-hole.  The bitmap draws traces along the same
-# channels.
+# Loads real catalog components (resistor, button, battery), arranges
+# them on a common plate, and uses the pipeline's component_z_range()
+# and resolve_component() to derive proper block heights, pin holes,
+# body pockets, pin bridges, SCAD features (battery plate channels,
+# dome contact windows, hatch), and funnel tapers — matching the
+# real enclosure pipeline as closely as possible.
+
+_BLOCK_MARGIN: float = 2.0
+_PIN_MARGIN: float = 1.5
+_COMP_GAP: float = 3.0
+_TRACE_RUN: float = 15.0
+_COMPONENT_CONFIGS: list[tuple[str, float]] = [
+    ("resistor_axial", 90),
+    ("tactile_button_6x6", 0),
+    ("battery_holder_2xAAA", 90),
+]
+
+
+@dataclass
+class _CompLayout:
+    catalog: Component
+    cx: float
+    cy: float
+    block_x: float
+    block_y: float
+    block_w: float
+    block_h: float
+    block_z_top: float
+    pins: list[tuple[float, float, float]]
+    fragments: list[ScadFragment]
+    plate_x: float
+    plate_y: float
+    plate_w: float
+    plate_h: float
+
+
+def _compute_component_layout(
+    pdef: PrinterDef,
+    pad: float,
+    z: float = 0.2,
+) -> list[_CompLayout]:
+    """Compute layout for catalog components, each on its own plate.
+
+    Uses the real pipeline's component_z_range() for Z heights and
+    resolve_component() for SCAD cutout fragments (body pockets, pin
+    holes, pin bridges, SCAD features, hatches).
+
+    Plates are stacked vertically and centred horizontally on the bed.
+    The battery is rotated 90° so its two pins separate in Y and the
+    traces extending left to the plate edge don't collide.
+
+    Returns a list of _CompLayout, each with its own plate coordinates.
+    """
+    cat = load_catalog()
+
+    nom_w = pdef.nominal_bed_width
+    nom_d = pdef.nominal_bed_depth
+
+    block_infos: list[tuple[Component, float, float, float, float, float]] = []
+    for cid, rot in _COMPONENT_CONFIGS:
+        comp = get_component(cat, cid)
+        if comp is None:
+            raise ValueError(f"Catalog component '{cid}' not found")
+
+        body_w: float = comp.body.width_mm or 1.0
+        body_l: float = comp.body.length_mm or 1.0
+
+        pin_coords: list[tuple[float, float]] = []
+        for pin in comp.pins:
+            px_rel, py_rel = float(pin.position_mm[0]), float(pin.position_mm[1])
+            if rot:
+                rad = math.radians(rot)
+                cos_a, sin_a = math.cos(rad), math.sin(rad)
+                px_rel, py_rel = px_rel * cos_a - py_rel * sin_a, px_rel * sin_a + py_rel * cos_a
+            pin_coords.append((px_rel, py_rel))
+
+        if rot % 180 == 90:
+            eff_w, eff_l = body_l, body_w
+        else:
+            eff_w, eff_l = body_w, body_l
+
+        half_w = max(eff_w / 2,
+                     max((abs(c[0]) for c in pin_coords), default=0) + _PIN_MARGIN)
+        half_h = max(eff_l / 2,
+                     max((abs(c[1]) for c in pin_coords), default=0) + _PIN_MARGIN)
+
+        bw = 2 * half_w + 2 * _BLOCK_MARGIN
+        bh = 2 * half_h + 2 * _BLOCK_MARGIN
+
+        enclosure_h = CAVITY_START_MM + comp.body.height_mm + CEILING_MM
+        ceil_start = enclosure_h - CEILING_MM
+
+        _, body_top = component_z_range(
+            comp.mounting.style, comp.body.height_mm,
+            comp.pin_length_mm, ceil_start,
+        )
+        block_infos.append((comp, bw, bh, body_top, rot, enclosure_h))
+
+    total_plate_h = sum(
+        bi[2] + 2 * pad for bi in block_infos
+    ) + _COMP_GAP * (len(block_infos) - 1)
+    y_cursor = (nom_d - total_plate_h) / 2
+
+    layouts: list[_CompLayout] = []
+    for comp, bw, bh, body_top, rot, enclosure_h in block_infos:
+        plate_w = _TRACE_RUN + bw + 2 * pad
+        plate_h = bh + 2 * pad
+        plate_x = (nom_w - plate_w) / 2
+        plate_y = y_cursor
+
+        outline = Outline(points=[
+            OutlineVertex(plate_x, plate_y),
+            OutlineVertex(plate_x + plate_w, plate_y),
+            OutlineVertex(plate_x + plate_w, plate_y + plate_h),
+            OutlineVertex(plate_x, plate_y + plate_h),
+        ])
+
+        ceil_start = enclosure_h - CEILING_MM
+        enclosure = Enclosure(height_mm=enclosure_h)
+
+        ctx = ResolverContext(
+            outline=outline,
+            enclosure=enclosure,
+            base_h=enclosure_h,
+            ceil_start=ceil_start,
+            cavity_depth=ceil_start - CAVITY_START_MM,
+            blended_height_fn=lambda _x, _y, _o, e: e.height_mm,  # type: ignore[arg-type]
+        )
+
+        block_x = plate_x + plate_w - pad - bw
+        block_y = plate_y + pad
+        cx = block_x + bw / 2
+        cy = block_y + bh / 2
+
+        pin_positions: dict[str, tuple[float, float]] = {}
+        pins: list[tuple[float, float, float]] = []
+        for pin in comp.pins:
+            px_rel, py_rel = float(pin.position_mm[0]), float(pin.position_mm[1])
+            if rot:
+                rad = math.radians(rot)
+                cos_a, sin_a = math.cos(rad), math.sin(rad)
+                px_rel, py_rel = px_rel * cos_a - py_rel * sin_a, px_rel * sin_a + py_rel * cos_a
+            px = cx + px_rel
+            py = cy + py_rel
+            pin_positions[pin.id] = (px, py)
+            hole_r = (pin.hole_diameter_mm + PINHOLE_CLEARANCE) / 2
+            pins.append((px, py, hole_r))
+
+        placed = PlacedComponent(
+            instance_id=comp.id,
+            catalog_id=comp.id,
+            x_mm=cx,
+            y_mm=cy,
+            rotation_deg=rot,
+            pin_positions=pin_positions,
+            mounting_style=comp.mounting.style,
+        )
+
+        fragments = resolve_component(placed, comp, ctx)
+
+        frag_z_top = max(
+            (f.z_base + f.depth for f in fragments if f.z_base >= 0),
+            default=body_top,
+        )
+        block_z_top = min(max(frag_z_top, body_top), ceil_start)
+
+        layouts.append(_CompLayout(
+            catalog=comp, cx=cx, cy=cy,
+            block_x=block_x, block_y=block_y,
+            block_w=bw, block_h=bh,
+            block_z_top=block_z_top,
+            pins=pins,
+            fragments=fragments,
+            plate_x=plate_x, plate_y=plate_y,
+            plate_w=plate_w, plate_h=plate_h,
+        ))
+        y_cursor += plate_h + _COMP_GAP
+
+    return layouts
 
 
 def _pinhole_gcode(
     pdef: PrinterDef,
     fdef: FilamentDef,
     pad: float,
-    plate_w: float,
-    plate_h: float,
-    cube_size: float,
-    cube_width: float = 5,
     z: float = 0.2,
     feed: float = 1200,
-) -> str:
+) -> tuple[str, list[_CompLayout]]:
+    """Generate G-code for multi-component cube-trace test.
+
+    Each component sits on its own plate with traces extending left.
+
+    Returns (gcode_str, layouts).
+    """
+    layouts = _compute_component_layout(pdef, pad, z)
+
     nozzle_temp = int(fdef.overrides.get("first_layer_temperature",
                       fdef.overrides.get("temperature", "215")))
     bed_temp = int(fdef.overrides.get("first_layer_bed_temperature",
@@ -614,21 +806,13 @@ def _pinhole_gcode(
     nom_w = pdef.nominal_bed_width
     nom_d = pdef.nominal_bed_depth
 
-    plate_x = (nom_w - plate_w) / 2
-    plate_y = (nom_d - plate_h) / 2
-
-    cube_w = cube_width
-    cube_h = cube_size
-    cube_x = plate_x + plate_w - cube_w
-    cube_y = plate_y + (plate_h - cube_h) / 2
-    cube_layers = max(1, round(cube_size / z)) - 1
-
     bw_i, bd_i = int(nom_w), int(nom_d)
+    comp_names = ", ".join(ly.catalog.id for ly in layouts)
     lines = [
-        "; Cube-trace test - plate with raised cube, pin-holes, trace cutouts",
+        "; Cube-trace test - separate plates per component",
         f"; Printer: {pdef.label}  Filament: {fdef.label}",
         f"; bed {nom_w}x{nom_d}  pad {pad}",
-        f"; plate {plate_w}x{plate_h} mm, cube {cube_w}x{cube_h}x{cube_size} mm, {cube_layers} cube layers",
+        f"; components: {comp_names}",
         f"; printer_model = {pdef.id}",
         f"; bed_shape = 0x0,{bw_i}x0,{bw_i}x{bd_i},0x{bd_i}",
         f"; nozzle_diameter = {nozzle_d}",
@@ -659,6 +843,8 @@ def _pinhole_gcode(
 
     e = 0.0
 
+    # ── Shared G-code helpers ──
+
     def _rect_perimeter_infill_iron(
         x0: float, y0: float, w: float, h: float,
         do_iron: bool = False,
@@ -676,7 +862,6 @@ def _pinhole_gcode(
             e += dist * e_per_mm
             lines.append(f"G1 X{nx:.3f} Y{ny:.3f} E{e:.4f} F{feed}")
             prev = (nx, ny)
-        # Infill
         inset = extrusion_w / 2
         ix0, iy0 = x0 + inset, y0 + inset
         ix1, iy1 = x1 - inset, y1 - inset
@@ -715,56 +900,100 @@ def _pinhole_gcode(
                     e += iron_spacing * iron_epmm
                     lines.append(f"G1 X{x_pos:.3f} E{e:.5f} F900")
 
-    # ── Cutout geometry (matches SCAD pipeline dimensions) ──
-    pin_half = PINHOLE_TAPER_D / 2
     cut_hw = SCAD_TRACE_WIDTH / 2
-    cube_cx = cube_x + cube_w / 2
-    pin_ys = [cube_y + cube_h * 0.3, cube_y + cube_h * 0.7]
 
     def _iron_trace_channels() -> None:
         nonlocal e
         iron_epmm = e_per_mm * iron_flow
         lines.append(";TYPE:Ironing - trace channels")
-        for py in pin_ys:
-            y_lo = py - cut_hw
-            y_hi = py + cut_hw
-            x_lo = plate_x
-            x_hi = cube_cx
-            e -= 0.8
-            lines.append(f"G1 E{e:.4f} F2400 ; retract")
-            lines.append(f"G1 X{x_hi:.3f} Y{y_lo:.3f} F3000")
-            e += 0.8
-            lines.append(f"G1 E{e:.4f} F2400 ; unretract")
-            x_pos = x_hi
-            going_down = True
-            while x_pos >= x_lo - 0.001:
-                e += (y_hi - y_lo) * iron_epmm
-                if going_down:
-                    lines.append(f"G1 X{x_pos:.3f} Y{y_hi:.3f} E{e:.5f} F900")
-                else:
-                    lines.append(f"G1 X{x_pos:.3f} Y{y_lo:.3f} E{e:.5f} F900")
-                going_down = not going_down
-                x_pos -= iron_spacing
-                if x_pos >= x_lo - 0.001:
-                    e += iron_spacing * iron_epmm
-                    lines.append(f"G1 X{x_pos:.3f} E{e:.5f} F900")
+        for ly in layouts:
+            for pin_x, pin_y, _hr in ly.pins:
+                y_lo = pin_y - cut_hw
+                y_hi = pin_y + cut_hw
+                x_lo = ly.plate_x
+                x_hi = pin_x
+                if x_hi <= x_lo:
+                    continue
+                e -= 0.8
+                lines.append(f"G1 E{e:.4f} F2400 ; retract")
+                lines.append(f"G1 X{x_hi:.3f} Y{y_lo:.3f} F3000")
+                e += 0.8
+                lines.append(f"G1 E{e:.4f} F2400 ; unretract")
+                x_pos = x_hi
+                going_down = True
+                while x_pos >= x_lo - 0.001:
+                    e += (y_hi - y_lo) * iron_epmm
+                    if going_down:
+                        lines.append(f"G1 X{x_pos:.3f} Y{y_hi:.3f} E{e:.5f} F900")
+                    else:
+                        lines.append(f"G1 X{x_pos:.3f} Y{y_lo:.3f} E{e:.5f} F900")
+                    going_down = not going_down
+                    x_pos -= iron_spacing
+                    if x_pos >= x_lo - 0.001:
+                        e += iron_spacing * iron_epmm
+                        lines.append(f"G1 X{x_pos:.3f} E{e:.5f} F900")
 
-    plate_layers = 4
-    for pl in range(1, plate_layers + 1):
-        lz = z * pl
-        lines.append(";LAYER_CHANGE")
-        lines.append(f";Z:{lz:.1f}")
-        lines.append(f"G1 Z{lz:.2f} F600")
-        _rect_perimeter_infill_iron(plate_x, plate_y, plate_w, plate_h)
-    _iron_trace_channels()
+    def _frag_y_excl(
+        frag: ScadFragment, x: float,
+    ) -> tuple[float, float] | None:
+        geom = frag.geometry
+        s = max(frag.taper_scale, 1.0) if frag.taper_scale > 0 else 1.0
+        if isinstance(geom, RectGeometry):
+            hw = geom.width / 2 * s
+            if abs(x - geom.cx) <= hw:
+                hh = geom.height / 2 * s
+                return (geom.cy - hh, geom.cy + hh)
+        elif isinstance(geom, CylinderGeometry):
+            r = geom.r * s
+            dx = x - geom.cx
+            if abs(dx) <= r:
+                hc = math.sqrt(r ** 2 - dx ** 2)
+                return (geom.cy - hc, geom.cy + hc)
+        elif isinstance(geom, PolygonGeometry):
+            xs = [p[0] for p in geom.points]
+            if min(xs) <= x <= max(xs):
+                ys = [p[1] for p in geom.points]
+                return (min(ys), max(ys))
+        elif isinstance(geom, (SegmentGeometry, CapsuleGeometry)):
+            if isinstance(geom, SegmentGeometry):
+                poly = geom.to_polygon()
+                xs = [p[0] for p in poly]
+                if min(xs) <= x <= max(xs):
+                    ys = [p[1] for p in poly]
+                    return (min(ys), max(ys))
+            else:
+                xmin = min(geom.x1 - geom.r1, geom.x2 - geom.r2)
+                xmax = max(geom.x1 + geom.r1, geom.x2 + geom.r2)
+                if xmin <= x <= xmax:
+                    ymin = min(geom.y1 - geom.r1, geom.y2 - geom.r2)
+                    ymax = max(geom.y1 + geom.r1, geom.y2 + geom.r2)
+                return (ymin, ymax)
+        return None
 
-    def _excl_at(x: float) -> list[tuple[float, float]]:
+    def _trace_excl_at(
+        ly: _CompLayout, x: float,
+    ) -> list[tuple[float, float]]:
         raw: list[tuple[float, float]] = []
-        for py in pin_ys:
-            if abs(x - cube_cx) <= pin_half:
-                raw.append((py - pin_half, py + pin_half))
-            if cube_x - 0.001 <= x <= cube_cx + 0.001:
-                raw.append((py - cut_hw, py + cut_hw))
+        for pin_x, pin_y, _hr in ly.pins:
+            if x < ly.plate_x - 0.001 or x > pin_x + 0.001:
+                continue
+            raw.append((pin_y - cut_hw, pin_y + cut_hw))
+        return raw
+
+    trace_z_top = FLOOR_MM + TRACE_HEIGHT_MM
+
+    def _fragment_excl_at(
+        ly: _CompLayout, x: float, z_layer: float,
+    ) -> list[tuple[float, float]]:
+        raw: list[tuple[float, float]] = []
+        if z_layer <= trace_z_top + 0.001:
+            raw.extend(_trace_excl_at(ly, x))
+        for frag in ly.fragments:
+            if frag.z_base > z_layer or z_layer > frag.z_base + frag.depth:
+                continue
+            excl = _frag_y_excl(frag, x)
+            if excl is not None:
+                raw.append(excl)
         raw.sort()
         merged: list[tuple[float, float]] = []
         for a, b in raw:
@@ -791,12 +1020,37 @@ def _pinhole_gcode(
             segs = ns
         return segs
 
+    def _wall_edge(x_a: float, y_a: float, x_b: float, y_b: float,
+                   ly: _CompLayout, z_layer: float) -> None:
+        nonlocal e
+        is_vertical = abs(x_a - x_b) < 0.001
+        if is_vertical and z_layer <= trace_z_top + 0.001:
+            excls = _trace_excl_at(ly, x_a)
+            if excls:
+                lo, hi = min(y_a, y_b), max(y_a, y_b)
+                segs = _split_y(lo, hi, excls)
+                going_up = y_b > y_a
+                ordered = segs if going_up else list(reversed(segs))
+                for s in ordered:
+                    sa, sb = (s[0], s[1]) if going_up else (s[1], s[0])
+                    e -= 0.8
+                    lines.append(f"G1 E{e:.4f} F2400 ; retract")
+                    lines.append(f"G1 X{x_a:.3f} Y{sa:.3f} F3000")
+                    e += 0.8
+                    lines.append(f"G1 E{e:.4f} F2400 ; unretract")
+                    e += abs(sb - sa) * e_per_mm
+                    lines.append(f"G1 X{x_a:.3f} Y{sb:.3f} E{e:.4f} F{feed}")
+                return
+        dist = math.hypot(x_b - x_a, y_b - y_a)
+        e += dist * e_per_mm
+        lines.append(f"G1 X{x_b:.3f} Y{y_b:.3f} E{e:.4f} F{feed}")
+
     n_walls = 3
 
-    def _cube_with_cutouts(
-        x0: float, y0: float, w: float, h: float,
-    ) -> None:
+    def _block_with_fragments(ly: _CompLayout, z_layer: float) -> None:
         nonlocal e
+        x0, y0 = ly.block_x, ly.block_y
+        w, h = ly.block_w, ly.block_h
         x1, y1 = x0 + w, y0 + h
 
         for wall in range(n_walls):
@@ -811,74 +1065,10 @@ def _pinhole_gcode(
             lines.append(f"G1 X{wx0:.3f} Y{wy0:.3f} F3000 ; travel")
             e += 0.8
             lines.append(f"G1 E{e:.4f} F2400 ; unretract")
-            e += (wx1 - wx0) * e_per_mm
-            lines.append(f"G1 X{wx1:.3f} Y{wy0:.3f} E{e:.4f} F{feed}")
-            e += (wy1 - wy0) * e_per_mm
-            lines.append(f"G1 X{wx1:.3f} Y{wy1:.3f} E{e:.4f} F{feed}")
-            e += (wx1 - wx0) * e_per_mm
-            lines.append(f"G1 X{wx0:.3f} Y{wy1:.3f} E{e:.4f} F{feed}")
-
-            for seg in sorted(
-                _split_y(wy0, wy1, _excl_at(wx0)), key=lambda s: -s[1],
-            ):
-                e -= 0.8
-                lines.append(f"G1 E{e:.4f} F2400 ; retract")
-                lines.append(f"G1 X{wx0:.3f} Y{seg[1]:.3f} F3000")
-                e += 0.8
-                lines.append(f"G1 E{e:.4f} F2400 ; unretract")
-                e += (seg[1] - seg[0]) * e_per_mm
-                lines.append(f"G1 X{wx0:.3f} Y{seg[0]:.3f} E{e:.4f} F{feed}")
-
-        inset = n_walls * extrusion_w - extrusion_w / 2
-        ix0, iy0 = x0 + inset, y0 + inset
-        ix1, iy1 = x1 - inset, y1 - inset
-        x_pos = ix0
-        going_up = True
-        while x_pos <= ix1 + 0.001:
-            segs = _split_y(iy0, iy1, _excl_at(x_pos))
-            ordered = segs if going_up else list(reversed(segs))
-            for s in ordered:
-                sy_a, sy_b = (s[0], s[1]) if going_up else (s[1], s[0])
-                e -= 0.8
-                lines.append(f"G1 E{e:.4f} F2400 ; retract")
-                lines.append(f"G1 X{x_pos:.3f} Y{sy_a:.3f} F3000")
-                e += 0.8
-                lines.append(f"G1 E{e:.4f} F2400 ; unretract")
-                e += abs(sy_b - sy_a) * e_per_mm
-                lines.append(f"G1 X{x_pos:.3f} Y{sy_b:.3f} E{e:.4f} F{feed}")
-            going_up = not going_up
-            x_pos += extrusion_w
-
-    def _pinhole_excl_at(x: float) -> list[tuple[float, float]]:
-        raw: list[tuple[float, float]] = []
-        for py in pin_ys:
-            if abs(x - cube_cx) <= pin_half:
-                raw.append((py - pin_half, py + pin_half))
-        return raw
-
-    def _cube_with_pinholes(
-        x0: float, y0: float, w: float, h: float,
-    ) -> None:
-        nonlocal e
-        x1, y1 = x0 + w, y0 + h
-
-        for wall in range(n_walls):
-            offset = extrusion_w * wall
-            wx0 = x0 + offset
-            wy0 = y0 + offset
-            wx1 = x1 - offset
-            wy1 = y1 - offset
-
-            e -= 0.8
-            lines.append(f"G1 E{e:.4f} F2400 ; retract")
-            lines.append(f"G1 X{wx0:.3f} Y{wy0:.3f} F3000 ; travel")
-            e += 0.8
-            lines.append(f"G1 E{e:.4f} F2400 ; unretract")
+            corners = [(wx1, wy0), (wx1, wy1), (wx0, wy1), (wx0, wy0)]
             prev = (wx0, wy0)
-            for nx, ny in [(wx1, wy0), (wx1, wy1), (wx0, wy1), (wx0, wy0)]:
-                dist = math.hypot(nx - prev[0], ny - prev[1])
-                e += dist * e_per_mm
-                lines.append(f"G1 X{nx:.3f} Y{ny:.3f} E{e:.4f} F{feed}")
+            for nx, ny in corners:
+                _wall_edge(prev[0], prev[1], nx, ny, ly, z_layer)
                 prev = (nx, ny)
 
         inset = n_walls * extrusion_w - extrusion_w / 2
@@ -887,7 +1077,8 @@ def _pinhole_gcode(
         x_pos = ix0
         going_up = True
         while x_pos <= ix1 + 0.001:
-            segs = _split_y(iy0, iy1, _pinhole_excl_at(x_pos))
+            excls = _fragment_excl_at(ly, x_pos, z_layer)
+            segs = _split_y(iy0, iy1, excls)
             ordered = segs if going_up else list(reversed(segs))
             for s in ordered:
                 sy_a, sy_b = (s[0], s[1]) if going_up else (s[1], s[0])
@@ -901,17 +1092,29 @@ def _pinhole_gcode(
             going_up = not going_up
             x_pos += extrusion_w
 
-    cutout_layers = max(1, round((cube_size / 2) / z))
+    # ── Print the plate bases (one per component) ──
+    plate_layers = max(1, round(FLOOR_MM / z))
+    for pl in range(1, plate_layers + 1):
+        lz = z * pl
+        lines.append(";LAYER_CHANGE")
+        lines.append(f";Z:{lz:.1f}")
+        lines.append(f"G1 Z{lz:.2f} F600")
+        for ly in layouts:
+            _rect_perimeter_infill_iron(ly.plate_x, ly.plate_y, ly.plate_w, ly.plate_h)
+    _iron_trace_channels()
 
-    for layer in range(1, cube_layers + 1):
+    # ── Print raised blocks ──
+    max_block_z_top = max(ly.block_z_top for ly in layouts)
+    max_block_layers = max(1, round((max_block_z_top - FLOOR_MM) / z))
+    for layer in range(1, max_block_layers + 1):
         lz = z * (plate_layers + layer)
         lines.append(";LAYER_CHANGE")
         lines.append(f";Z:{lz:.1f}")
         lines.append(f"G1 Z{lz:.2f} F600")
-        if layer <= cutout_layers:
-            _cube_with_cutouts(cube_x, cube_y, cube_w, cube_h)
-        else:
-            _cube_with_pinholes(cube_x, cube_y, cube_w, cube_h)
+        for ly in layouts:
+            if lz > ly.block_z_top + 0.001:
+                continue
+            _block_with_fragments(ly, lz)
 
     e -= 4.0
     lines.append(f"G1 E{e:.4f} F3000 ; retract")
@@ -940,52 +1143,37 @@ def _pinhole_gcode(
         "M84 ; disable motors",
     ]
 
-    return "\n".join(lines)
+    return "\n".join(lines), layouts
 
 
 def _pinhole_bitmap(
     pdef: PrinterDef,
     grid: SweepGrid,
-    plate_w: float,
-    plate_h: float,
-    cube_size: float,
-    cube_width: float = 5,
+    layouts: list[_CompLayout],
 ) -> str:
+    """Generate bitmap with traces for all component pins."""
     px = grid.pixel_size_mm
     cols = grid.data_cols
     rows = grid.data_rows
     trace_width_nozzles = max(1, int(round(SCAD_TRACE_WIDTH / px)))
     half_trace = trace_width_nozzles // 2
 
-    nom_w = pdef.nominal_bed_width
-    nom_d = pdef.nominal_bed_depth
-
-    plate_x = (nom_w - plate_w) / 2
-    plate_y = (nom_d - plate_h) / 2
-
-    cube_w = cube_width
-    cube_h = cube_size
-    cube_x = plate_x + plate_w - cube_w
-    cube_y = plate_y + (plate_h - cube_h) / 2
-    cube_center_x = cube_x + cube_w / 2
-    pin1_y = cube_y + cube_h * 0.3
-    pin2_y = cube_y + cube_h * 0.7
-
     ink_cells: set[tuple[int, int]] = set()
 
-    for pin_y in (pin1_y, pin2_y):
-        bx0, by = grid.bed_to_bitmap(plate_x, pin_y)
-        bx1, _ = grid.bed_to_bitmap(cube_center_x, pin_y)
+    for ly in layouts:
+        for pin_x, pin_y, _hr in ly.pins:
+            bx0, by = grid.bed_to_bitmap(ly.plate_x, pin_y)
+            bx1, _ = grid.bed_to_bitmap(pin_x, pin_y)
 
-        c0 = max(0, int(math.floor(bx0 / px)))
-        c1 = min(cols - 1, int(math.floor(bx1 / px)))
-        r_center = int(round(by / px))
+            c0 = max(0, int(math.floor(bx0 / px)))
+            c1 = min(cols - 1, int(math.floor(bx1 / px)))
+            r_center = int(round(by / px))
 
-        for dc in range(-half_trace, half_trace + 1):
-            r = r_center + dc
-            if 0 <= r < rows:
-                for c in range(c0, c1 + 1):
-                    ink_cells.add((r, c))
+            for dc in range(-half_trace, half_trace + 1):
+                r = r_center + dc
+                if 0 <= r < rows:
+                    for c in range(c0, c1 + 1):
+                        ink_cells.add((r, c))
 
     result: list[str] = []
     for r in range(rows - 1, -1, -1):
@@ -1002,29 +1190,26 @@ async def generate_pinhole(
     printer: str = Query("coreone"),
     filament: str = Query("prusament_pla"),
     padding: float = Query(5),
-    plate_width: float = Query(15),
-    plate_height: float = Query(20),
-    cube_size: float = Query(15),
-    cube_width: float = Query(5),
 ) -> dict[str, Any]:
-    """Generate G-code + bitmap for cube-trace test."""
+    """Generate G-code + bitmap for multi-component cube-trace test."""
     pdef = get_printer(printer)
     fdef = get_filament(filament)
     grid = sweep_grid(pdef)
 
-    gcode = _pinhole_gcode(
-        pdef, fdef, padding, plate_width, plate_height, cube_size, cube_width)
-    bitmap = _pinhole_bitmap(pdef, grid, plate_width, plate_height, cube_size, cube_width)
+    gcode, layouts = _pinhole_gcode(pdef, fdef, padding)
+    bitmap = _pinhole_bitmap(pdef, grid, layouts)
 
-    plate_x = (pdef.nominal_bed_width - plate_width) / 2
-    plate_y = (pdef.nominal_bed_depth - plate_height) / 2
+    bb_x = min(ly.plate_x for ly in layouts)
+    bb_y = min(ly.plate_y for ly in layouts)
+    bb_x2 = max(ly.plate_x + ly.plate_w for ly in layouts)
+    bb_y2 = max(ly.plate_y + ly.plate_h for ly in layouts)
 
     manifest = generate_manifest(
         grid=grid,
-        part_origin_x_mm=plate_x,
-        part_origin_y_mm=plate_y,
-        part_width_mm=plate_width,
-        part_depth_mm=plate_height,
+        part_origin_x_mm=bb_x,
+        part_origin_y_mm=bb_y,
+        part_width_mm=bb_x2 - bb_x,
+        part_depth_mm=bb_y2 - bb_y,
         gcode_file="pinhole.gcode",
         bitmap_file="pinhole_bitmap.txt",
         printer=pdef,
