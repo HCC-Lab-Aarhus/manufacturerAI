@@ -105,8 +105,9 @@ async def get_bitmap(sid: str):
     routing_data = require_routing(s)
     pdef = get_printer(s.printer_id)
 
-    from src.web.routes._deps import _read_outline
+    from src.web.routes._deps import _read_outline, _read_outline_full
     outline = _read_outline(s)
+    outline_full = _read_outline_full(s)
     components = placement_data.get("components", [])
     traces = routing_data.get("traces", [])
 
@@ -140,7 +141,7 @@ async def get_bitmap(sid: str):
         "inkjet_offset_y": pdef.inkjet_offset_y,
         "bed_offset_x": bed_offset_x,
         "bed_offset_y": bed_offset_y,
-        "outline": outline,
+        "outline": outline_full,
         "components": components,
         "traces": traces,
         "trace_width_mm": TRACE_RULES.trace_width_mm,
