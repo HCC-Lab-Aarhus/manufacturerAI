@@ -140,7 +140,7 @@ def prune_messages(messages: list[dict], keep_recent_turns: int = 6) -> list[dic
     assistant_indices = [i for i, m in enumerate(messages) if m["role"] == "assistant"]
 
     if len(assistant_indices) <= keep_recent_turns:
-        return messages
+        return _strip_old_design_context(messages)
 
     cutoff_msg_index = assistant_indices[-keep_recent_turns]
 
@@ -157,7 +157,7 @@ def prune_messages(messages: list[dict], keep_recent_turns: int = 6) -> list[dic
                         design_prunable_ids.add(block["id"])
 
     if not prunable_ids and not design_prunable_ids:
-        return messages
+        return _strip_old_design_context(messages)
 
     result = []
     for idx, msg in enumerate(messages):
@@ -176,6 +176,62 @@ def prune_messages(messages: list[dict], keep_recent_turns: int = 6) -> list[dic
                 else:
                     new_content.append(b)
             result.append({**msg, "content": new_content})
+        else:
+            result.append(msg)
+
+    result = _strip_old_design_context(result)
+    return result
+
+
+_DESIGN_CONTEXT_PREFIX = "<!-- design-context -->"
+
+
+def _strip_old_design_context(messages: list[dict]) -> list[dict]:
+    """Remove design-context blocks from all user messages except the last one.
+
+    The full design JSON is injected into every user turn, but the API only
+    needs the most recent copy.  Older copies waste tokens without adding
+    information — the latest version already reflects all prior edits.
+    """
+    last_idx = -1
+    for idx in range(len(messages) - 1, -1, -1):
+        msg = messages[idx]
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str) and content.startswith(_DESIGN_CONTEXT_PREFIX):
+            last_idx = idx
+            break
+        if isinstance(content, list):
+            if any(
+                b.get("type") == "text"
+                and isinstance(b.get("text"), str)
+                and b["text"].startswith(_DESIGN_CONTEXT_PREFIX)
+                for b in content
+            ):
+                last_idx = idx
+                break
+
+    if last_idx < 0:
+        return messages
+
+    result = []
+    for idx, msg in enumerate(messages):
+        if idx == last_idx or msg.get("role") != "user":
+            result.append(msg)
+            continue
+
+        content = msg.get("content")
+        if isinstance(content, list):
+            filtered = [
+                b for b in content
+                if not (
+                    b.get("type") == "text"
+                    and isinstance(b.get("text"), str)
+                    and b["text"].startswith(_DESIGN_CONTEXT_PREFIX)
+                )
+            ]
+            result.append({**msg, "content": filtered} if filtered != content else msg)
         else:
             result.append(msg)
 

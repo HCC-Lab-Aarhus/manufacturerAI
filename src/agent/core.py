@@ -87,7 +87,7 @@ class _BaseAgent:
         """
         raise NotImplementedError
 
-    def _build_user_message(self, user_prompt: str) -> str:
+    def _build_user_message(self, user_prompt: str) -> str | list:
         """Build the user message content. Subclasses may prepend context."""
         return user_prompt
 
@@ -348,12 +348,15 @@ class DesignAgent(_BaseAgent):
             printer=printer,
         )
 
-    def _build_user_message(self, user_prompt: str) -> str:
-        return (
-            f"Current design document:\n"
-            f"```json\n{self._design_text}\n```\n\n"
-            f"{user_prompt}"
-        )
+    def _build_user_message(self, user_prompt: str) -> str | list:
+        return [
+            {"type": "text", "text": (
+                f"<!-- design-context -->\n"
+                f"Current design document:\n"
+                f"```json\n{self._design_text}\n```"
+            )},
+            {"type": "text", "text": user_prompt},
+        ]
 
     def _handle_tool(self, name: str, input_data: dict) -> tuple[str, bool]:
         if name == "list_components":
