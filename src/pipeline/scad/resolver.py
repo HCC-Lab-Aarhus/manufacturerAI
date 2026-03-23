@@ -1,7 +1,7 @@
 """SCAD fragment resolver — turns placed components into cutout geometry.
 
 All component-specific behaviour is driven by catalog data (body.shape,
-mounting.style, mounting.cap, mounting.hatch, pin positions).
+mounting.style, mounting.cap, pin positions).
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ PINHOLE_CLEARANCE: float = 1.0
 PINHOLE_TAPER_EXTRA: float = 1.0   # extra width on each side for the funnel mouth
 PINHOLE_TAPER_DEPTH: float = 1.5   # total height of the graduated funnel zone (mm)
 PIN_BRIDGE_WIDTH: float = 1.6
-HATCH_LEDGE_WIDTH: float = 2.5
 
 
 @dataclass
@@ -44,7 +43,7 @@ class ComponentResolver:
     """Resolves a single placed component into SCAD cutout fragments.
 
     Dispatches by ``mounting.style`` (top / bottom / side / internal)
-    and uses catalog fields (cap, hatch, body shape, pin positions) to
+    and uses catalog fields (cap, body shape, pin positions) to
     derive all geometry.
     """
 
@@ -178,9 +177,6 @@ class ComponentResolver:
             depth=pocket_depth,
             label=f"bottom-mount body — {self.cid}",
         ))
-
-        if mounting.hatch and mounting.hatch.enabled:
-            frags.extend(self._hatch_fragments())
 
         return frags
 
@@ -364,58 +360,6 @@ class ComponentResolver:
 
         return frags
 
-    # ── Hatch (bottom-mount) ───────────────────────────────────────
-
-    def _hatch_fragments(self) -> list[ScadFragment]:
-        frags: list[ScadFragment] = []
-        body = self.catalog.body
-        hatch = self.catalog.mounting.hatch
-        assert hatch is not None
-        hatch_clr = hatch.clearance_mm
-
-        hw2 = body.width_mm / 2 - hatch_clr
-        hh2 = body.length_mm / 2 - hatch_clr
-        hatch_depth = CAVITY_START_MM + 1.0
-
-        hatch_pts = [
-            [self.cx - hw2, self.cy - hh2],
-            [self.cx + hw2, self.cy - hh2],
-            [self.cx + hw2, self.cy + hh2],
-            [self.cx - hw2, self.cy + hh2],
-        ]
-        if self.rot:
-            hatch_pts = rotated_polygon(hatch_pts, self.rot, self.cx, self.cy)
-
-        frags.append(ScadFragment(
-            type="cutout",
-            geometry=PolygonGeometry(hatch_pts),
-            z_base=-1.0,
-            depth=hatch_depth,
-            label=f"floor opening — {self.cid}",
-        ))
-
-        hatch_thick = hatch.thickness_mm
-        ledge_d = hatch_thick + 0.3
-        half_bw = body.width_mm / 2 - hatch_clr
-        ledge_len = body.length_mm - hatch_clr * 2
-
-        for side in (-1, 1):
-            ledge_pts = RectGeometry(
-                self.cx + side * (half_bw - HATCH_LEDGE_WIDTH / 2), self.cy,
-                HATCH_LEDGE_WIDTH, ledge_len,
-            ).to_polygon()
-            if self.rot:
-                ledge_pts = rotated_polygon(ledge_pts, self.rot, self.cx, self.cy)
-            frags.append(ScadFragment(
-                type="cutout",
-                geometry=PolygonGeometry(ledge_pts),
-                z_base=-0.5,
-                depth=ledge_d + 0.5,
-                label=f"hatch ledge — {self.cid}",
-            ))
-
-        return frags
-
     # ── Pin bridges ──────────────────────────────────────────────────
 
     def _pin_bridge_fragments(self) -> list[ScadFragment]:
@@ -500,7 +444,9 @@ class ComponentResolver:
                 fx, fy = rotate_point(fx, fy, self.rot)
             wx, wy = self.cx + fx, self.cy + fy
 
-            if feat.z_anchor == "floor":
+            if feat.z_anchor == "ground":
+                z_base = 0.0
+            elif feat.z_anchor == "floor":
                 z_base = FLOOR_MM
             elif feat.z_anchor == "ceil_start":
                 z_base = self.ctx.ceil_start

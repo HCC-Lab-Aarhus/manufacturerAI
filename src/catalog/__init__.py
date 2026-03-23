@@ -1,7 +1,7 @@
 """Component catalog — load, validate, query, and serialize catalog/*.json."""
 
 from .models import (
-    Body, Cap, Hatch, Mounting, Pin, PinGroup, Component,
+    Body, Cap, Mounting, Pin, PinGroup, Component,
     ValidationError, CatalogResult,
 )
 from .loader import load_catalog, get_component, CATALOG_DIR
@@ -12,7 +12,7 @@ _component_to_dict = component_to_dict
 
 __all__ = [
     # Models
-    "Body", "Cap", "Hatch", "Mounting", "Pin", "PinGroup", "Component",
+    "Body", "Cap", "Mounting", "Pin", "PinGroup", "Component",
     "ValidationError", "CatalogResult",
     # Loader
     "load_catalog", "get_component", "CATALOG_DIR",

@@ -37,6 +37,7 @@ from .traces import build_trace_fragments, build_jumper_fragments
 from .resolver import resolve_component, ResolverContext
 from .fragment import ScadFragment, PolygonGeometry
 from .buttons import build_button_configs, generate_all_buttons_scad
+from .extras import collect_and_generate_extras
 
 log = logging.getLogger(__name__)
 
@@ -228,19 +229,13 @@ def run_scad_step(
         outline_pts=flat_pts,
     )
 
-    # ── 8b. Generate custom buttons (printed next to enclosure) ───
-    button_configs = build_button_configs(
-        placement.components, cat_index, outline, enclosure, ceil_start,
+    # ── 8b. Generate extra parts (buttons, hatches, etc.) ───────────
+    extras_scad = collect_and_generate_extras(
+        placement.components, cat_index, outline, enclosure,
+        ceil_start, flat_pts,
     )
-    if button_configs:
-        # Compute enclosure bounding box for button placement
-        enc_max_x = max(p[0] for p in flat_pts)
-        enc_min_y = min(p[1] for p in flat_pts)
-        buttons_scad = generate_all_buttons_scad(
-            button_configs, enc_max_x, enc_min_y,
-        )
-        scad_str += buttons_scad
-        log.info("Custom buttons: %d generated", len(button_configs))
+    if extras_scad:
+        scad_str += extras_scad
 
     # ── 9. Write to session folder ────────────────────────────────
     scad_path: Path = session.artifact_path("enclosure.scad")

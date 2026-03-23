@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from .models import (
-    Body, Cap, Hatch, Mounting, SwitchActuator,
+    Body, Cap, ExtraPart, Mounting, SwitchActuator,
     Pin, PinShape, PinGroup, ScadPattern, ScadFeature, Component,
     ValidationError, CatalogResult,
 )
@@ -115,26 +115,33 @@ def _parse_cap(data: dict | None) -> Cap | None:
     )
 
 
-def _parse_hatch(data: dict | None) -> Hatch | None:
-    if data is None:
-        return None
-    return Hatch(
-        enabled=data["enabled"],
-        clearance_mm=data["clearance_mm"],
-        thickness_mm=data["thickness_mm"],
+def _parse_extra_part(data: dict) -> ExtraPart:
+    return ExtraPart(
+        label=data.get("label", data["shape"]),
+        shape=data["shape"],
+        width_mm=data.get("width_mm"),
+        length_mm=data.get("length_mm"),
+        thickness_mm=data.get("thickness_mm"),
+        diameter_mm=data.get("diameter_mm"),
     )
 
 
 def _parse_mounting(data: dict) -> Mounting:
+    extras_raw = data.get("extras")
+    extras = [_parse_extra_part(e) for e in extras_raw] if extras_raw else []
+
+    cap = _parse_cap(data.get("cap"))
+    body_raw = data.get("_body")
+
     return Mounting(
         style=data["style"],
         allowed_styles=data["allowed_styles"],
         blocks_routing=data["blocks_routing"],
         keepout_margin_mm=data["keepout_margin_mm"],
-        cap=_parse_cap(data.get("cap")),
-        hatch=_parse_hatch(data.get("hatch")),
+        cap=cap,
         installed_height_mm=data.get("installed_height_mm"),
         pause_z_mm=data.get("pause_z_mm"),
+        extras=extras,
     )
 
 

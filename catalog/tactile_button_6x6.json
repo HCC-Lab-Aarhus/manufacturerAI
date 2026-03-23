@@ -27,7 +27,13 @@
                 "cylinder_height_mm": 1.21,
                 "cylinder_diameter_mm": 3.4
             }
-        }
+        },
+        "extras": [
+            {
+                "label": "button",
+                "shape": "button"
+            }
+        ]
     },
     "pin_length_mm": 3.7,
     "pins": [

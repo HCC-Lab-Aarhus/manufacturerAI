@@ -17,11 +17,15 @@
         "blocks_routing": true,
         "keepout_margin_mm": 2.0,
         "pause_z_mm": 16.0,
-        "hatch": {
-            "enabled": true,
-            "clearance_mm": 0.3,
-            "thickness_mm": 1.5
-        }
+        "extras": [
+            {
+                "label": "battery hatch",
+                "shape": "hatch",
+                "width_mm": 24.4,
+                "length_mm": 47.4,
+                "thickness_mm": 1.5
+            }
+        ]
     },
     "pin_length_mm": 7.5,
     "pins": [
@@ -168,6 +172,36 @@
                 "through_surface": true,
                 "z_anchor": "floor",
                 "description": "Floor slot for GND plate tab extension to reach ink traces."
+            },
+            {
+                "shape": "rect",
+                "label": "hatch floor opening",
+                "position_mm": [0, 0],
+                "width_mm": 19.4,
+                "length_mm": 47.4,
+                "depth_mm": 4.0,
+                "z_anchor": "ground",
+                "description": "Through-hole for battery access. Narrower than hatch so panel rests on ledges."
+            },
+            {
+                "shape": "rect",
+                "label": "hatch ledge left",
+                "position_mm": [-10.95, 0],
+                "width_mm": 2.5,
+                "length_mm": 47.4,
+                "depth_mm": 1.8,
+                "z_anchor": "ground",
+                "description": "Left ledge recess for hatch panel to sit on (depth = panel thickness + 0.3mm clearance)."
+            },
+            {
+                "shape": "rect",
+                "label": "hatch ledge right",
+                "position_mm": [10.95, 0],
+                "width_mm": 2.5,
+                "length_mm": 47.4,
+                "depth_mm": 1.8,
+                "z_anchor": "ground",
+                "description": "Right ledge recess for hatch panel to sit on (depth = panel thickness + 0.3mm clearance)."
             }
         ]
     }

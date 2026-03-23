@@ -126,12 +126,6 @@ def component_to_dict(c: Component) -> dict:
             "height_mm": c.mounting.cap.height_mm,
             "hole_clearance_mm": c.mounting.cap.hole_clearance_mm,
         }
-    if c.mounting.hatch:
-        d["mounting"]["hatch"] = {
-            "enabled": c.mounting.hatch.enabled,
-            "clearance_mm": c.mounting.hatch.clearance_mm,
-            "thickness_mm": c.mounting.hatch.thickness_mm,
-        }
     if c.mounting.installed_height_mm is not None:
         d["mounting"]["installed_height_mm"] = c.mounting.installed_height_mm
     if c.mounting.pause_z_mm is not None:

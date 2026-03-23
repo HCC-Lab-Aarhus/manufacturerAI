@@ -32,10 +32,22 @@ class Cap:
 
 
 @dataclass
-class Hatch:
-    enabled: bool
-    clearance_mm: float
-    thickness_mm: float
+class ExtraPart:
+    """A separate part printed on the same build plate alongside the enclosure.
+
+    Geometry is described by shape + dimensions.  The generator renders
+    any ExtraPart without needing to know its purpose.
+
+    Special case: shape="button" delegates to the complex button generator
+    (socket + stem + cap with surface tilt) since that cannot be described
+    by simple extrusion.
+    """
+    label: str                          # human-readable, e.g. "battery hatch"
+    shape: str                          # "rect" | "circle" | "button"
+    width_mm: float | None = None
+    length_mm: float | None = None
+    thickness_mm: float | None = None
+    diameter_mm: float | None = None
 
 
 @dataclass
@@ -45,9 +57,9 @@ class Mounting:
     blocks_routing: bool
     keepout_margin_mm: float
     cap: Cap | None = None
-    hatch: Hatch | None = None
     installed_height_mm: float | None = None  # height of component top above cavity floor when installed (for through-hole DIP etc.)
     pause_z_mm: float | None = None           # explicit pause Z (from build plate) at which this component is inserted
+    extras: list[ExtraPart] = field(default_factory=list)
 
 
 @dataclass
@@ -105,7 +117,7 @@ class ScadFeature:
     length_mm: float | None = None      # rect
     diameter_mm: float | None = None    # circle
     depth_mm: float | None = None       # override; else uses cavity_depth
-    z_anchor: str = "cavity_start"      # "cavity_start" | "floor" | "ceil_start"
+    z_anchor: str = "cavity_start"      # "ground" | "floor" | "cavity_start" | "ceil_start"
     through_surface: bool = False       # cut through dome (e.g. shaft hole)
     pattern: ScadPattern | None = None  # repeat pattern (e.g. grid of holes)
 

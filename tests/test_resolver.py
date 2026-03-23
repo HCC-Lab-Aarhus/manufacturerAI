@@ -6,7 +6,7 @@ Coverage
 * Tactile button (top mount) — cap hole through ceiling, body pocket,
   upper cavity, pinholes, and pin bridges for offset pins.
 * Battery holder (bottom mount) — body pocket at cavity start, hatch
-  opening, hatch ledges, pinholes.
+  floor opening and ledges (via scad features), pinholes.
 """
 
 from __future__ import annotations
@@ -204,7 +204,7 @@ class TestButtonResolver(unittest.TestCase):
 
 
 class TestBatteryResolver(unittest.TestCase):
-    """Battery holder: bottom mount with hatch, 2 large rectangular pins."""
+    """Battery holder: bottom mount with hatch features, 2 large rectangular pins."""
 
     @classmethod
     def setUpClass(cls):
@@ -238,9 +238,9 @@ class TestBatteryResolver(unittest.TestCase):
         openings = [f for f in self.frags if "floor opening" in f.label]
         self.assertEqual(len(openings), 1)
 
-    def test_hatch_opening_is_polygon(self):
+    def test_hatch_opening_is_rect(self):
         opening = next(f for f in self.frags if "floor opening" in f.label)
-        self.assertIsInstance(opening.geometry, PolygonGeometry)
+        self.assertIsInstance(opening.geometry, RectGeometry)
 
     def test_has_hatch_ledges(self):
         ledges = [f for f in self.frags if "hatch ledge" in f.label]
