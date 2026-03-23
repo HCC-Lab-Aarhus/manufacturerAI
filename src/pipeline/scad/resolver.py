@@ -165,18 +165,63 @@ class ComponentResolver:
 
         pocket_depth = min(body.height_mm, self.ctx.cavity_depth)
 
-        if body.shape == "circle":
-            geom = CylinderGeometry(self.cx, self.cy, body.diameter_mm / 2)
-        else:
-            geom = self._rect_geom(body.width_mm, body.length_mm)
+        if body.channels:
+            ch = body.channels
+            cz = CAVITY_START_MM + ch.center_z_mm
+            r = ch.diameter_mm / 2
 
-        frags.append(ScadFragment(
-            type="cutout",
-            geometry=geom,
-            z_base=CAVITY_START_MM,
-            depth=pocket_depth,
-            label=f"bottom-mount body — {self.cid}",
-        ))
+            if body.shape == "circle":
+                pocket_geom = CylinderGeometry(
+                    self.cx, self.cy, body.diameter_mm / 2,
+                )
+            else:
+                pocket_geom = self._rect_geom(body.width_mm, body.length_mm)
+            frags.append(ScadFragment(
+                type="cutout",
+                geometry=pocket_geom,
+                z_base=CAVITY_START_MM,
+                depth=ch.center_z_mm,
+                label=f"channel pocket — {self.cid}",
+            ))
+
+            for i in range(ch.count):
+                offset = (i - (ch.count - 1) / 2) * ch.spacing_mm
+                if ch.axis == "y":
+                    dx, dy = offset, 0.0
+                    base_rot = (-90.0, 0.0, 0.0)
+                else:
+                    dx, dy = 0.0, offset
+                    base_rot = (0.0, -90.0, 0.0)
+
+                if self.rot:
+                    dx, dy = rotate_point(dx, dy, self.rot)
+
+                ccx = self.cx + dx
+                ccy = self.cy + dy
+                rot = (base_rot[0], base_rot[1], base_rot[2] + self.rot)
+
+                frags.append(ScadFragment(
+                    type="cutout",
+                    geometry=CylinderGeometry(ccx, ccy, r),
+                    z_base=cz,
+                    depth=ch.length_mm,
+                    label=f"cell channel {i + 1} — {self.cid}",
+                    rotate_3d=rot,
+                    clip_half="top",
+                ))
+        else:
+            if body.shape == "circle":
+                geom = CylinderGeometry(self.cx, self.cy, body.diameter_mm / 2)
+            else:
+                geom = self._rect_geom(body.width_mm, body.length_mm)
+
+            frags.append(ScadFragment(
+                type="cutout",
+                geometry=geom,
+                z_base=CAVITY_START_MM,
+                depth=pocket_depth,
+                label=f"bottom-mount body — {self.cid}",
+            ))
 
         return frags
 
@@ -472,12 +517,19 @@ class ComponentResolver:
                     h = feat.length_mm or 1.0
                     geom = self._rect_geom_at(wx, wy, w, h)
 
+                rotate_3d = None
+                if feat.rotate:
+                    rotate_3d = feat.rotate
+                    if feat.z_center_mm is not None:
+                        z_base = z_base + feat.z_center_mm
+
                 frags.append(ScadFragment(
                     type="cutout",
                     geometry=geom,
                     z_base=z_base,
                     depth=depth,
                     label=f"{feat.label} — {self.cid}",
+                    rotate_3d=rotate_3d,
                 ))
         return frags
 

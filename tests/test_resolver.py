@@ -221,18 +221,31 @@ class TestBatteryResolver(unittest.TestCase):
         cls.ctx = _make_ctx()
         cls.frags = ComponentResolver(cls.placed, cls.cat, cls.ctx).resolve()
 
-    def test_has_bottom_mount_body(self):
-        bodies = [f for f in self.frags if "bottom-mount body" in f.label]
-        self.assertEqual(len(bodies), 1)
+    def test_has_channel_pocket(self):
+        pockets = [f for f in self.frags if "channel pocket" in f.label]
+        self.assertEqual(len(pockets), 1)
 
-    def test_body_starts_at_cavity(self):
-        body = next(f for f in self.frags if "bottom-mount body" in f.label)
-        self.assertAlmostEqual(body.z_base, CAVITY_START_MM)
+    def test_channel_pocket_depth_is_center_z(self):
+        ch = self.cat.body.channels
+        pocket = next(f for f in self.frags if "channel pocket" in f.label)
+        self.assertAlmostEqual(pocket.depth, ch.center_z_mm)
 
-    def test_body_depth_clamped(self):
-        body = next(f for f in self.frags if "bottom-mount body" in f.label)
-        expected = min(self.cat.body.height_mm, CAVITY_DEPTH)
-        self.assertAlmostEqual(body.depth, expected)
+    def test_has_cell_channels(self):
+        channels = [f for f in self.frags if "cell channel" in f.label]
+        self.assertEqual(len(channels), 2)
+
+    def test_channels_are_half_cylinders(self):
+        channel = next(f for f in self.frags if "cell channel 1" in f.label)
+        self.assertEqual(channel.clip_half, "top")
+
+    def test_channel_depth_is_cell_length(self):
+        ch = self.cat.body.channels
+        channel = next(f for f in self.frags if "cell channel 1" in f.label)
+        self.assertAlmostEqual(channel.depth, ch.length_mm)
+
+    def test_no_channel_access_opening(self):
+        access = [f for f in self.frags if "channel access opening" in f.label]
+        self.assertEqual(len(access), 0)
 
     def test_has_hatch_opening(self):
         openings = [f for f in self.frags if "floor opening" in f.label]

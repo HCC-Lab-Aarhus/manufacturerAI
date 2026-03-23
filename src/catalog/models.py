@@ -6,12 +6,24 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class BodyChannels:
+    """Cylindrical channels carved into the body pocket (e.g. battery cells)."""
+    axis: str                           # "x" | "y" — cylinder axis direction
+    count: int
+    diameter_mm: float
+    spacing_mm: float                   # center-to-center distance between channels
+    length_mm: float                    # cylinder length along *axis*
+    center_z_mm: float                  # Z offset from cavity_start to cylinder centre
+
+
+@dataclass
 class Body:
     shape: str                          # "rect" | "circle"
     height_mm: float
     width_mm: float | None = None       # rect only
     length_mm: float | None = None      # rect only
     diameter_mm: float | None = None    # circle only
+    channels: BodyChannels | None = None
 
 
 @dataclass
@@ -118,7 +130,9 @@ class ScadFeature:
     diameter_mm: float | None = None    # circle
     depth_mm: float | None = None       # override; else uses cavity_depth
     z_anchor: str = "cavity_start"      # "ground" | "floor" | "cavity_start" | "ceil_start"
+    z_center_mm: float | None = None    # explicit Z center offset from anchor (for rotated features)
     through_surface: bool = False       # cut through dome (e.g. shaft hole)
+    rotate: tuple[float, float, float] | None = None  # [rx, ry, rz] 3-D rotation
     pattern: ScadPattern | None = None  # repeat pattern (e.g. grid of holes)
 
 

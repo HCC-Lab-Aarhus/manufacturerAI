@@ -15,7 +15,8 @@ import math
 import logging
 from dataclasses import dataclass
 
-from src.catalog.models import Component, ExtraPart
+from src.catalog.models import BodyChannels, Component, ExtraPart
+from src.pipeline.config import CAVITY_START_MM
 from src.pipeline.design.models import Outline, Enclosure
 from src.pipeline.placer.models import PlacedComponent
 
@@ -85,18 +86,18 @@ def _generate_shape_scad(extra: ExtraPart) -> PlacedExtra:
     )
 
 
-LOOP_WIDTH: float = 3.0
-LOOP_HEIGHT: float = 8.0
-LOOP_THICKNESS: float = 1.2
-HOOK_HEIGHT: float = 1.5
-HOOK_DEPTH: float = 1.5
-TAB_WIDTH: float = 8.0
-TAB_DEPTH: float = 2.0
-TAB_HEIGHT: float = 1.5
+TAB_WIDTH: float = 4.0
+TAB_DEPTH: float = 0.8
+TAB_HEIGHT: float = 2.5
+LOOP_WIDTH: float = 4.0
+LOOP_HEIGHT: float = 4.0
+LOOP_THICKNESS: float = 1.0
+HOOK_HEIGHT: float = 1.2
+HOOK_DEPTH: float = 0.5
 
 
-def _generate_hatch_scad(extra: ExtraPart) -> PlacedExtra:
-    """Generate SCAD for a snap-fit hatch panel with spring latch and ledge tab."""
+def _generate_hatch_scad(extra: ExtraPart, channels: BodyChannels | None = None, body_height: float = 0) -> PlacedExtra:
+    """Generate SCAD for a hatch panel with spring latch, ledge tab, and optional battery mold."""
     w = extra.width_mm or 24.4
     l = extra.length_mm or 47.4
     t = extra.thickness_mm or 1.5
@@ -133,9 +134,12 @@ def _generate_hatch_scad(extra: ExtraPart) -> PlacedExtra:
         "}",
     ]
 
+    tw = TAB_WIDTH
+    tab_x = (w - tw) / 2
+
     lines = [
         "difference() {",
-        "  cube([hatch_w, hatch_l, hatch_t]);",
+        f"  cube([hatch_w, hatch_l, hatch_t]);",
         f"  translate([(hatch_w - slit_w) / 2, -hook_d - 1 + 2, -1])",
         f"    cube([slit_w, {spring_depth:.3f} + hook_d, hatch_t + 2]);",
         "}",
@@ -143,15 +147,39 @@ def _generate_hatch_scad(extra: ExtraPart) -> PlacedExtra:
         "translate([(hatch_w - loop_w) / 2, 2, 0])",
         "  spring_latch();",
         "",
-        f"translate([(hatch_w - {TAB_WIDTH:.3f}) / 2, hatch_l - 1, hatch_t])",
-        f"  cube([{TAB_WIDTH:.3f}, {TAB_DEPTH:.3f}, {TAB_HEIGHT:.3f}]);",
+        f"translate([{tab_x:.3f}, hatch_l - 1, hatch_t])",
+        f"  cube([{tw:.3f}, {TAB_DEPTH:.3f}, {TAB_HEIGHT:.3f}]);",
     ]
+
+    if channels:
+        clearance = 0.3
+        r = channels.diameter_mm / 2 - clearance
+        cz_local = CAVITY_START_MM + channels.center_z_mm
+        mold_h = cz_local - t
+        mold_w = (channels.count - 1) * channels.spacing_mm + 2 * r
+        mold_x = (w - mold_w) / 2
+
+        lines.append("")
+        lines.append("difference() {")
+        lines.append(f"  translate([{mold_x:.3f}, 0, {t:.3f}])")
+        lines.append(f"    cube([{mold_w:.3f}, {l:.3f}, {mold_h:.3f}]);")
+        for i in range(channels.count):
+            offset = (i - (channels.count - 1) / 2) * channels.spacing_mm
+            cx = w / 2 + offset
+            lines.append(f"  intersection() {{")
+            lines.append(f"    translate([{cx:.3f}, -1, {cz_local:.3f}])")
+            lines.append(f"      rotate([-90, 0, 0])")
+            lines.append(f"        cylinder(h = {l + 2:.3f}, r = {r:.3f}, $fn = 32);")
+            lines.append(f"    translate([{cx - r:.3f}, -1, 0])")
+            lines.append(f"      cube([{2 * r:.3f}, {l + 2:.3f}, {cz_local:.3f}]);")
+            lines.append(f"  }}")
+        lines.append("}")
 
     return PlacedExtra(
         label=extra.label,
         scad_lines=lines,
         footprint_x=w,
-        footprint_y=l + LOOP_HEIGHT,
+        footprint_y=l,
         preamble=preamble,
     )
 
@@ -202,7 +230,7 @@ def collect_and_generate_extras(
                 ))
             elif extra.shape == "hatch":
                 resolved = _resolve_dimensions(extra, cat)
-                extras.append(_generate_hatch_scad(resolved))
+                extras.append(_generate_hatch_scad(resolved, cat.body.channels, cat.body.height_mm))
             else:
                 resolved = _resolve_dimensions(extra, cat)
                 extras.append(_generate_shape_scad(resolved))

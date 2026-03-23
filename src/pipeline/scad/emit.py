@@ -288,7 +288,7 @@ def generate_scad(
     polygon_cuts: list[ScadFragment] = []
     tapered_cuts: list[ScadFragment] = []
     for f in cutouts:
-        if f.tilt_deg:
+        if f.tilt_deg or f.rotate_3d:
             tilted_cuts.append(f)
         elif f.taper_scale:
             tapered_cuts.append(f)
@@ -387,28 +387,54 @@ def _tapered_scad_lines(frag: ScadFragment) -> list[str]:
 def _tilted_scad_lines(frag: ScadFragment) -> list[str]:
     """Emit a fragment that is tilted (rotated in 3-D) around its centre."""
     g = frag.geometry
-    z_center = frag.z_base + frag.depth / 2
     _EPS = 0.001
 
+    if frag.rotate_3d:
+        rx, ry, rz = frag.rotate_3d
+        z_center = frag.z_base
+        length = frag.depth
+        rot_str = f"rotate([{rx:.1f}, {ry:.1f}, {rz:.1f}])"
+    else:
+        z_center = frag.z_base + frag.depth / 2
+        length = frag.tilt_length
+        rot_str = f"rotate([0, {frag.tilt_deg:.1f}, {frag.rotation_deg:.1f}])"
+
     if isinstance(g, CylinderGeometry):
-        return [
+        base_lines = [
             f"translate([{g.cx:.3f}, {g.cy:.3f}, {z_center:.3f}])",
-            f"  rotate([0, {frag.tilt_deg:.1f}, {frag.rotation_deg:.1f}])",
-            f"    cylinder(h = {frag.tilt_length + 2 * _EPS:.3f}, r = {g.r + _EPS:.3f}, center = true);",
+            f"  {rot_str}",
+            f"    cylinder(h = {length + 2 * _EPS:.3f}, r = {g.r + _EPS:.3f}, center = true);",
         ]
     elif isinstance(g, RectGeometry):
-        return [
+        base_lines = [
             f"translate([{g.cx:.3f}, {g.cy:.3f}, {z_center:.3f}])",
-            f"  rotate([0, {frag.tilt_deg:.1f}, {frag.rotation_deg:.1f}])",
-            f"    linear_extrude(height = {frag.tilt_length + 2 * _EPS:.3f}, center = true)",
+            f"  {rot_str}",
+            f"    linear_extrude(height = {length + 2 * _EPS:.3f}, center = true)",
             f"      square([{g.width + 2 * _EPS:.3f}, {g.height + 2 * _EPS:.3f}], center = true);",
         ]
-    return [f"// unsupported tilted geometry: {frag.label}"]
+    else:
+        return [f"// unsupported tilted geometry: {frag.label}"]
+
+    if frag.clip_half:
+        big = max(length, g.r if isinstance(g, CylinderGeometry) else max(g.width, g.height)) + 10
+        if frag.clip_half == "top":
+            clip_z = z_center
+        else:
+            clip_z = z_center - big
+        return [
+            "intersection() {",
+            *[f"  {l}" for l in base_lines],
+            f"  translate([{g.cx - big:.3f}, {g.cy - big:.3f}, {clip_z:.3f}])",
+            f"    cube([{2 * big:.3f}, {2 * big:.3f}, {big:.3f}]);",
+            "}",
+        ]
+
+    return base_lines
 
 
 def _fragment_scad_lines(frag: ScadFragment) -> list[str]:
     """Convert a single fragment to OpenSCAD lines (for additions or standalone use)."""
-    if frag.tilt_deg:
+    if frag.tilt_deg or frag.rotate_3d:
         return _tilted_scad_lines(frag)
     g = frag.geometry
     if isinstance(g, CylinderGeometry):

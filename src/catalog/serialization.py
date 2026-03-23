@@ -118,6 +118,16 @@ def component_to_dict(c: Component) -> dict:
         d["body"]["length_mm"] = c.body.length_mm
     if c.body.diameter_mm is not None:
         d["body"]["diameter_mm"] = c.body.diameter_mm
+    if c.body.channels:
+        ch = c.body.channels
+        d["body"]["channels"] = {
+            "axis": ch.axis,
+            "count": ch.count,
+            "diameter_mm": ch.diameter_mm,
+            "spacing_mm": ch.spacing_mm,
+            "length_mm": ch.length_mm,
+            "center_z_mm": ch.center_z_mm,
+        }
 
     # Optional mounting sub-objects
     if c.mounting.cap:
@@ -160,6 +170,8 @@ def component_to_dict(c: Component) -> dict:
                     **({} if f.depth_mm is None else {"depth_mm": f.depth_mm}),
                     "z_anchor": f.z_anchor,
                     **({"through_surface": True} if f.through_surface else {}),
+                    **({"z_center_mm": f.z_center_mm} if f.z_center_mm is not None else {}),
+                    **({"rotate": list(f.rotate)} if f.rotate else {}),
                     **({"pattern": {
                         "type": f.pattern.type,
                         "spacing_mm": f.pattern.spacing_mm,

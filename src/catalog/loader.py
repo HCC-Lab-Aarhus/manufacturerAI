@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from .models import (
-    Body, Cap, ExtraPart, Mounting, SwitchActuator,
+    Body, BodyChannels, Cap, ExtraPart, Mounting, SwitchActuator,
     Pin, PinShape, PinGroup, ScadPattern, ScadFeature, Component,
     ValidationError, CatalogResult,
 )
@@ -86,12 +86,24 @@ def _validate_component(comp: Component) -> list[ValidationError]:
 # ── Parsing ────────────────────────────────────────────────────────
 
 def _parse_body(data: dict) -> Body:
+    ch_raw = data.get("channels")
+    channels = None
+    if ch_raw:
+        channels = BodyChannels(
+            axis=ch_raw["axis"],
+            count=ch_raw["count"],
+            diameter_mm=ch_raw["diameter_mm"],
+            spacing_mm=ch_raw["spacing_mm"],
+            length_mm=ch_raw["length_mm"],
+            center_z_mm=ch_raw["center_z_mm"],
+        )
     return Body(
         shape=data["shape"],
         height_mm=data["height_mm"],
         width_mm=data.get("width_mm"),
         length_mm=data.get("length_mm"),
         diameter_mm=data.get("diameter_mm"),
+        channels=channels,
     )
 
 
@@ -189,6 +201,8 @@ def _parse_scad_feature(data: dict) -> ScadFeature:
             spacing_mm=pattern_raw["spacing_mm"],
             clip_to_body=pattern_raw.get("clip_to_body", True),
         )
+    rot_raw = data.get("rotate")
+    rotate = tuple(rot_raw) if rot_raw else None
     return ScadFeature(
         shape=data["shape"],
         label=data.get("label", ""),
@@ -198,7 +212,9 @@ def _parse_scad_feature(data: dict) -> ScadFeature:
         diameter_mm=data.get("diameter_mm"),
         depth_mm=data.get("depth_mm"),
         z_anchor=data.get("z_anchor", "cavity_start"),
+        z_center_mm=data.get("z_center_mm"),
         through_surface=data.get("through_surface", False),
+        rotate=rotate,
         pattern=pattern,
     )
 

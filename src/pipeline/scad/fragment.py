@@ -120,6 +120,8 @@ class ScadFragment:
     tilt_deg: float = 0.0              # 3-D tilt (0 = upright, 90 = horizontal)
     tilt_length: float = 0.0           # pre-tilt extrusion length (body height)
     taper_scale: float = 0.0           # >0: linear_extrude scale at top (smooth funnel)
+    rotate_3d: tuple[float, float, float] | None = None  # full [rx, ry, rz] rotation
+    clip_half: str = ""                  # "top" or "bottom" — keep only one Z half
 
 
 # ── Helpers ────────────────────────────────────────────────────────
