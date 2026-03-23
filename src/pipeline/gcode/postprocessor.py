@@ -319,6 +319,7 @@ def _ink_pause_block(
 
     lines.extend([
         "",
+        "M300 S1000 P500 ; beep before silverink",
         "G91 ; relative positioning",
         "G1 Z1 F1000 ; lift head",
         "G90 ; absolute positioning",
@@ -373,6 +374,7 @@ def _pause_block(label: str, z: float, instructions: list[str]) -> list[str]:
     lines.extend([
         "; " + "=" * 50,
         "",
+        "M300 S1000 P2000 ; beep before pause",
         "; Park head and wait for user",
         "M601 ; pause print — press knob to resume",
         "",
