@@ -43,6 +43,7 @@ from src.pipeline.scad.fragment import (
 from src.pipeline.scad.traces import TRACE_WIDTH as SCAD_TRACE_WIDTH
 
 PINHOLE_TAPER_D: float = 3.5
+_Z_HOP: float = 1.0
 
 router = APIRouter(prefix="/debug", tags=["debug"])
 
@@ -140,7 +141,9 @@ def _calibration_gcode(
         lines.append(f"; Square {i + 1} at ({ox:.2f}, {oy:.2f})")
         e -= 0.8
         lines.append(f"G1 E{e:.4f} F2400 ; retract")
+        lines.append(f"G1 Z{z + _Z_HOP:.2f} F720 ; z-hop")
         lines.append(f"G1 X{ox:.2f} Y{oy:.2f} F3000 ; travel")
+        lines.append(f"G1 Z{z:.2f} F720 ; lower")
         e += 0.8
         lines.append(f"G1 E{e:.4f} F2400 ; unretract")
 
@@ -387,7 +390,9 @@ def _silverink_test_gcode(
             # Perimeter
             e -= 0.8
             lines.append(f"G1 E{e:.4f} F2400 ; retract")
+            lines.append(f"G1 Z{lz + _Z_HOP:.2f} F720 ; z-hop")
             lines.append(f"G1 X{x0:.3f} Y{y0:.3f} F3000 ; travel")
+            lines.append(f"G1 Z{lz:.2f} F720 ; lower")
             e += 0.8
             lines.append(f"G1 E{e:.4f} F2400 ; unretract")
 
@@ -438,7 +443,9 @@ def _silverink_test_gcode(
 
                 e -= 0.8
                 lines.append(f"G1 E{e:.4f} F2400 ; retract")
+                lines.append(f"G1 Z{lz + _Z_HOP:.2f} F720 ; z-hop")
                 lines.append(f"G1 X{ix1:.3f} Y{iy0:.3f} F3000 ; travel")
+                lines.append(f"G1 Z{lz:.2f} F720 ; lower")
                 e += 0.8
                 lines.append(f"G1 E{e:.4f} F2400 ; unretract")
 
@@ -842,6 +849,7 @@ def _pinhole_gcode(
     lines += ["", "G90 ; absolute positioning", "M82 ; absolute extrusion", ""]
 
     e = 0.0
+    cur_z = 0.0
 
     # ── Shared G-code helpers ──
 
@@ -853,7 +861,9 @@ def _pinhole_gcode(
         x1, y1 = x0 + w, y0 + h
         e -= 0.8
         lines.append(f"G1 E{e:.4f} F2400 ; retract")
+        lines.append(f"G1 Z{cur_z + _Z_HOP:.2f} F720 ; z-hop")
         lines.append(f"G1 X{x0:.3f} Y{y0:.3f} F3000 ; travel")
+        lines.append(f"G1 Z{cur_z:.2f} F720 ; lower")
         e += 0.8
         lines.append(f"G1 E{e:.4f} F2400 ; unretract")
         prev = (x0, y0)
@@ -883,7 +893,9 @@ def _pinhole_gcode(
             lines.append(";TYPE:Ironing")
             e -= 0.8
             lines.append(f"G1 E{e:.4f} F2400 ; retract")
+            lines.append(f"G1 Z{cur_z + _Z_HOP:.2f} F720 ; z-hop")
             lines.append(f"G1 X{ix1:.3f} Y{iy0:.3f} F3000")
+            lines.append(f"G1 Z{cur_z:.2f} F720 ; lower")
             e += 0.8
             lines.append(f"G1 E{e:.4f} F2400 ; unretract")
             x_pos = ix1
@@ -916,7 +928,9 @@ def _pinhole_gcode(
                     continue
                 e -= 0.8
                 lines.append(f"G1 E{e:.4f} F2400 ; retract")
+                lines.append(f"G1 Z{cur_z + _Z_HOP:.2f} F720 ; z-hop")
                 lines.append(f"G1 X{x_hi:.3f} Y{y_lo:.3f} F3000")
+                lines.append(f"G1 Z{cur_z:.2f} F720 ; lower")
                 e += 0.8
                 lines.append(f"G1 E{e:.4f} F2400 ; unretract")
                 x_pos = x_hi
@@ -1035,7 +1049,9 @@ def _pinhole_gcode(
                     sa, sb = (s[0], s[1]) if going_up else (s[1], s[0])
                     e -= 0.8
                     lines.append(f"G1 E{e:.4f} F2400 ; retract")
+                    lines.append(f"G1 Z{z_layer + _Z_HOP:.2f} F720 ; z-hop")
                     lines.append(f"G1 X{x_a:.3f} Y{sa:.3f} F3000")
+                    lines.append(f"G1 Z{z_layer:.2f} F720 ; lower")
                     e += 0.8
                     lines.append(f"G1 E{e:.4f} F2400 ; unretract")
                     e += abs(sb - sa) * e_per_mm
@@ -1062,7 +1078,9 @@ def _pinhole_gcode(
 
             e -= 0.8
             lines.append(f"G1 E{e:.4f} F2400 ; retract")
+            lines.append(f"G1 Z{z_layer + _Z_HOP:.2f} F720 ; z-hop")
             lines.append(f"G1 X{wx0:.3f} Y{wy0:.3f} F3000 ; travel")
+            lines.append(f"G1 Z{z_layer:.2f} F720 ; lower")
             e += 0.8
             lines.append(f"G1 E{e:.4f} F2400 ; unretract")
             corners = [(wx1, wy0), (wx1, wy1), (wx0, wy1), (wx0, wy0)]
@@ -1084,7 +1102,9 @@ def _pinhole_gcode(
                 sy_a, sy_b = (s[0], s[1]) if going_up else (s[1], s[0])
                 e -= 0.8
                 lines.append(f"G1 E{e:.4f} F2400 ; retract")
+                lines.append(f"G1 Z{z_layer + _Z_HOP:.2f} F720 ; z-hop")
                 lines.append(f"G1 X{x_pos:.3f} Y{sy_a:.3f} F3000")
+                lines.append(f"G1 Z{z_layer:.2f} F720 ; lower")
                 e += 0.8
                 lines.append(f"G1 E{e:.4f} F2400 ; unretract")
                 e += abs(sy_b - sy_a) * e_per_mm
@@ -1096,6 +1116,7 @@ def _pinhole_gcode(
     plate_layers = max(1, round(FLOOR_MM / z))
     for pl in range(1, plate_layers + 1):
         lz = z * pl
+        cur_z = lz
         lines.append(";LAYER_CHANGE")
         lines.append(f";Z:{lz:.1f}")
         lines.append(f"G1 Z{lz:.2f} F600")
@@ -1108,6 +1129,7 @@ def _pinhole_gcode(
     max_block_layers = max(1, round((max_block_z_top - FLOOR_MM) / z))
     for layer in range(1, max_block_layers + 1):
         lz = z * (plate_layers + layer)
+        cur_z = lz
         lines.append(";LAYER_CHANGE")
         lines.append(f";Z:{lz:.1f}")
         lines.append(f"G1 Z{lz:.2f} F600")
@@ -1316,7 +1338,9 @@ def _progressive_trace_gcode(
 
             e -= 0.8
             lines.append(f"G1 E{e:.4f} F2400 ; retract")
+            lines.append(f"G1 Z{lz + _Z_HOP:.2f} F720 ; z-hop")
             lines.append(f"G1 X{x0:.3f} Y{y0:.3f} F3000")
+            lines.append(f"G1 Z{lz:.2f} F720 ; lower")
             e += 0.8
             lines.append(f"G1 E{e:.4f} F2400 ; unretract")
 
@@ -1356,7 +1380,9 @@ def _progressive_trace_gcode(
                 ix1, iy1 = x1 - inset, y1 - inset
                 e -= 0.8
                 lines.append(f"G1 E{e:.4f} F2400")
+                lines.append(f"G1 Z{lz + _Z_HOP:.2f} F720 ; z-hop")
                 lines.append(f"G1 X{ix1:.3f} Y{iy0:.3f} F3000")
+                lines.append(f"G1 Z{lz:.2f} F720 ; lower")
                 e += 0.8
                 lines.append(f"G1 E{e:.4f} F2400")
                 x_pos = ix1
@@ -1599,7 +1625,9 @@ def _parallel_lines_gcode(
 
             e -= 0.8
             lines.append(f"G1 E{e:.4f} F2400 ; retract")
+            lines.append(f"G1 Z{lz + _Z_HOP:.2f} F720 ; z-hop")
             lines.append(f"G1 X{x0:.3f} Y{y0:.3f} F3000")
+            lines.append(f"G1 Z{lz:.2f} F720 ; lower")
             e += 0.8
             lines.append(f"G1 E{e:.4f} F2400 ; unretract")
 
@@ -1639,7 +1667,9 @@ def _parallel_lines_gcode(
                 ix1, iy1 = x1 - inset, y1 - inset
                 e -= 0.8
                 lines.append(f"G1 E{e:.4f} F2400")
+                lines.append(f"G1 Z{lz + _Z_HOP:.2f} F720 ; z-hop")
                 lines.append(f"G1 X{ix1:.3f} Y{iy0:.3f} F3000")
+                lines.append(f"G1 Z{lz:.2f} F720 ; lower")
                 e += 0.8
                 lines.append(f"G1 E{e:.4f} F2400")
                 x_pos = ix1
@@ -1877,7 +1907,9 @@ def _trace_width_gcode(
 
         e -= 0.8
         lines.append(f"G1 E{e:.4f} F2400 ; retract")
+        lines.append(f"G1 Z{lz + _Z_HOP:.2f} F720 ; z-hop")
         lines.append(f"G1 X{x0:.3f} Y{y0:.3f} F3000")
+        lines.append(f"G1 Z{lz:.2f} F720 ; lower")
         e += 0.8
         lines.append(f"G1 E{e:.4f} F2400 ; unretract")
 
@@ -1914,7 +1946,9 @@ def _trace_width_gcode(
             ix1, iy1 = x1 - inset, y1 - inset
             e -= 0.8
             lines.append(f"G1 E{e:.4f} F2400")
+            lines.append(f"G1 Z{lz + _Z_HOP:.2f} F720 ; z-hop")
             lines.append(f"G1 X{ix1:.3f} Y{iy0:.3f} F3000")
+            lines.append(f"G1 Z{lz:.2f} F720 ; lower")
             e += 0.8
             lines.append(f"G1 E{e:.4f} F2400")
             x_pos = ix1
