@@ -599,7 +599,7 @@ async def generate_silverink_test(
     }
 
 
-# ── Cube-trace test ───────────────────────────────────────────────
+# ── Components test ───────────────────────────────────────────────
 #
 # Loads real catalog components (resistor, button, battery), arranges
 # them on a common plate, and uses the pipeline's component_z_range()
@@ -1207,13 +1207,13 @@ def _pinhole_bitmap(
     return "\n".join(result)
 
 
-@router.post("/cube-trace")
-async def generate_pinhole(
+@router.post("/components")
+async def generate_components(
     printer: str = Query("coreone"),
     filament: str = Query("prusament_pla"),
     padding: float = Query(5),
 ) -> dict[str, Any]:
-    """Generate G-code + bitmap for multi-component cube-trace test."""
+    """Generate G-code + bitmap for multi-component test."""
     pdef = get_printer(printer)
     fdef = get_filament(filament)
     grid = sweep_grid(pdef)
@@ -1232,8 +1232,8 @@ async def generate_pinhole(
         part_origin_y_mm=bb_y,
         part_width_mm=bb_x2 - bb_x,
         part_depth_mm=bb_y2 - bb_y,
-        gcode_file="pinhole.gcode",
-        bitmap_file="pinhole_bitmap.txt",
+        gcode_file="components.gcode",
+        bitmap_file="components.txt",
         printer=pdef,
     )
 
@@ -1244,7 +1244,7 @@ async def generate_pinhole(
     }
 
 
-# ── Progressive-trace test ────────────────────────────────────────
+# ── Layers test ───────────────────────────────────────────────────
 #
 # Three flat rectangles with accompanying bitmaps.  Bitmap 1 has a
 # trace on rect 1 only; bitmap 2 on rects 1-2; bitmap 3 on all three.
@@ -1486,8 +1486,8 @@ def _progressive_trace_bitmap(
     return "\n".join(result)
 
 
-@router.post("/progressive-trace")
-async def generate_progressive_trace(
+@router.post("/layers")
+async def generate_layers(
     printer: str = Query("coreone"),
     filament: str = Query("prusament_pla"),
     padding: float = Query(5),
@@ -1495,7 +1495,7 @@ async def generate_progressive_trace(
     rect_height: float = Query(20),
     layers: int = Query(4),
 ) -> dict[str, Any]:
-    """Generate G-code + 3 bitmaps for the progressive-trace test."""
+    """Generate G-code + 3 bitmaps for the layers test."""
     pdef = get_printer(printer)
     fdef = get_filament(filament)
     grid = sweep_grid(pdef)
@@ -1521,8 +1521,8 @@ async def generate_progressive_trace(
         part_origin_y_mm=part_origin_y,
         part_width_mm=total_w,
         part_depth_mm=total_h,
-        gcode_file="progressive_trace.gcode",
-        bitmap_file="progressive_trace_1.txt",
+        gcode_file="layers.gcode",
+        bitmap_file="layers_1.txt",
         printer=pdef,
     )
 
@@ -1533,7 +1533,7 @@ async def generate_progressive_trace(
     }
 
 
-# ── Parallel-lines test ──────────────────────────────────────────
+# ── Spacing test ─────────────────────────────────────────────────
 #
 # Three landscape rectangles (twice as large, rotated orientation)
 # each with the same pattern of parallel lines.  The gap between
@@ -1787,8 +1787,8 @@ def _parallel_lines_bitmap(
     return "\n".join(result)
 
 
-@router.post("/parallel-lines")
-async def generate_parallel_lines(
+@router.post("/spacing")
+async def generate_spacing(
     printer: str = Query("coreone"),
     filament: str = Query("prusament_pla"),
     padding: float = Query(5),
@@ -1796,7 +1796,7 @@ async def generate_parallel_lines(
     rect_height: float = Query(20),
     layers: int = Query(4),
 ) -> dict[str, Any]:
-    """Generate G-code + bitmap for the parallel-lines spacing test."""
+    """Generate G-code + bitmap for the spacing test."""
     pdef = get_printer(printer)
     fdef = get_filament(filament)
     grid = sweep_grid(pdef)
@@ -1817,8 +1817,8 @@ async def generate_parallel_lines(
         part_origin_y_mm=y_bottom,
         part_width_mm=total_w,
         part_depth_mm=rect_height,
-        gcode_file="parallel_lines.gcode",
-        bitmap_file="parallel_lines_bitmap.txt",
+        gcode_file="spacing.gcode",
+        bitmap_file="spacing.txt",
         printer=pdef,
     )
 
@@ -1829,7 +1829,7 @@ async def generate_parallel_lines(
     }
 
 
-# ── Trace-width test ────────────────────────────────────────────────
+# ── Width test ───────────────────────────────────────────────────
 
 def _trace_width_gcode(
     pdef: PrinterDef,
@@ -2041,8 +2041,8 @@ def _trace_width_bitmap(
     return "\n".join(result)
 
 
-@router.post("/trace-width")
-async def generate_trace_width(
+@router.post("/width")
+async def generate_width(
     printer: str = Query("coreone"),
     filament: str = Query("prusament_pla"),
     padding: float = Query(5),
@@ -2068,8 +2068,8 @@ async def generate_trace_width(
         part_origin_y_mm=y_bottom,
         part_width_mm=rect_width,
         part_depth_mm=rect_height,
-        gcode_file="trace_width.gcode",
-        bitmap_file="trace_width_bitmap.txt",
+        gcode_file="width.gcode",
+        bitmap_file="width.txt",
         printer=pdef,
     )
 
