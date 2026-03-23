@@ -91,7 +91,7 @@ def _calibration_gcode(
     lines = [
         "; Calibration alignment squares",
         f"; Printer: {pdef.label}  Filament: {fdef.label}",
-        f"; bed {nom_w}×{nom_d}  box {box}  pad {pad}  sq {sq}",
+        f"; bed {nom_w}x{nom_d}  box {box}  pad {pad}  sq {sq}",
         f"; printer_model = {pdef.id}",
         f"; bed_shape = 0x0,{bw_i}x0,{bw_i}x{bd_i},0x{bd_i}",
         f"; nozzle_diameter = {nozzle_d}",
