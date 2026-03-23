@@ -320,7 +320,7 @@ def _ink_pause_block(
     lines.extend([
         "",
         "G91 ; relative positioning",
-        "G1 Z1 F1000 ; lift head before pause",
+        "G1 Z1 F1000 ; lift head",
         "G90 ; absolute positioning",
         "",
         "G1 X0 Y0 F3000 ; move to home",
