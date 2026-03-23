@@ -3,10 +3,6 @@ Web server -- lightweight FastAPI app that dispatches pipeline stages.
 
 Run:  python -m uvicorn src.web.server:app --reload --port 8000
   or: python -m src.web.server
-
-Routes are split into two versioned modules:
-  - v1 (/api/...)    -- original query-param API surface
-  - v2 (/api/v2/...) -- RESTful API with session ID in the path
 """
 
 from __future__ import annotations

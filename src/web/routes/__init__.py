@@ -8,7 +8,7 @@ from src.web.routes.manufacture import router as _manufacture
 from src.web.routes.setup import router as _setup
 from src.web.routes.debug import router as _debug
 
-api_router = APIRouter(prefix="/api/v2")
+api_router = APIRouter(prefix="/api")
 api_router.include_router(_sessions)
 api_router.include_router(_catalog)
 api_router.include_router(_design)
