@@ -262,19 +262,18 @@ def generate_button_scad(config: ButtonConfig) -> list[str]:
 
         lines.append(f"  points = [{', '.join(pts_3d)}],")
 
-        # Build face list
+        # Build face list (OpenSCAD: CW from outside, i.e. right-hand normal inward)
         faces: list[str] = []
-        # Bottom face (vertices 0..n-1, wound CW when viewed from below → listed in reverse)
-        bottom = list(range(n - 1, -1, -1))
+        # Bottom face: normal must point up (+Z, inward) → forward vertex order
+        bottom = list(range(n))
         faces.append("[" + ", ".join(str(i) for i in bottom) + "]")
-        # Top face (vertices n..2n-1, wound CCW when viewed from above)
-        top = list(range(n, 2 * n))
+        # Top face: normal must point down (-Z, inward) → reverse vertex order
+        top = list(range(2 * n - 1, n - 1, -1))
         faces.append("[" + ", ".join(str(i) for i in top) + "]")
-        # Side faces
+        # Side faces: normal must point inward (toward axis)
         for i in range(n):
             j = (i + 1) % n
-            # Quad: bottom[i], bottom[j], top[j], top[i]
-            faces.append(f"[{i}, {j}, {n + j}, {n + i}]")
+            faces.append(f"[{i}, {n + i}, {n + j}, {j}]")
 
         lines.append(f"  faces = [{', '.join(faces)}]")
         lines.append(f");")
