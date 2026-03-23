@@ -1,6 +1,5 @@
 """
-Web server -- lightweight FastAPI app that dispatches pipeline stages
-and serves a UI for inspecting each step.
+Web server -- lightweight FastAPI app that dispatches pipeline stages.
 
 Run:  python -m uvicorn src.web.server:app --reload --port 8000
   or: python -m src.web.server
@@ -15,10 +14,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
 
 from src.web.routes import api_router
 
@@ -56,50 +53,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-STATIC_DIR = Path(__file__).resolve().parent / "static"
-STATIC_DIR.mkdir(exist_ok=True)
-
-
-@app.get("/favicon.ico", include_in_schema=False)
-async def _favicon():
-    return FileResponse(STATIC_DIR / "favicon.ico")
-
-
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
-
-@app.middleware("http")
-async def _no_cache_static(request, call_next):
-    response = await call_next(request)
-    if request.url.path.startswith("/static/"):
-        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    return response
-
-
-@app.get("/", response_class=HTMLResponse)
-async def root():
-    html_path = STATIC_DIR / "index.html"
-    if not html_path.exists():
-        return HTMLResponse("<h1>ManufacturerAI</h1><p>Static files not found.</p>")
-    return FileResponse(html_path)
-
-
-@app.get("/debug", response_class=HTMLResponse)
-async def debug_page():
-    html_path = STATIC_DIR / "debug.html"
-    if not html_path.exists():
-        raise HTTPException(404, "debug.html not found")
-    return html_path.read_text(encoding="utf-8")
-
-
-@app.get("/scad", response_class=HTMLResponse)
-async def scad_page():
-    html_path = STATIC_DIR / "index.html"
-    if not html_path.exists():
-        return HTMLResponse("<h1>ManufacturerAI</h1><p>Static files not found.</p>")
-    return FileResponse(html_path)
-
 
 app.include_router(api_router)
 
