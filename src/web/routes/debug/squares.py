@@ -28,7 +28,7 @@ def _squares_gcode(
 ) -> str:
     """Generate G-code for filled squares fully covered by trace.
 
-    Three 10×20 mm rectangles stacked vertically, printed 2 mm tall
+    Nine 10×20 mm rectangles in a 3×3 grid, printed 2 mm tall
     (10 layers at 0.2 mm) with ironing on the top layer.
     """
     nozzle_temp = int(fdef.overrides.get("first_layer_temperature",
@@ -49,19 +49,19 @@ def _squares_gcode(
     nom_d = pdef.nominal_bed_depth
 
     gap = pad
+    total_w = 3 * rect_w + 2 * gap
     total_h = 3 * rect_h + 2 * gap
-    y_base = (nom_d - total_h) / 2
     x_left = abs(pdef.inkjet_offset_x) + pad
+    y_base = (nom_d - total_h) / 2
 
     corners = [
-        (x_left, y_base),
-        (x_left, y_base + rect_h + gap),
-        (x_left, y_base + 2 * (rect_h + gap)),
+        (x_left + col * (rect_w + gap), y_base + row * (rect_h + gap))
+        for row in range(3) for col in range(3)
     ]
 
     bw_i, bd_i = int(nom_w), int(nom_d)
     lines = [
-        "; Squares trace coverage test - 3 rectangles fully covered",
+        "; Squares trace coverage test - 9 rectangles in 3x3 grid",
         f"; Printer: {pdef.label}  Filament: {fdef.label}",
         f"; bed {nom_w}x{nom_d}  pad {pad}",
         f"; rect {rect_w}x{rect_h} mm, {layers} layers, ironing on top",
@@ -228,7 +228,7 @@ def _squares_bitmap(
 ) -> str:
     """Generate a bitmap with the full surface of each rectangle filled.
 
-    Three rectangles stacked vertically.  Each is fully covered with
+    Nine rectangles in a 3×3 grid.  Each is fully covered with
     ink ('1') — the entire footprint is projected onto the bitmap.
     """
     px = grid.pixel_size_mm
@@ -238,14 +238,14 @@ def _squares_bitmap(
     nom_d = pdef.nominal_bed_depth
 
     gap = pad
+    total_w = 3 * rect_w + 2 * gap
     total_h = 3 * rect_h + 2 * gap
-    y_base = (nom_d - total_h) / 2
     x_left = abs(pdef.inkjet_offset_x) + pad
+    y_base = (nom_d - total_h) / 2
 
     corners_bed = [
-        (x_left, y_base),
-        (x_left, y_base + rect_h + gap),
-        (x_left, y_base + 2 * (rect_h + gap)),
+        (x_left + col * (rect_w + gap), y_base + row * (rect_h + gap))
+        for row in range(3) for col in range(3)
     ]
 
     ink_cells: set[tuple[int, int]] = set()
@@ -284,8 +284,8 @@ async def generate_squares(
 ) -> dict[str, Any]:
     """Generate G-code + bitmap for filled-trace square coverage test.
 
-    Prints three 10×20 mm rectangles (2 mm tall) with their entire
-    surface covered in silver-ink trace on the bitmap.
+    Prints nine 10×20 mm rectangles in a 3×3 grid (2 mm tall) with
+    their entire surface covered in silver-ink trace on the bitmap.
     """
     pdef = get_printer(printer)
     fdef = get_filament(filament)
@@ -297,6 +297,7 @@ async def generate_squares(
         pdef, grid, padding, rect_width, rect_height)
 
     gap = padding
+    total_w = 3 * rect_width + 2 * gap
     total_h = 3 * rect_height + 2 * gap
     part_origin_x = abs(pdef.inkjet_offset_x) + padding
     part_origin_y = (pdef.nominal_bed_depth - total_h) / 2
@@ -305,7 +306,7 @@ async def generate_squares(
         grid=grid,
         part_origin_x_mm=part_origin_x,
         part_origin_y_mm=part_origin_y,
-        part_width_mm=rect_width,
+        part_width_mm=total_w,
         part_depth_mm=total_h,
         gcode_file="squares.gcode",
         bitmap_file="squares.txt",
