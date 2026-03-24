@@ -6,7 +6,7 @@ from .calibration import generate_calibration
 from .components import generate_components
 from .layers import generate_layers
 from .spacing import generate_spacing
-from .squares import generate_squares
+from .solid_squares import generate_solid_squares
 from .width import generate_width
 
 router = APIRouter()
@@ -66,11 +66,11 @@ async def generate_all_tests(
         files[f"{folder}/width.gcode"] = r["gcode"]
         files[f"{folder}/width.txt"] = r["bitmap"]
 
-        r = await generate_squares(
+        r = await generate_solid_squares(
             printer=printer, filament=fil_id, padding=5,
             rect_width=10, rect_height=20, layers=10,
         )
-        files[f"{folder}/squares.gcode"] = r["gcode"]
-        files[f"{folder}/squares.txt"] = r["bitmap"]
+        files[f"{folder}/solid_squares.gcode"] = r["gcode"]
+        files[f"{folder}/solid_squares.txt"] = r["bitmap"]
 
     return {"files": files}

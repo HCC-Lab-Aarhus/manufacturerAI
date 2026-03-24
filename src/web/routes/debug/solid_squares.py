@@ -16,7 +16,7 @@ from ._common import _Z_HOP
 router = APIRouter()
 
 
-def _squares_gcode(
+def _solid_squares_gcode(
     pdef: PrinterDef,
     fdef: FilamentDef,
     pad: float,
@@ -219,7 +219,7 @@ def _squares_gcode(
     return "\n".join(lines)
 
 
-def _squares_bitmap(
+def _solid_squares_bitmap(
     pdef: PrinterDef,
     grid: SweepGrid,
     pad: float,
@@ -273,8 +273,8 @@ def _squares_bitmap(
     return "\n".join(result)
 
 
-@router.post("/squares")
-async def generate_squares(
+@router.post("/solid-squares")
+async def generate_solid_squares(
     printer: str = Query("coreone"),
     filament: str = Query("prusament_pla"),
     padding: float = Query(5),
@@ -291,9 +291,9 @@ async def generate_squares(
     fdef = get_filament(filament)
     grid = sweep_grid(pdef)
 
-    gcode = _squares_gcode(
+    gcode = _solid_squares_gcode(
         pdef, fdef, padding, rect_width, rect_height, layers)
-    bitmap = _squares_bitmap(
+    bitmap = _solid_squares_bitmap(
         pdef, grid, padding, rect_width, rect_height)
 
     gap = padding
@@ -308,8 +308,8 @@ async def generate_squares(
         part_origin_y_mm=part_origin_y,
         part_width_mm=total_w,
         part_depth_mm=total_h,
-        gcode_file="squares.gcode",
-        bitmap_file="squares.txt",
+        gcode_file="solid_squares.gcode",
+        bitmap_file="solid_squares.txt",
         printer=pdef,
     )
 

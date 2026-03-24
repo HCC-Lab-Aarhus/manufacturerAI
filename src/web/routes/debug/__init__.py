@@ -22,7 +22,7 @@ from .components import router as _components
 from .layers import router as _layers
 from .spacing import router as _spacing
 from .width import router as _width
-from .squares import router as _squares
+from .solid_squares import router as _solid_squares
 from .generate_all import router as _generate_all
 
 router = APIRouter(prefix="/debug", tags=["debug"])
@@ -33,5 +33,5 @@ router.include_router(_components)
 router.include_router(_layers)
 router.include_router(_spacing)
 router.include_router(_width)
-router.include_router(_squares)
+router.include_router(_solid_squares)
 router.include_router(_generate_all)
