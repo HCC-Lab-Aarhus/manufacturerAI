@@ -308,7 +308,7 @@ async def generate_squares(
         part_width_mm=rect_width,
         part_depth_mm=total_h,
         gcode_file="squares.gcode",
-        bitmap_file="squares_trace.txt",
+        bitmap_file="squares.txt",
         printer=pdef,
     )
 
