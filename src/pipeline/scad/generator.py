@@ -19,7 +19,6 @@ from src.catalog.loader import load_catalog
 from src.catalog.models import Component
 from src.pipeline.config import CAVITY_START_MM, CEILING_MM
 from src.pipeline.design.parsing import parse_physical_design, parse_circuit, build_design_spec
-from src.pipeline.design.height_field import blended_height, blended_bottom_height, sample_height_grid
 from src.pipeline.design.models import Outline
 from src.pipeline.placer.serialization import assemble_full_placement
 from src.pipeline.router.models import RoutingResult
@@ -101,37 +100,11 @@ def run_scad_step(
     flat_pts = tessellate_outline(outline)
     log.info("Footprint: %d vertices", len(flat_pts))
 
-    # ── 3. Compute per-vertex ceiling heights ─────────────────────
-    top_zs = [
-        blended_height(x, y, outline, enclosure)
-        for x, y in flat_pts
-    ]
-    z_min = min(top_zs)
-    z_max = max(top_zs)
-    variable_height = (z_max - z_min) >= 0.1
-    log.info(
-        "Ceiling heights: min=%.2f  max=%.2f mm  variable=%s",
-        z_min, z_max, variable_height,
-    )
-
-    # ── 3b. Compute per-vertex floor heights ────────────────────
-    bottom_zs = [
-        blended_bottom_height(x, y, outline, enclosure)
-        for x, y in flat_pts
-    ]
-    bz_min = min(bottom_zs)
-    bz_max = max(bottom_zs)
-    variable_bottom = (bz_max - bz_min) >= 0.1 or bz_max >= 0.1
-    log.info(
-        "Floor heights: min=%.2f  max=%.2f mm  variable=%s",
-        bz_min, bz_max, variable_bottom,
-    )
-
-    # ── 4. Compute shell body layers ──────────────────────────
-    body_lines = shell_body_lines(outline, enclosure, flat_pts, top_zs=top_zs, bottom_zs=bottom_zs)
+    # ── 3. Compute shell body layers ──────────────────────────
+    body_lines = shell_body_lines(outline, enclosure, flat_pts)
     log.info("Shell body: %d SCAD lines", len(body_lines))
 
-    # ── 5. Resolve per-component fragments ────────────────────────
+    # ── 4. Resolve per-component fragments ────────────────────────
     base_h = enclosure.height_mm
     ceil_start = base_h - CEILING_MM
     cavity_depth = ceil_start - CAVITY_START_MM
@@ -142,7 +115,6 @@ def run_scad_step(
         base_h=base_h,
         ceil_start=ceil_start,
         cavity_depth=cavity_depth,
-        blended_height_fn=blended_height,
     )
 
     cat_index: dict[str, Component] = {c.id: c for c in catalog.components}
@@ -187,7 +159,7 @@ def run_scad_step(
         all_fragments.extend(frags)
         log.debug("Component %s: %d fragments (pause_z=%.1f)", comp.instance_id, len(frags), ctx.pause_z)
 
-    # ── 6. Trace channel fragments ────────────────────────────────
+    # ── 5. Trace channel fragments ────────────────────────────────
     trace_frags = build_trace_fragments(routing, ceil_start)
     all_fragments.extend(trace_frags)
 
@@ -203,7 +175,7 @@ def run_scad_step(
              len(all_fragments) - len(trace_frags) - len(jumper_frags),
              len(trace_frags), len(jumper_frags), len(all_fragments))
 
-    # ── 7. Compute metadata for header comment ────────────────────
+    # ── 6. Compute metadata for header comment ────────────────────
     height_grid = sample_height_grid(outline, enclosure, resolution_mm=2.0)
     max_h = z_max
     for row in height_grid["grid"]:
@@ -221,7 +193,7 @@ def run_scad_step(
         "variable_height":  variable_height,
     }
 
-    # ── 8. Emit SCAD string ───────────────────────────────────────
+    # ── 7. Emit SCAD string ───────────────────────────────────────
     scad_str = generate_scad(
         body_lines, all_fragments,
         session_id=session.id,
@@ -237,7 +209,7 @@ def run_scad_step(
     if extras_scad:
         scad_str += extras_scad
 
-    # ── 9. Write to session folder ────────────────────────────────
+    # ── 8. Write to session folder ────────────────────────────────
     scad_path: Path = session.artifact_path("enclosure.scad")
     scad_path.parent.mkdir(parents=True, exist_ok=True)
     scad_path.write_text(scad_str, encoding="utf-8")
@@ -252,7 +224,7 @@ def run_scad_step(
     session.pipeline_state["scad"] = "done"
     session.save()
 
-    # ── 10. Optional: compile to STL ──────────────────────────────
+    # ── 9. Optional: compile to STL ──────────────────────────────
     if compile_stl:
         stl_path = session.artifact_path("enclosure.stl")
         ok, msg, out = compile_scad(scad_path, stl_path)

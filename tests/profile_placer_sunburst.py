@@ -121,26 +121,6 @@ def run_profiled_placement(use_large: bool = False):
                 raise PlacementError("_outline", "_outline",
                                      "Outline polygon is invalid")
 
-            _has_raised_bottom = any(
-                getattr(p, 'z_bottom', None) for p in design.outline.points
-            ) or design.enclosure.bottom_surface is not None
-            _floor_threshold = 0.0
-            _pcb_contour_verts = None
-            if _has_raised_bottom:
-                from src.pipeline.design.height_field import (
-                    blended_bottom_height, sample_bottom_height_grid,
-                    pcb_contour_from_bottom_grid,
-                )
-                from src.pipeline.config import FLOOR_MM
-                _floor_threshold = FLOOR_MM - 0.1
-                _bot_grid = sample_bottom_height_grid(design.outline, design.enclosure)
-                if _bot_grid is not None:
-                    _contour_pts = pcb_contour_from_bottom_grid(
-                        _bot_grid, design.outline, FLOOR_MM,
-                    )
-                    if _contour_pts is not None and len(_contour_pts) >= 3:
-                        _pcb_contour_verts = [(p[0], p[1]) for p in _contour_pts]
-
             _ebot = design.enclosure.edge_bottom
             _raw_inset = _ebot.size_mm if _ebot.type in ("fillet", "chamfer") else 0.0
             _max_inset = design.enclosure.height_mm * 0.42
@@ -296,29 +276,6 @@ def run_profiled_placement(use_large: bool = False):
                                 if not inside:
                                     continue
 
-                                if _has_raised_bottom:
-                                    with ht.section("raised_floor_check"):
-                                        from src.pipeline.design.height_field import blended_bottom_height
-                                        _raised = False
-                                        _check_pts = [
-                                            (cx, cy),
-                                            (cx - ehw, cy - ehh),
-                                            (cx + ehw, cy - ehh),
-                                            (cx - ehw, cy + ehh),
-                                            (cx + ehw, cy + ehh),
-                                        ]
-                                        for _pox, _poy in my_pin_offsets:
-                                            _check_pts.append((cx + _pox, cy + _poy))
-                                        for _px, _py in _check_pts:
-                                            if blended_bottom_height(
-                                                _px, _py, design.outline,
-                                                design.enclosure,
-                                            ) >= _floor_threshold:
-                                                _raised = True
-                                                break
-                                    if _raised:
-                                        continue
-
                                 with ht.section("overlap_check"):
                                     overlap = False
                                     for p in placed:
@@ -346,13 +303,6 @@ def run_profiled_placement(use_large: bool = False):
                                         cx, cy, ehw, ehh, outline_verts)
                                 if edge_dist < edge_clr:
                                     continue
-
-                                if _pcb_contour_verts is not None:
-                                    with ht.section("contour_clearance"):
-                                        contour_edge_dist = rect_edge_clearance(
-                                            cx, cy, ehw, ehh, _pcb_contour_verts)
-                                    if contour_edge_dist < edge_clr:
-                                        continue
 
                                 with ht.section("pin_clash_check"):
                                     pin_clash = False
@@ -385,7 +335,6 @@ def run_profiled_placement(use_large: bool = False):
                                         catalog_map, net_graph,
                                         outline_verts, outline_bounds, style,
                                         congestion_grid=cg,
-                                        pcb_contour_verts=_pcb_contour_verts,
                                     )
 
                                 if score > best_score:

@@ -41,8 +41,6 @@ CEIL_START = ENCLOSURE_HEIGHT - CEILING_MM
 CAVITY_DEPTH = CEIL_START - CAVITY_START_MM
 
 
-def _constant_height(_x, _y, _outline, _enc):
-    return ENCLOSURE_HEIGHT
 
 
 def _load_catalog(name: str):
@@ -58,7 +56,6 @@ def _make_ctx(pause_z: float | None = None) -> ResolverContext:
         base_h=ENCLOSURE_HEIGHT,
         ceil_start=CEIL_START,
         cavity_depth=CAVITY_DEPTH,
-        blended_height_fn=_constant_height,
         pause_z=pause_z,
     )
 

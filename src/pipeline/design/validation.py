@@ -81,70 +81,11 @@ def validate_physical_design(
             f"(floor {FLOOR_MM}mm + tallest component {tallest_mm:.1f}mm + ceiling {CEILING_MM}mm)"
         )
 
-    too_short: dict[float, list[int]] = {}
-    too_tall: dict[float, list[int]] = {}
-    for i, pt in enumerate(physical.outline.points):
-        eff_z = pt.z_top if pt.z_top is not None else physical.enclosure.height_mm
-        if eff_z < min_required_z:
-            too_short.setdefault(eff_z, []).append(i)
-        if eff_z > pdef.max_z_mm:
-            too_tall.setdefault(eff_z, []).append(i)
-    for eff_z, idxs in too_short.items():
-        verts = _fmt_indices(idxs)
-        errors.append(
-            f"{verts} z_top ({eff_z:.1f}mm) is too short — "
-            f"needs at least {min_required_z:.1f}mm"
-        )
-    for eff_z, idxs in too_tall.items():
-        verts = _fmt_indices(idxs)
-        errors.append(
-            f"{verts} z_top ({eff_z:.1f}mm) exceeds printer max Z "
-            f"({pdef.max_z_mm:.0f}mm)"
-        )
-
     if physical.enclosure.height_mm > pdef.max_z_mm:
         errors.append(
             f"Enclosure height_mm ({physical.enclosure.height_mm:.1f}mm) exceeds "
             f"printer max Z ({pdef.max_z_mm:.0f}mm)"
         )
-
-    # ── top_surface validation ──
-    ts = physical.enclosure.top_surface
-    if ts is not None and ts.type != "flat":
-        if ts.type == "dome":
-            missing = [f for f in ("peak_x_mm", "peak_y_mm", "peak_height_mm", "base_height_mm")
-                       if getattr(ts, f) is None]
-            if missing:
-                errors.append(f"top_surface dome is missing required fields: {', '.join(missing)}")
-            else:
-                if ts.peak_height_mm < ts.base_height_mm:
-                    errors.append(
-                        f"top_surface dome peak_height_mm ({ts.peak_height_mm}) must be >= "
-                        f"base_height_mm ({ts.base_height_mm})"
-                    )
-                if ts.peak_height_mm > pdef.max_z_mm:
-                    errors.append(
-                        f"top_surface dome peak_height_mm ({ts.peak_height_mm}mm) exceeds "
-                        f"printer max Z ({pdef.max_z_mm:.0f}mm)"
-                    )
-        elif ts.type == "ridge":
-            missing = [f for f in ("x1", "y1", "x2", "y2", "crest_height_mm", "base_height_mm", "falloff_mm")
-                       if getattr(ts, f) is None]
-            if missing:
-                errors.append(f"top_surface ridge is missing required fields: {', '.join(missing)}")
-            else:
-                if ts.crest_height_mm < ts.base_height_mm:
-                    errors.append(
-                        f"top_surface ridge crest_height_mm ({ts.crest_height_mm}) must be >= "
-                        f"base_height_mm ({ts.base_height_mm})"
-                    )
-                if ts.crest_height_mm > pdef.max_z_mm:
-                    errors.append(
-                        f"top_surface ridge crest_height_mm ({ts.crest_height_mm}mm) exceeds "
-                        f"printer max Z ({pdef.max_z_mm:.0f}mm)"
-                    )
-        else:
-            errors.append(f"top_surface type '{ts.type}' is unknown (expected: flat, dome, ridge)")
 
     # ── Outline polygon validity & UI placement checks ──
     if len(physical.outline.vertices) >= 3:
@@ -562,70 +503,11 @@ def validate_design(
             f"(floor {FLOOR_MM}mm + tallest component {tallest_mm:.1f}mm + ceiling {CEILING_MM}mm)"
         )
 
-    too_short: dict[float, list[int]] = {}
-    too_tall: dict[float, list[int]] = {}
-    for i, pt in enumerate(spec.outline.points):
-        eff_z = pt.z_top if pt.z_top is not None else spec.enclosure.height_mm
-        if eff_z < min_required_z_vertex:
-            too_short.setdefault(eff_z, []).append(i)
-        if eff_z > pdef.max_z_mm:
-            too_tall.setdefault(eff_z, []).append(i)
-    for eff_z, idxs in too_short.items():
-        verts = _fmt_indices(idxs)
-        errors.append(
-            f"{verts} z_top ({eff_z:.1f}mm) is too short — "
-            f"needs at least {min_required_z_vertex:.1f}mm to fit the tallest component"
-        )
-    for eff_z, idxs in too_tall.items():
-        verts = _fmt_indices(idxs)
-        errors.append(
-            f"{verts} z_top ({eff_z:.1f}mm) exceeds printer max Z "
-            f"({pdef.max_z_mm:.0f}mm)"
-        )
-
     if spec.enclosure.height_mm > pdef.max_z_mm:
         errors.append(
             f"Enclosure height_mm ({spec.enclosure.height_mm:.1f}mm) exceeds "
             f"printer max Z ({pdef.max_z_mm:.0f}mm)"
         )
-
-    # ── top_surface validation ──
-    ts = spec.enclosure.top_surface
-    if ts is not None and ts.type != "flat":
-        if ts.type == "dome":
-            missing = [f for f in ("peak_x_mm", "peak_y_mm", "peak_height_mm", "base_height_mm")
-                       if getattr(ts, f) is None]
-            if missing:
-                errors.append(f"top_surface dome is missing required fields: {', '.join(missing)}")
-            else:
-                if ts.peak_height_mm < ts.base_height_mm:
-                    errors.append(
-                        f"top_surface dome peak_height_mm ({ts.peak_height_mm}) must be >= "
-                        f"base_height_mm ({ts.base_height_mm})"
-                    )
-                if ts.peak_height_mm > pdef.max_z_mm:
-                    errors.append(
-                        f"top_surface dome peak_height_mm ({ts.peak_height_mm}mm) exceeds "
-                        f"printer max Z ({pdef.max_z_mm:.0f}mm)"
-                    )
-        elif ts.type == "ridge":
-            missing = [f for f in ("x1", "y1", "x2", "y2", "crest_height_mm", "base_height_mm", "falloff_mm")
-                       if getattr(ts, f) is None]
-            if missing:
-                errors.append(f"top_surface ridge is missing required fields: {', '.join(missing)}")
-            else:
-                if ts.crest_height_mm < ts.base_height_mm:
-                    errors.append(
-                        f"top_surface ridge crest_height_mm ({ts.crest_height_mm}) must be >= "
-                        f"base_height_mm ({ts.base_height_mm})"
-                    )
-                if ts.crest_height_mm > pdef.max_z_mm:
-                    errors.append(
-                        f"top_surface ridge crest_height_mm ({ts.crest_height_mm}mm) exceeds "
-                        f"printer max Z ({pdef.max_z_mm:.0f}mm)"
-                    )
-        else:
-            errors.append(f"top_surface type '{ts.type}' is unknown (expected: flat, dome, ridge)")
 
     # ── Outline polygon validity (Shapely) ──
     if len(spec.outline.vertices) >= 3:

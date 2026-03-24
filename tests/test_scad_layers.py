@@ -28,7 +28,6 @@ from src.pipeline.design.models import (
     EdgeProfile,
     Outline,
     OutlineVertex,
-    TopSurface,
 )
 from src.pipeline.scad.layers import (
     _CURVE_STEPS,
@@ -175,10 +174,9 @@ class TestBuildRings(unittest.TestCase):
 
     def setUp(self):
         self.pts = _rect_pts(30, 50)
-        self.top_zs = [25.0] * 4   # uniform; shape logic is independent
 
     def _ring_count_for(self, enc: Enclosure) -> int:
-        rings = _build_rings(self.pts, self.top_zs, enc)
+        rings = _build_rings(self.pts, enc)
         return len(rings)
 
     def test_no_profiles_gives_two_rings(self):
@@ -212,41 +210,24 @@ class TestBuildRings(unittest.TestCase):
         self.assertEqual(self._ring_count_for(_chamfer_enclosure(25.0, 2.0)), expected)
 
     def test_each_ring_has_n_vertices(self):
-        rings = _build_rings(self.pts, self.top_zs, _fillet_enclosure())
+        rings = _build_rings(self.pts, _fillet_enclosure())
         n = len(self.pts)
         for i, ring in enumerate(rings):
             self.assertEqual(len(ring), n, f"ring {i} has wrong vertex count")
 
     def test_bottom_ring_is_at_z_zero(self):
         """First ring must start at z=0 (no bottom profile case)."""
-        rings = _build_rings(self.pts, self.top_zs, _plain_enclosure())
+        rings = _build_rings(self.pts, _plain_enclosure())
         for pt in rings[0]:
             self.assertAlmostEqual(pt[2], 0.0)
 
-    def test_top_ring_follows_top_zs(self):
-        """Last ring z-values must match top_zs (no top profile)."""
-        top_zs = [20.0, 22.0, 25.0, 21.0]
-        pts = _rect_pts(30, 50)
-        rings = _build_rings(pts, top_zs, _plain_enclosure())
+    def test_top_ring_is_at_enclosure_height(self):
+        """Last ring z-values must equal enclosure.height_mm."""
+        enc = _plain_enclosure(25.0)
+        rings = _build_rings(self.pts, enc)
         last = rings[-1]
-        for pt, tz in zip(last, top_zs):
-            self.assertAlmostEqual(pt[2], tz, places=4)
-
-    def test_variable_top_zs_propagate_through_fillet(self):
-        """With a top fillet, the last ring z-values should equal the per-vertex
-        top_zs (at frac=1 the z_offset equals top_size)."""
-        top_zs = [20.0, 22.0, 25.0, 21.0]
-        pts = _rect_pts(30, 50)
-        top_size = 2.0
-        enc = Enclosure(
-            height_mm=min(top_zs),
-            edge_top=EdgeProfile(type="fillet", size_mm=top_size),
-        )
-        rings = _build_rings(pts, top_zs, enc)
-        last = rings[-1]
-        for pt, tz in zip(last, top_zs):
-            self.assertAlmostEqual(pt[2], tz, places=4,
-                                   msg=f"last fillet ring z should equal top_zs")
+        for pt in last:
+            self.assertAlmostEqual(pt[2], 25.0, places=4)
 
 
 # ── shell_body_lines: uniform path ────────────────────────────────────────────
@@ -301,56 +282,31 @@ class TestShellBodyUniformHeight(unittest.TestCase):
     def _joined(self, lines):
         return "\n".join(lines)
 
-    def test_none_top_zs_is_polyhedron_path(self):
+    def test_plain_is_polyhedron_path(self):
         lines = shell_body_lines(self.outline, _plain_enclosure(25.0), self.pts)
         scad = self._joined(lines)
         self.assertIn("polyhedron", scad)
 
-    def test_uniform_top_zs_uses_polyhedron(self):
-        top_zs = [25.0] * len(self.pts)
-        lines = shell_body_lines(self.outline, _plain_enclosure(25.0), self.pts, top_zs=top_zs)
-        scad = self._joined(lines)
-        self.assertIn("polyhedron", scad)
-
-    def test_near_threshold_variation_still_polyhedron(self):
-        """Small height variation still uses the polyhedron path."""
-        top_zs = [25.0, 25.09, 25.0, 25.0]
-        lines = shell_body_lines(self.outline, _plain_enclosure(25.0), self.pts, top_zs=top_zs)
-        scad = self._joined(lines)
-        self.assertIn("polyhedron", scad)
-
-    def test_uniform_height_from_top_zs_overrides_enclosure_height(self):
-        """If all top_zs are equal but differ from enclosure.height_mm,
-        the emitted height should match top_zs[0], not enclosure.height_mm."""
-        top_zs = [30.0] * len(self.pts)   # all = 30, but enclosure says 25
-        lines = shell_body_lines(self.outline, _plain_enclosure(25.0), self.pts, top_zs=top_zs)
-        scad = self._joined(lines)
-        self.assertIn("30.000", scad)
-
-    def test_with_fillet_uniform_height_uses_polyhedron(self):
-        top_zs = [25.0] * len(self.pts)
-        lines = shell_body_lines(self.outline, _fillet_enclosure(25.0), self.pts, top_zs=top_zs)
+    def test_with_fillet_uses_polyhedron(self):
+        lines = shell_body_lines(self.outline, _fillet_enclosure(25.0), self.pts)
         scad = self._joined(lines)
         self.assertIn("polyhedron", scad)
 
 
-# ── shell_body_lines: variable heights ──────────────────────────────────────────────
+# ── shell_body_lines: polyhedron path ───────────────────────────────────────────
 
 
 class TestShellBodyPolyhedronPath(unittest.TestCase):
-    """shell_body_lines uses ear-clipped caps for all height configurations."""
+    """shell_body_lines emits a polyhedron with ear-clipped caps."""
 
     def setUp(self):
-        # Simple 4-vertex rectangle with variable ceiling heights
         self.pts = _rect_pts(30, 50)
         self.outline = _outline_from_pts(self.pts)
-        self.top_zs     = [20.0, 25.0, 30.0, 22.0]   # 10 mm variation
         self.enclosure  = _plain_enclosure(20.0)
 
-    def _get_scad(self, enc=None, top_zs=None):
+    def _get_scad(self, enc=None):
         enc = enc or self.enclosure
-        tz  = top_zs if top_zs is not None else self.top_zs
-        return "\n".join(shell_body_lines(self.outline, enc, self.pts, top_zs=tz))
+        return "\n".join(shell_body_lines(self.outline, enc, self.pts))
 
     # ── Output structure ────────────────────────────────────────────────────────
 
@@ -359,10 +315,6 @@ class TestShellBodyPolyhedronPath(unittest.TestCase):
 
     def test_no_linear_extrude(self):
         self.assertNotIn("linear_extrude", self._get_scad())
-
-    def test_variable_height_uses_polyhedron(self):
-        top_zs = [25.0, 25.2, 25.0, 25.0]
-        self.assertIn("polyhedron(", self._get_scad(top_zs=top_zs))
 
     # ── points= field ──────────────────────────────────────────────────────────
 
@@ -420,20 +372,15 @@ class TestShellBodyPolyhedronPath(unittest.TestCase):
             self.assertAlmostEqual(pts[i][2], 0.0, places=3,
                                    msg=f"bottom ring pt {i} z should be 0")
 
-    def test_top_ring_z_matches_top_zs(self):
-        """Last ring (indices (R-1)*N .. R*N-1) must match top_zs.
-
-        With a top fillet the fillet zone base heights are smoothed for visual
-        quality, but the final ring (frac=1 lerp) always lands exactly at
-        top_zs[i] so component clearances and cutout depths are preserved.
-        """
+    def test_top_ring_z_matches_enclosure_height(self):
+        """Last ring z-values must equal enclosure.height_mm."""
         N = len(self.pts)
         scad = self._get_scad()
         pts = self._parse_points(scad)
-        # 2 rings, no profiles
         top_ring_start = N
-        for i, tz in enumerate(self.top_zs):
-            self.assertAlmostEqual(pts[top_ring_start + i][2], tz, places=3)
+        for i in range(N):
+            self.assertAlmostEqual(pts[top_ring_start + i][2],
+                                   self.enclosure.height_mm, places=3)
 
     # ── faces= field ───────────────────────────────────────────────────────────
 
@@ -539,8 +486,8 @@ class TestShellBodyPolyhedronPath(unittest.TestCase):
         pts_c = self._parse_points(scad_c)
         self.assertEqual(len(pts_f), len(pts_c))
 
-    def test_top_zs_are_reflected_in_top_profile_ring(self):
-        """With a top fillet, the last ring z must exactly match top_zs."""
+    def test_top_profile_ring_z_matches_enclosure_height(self):
+        """With a top fillet, the last ring z must equal enclosure.height_mm."""
         enc = _fillet_enclosure(20.0, 2.0)
         N = len(self.pts)
         scad = self._get_scad(enc=enc)
@@ -548,9 +495,9 @@ class TestShellBodyPolyhedronPath(unittest.TestCase):
         R = len(pts) // N
         top_ring_start = (R - 1) * N
         top_ring = pts[top_ring_start:top_ring_start + N]
-        for i, tz in enumerate(self.top_zs):
-            self.assertAlmostEqual(top_ring[i][2], tz, places=3,
-                                   msg=f"vertex {i}: fillet last ring z != top_zs")
+        for i in range(N):
+            self.assertAlmostEqual(top_ring[i][2], enc.height_mm, places=3,
+                                   msg=f"vertex {i}: fillet last ring z != enclosure height")
 
 
 # ── More polygons: 8-vertex octagon and 3-vertex triangle ─────────────────────
@@ -566,15 +513,10 @@ class TestPolyhedronWithVariousPolygons(unittest.TestCase):
             for i in range(n)
         ]
 
-    def _variable_top_zs(self, pts: list[list[float]]) -> list[float]:
-        """Assign heights that vary by more than the threshold."""
-        n = len(pts)
-        return [20.0 + 5.0 * (i / max(n - 1, 1)) for i in range(n)]
-
-    def _run_checks(self, pts, top_zs, enc):
+    def _run_checks(self, pts, enc):
         """Run the basic structural checks for any polygon."""
         outline = _outline_from_pts(pts)
-        lines = shell_body_lines(outline, enc, pts, top_zs=top_zs)
+        lines = shell_body_lines(outline, enc, pts)
         scad = "\n".join(lines)
         self.assertIn("polyhedron(", scad)
 
@@ -596,18 +538,15 @@ class TestPolyhedronWithVariousPolygons(unittest.TestCase):
 
     def test_octagon_no_profiles(self):
         pts = self._octagon()
-        top_zs = self._variable_top_zs(pts)
-        self._run_checks(pts, top_zs, _plain_enclosure(22.0))
+        self._run_checks(pts, _plain_enclosure(22.0))
 
     def test_octagon_with_fillet(self):
         pts = self._octagon()
-        top_zs = self._variable_top_zs(pts)
-        self._run_checks(pts, top_zs, _fillet_enclosure(22.0, 1.5))
+        self._run_checks(pts, _fillet_enclosure(22.0, 1.5))
 
     def test_triangle_no_profiles(self):
         pts = [[0.0, 0.0], [20.0, 0.0], [10.0, 20.0]]
-        top_zs = [20.0, 28.0, 24.0]
-        self._run_checks(pts, top_zs, _plain_enclosure(20.0))
+        self._run_checks(pts, _plain_enclosure(20.0))
 
 
 # ── OpenSCAD syntax check (optional, requires openscad binary) ─────────────────
@@ -638,8 +577,7 @@ class TestOpenSCADSyntax(unittest.TestCase):
             self.skipTest("openscad not found")
         pts = _rect_pts(30, 50)
         outline = _outline_from_pts(pts)
-        top_zs = [20.0, 25.0, 30.0, 22.0]
-        lines = shell_body_lines(outline, _plain_enclosure(20.0), pts, top_zs=top_zs)
+        lines = shell_body_lines(outline, _plain_enclosure(20.0), pts)
         ok, msg = self._write_and_check(lines)
         self.assertTrue(ok, f"OpenSCAD syntax error: {msg}")
 
@@ -648,8 +586,7 @@ class TestOpenSCADSyntax(unittest.TestCase):
             self.skipTest("openscad not found")
         pts = _rect_pts(30, 50)
         outline = _outline_from_pts(pts)
-        top_zs = [20.0, 25.0, 30.0, 22.0]
-        lines = shell_body_lines(outline, _fillet_enclosure(20.0, 2.0), pts, top_zs=top_zs)
+        lines = shell_body_lines(outline, _fillet_enclosure(20.0, 2.0), pts)
         ok, msg = self._write_and_check(lines)
         self.assertTrue(ok, f"OpenSCAD syntax error: {msg}")
 
@@ -662,259 +599,6 @@ class TestOpenSCADSyntax(unittest.TestCase):
         ok, msg = self._write_and_check(lines)
         self.assertTrue(ok, f"OpenSCAD syntax error: {msg}")
 
-    def test_polyhedron_variable_bottom_parses(self):
-        if not self._openscad_available():
-            self.skipTest("openscad not found")
-        pts = _rect_pts(30, 50)
-        outline = _outline_from_pts(pts)
-        top_zs    = [25.0, 25.0, 25.0, 25.0]
-        bottom_zs = [0.0, 3.0, 5.0, 2.0]
-        lines = shell_body_lines(outline, _plain_enclosure(25.0), pts,
-                                 top_zs=top_zs, bottom_zs=bottom_zs)
-        ok, msg = self._write_and_check(lines)
-        self.assertTrue(ok, f"OpenSCAD syntax error: {msg}")
-
-    def test_polyhedron_variable_both_parses(self):
-        if not self._openscad_available():
-            self.skipTest("openscad not found")
-        pts = _rect_pts(30, 50)
-        outline = _outline_from_pts(pts)
-        top_zs    = [20.0, 25.0, 30.0, 22.0]
-        bottom_zs = [0.0, 3.0, 5.0, 1.0]
-        lines = shell_body_lines(outline, _fillet_enclosure(20.0, 2.0), pts,
-                                 top_zs=top_zs, bottom_zs=bottom_zs)
-        ok, msg = self._write_and_check(lines)
-        self.assertTrue(ok, f"OpenSCAD syntax error: {msg}")
-
-
-# ── Variable bottom surface tests ──────────────────────────────────────────────
-
-
-class TestVariableBottomSurface(unittest.TestCase):
-    """Tests for the custom bottom surface feature (bottom_zs)."""
-
-    def setUp(self):
-        self.pts = _rect_pts(30, 50)
-        self.outline = _outline_from_pts(self.pts)
-        self.top_zs = [25.0] * 4
-        self.bottom_zs = [0.0, 3.0, 5.0, 2.0]  # variable floor
-
-    def _joined(self, lines):
-        return "\n".join(lines)
-
-    def _parse_points(self, scad: str) -> list[list[float]]:
-        m = re.search(r"points\s*=\s*\[(.+?)\](?=,\s*faces)", scad, re.DOTALL)
-        self.assertIsNotNone(m)
-        triples = re.findall(r"\[([^]]+)\]", m.group(1))
-        return [[float(v.strip()) for v in t.split(",")] for t in triples]
-
-    def _parse_faces(self, scad: str) -> list[list[int]]:
-        m = re.search(r"faces\s*=\s*\[(.+?)\](?=,\s*convexity)", scad, re.DOTALL)
-        self.assertIsNotNone(m)
-        return [[int(i) for i in fs.split(",") if i.strip()]
-                for fs in re.findall(r"\[([^\]]+)\]", m.group(1))]
-
-    def test_variable_bottom_activates_polyhedron(self):
-        """Variable bottom_zs should produce a polyhedron even with uniform
-        top_zs."""
-        lines = shell_body_lines(
-            self.outline, _plain_enclosure(25.0), self.pts,
-            top_zs=self.top_zs, bottom_zs=self.bottom_zs)
-        scad = self._joined(lines)
-        self.assertIn("polyhedron(", scad)
-        self.assertNotIn("linear_extrude", scad)
-
-    def test_bottom_ring_follows_bottom_zs(self):
-        """First ring z-values must match bottom_zs."""
-        N = len(self.pts)
-        lines = shell_body_lines(
-            self.outline, _plain_enclosure(25.0), self.pts,
-            top_zs=self.top_zs, bottom_zs=self.bottom_zs)
-        scad = self._joined(lines)
-        pts = self._parse_points(scad)
-        for i, bz in enumerate(self.bottom_zs):
-            self.assertAlmostEqual(pts[i][2], bz, places=3,
-                                   msg=f"bottom ring pt {i} z should be {bz}")
-
-    def test_all_face_indices_valid(self):
-        """Every face index must refer to a valid point."""
-        lines = shell_body_lines(
-            self.outline, _plain_enclosure(25.0), self.pts,
-            top_zs=self.top_zs, bottom_zs=self.bottom_zs)
-        scad = self._joined(lines)
-        pts = self._parse_points(scad)
-        faces = self._parse_faces(scad)
-        for face in faces:
-            for idx in face:
-                self.assertGreaterEqual(idx, 0)
-                self.assertLess(idx, len(pts))
-
-    def test_variable_vs_flat_bottom_same_point_count(self):
-        """Variable and flat bottom use the same ring structure (R*N points)."""
-        flat_lines = shell_body_lines(
-            self.outline, _plain_enclosure(25.0), self.pts,
-            top_zs=[20.0, 25.0, 30.0, 22.0])
-        flat_pts = self._parse_points(self._joined(flat_lines))
-
-        var_lines = shell_body_lines(
-            self.outline, _plain_enclosure(25.0), self.pts,
-            top_zs=[20.0, 25.0, 30.0, 22.0], bottom_zs=self.bottom_zs)
-        var_pts = self._parse_points(self._joined(var_lines))
-
-        self.assertEqual(len(var_pts), len(flat_pts))
-
-    def test_uniform_bottom_nonzero_uses_polyhedron(self):
-        """Uniform but non-zero bottom_zs should still trigger polyhedron."""
-        bottom_zs = [3.0] * 4
-        lines = shell_body_lines(
-            self.outline, _plain_enclosure(25.0), self.pts,
-            top_zs=self.top_zs, bottom_zs=bottom_zs)
-        scad = self._joined(lines)
-        # Uniform non-zero bottom → polyhedron (bot_z_max >= threshold)
-        self.assertIn("polyhedron(", scad)
-
-    def test_both_variable_top_and_bottom(self):
-        """Variable top and bottom should produce valid polyhedron."""
-        top_zs = [20.0, 25.0, 30.0, 22.0]
-        bottom_zs = [0.0, 3.0, 5.0, 1.0]
-        lines = shell_body_lines(
-            self.outline, _plain_enclosure(20.0), self.pts,
-            top_zs=top_zs, bottom_zs=bottom_zs)
-        scad = self._joined(lines)
-        self.assertIn("polyhedron(", scad)
-        pts = self._parse_points(scad)
-        faces = self._parse_faces(scad)
-        for face in faces:
-            for idx in face:
-                self.assertGreaterEqual(idx, 0)
-                self.assertLess(idx, len(pts))
-
-    def test_variable_bottom_with_fillet(self):
-        """Variable bottom + fillet profiles should produce valid geometry."""
-        bottom_zs = [0.0, 2.0, 4.0, 1.0]
-        enc = _fillet_enclosure(25.0, 2.0)
-        lines = shell_body_lines(
-            self.outline, enc, self.pts,
-            top_zs=self.top_zs, bottom_zs=bottom_zs)
-        scad = self._joined(lines)
-        self.assertIn("polyhedron(", scad)
-        pts = self._parse_points(scad)
-        faces = self._parse_faces(scad)
-        for face in faces:
-            for idx in face:
-                self.assertGreaterEqual(idx, 0)
-                self.assertLess(idx, len(pts))
-
-    def test_build_rings_with_bottom_zs(self):
-        """_build_rings should use bottom_zs for the first ring."""
-        bottom_zs = [1.0, 3.0, 5.0, 2.0]
-        top_zs = [25.0] * 4
-        rings = _build_rings(self.pts, top_zs, _plain_enclosure(), bottom_zs=bottom_zs)
-        for i, bz in enumerate(bottom_zs):
-            self.assertAlmostEqual(rings[0][i][2], bz, places=4)
-        for i, tz in enumerate(top_zs):
-            self.assertAlmostEqual(rings[-1][i][2], tz, places=4)
-
-    def test_flat_bottom_zs_no_change(self):
-        """All-zero bottom_zs should behave the same as None."""
-        enc = _plain_enclosure(25.0)
-        top_zs = [20.0, 25.0, 30.0, 22.0]
-        lines_none = shell_body_lines(
-            self.outline, enc, self.pts, top_zs=top_zs)
-        lines_zero = shell_body_lines(
-            self.outline, enc, self.pts, top_zs=top_zs,
-            bottom_zs=[0.0] * 4)
-        # Both should produce polyhedron (variable top), same content
-        self.assertEqual(lines_none, lines_zero)
-
-
-class TestPCBContour(unittest.TestCase):
-    """Tests for pcb_contour_from_bottom_grid."""
-
-    def test_all_flat_returns_none(self):
-        """When all grid cells are below threshold, returns None."""
-        from src.pipeline.design.height_field import (
-            pcb_contour_from_bottom_grid, sample_bottom_height_grid,
-        )
-
-        outline = Outline(points=[
-            OutlineVertex(0, 0, z_bottom=0.5),
-            OutlineVertex(40, 0, z_bottom=0.5),
-            OutlineVertex(40, 40, z_bottom=0.5),
-            OutlineVertex(0, 40, z_bottom=0.5),
-        ])
-        enc = Enclosure(height_mm=25)
-        grid = sample_bottom_height_grid(outline, enc, resolution_mm=2.0)
-        self.assertIsNotNone(grid)
-        result = pcb_contour_from_bottom_grid(grid, outline, threshold_mm=2.0)
-        # z_bottom=0.5 everywhere — well below threshold, so no contour needed
-        self.assertIsNone(result)
-
-    def test_partial_raised_returns_polygon(self):
-        """When some vertices exceed the threshold, returns a non-empty contour."""
-        from src.pipeline.design.height_field import (
-            pcb_contour_from_bottom_grid, sample_bottom_height_grid,
-        )
-
-        outline = Outline(points=[
-            OutlineVertex(0, 0),
-            OutlineVertex(60, 0),
-            OutlineVertex(60, 60),
-            OutlineVertex(0, 60, z_bottom=10),  # raised corner
-        ])
-        enc = Enclosure(height_mm=25)
-        grid = sample_bottom_height_grid(outline, enc, resolution_mm=2.0)
-        self.assertIsNotNone(grid)
-        result = pcb_contour_from_bottom_grid(grid, outline, threshold_mm=2.0)
-        # Should return a polygon (list of [x, y] pairs)
-        self.assertIsNotNone(result)
-        self.assertIsInstance(result, list)
-        self.assertGreater(len(result), 2)
-        # Each element is [x, y]
-        for pt in result:
-            self.assertEqual(len(pt), 2)
-
-    def test_all_raised_returns_empty(self):
-        """When the entire floor exceeds the threshold, returns []."""
-        from src.pipeline.design.height_field import (
-            pcb_contour_from_bottom_grid, sample_bottom_height_grid,
-        )
-
-        outline = Outline(points=[
-            OutlineVertex(0, 0, z_bottom=10),
-            OutlineVertex(40, 0, z_bottom=10),
-            OutlineVertex(40, 40, z_bottom=10),
-            OutlineVertex(0, 40, z_bottom=10),
-        ])
-        enc = Enclosure(height_mm=25)
-        grid = sample_bottom_height_grid(outline, enc, resolution_mm=2.0)
-        self.assertIsNotNone(grid)
-        result = pcb_contour_from_bottom_grid(grid, outline, threshold_mm=2.0)
-        # All raised — no flat region
-        self.assertEqual(result, [])
-
-    def test_contour_area_smaller_than_outline(self):
-        """The contour polygon area should be smaller than the full outline."""
-        from shapely.geometry import Polygon as ShapelyPolygon
-        from src.pipeline.design.height_field import (
-            pcb_contour_from_bottom_grid, sample_bottom_height_grid,
-        )
-
-        outline = Outline(points=[
-            OutlineVertex(0, 0),
-            OutlineVertex(60, 0),
-            OutlineVertex(60, 60),
-            OutlineVertex(0, 60, z_bottom=10),
-        ])
-        enc = Enclosure(height_mm=25)
-        grid = sample_bottom_height_grid(outline, enc, resolution_mm=1.0)
-        contour = pcb_contour_from_bottom_grid(grid, outline, threshold_mm=2.0)
-        self.assertIsNotNone(contour)
-        self.assertGreater(len(contour), 2)
-
-        contour_poly = ShapelyPolygon(contour)
-        outline_poly = ShapelyPolygon(outline.vertices)
-        self.assertLess(contour_poly.area, outline_poly.area)
 
 
 if __name__ == "__main__":

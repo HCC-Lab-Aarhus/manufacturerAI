@@ -284,9 +284,6 @@ All transforms apply in a fixed order regardless of JSON key order:
 
 For **primitives**, the pivot is always `center`. For **operations**, the pivot is `origin` (if specified) or the centroid of the combined children.
 
-### Per-Primitive Height
-Each primitive can carry optional `z_top` (ceiling height) and `z_bottom` (floor height). Where primitives overlap, the higher `z_top` wins. Primitives without these inherit from `enclosure.height_mm`.
-
 ---
 
 ## Enclosure
@@ -294,39 +291,8 @@ Each primitive can carry optional `z_top` (ceiling height) and `z_bottom` (floor
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `height_mm` | number | yes | Default ceiling height. Must fit your tallest component — validation will tell you if it's too short. |
-| `top_surface` | object | no | Dome or ridge above the ceiling. |
-| `bottom_surface` | object | no | Dome or ridge raising the floor (raised areas can't hold traces/components). |
 | `edge_top` | object | no | Edge profile: `"none"`, `"chamfer"`, or `"fillet"`. |
 | `edge_bottom` | object | no | Edge profile: `"none"`, `"chamfer"`, or `"fillet"`. |
-
-### Dome top_surface
-```json
-"enclosure": {{
-    "height_mm": 16,
-    "top_surface": {{
-        "type": "dome",
-        "peak_x_mm": 25, "peak_y_mm": 40,
-        "peak_height_mm": 22, "base_height_mm": 16
-    }}
-}}
-```
-**Use for:** ergonomic palm swells, rounded character bodies, mushroom tops.
-
-### Ridge top_surface
-```json
-"enclosure": {{
-    "height_mm": 14,
-    "top_surface": {{
-        "type": "ridge",
-        "x1": 5, "y1": 30, "x2": 45, "y2": 30,
-        "crest_height_mm": 20, "base_height_mm": 14, "falloff_mm": 15
-    }}
-}}
-```
-**Use for:** spines, keels, structural accents, dragon-back ridges.
-
-### Bottom surfaces
-Same dome/ridge types. Use for palm swells on the bottom or rocking-base shapes.
 
 ### Edge Profiles
 ```json

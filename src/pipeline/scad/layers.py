@@ -2,9 +2,7 @@
 
 Emits a single ``polyhedron()`` primitive built from vertex rings.  Each ring
 corresponds to a profile step (bottom edge, top edge) or to the top/bottom
-of the straight wall section.  Because every vertex in a ring can sit at a
-different Z, the ceiling and floor can follow per-vertex heights defined in
-the design outline.
+of the straight wall section.
 
 Outline holes are built directly into the polyhedron: the caps are
 triangulated as a polygon-with-holes (via earcut bridging), and each hole
@@ -28,10 +26,6 @@ import logging
 from shapely.geometry import Polygon as ShapelyPolygon
 
 from src.pipeline.design.models import Outline, Enclosure
-from src.pipeline.design.height_field import (
-    blended_height as _blended_height,
-    blended_bottom_height as _blended_bottom_height,
-)
 from src.pipeline.scad.outline import tessellate_outline
 
 log = logging.getLogger(__name__)
@@ -282,44 +276,9 @@ def _earclip_with_holes(
 # ── Polyhedron ring builder ───────────────────────────────────────────────────
 
 
-def _smooth_top_zs(
-    top_zs: list[float],
-    sigma: float = 4.0,
-    passes: int = 3,
-) -> list[float]:
-    """Smooth per-vertex ceiling heights along the perimeter ring.
-
-    Applies a Gaussian blur (σ in vertex-index units) along the circular
-    array of ceiling heights.  After every pass the result is clamped from
-    below by the *original* values so component clearances are never reduced.
-    """
-    N    = len(top_zs)
-    orig = list(top_zs)
-    arr  = list(top_zs)
-    half = int(math.ceil(3.0 * sigma))
-
-    for _ in range(passes):
-        new_arr: list[float] = []
-        for i in range(N):
-            wsum = 0.0
-            vsum = 0.0
-            for di in range(-half, half + 1):
-                j = (i + di) % N
-                w = math.exp(-0.5 * (di / sigma) ** 2)
-                vsum += arr[j] * w
-                wsum += w
-            new_arr.append(vsum / wsum)
-        # Clamp from below to preserve minimum component clearances
-        arr = [max(orig[i], new_arr[i]) for i in range(N)]
-
-    return arr
-
-
 def _build_rings(
     flat_pts: list[list[float]],
-    top_zs: list[float],
     enclosure: Enclosure,
-    bottom_zs: list[float] | None = None,
 ) -> list[list[list[float]]]:
     """Build an ordered list of vertex rings from bottom to top.
 
@@ -327,23 +286,17 @@ def _build_rings(
     Rings are stacked bottom → top:
 
     * Bottom edge zone: ``_CURVE_STEPS + 1`` rings (last ring =
-      z=bottom_zs[i]+bot_size, full-width polygon = start of the straight wall).
-    * OR single bottom ring at z=bottom_zs[i] (no bottom profile).
-    * Top edge zone: ``_CURVE_STEPS + 1`` rings (first ring = per-vertex
-      ``top_zs[i] − top_size``, full-width = end of the straight wall).
-    * OR single per-vertex top ring at z=top_zs[i] (no top profile).
+      z=bot_size, full-width polygon = start of the straight wall).
+    * OR single bottom ring at z=0 (no bottom profile).
+    * Top edge zone: ``_CURVE_STEPS + 1`` rings (first ring =
+      z=height − top_size, full-width = end of the straight wall).
+    * OR single top ring at z=height (no top profile).
 
     The straight wall section is implicitly encoded as the quad between the
     last bottom ring and the first top ring.
-
-    Parameters
-    ----------
-    bottom_zs : Per-vertex floor heights.  ``None`` or all-zeros gives a flat
-                bottom at z=0.
     """
     N = len(flat_pts)
-    if bottom_zs is None:
-        bottom_zs = [0.0] * N
+    height = enclosure.height_mm
 
     edge_top = enclosure.edge_top
     edge_bot = enclosure.edge_bottom
@@ -372,17 +325,14 @@ def _build_rings(
                 z_frac     = frac
             inset = bot_size * inset_frac
             ipts = _safe_inset_polygon_pts(flat_pts, inset, _area=area)
-            ring = []
-            for i in range(N):
-                # Clamp bot_size so the bottom profile doesn't exceed available wall
-                avail = max(top_zs[i] - bottom_zs[i], _MIN_WALL_GAP)
-                eff_bs = min(bot_size, avail * 0.45)
-                eff_bs = max(eff_bs, 0.01)
-                z = bottom_zs[i] + eff_bs * z_frac
-                ring.append([ipts[i][0], ipts[i][1], z])
+            avail = max(height, _MIN_WALL_GAP)
+            eff_bs = min(bot_size, avail * 0.45)
+            eff_bs = max(eff_bs, 0.01)
+            z = eff_bs * z_frac
+            ring = [[ipts[i][0], ipts[i][1], z] for i in range(N)]
             rings.append(ring)
     else:
-        rings.append([[flat_pts[i][0], flat_pts[i][1], bottom_zs[i]] for i in range(N)])
+        rings.append([[flat_pts[i][0], flat_pts[i][1], 0.0] for i in range(N)])
 
     # ── Top edge rings (also encodes the straight wall top in ring[0]) ─────────
     if has_top:
@@ -396,30 +346,24 @@ def _build_rings(
                 inset    = top_size * frac
                 z_offset = top_size * frac
             ipts = _safe_inset_polygon_pts(flat_pts, inset, _area=area)
-            ring = []
-            for i in range(N):
-                last_bot_z = (bottom_zs[i] + bot_size) if has_bot else bottom_zs[i]
-                avail = max(top_zs[i] - last_bot_z, _MIN_WALL_GAP)
-                eff_ts = min(top_size, avail - _MIN_WALL_GAP)
-                eff_ts = max(eff_ts, 0.01)
-                z = (top_zs[i] - eff_ts) + z_offset * (eff_ts / top_size)
-                ring.append([ipts[i][0], ipts[i][1], z])
+            last_bot_z = bot_size if has_bot else 0.0
+            avail = max(height - last_bot_z, _MIN_WALL_GAP)
+            eff_ts = min(top_size, avail - _MIN_WALL_GAP)
+            eff_ts = max(eff_ts, 0.01)
+            z = (height - eff_ts) + z_offset * (eff_ts / top_size)
+            ring = [[ipts[i][0], ipts[i][1], z] for i in range(N)]
             rings.append(ring)
     else:
-        rings.append([[flat_pts[i][0], flat_pts[i][1], top_zs[i]] for i in range(N)])
+        rings.append([[flat_pts[i][0], flat_pts[i][1], height] for i in range(N)])
 
     return rings
 
 
 def _polyhedron_shell(
     flat_pts: list[list[float]],
-    top_zs: list[float],
     enclosure: Enclosure,
     outline: Outline | None = None,
-    bottom_zs: list[float] | None = None,
     hole_pts_list: list[list[list[float]]] | None = None,
-    hole_top_zs_list: list[list[float]] | None = None,
-    hole_bot_zs_list: list[list[float]] | None = None,
 ) -> list[str]:
     """Emit an OpenSCAD ``polyhedron()`` for the shell body.
 
@@ -431,35 +375,27 @@ def _polyhedron_shell(
     Face winding follows OpenSCAD's left-hand / CW-from-outside convention.
     """
     N = len(flat_pts)
-    if bottom_zs is None:
-        bottom_zs = [0.0] * N
+    height = enclosure.height_mm
 
     # Normalise to CCW so all downstream winding logic can assume positive area.
     if _polygon_signed_area(flat_pts) < 0:
         flat_pts = list(reversed(flat_pts))
-        top_zs   = list(reversed(top_zs))
-        bottom_zs = list(reversed(bottom_zs))
     holes = hole_pts_list or []
     hole_sizes = [len(h) for h in holes]
     N_total = N + sum(hole_sizes)
 
     # ── Build outer rings ──────────────────────────────────────────────────────
-    outer_rings = _build_rings(flat_pts, top_zs, enclosure, bottom_zs=bottom_zs)
+    outer_rings = _build_rings(flat_pts, enclosure)
     R = len(outer_rings)
 
     # ── Build hole rings ───────────────────────────────────────────────────────
-    # Hole vertices keep constant XY (no edge profile) with Z linearly
-    # distributed from floor to ceiling at each vertex position.
     hole_ring_data: list[list[list[list[float]]]] = []
     for hi, hpts in enumerate(holes):
         H = len(hpts)
-        h_top = hole_top_zs_list[hi] if hole_top_zs_list else [max(top_zs)] * H
-        h_bot = hole_bot_zs_list[hi] if hole_bot_zs_list else [0.0] * H
         h_rings: list[list[list[float]]] = []
         for ri in range(R):
             frac = ri / max(R - 1, 1)
-            ring = [[hpts[vi][0], hpts[vi][1],
-                      h_bot[vi] + frac * (h_top[vi] - h_bot[vi])]
+            ring = [[hpts[vi][0], hpts[vi][1], frac * height]
                      for vi in range(H)]
             h_rings.append(ring)
         hole_ring_data.append(h_rings)
@@ -520,8 +456,6 @@ def _polyhedron_shell(
         base_in_ring += H
 
     # ── Format as OpenSCAD source ──────────────────────────────────────────────
-    min_z = min(top_zs)
-    max_z = max(top_zs)
     edge_top = enclosure.edge_top
     edge_bot = enclosure.edge_bottom
     top_type = (edge_top.type    if edge_top else "none") or "none"
@@ -539,14 +473,13 @@ def _polyhedron_shell(
 
     log.info(
         "Shell body (polyhedron): %d rings, %d outer + %d hole verts/ring, "
-        "%d pts, %d faces, %d holes, z=%.1f..%.1f mm",
-        R, N, sum(hole_sizes), len(all_pts), len(faces), n_holes,
-        min(bottom_zs), max_z,
+        "%d pts, %d faces, %d holes, z=0.0..%.1f mm",
+        R, N, sum(hole_sizes), len(all_pts), len(faces), n_holes, height,
     )
 
     return [
         f"// Shell body — polyhedron",
-        f"// ceiling z: {min_z:.1f}..{max_z:.1f} mm  floor z: {min(bottom_zs):.1f}..{max(bottom_zs):.1f} mm"
+        f"// height: {height:.1f} mm"
         f"  bottom={bot_type}({bot_size:.1f}mm)  top={top_type}({top_size:.1f}mm)",
         f"// {N} outer + {sum(hole_sizes)} hole verts, {R} rings, "
         f"{len(all_pts)} pts, {len(faces)} faces, {n_holes} holes",
@@ -565,40 +498,21 @@ def shell_body_lines(
     outline:   Outline,
     enclosure: Enclosure,
     flat_pts:  list[list[float]],
-    top_zs:    list[float] | None = None,
-    bottom_zs: list[float] | None = None,
 ) -> list[str]:
     """Return OpenSCAD lines for the shell body as a single ``polyhedron()``.
 
     If the outline contains holes, they are tessellated and built directly
     into the polyhedron as inner wall surfaces with triangulated caps.
     """
-    N = len(flat_pts)
-
-    eff_top = top_zs if (top_zs is not None and len(top_zs) == N) else [enclosure.height_mm] * N
-    eff_bot = bottom_zs if (bottom_zs is not None and len(bottom_zs) == N) else [0.0] * N
-
     hole_pts_list: list[list[list[float]]] | None = None
-    hole_top_zs_list: list[list[float]] | None = None
-    hole_bot_zs_list: list[list[float]] | None = None
 
     if outline and outline.holes:
         hole_pts_list = []
-        hole_top_zs_list = []
-        hole_bot_zs_list = []
         for h in outline.holes:
             hpts = tessellate_outline(Outline(points=h))
             hole_pts_list.append(hpts)
-            hole_top_zs_list.append([
-                _blended_height(x, y, outline, enclosure) for x, y in hpts
-            ])
-            hole_bot_zs_list.append([
-                _blended_bottom_height(x, y, outline, enclosure) for x, y in hpts
-            ])
 
     return _polyhedron_shell(
-        flat_pts, eff_top, enclosure, outline=outline, bottom_zs=eff_bot,
+        flat_pts, enclosure, outline=outline,
         hole_pts_list=hole_pts_list,
-        hole_top_zs_list=hole_top_zs_list,
-        hole_bot_zs_list=hole_bot_zs_list,
     )

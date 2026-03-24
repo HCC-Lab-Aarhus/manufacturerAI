@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from .models import (
     ComponentInstance, Net, OutlineVertex, Outline, UIPlacement, DesignSpec,
-    Enclosure, TopSurface, BottomSurface, EdgeProfile,
+    Enclosure, EdgeProfile,
     PhysicalDesign, CircuitDesign,
 )
 from .shape2d import tessellate_shape
@@ -32,8 +32,6 @@ def _parse_outline(data: list, holes_data: list | None = None) -> Outline:
 
     Format:
         [{"x": 0, "y": 0}, {"x": 30, "y": 0}, {"x": 30, "y": 80, "ease_in": 8}]
-        or with per-vertex ceiling heights:
-        [{"x": 0, "y": 0, "z_top": 30}, {"x": 30, "y": 0, "z_top": 20}, ...]
     """
     points = _parse_vertex_list(data)
     holes: list[list[OutlineVertex]] = []
@@ -53,53 +51,13 @@ def _parse_vertex_list(data: list) -> list[OutlineVertex]:
             raw_out = raw_in
         elif raw_out is not None and raw_in is None:
             raw_in = raw_out
-        z_top_raw = v.get("z_top")
-        z_bottom_raw = v.get("z_bottom")
         points.append(OutlineVertex(
             x=float(v["x"]),
             y=float(v["y"]),
             ease_in=float(raw_in) if raw_in else 0,
             ease_out=float(raw_out) if raw_out else 0,
-            z_top=float(z_top_raw) if z_top_raw is not None else None,
-            z_bottom=float(z_bottom_raw) if z_bottom_raw is not None else None,
         ))
     return points
-
-
-def _parse_top_surface(data: dict) -> TopSurface:
-    """Parse a top_surface descriptor dict into a TopSurface dataclass."""
-    t = data.get("type", "flat")
-    return TopSurface(
-        type=t,
-        peak_x_mm=data.get("peak_x_mm"),
-        peak_y_mm=data.get("peak_y_mm"),
-        peak_height_mm=data.get("peak_height_mm"),
-        base_height_mm=data.get("base_height_mm"),
-        x1=data.get("x1"),
-        y1=data.get("y1"),
-        x2=data.get("x2"),
-        y2=data.get("y2"),
-        crest_height_mm=data.get("crest_height_mm"),
-        falloff_mm=data.get("falloff_mm"),
-    )
-
-
-def _parse_bottom_surface(data: dict) -> BottomSurface:
-    """Parse a bottom_surface descriptor dict into a BottomSurface dataclass."""
-    t = data.get("type", "flat")
-    return BottomSurface(
-        type=t,
-        peak_x_mm=data.get("peak_x_mm"),
-        peak_y_mm=data.get("peak_y_mm"),
-        peak_height_mm=data.get("peak_height_mm"),
-        base_height_mm=data.get("base_height_mm"),
-        x1=data.get("x1"),
-        y1=data.get("y1"),
-        x2=data.get("x2"),
-        y2=data.get("y2"),
-        crest_height_mm=data.get("crest_height_mm"),
-        falloff_mm=data.get("falloff_mm"),
-    )
 
 
 def _parse_edge_profile(data: dict | None) -> EdgeProfile:
@@ -115,18 +73,10 @@ def _parse_edge_profile(data: dict | None) -> EdgeProfile:
 def _parse_enclosure(data: dict) -> Enclosure:
     """Parse an enclosure block. Returns defaults if data is empty/missing."""
     height_mm = float(data.get("height_mm", 25.0))
-    top_surface: TopSurface | None = None
-    if "top_surface" in data and data["top_surface"]:
-        top_surface = _parse_top_surface(data["top_surface"])
-    bottom_surface: BottomSurface | None = None
-    if "bottom_surface" in data and data["bottom_surface"]:
-        bottom_surface = _parse_bottom_surface(data["bottom_surface"])
     edge_top    = _parse_edge_profile(data.get("edge_top"))
     edge_bottom = _parse_edge_profile(data.get("edge_bottom"))
     return Enclosure(
         height_mm=height_mm,
-        top_surface=top_surface,
-        bottom_surface=bottom_surface,
         edge_top=edge_top,
         edge_bottom=edge_bottom,
     )

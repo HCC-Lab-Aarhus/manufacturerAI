@@ -197,7 +197,7 @@ async def patch_enclosure(sid: str, request: Request):
         raise HTTPException(404, "No design yet")
 
     enc = data.setdefault("enclosure", {})
-    for key in ("height_mm", "top_surface", "edge_top", "edge_bottom"):
+    for key in ("height_mm", "edge_top", "edge_bottom"):
         if key in body:
             enc[key] = body[key]
 

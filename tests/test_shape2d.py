@@ -7,7 +7,6 @@ Coverage
 * Boolean ops: union, difference, intersection, nested.
 * Node-level transforms: rotate on ops, scale (uniform & per-axis), mirror (x/y/xy).
 * Combined transforms: scale + mirror + rotate on a single node.
-* Per-primitive z_top / z_bottom attribution.
 * Negative tests: bad types, bad scale/mirror/rotate values, depth limit.
 """
 
@@ -589,66 +588,6 @@ class TestTessellateTransforms(unittest.TestCase):
         self.assertEqual(validate_shape(tree), [])
         out = tessellate_shape(tree)
         self.assertGreater(len(out.points), 10)
-
-
-# ── Z-Height Attribution ─────────────────────────────────────────────────────
-
-class TestZAttribution(unittest.TestCase):
-
-    def test_z_top_inherited(self):
-        node = {"type": "rectangle", "center": [25, 50], "size": [50, 100], "z_top": 30}
-        out = tessellate_shape(node)
-        for p in out.points:
-            self.assertEqual(p.z_top, 30)
-
-    def test_z_bottom_inherited(self):
-        node = {"type": "rectangle", "center": [25, 50], "size": [50, 100], "z_bottom": 5}
-        out = tessellate_shape(node)
-        for p in out.points:
-            self.assertEqual(p.z_bottom, 5)
-
-    def test_default_z_propagated(self):
-        node = {"type": "rectangle", "center": [25, 50], "size": [50, 100]}
-        out = tessellate_shape(node, default_z_top=20, default_z_bottom=2)
-        for p in out.points:
-            self.assertEqual(p.z_top, 20)
-            self.assertEqual(p.z_bottom, 2)
-
-    def test_z_follows_op_rotation(self):
-        """z_top must follow vertices through op-level rotation."""
-        node = {"op": "union", "children": [
-            {"type": "rectangle", "center": [25, 25], "size": [50, 50], "z_top": 20},
-            {"type": "rectangle", "center": [25, 75], "size": [50, 50], "z_top": 35},
-        ], "rotate": 90}
-        out = tessellate_shape(node)
-        # rotate: 90 = 90° CCW — top (y=25) swings left, bottom (y=75) swings right
-        for p in out.points:
-            if p.x > 50:
-                self.assertEqual(p.z_top, 35,
-                    f"Right-side vertex ({p.x:.0f},{p.y:.0f}) should be z_top=35")
-            elif p.x < 0:
-                self.assertEqual(p.z_top, 20,
-                    f"Left-side vertex ({p.x:.0f},{p.y:.0f}) should be z_top=20")
-
-    def test_z_follows_op_scale(self):
-        """z_top regions must scale with the geometry."""
-        node = {"op": "union", "children": [
-            {"type": "rectangle", "center": [25, 25], "size": [50, 50], "z_top": 15},
-            {"type": "rectangle", "center": [25, 75], "size": [50, 50], "z_top": 30},
-        ], "scale": 0.5}
-        out = tessellate_shape(node)
-        for p in out.points:
-            if p.y < 50:
-                self.assertEqual(p.z_top, 15,
-                    f"Top vertex ({p.x:.0f},{p.y:.0f}) should be z_top=15")
-
-    def test_z_with_primitive_scale(self):
-        """Scaled primitive z_top must cover all output vertices."""
-        node = {"type": "rectangle", "center": [25, 50], "size": [10, 10],
-                "scale": 3.0, "z_top": 30}
-        out = tessellate_shape(node)
-        for p in out.points:
-            self.assertEqual(p.z_top, 30)
 
 
 # ── Complex Tree ──────────────────────────────────────────────────────────────

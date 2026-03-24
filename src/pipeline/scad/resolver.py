@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Callable
 
 from src.catalog.models import Component
 from src.pipeline.config import CAVITY_START_MM, FLOOR_MM, component_z_range
@@ -35,7 +34,6 @@ class ResolverContext:
     base_h: float
     ceil_start: float
     cavity_depth: float
-    blended_height_fn: Callable[..., float]
     pause_z: float | None = None  # per-component insertion pause Z (caps pin grooves)
 
 
@@ -273,8 +271,7 @@ class ComponentResolver:
     # ── Geometry helpers ───────────────────────────────────────────
 
     def _dome_z(self) -> float:
-        fn = self.ctx.blended_height_fn
-        return fn(self.cx, self.cy, self.ctx.outline, self.ctx.enclosure)
+        return self.ctx.enclosure.height_mm
 
     def _surface_depth(self) -> float:
         return self._dome_z() - self.ctx.ceil_start + SURFACE_OVERSHOOT

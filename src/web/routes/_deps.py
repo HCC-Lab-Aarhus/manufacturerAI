@@ -169,7 +169,7 @@ def _shape_cache_key(outline_data, enclosure_data) -> str:
 
 
 def _get_shape_fields(outline_data, enclosure_data) -> dict | None:
-    """Compute or retrieve cached height grids and PCB contour."""
+    """Compute or retrieve cached height grid."""
     if not outline_data:
         return None
 
@@ -179,11 +179,7 @@ def _get_shape_fields(outline_data, enclosure_data) -> dict | None:
         return cached
 
     from src.pipeline.design.parsing import _parse_outline, _parse_enclosure
-    from src.pipeline.design.height_field import (
-        sample_height_grid, sample_bottom_height_grid,
-        pcb_contour_from_bottom_grid,
-    )
-    from src.pipeline.config import FLOOR_MM
+    from src.pipeline.design.height_field import sample_height_grid
 
     try:
         outline = _parse_outline(outline_data)
@@ -194,24 +190,17 @@ def _get_shape_fields(outline_data, enclosure_data) -> dict | None:
     result: dict = {
         "height_grid": sample_height_grid(outline, enclosure, resolution_mm=1.0),
     }
-    bottom_grid = sample_bottom_height_grid(outline, enclosure, resolution_mm=1.0)
-    if bottom_grid is not None:
-        result["bottom_height_grid"] = bottom_grid
-        contour = pcb_contour_from_bottom_grid(bottom_grid, outline, threshold_mm=FLOOR_MM)
-        if contour is not None:
-            result["pcb_contour"] = contour
 
     _shape_cache[key] = result
     return result
 
 
 def _add_shape_fields(data: dict, outline_data, enclosure_data) -> None:
-    """Add cached height grids and pcb_contour to a response dict."""
+    """Add cached height grid to a response dict."""
     fields = _get_shape_fields(outline_data, enclosure_data)
     if fields:
-        for k in ("height_grid", "bottom_height_grid", "pcb_contour"):
-            if k in fields:
-                data[k] = fields[k]
+        if "height_grid" in fields:
+            data["height_grid"] = fields["height_grid"]
 
 
 def enrich_design(data: dict, cat, session: Session | None = None) -> None:
@@ -227,22 +216,10 @@ def enrich_design(data: dict, cat, session: Session | None = None) -> None:
     if fields is None:
         return
 
-    from src.pipeline.design.parsing import _parse_outline, _parse_enclosure
-    from src.pipeline.design.height_field import blended_height, surface_normal_at
-    try:
-        outline = _parse_outline(outline_data)
-        enclosure = _parse_enclosure(enclosure_data)
-    except Exception:
-        return
-
-    grid = fields["height_grid"]
+    height = enclosure_data.get("height_mm", 0)
     for up in data.get("ui_placements", []):
-        x, y = up.get("x_mm", 0), up.get("y_mm", 0)
-        try:
-            up["z_at_position"] = round(blended_height(x, y, outline, enclosure), 3)
-            up["surface_normal"] = [round(n, 4) for n in surface_normal_at(x, y, grid)]
-        except Exception:
-            pass
+        up["z_at_position"] = round(float(height), 3)
+        up["surface_normal"] = [0.0, 0.0, 1.0]
 
 
 # ── Response assembly ──

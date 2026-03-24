@@ -151,7 +151,6 @@ def _compute_component_layout(
             base_h=enclosure_h,
             ceil_start=ceil_start,
             cavity_depth=ceil_start - CAVITY_START_MM,
-            blended_height_fn=lambda _x, _y, _o, e: e.height_mm,  # type: ignore[arg-type]
         )
 
         block_x = plate_x + plate_w - pad - bw

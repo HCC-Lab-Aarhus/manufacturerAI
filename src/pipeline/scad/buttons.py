@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from src.catalog.models import Body, Component, SwitchActuator
 from src.pipeline.config import CAVITY_START_MM, CEILING_MM
 from src.pipeline.design.models import Outline, Enclosure
-from src.pipeline.design.height_field import blended_height, sample_height_grid, surface_normal_at
 from src.pipeline.placer.models import PlacedComponent
 
 log = logging.getLogger(__name__)
@@ -53,7 +52,7 @@ class ButtonConfig:
     actuator: SwitchActuator
     # Enclosure geometry
     ceil_start: float               # Z where ceiling starts (enclosure.height_mm - CEILING_MM)
-    surface_z: float                # blended_height at button centre
+    surface_z: float                # enclosure height at button centre
     surface_dzdx: float             # surface gradient in X (mm/mm)
     surface_dzdy: float             # surface gradient in Y (mm/mm)
 
@@ -122,9 +121,6 @@ def build_button_configs(
     actuator defined in its catalog cap."""
     configs: list[ButtonConfig] = []
 
-    # Pre-sample the height grid for surface normal computation
-    height_grid = sample_height_grid(outline, enclosure, resolution_mm=1.0)
-
     for comp in components:
         cat = catalog_index.get(comp.catalog_id)
         if cat is None:
@@ -143,16 +139,10 @@ def build_button_configs(
         # Stem must fit through the switch body opening
         stem_outline = _offset_polygon(_body_polygon(cat.body), -BUTTON_CLEARANCE_MM)
 
-        # Surface height & gradient at button position
-        surface_z = blended_height(comp.x_mm, comp.y_mm, outline, enclosure)
-        nx, ny, nz = surface_normal_at(comp.x_mm, comp.y_mm, height_grid)
-        # Convert normal to surface gradient: dz/dx = -nx/nz, dz/dy = -ny/nz
-        if abs(nz) > 1e-6:
-            dzdx = -nx / nz
-            dzdy = -ny / nz
-        else:
-            dzdx = 0.0
-            dzdy = 0.0
+        # Surface height & gradient at button position (flat ceiling)
+        surface_z = enclosure.height_mm
+        dzdx = 0.0
+        dzdy = 0.0
 
         configs.append(ButtonConfig(
             instance_id=comp.instance_id,

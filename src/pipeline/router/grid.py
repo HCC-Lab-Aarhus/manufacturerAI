@@ -210,52 +210,11 @@ class RoutingGrid:
             self._protected_flats = None
 
     def block_raised_floor(self, outline, enclosure) -> int:
-        """Permanently block cells where the floor is raised above the trace zone.
+        """Block cells where the floor is raised above the trace zone.
 
-        Any cell whose ``blended_bottom_height >= threshold`` is impassable
-        because the conductive-ink trace layer (at z = FLOOR_MM) would sit
-        inside the raised shell material.
-
-        Parameters
-        ----------
-        outline, enclosure
-            Design-spec objects passed through to ``blended_bottom_height``.
-
-        Returns
-        -------
-        int
-            Number of additionally blocked cells.
+        With a flat floor, no cells are ever blocked by raised floor geometry.
         """
-        from src.pipeline.design.height_field import blended_bottom_height
-        from src.pipeline.config import FLOOR_MM
-
-        # Fast check: skip entirely if no vertex has z_bottom and no bottom surface
-        has_raised = False
-        for pt in outline.points:
-            if pt.z_bottom is not None and pt.z_bottom > 0:
-                has_raised = True
-                break
-        if not has_raised:
-            bs = enclosure.bottom_surface
-            if bs is None or bs.type == "flat":
-                return 0
-
-        threshold = FLOOR_MM - 0.1   # small tolerance
-        count = 0
-        res = self.resolution
-
-        for gy in range(self.height):
-            wy = self.origin_y + (gy + 0.5) * res
-            for gx in range(self.width):
-                idx = gy * self.width + gx
-                if self._cells[idx] == PERMANENTLY_BLOCKED:
-                    continue   # already blocked (outside outline)
-                wx = self.origin_x + (gx + 0.5) * res
-                z = blended_bottom_height(wx, wy, outline, enclosure)
-                if z >= threshold:
-                    self._cells[idx] = PERMANENTLY_BLOCKED
-                    count += 1
-        return count
+        return 0
 
     def block_trace(
         self,

@@ -6,11 +6,7 @@ from .models import DesignSpec
 
 
 def design_to_dict(spec: DesignSpec) -> dict:
-    """Convert a DesignSpec to a JSON-serializable dict.
-
-    Uses OutlineVertex.to_dict() so any future fields on the vertex
-    (z_top, etc.) are automatically included without touching this function.
-    """
+    """Convert a DesignSpec to a JSON-serializable dict."""
     return {
         "components": [
             {
