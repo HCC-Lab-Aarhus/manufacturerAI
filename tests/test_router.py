@@ -269,6 +269,67 @@ class TestFlashlightRouting(unittest.TestCase):
 
         self.assertEqual(crossings, [], f"Found {len(crossings)} crossings: {crossings[:5]}")
 
+    def test_trace_channel_walls(self):
+        """Between any two traces of different nets there must be a wall of
+        empty cells at least as wide as the trace clearance, forming a
+        physical channel between them."""
+        from src.pipeline.router.models import RouterConfig
+        cfg = RouterConfig()
+        res = cfg.grid_resolution_mm
+        clearance_cells = max(
+            1,
+            int(math.ceil(
+                (cfg.trace_width_mm / 2 + cfg.trace_clearance_mm) / res
+            )),
+        )
+
+        outline_poly = Polygon(self.placement.outline.vertices)
+        xmin, ymin, _, _ = outline_poly.bounds
+
+        def w2g(wx: float, wy: float) -> tuple[int, int]:
+            gx = int(round((wx - xmin) / res - 0.5))
+            gy = int(round((wy - ymin) / res - 0.5))
+            return (gx, gy)
+
+        cell_owner: dict[tuple[int, int], str] = {}
+        for trace in self.result.traces:
+            net = trace.net_id
+            for i in range(len(trace.path) - 1):
+                x1, y1 = trace.path[i]
+                x2, y2 = trace.path[i + 1]
+                if abs(x2 - x1) > 0.001:
+                    step = res if x2 > x1 else -res
+                    x = x1
+                    while (step > 0 and x <= x2 + 0.001) or (step < 0 and x >= x2 - 0.001):
+                        cell_owner[w2g(x, y1)] = net
+                        x += step
+                else:
+                    step = res if y2 > y1 else -res
+                    y = y1
+                    while (step > 0 and y <= y2 + 0.001) or (step < 0 and y >= y2 - 0.001):
+                        cell_owner[w2g(x1, y)] = net
+                        y += step
+
+        violations: list[str] = []
+        for (gx, gy), net in cell_owner.items():
+            for dy in range(-clearance_cells, clearance_cells + 1):
+                for dx in range(-clearance_cells, clearance_cells + 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    neighbour = (gx + dx, gy + dy)
+                    other = cell_owner.get(neighbour)
+                    if other is not None and other != net:
+                        violations.append(
+                            f"{net} at {(gx, gy)} too close to {other} "
+                            f"at {neighbour} (need {clearance_cells}-cell wall)"
+                        )
+
+        self.assertEqual(
+            violations, [],
+            f"Found {len(violations)} channel wall violations: "
+            f"{violations[:5]}",
+        )
+
 
 class TestRoutingSerialization(unittest.TestCase):
     """Test JSON round-trip for routing results."""

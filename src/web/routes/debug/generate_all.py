@@ -6,6 +6,7 @@ from .calibration import generate_calibration
 from .components import generate_components
 from .layers import generate_layers
 from .spacing import generate_spacing
+from .channel import generate_channel
 from .solid_squares import generate_solid_squares
 from .width import generate_width
 
@@ -58,6 +59,13 @@ async def generate_all_tests(
         )
         files[f"{folder}/spacing.gcode"] = r["gcode"]
         files[f"{folder}/spacing.txt"] = r["bitmap"]
+
+        r = await generate_channel(
+            printer=printer, filament=fil_id, padding=5,
+            rect_width=40, rect_height=20, layers=4,
+        )
+        files[f"{folder}/channel.gcode"] = r["gcode"]
+        files[f"{folder}/channel.txt"] = r["bitmap"]
 
         r = await generate_width(
             printer=printer, filament=fil_id, padding=5,
