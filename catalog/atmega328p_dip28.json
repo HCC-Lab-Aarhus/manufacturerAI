@@ -5,7 +5,7 @@
     "ui_placement": false,
     "body": {
         "shape": "rect",
-        "width_mm": 8.7,
+        "width_mm": 12,
         "length_mm": 35.2,
         "height_mm": 3.3
     },
