@@ -5,7 +5,7 @@
     "ui_placement": false,
     "body": {
         "shape": "rect",
-        "width_mm": 26.0,
+        "width_mm": 23.0,
         "length_mm": 48.0,
         "height_mm": 12.0,
         "channels": {
@@ -29,7 +29,7 @@
             {
                 "label": "battery hatch",
                 "shape": "hatch",
-                "width_mm": 23.4,
+                "width_mm": 25.4,
                 "length_mm": 47.4,
                 "thickness_mm": 1.5
             }
@@ -75,21 +75,21 @@
                 "shape": "rect",
                 "label": "positive plate channel",
                 "position_mm": [5.5, 26.0],
-                "width_mm": 12.0,
+                "width_mm": 10.0,
                 "length_mm": 1.5,
                 "depth_mm": 12.0,
                 "z_anchor": "cavity_start",
-                "description": "Slot in +Y wall for V+ contact plate (full body height, open at pause for insertion)."
+                "description": "Slot in +Y wall for V+ contact plate, 1mm wall separates from GND."
             },
             {
                 "shape": "rect",
                 "label": "negative plate channel",
                 "position_mm": [-5.5, 26.0],
-                "width_mm": 12.0,
+                "width_mm": 10.0,
                 "length_mm": 1.5,
                 "depth_mm": 12.0,
                 "z_anchor": "cavity_start",
-                "description": "Slot in +Y wall for GND contact plate (full body height, open at pause for insertion)."
+                "description": "Slot in +Y wall for GND contact plate, 1mm wall separates from V+."
             },
             {
                 "shape": "rect",
@@ -105,7 +105,7 @@
                 "shape": "rect",
                 "label": "V+ dome window",
                 "position_mm": [5.5, 22.0],
-                "width_mm": 7.0,
+                "width_mm": 5.0,
                 "length_mm": 7.0,
                 "depth_mm": 10.5,
                 "z_anchor": "cavity_start",
@@ -115,7 +115,7 @@
                 "shape": "rect",
                 "label": "GND dome window",
                 "position_mm": [-5.5, 22.0],
-                "width_mm": 7.0,
+                "width_mm": 5.0,
                 "length_mm": 7.0,
                 "depth_mm": 10.5,
                 "z_anchor": "cavity_start",
@@ -155,7 +155,7 @@
                 "shape": "rect",
                 "label": "hatch floor opening",
                 "position_mm": [0, 0],
-                "width_mm": 18.4,
+                "width_mm": 23.0,
                 "length_mm": 47.4,
                 "depth_mm": 4.0,
                 "z_anchor": "ground",
@@ -164,8 +164,8 @@
             {
                 "shape": "rect",
                 "label": "hatch ledge left",
-                "position_mm": [-10.45, 0],
-                "width_mm": 2.5,
+                "position_mm": [-12.25, 0],
+                "width_mm": 1.5,
                 "length_mm": 47.4,
                 "depth_mm": 1.8,
                 "z_anchor": "ground",
@@ -174,8 +174,8 @@
             {
                 "shape": "rect",
                 "label": "hatch ledge right",
-                "position_mm": [10.45, 0],
-                "width_mm": 2.5,
+                "position_mm": [12.25, 0],
+                "width_mm": 1.5,
                 "length_mm": 47.4,
                 "depth_mm": 1.8,
                 "z_anchor": "ground",
@@ -187,9 +187,10 @@
                 "position_mm": [0, -24.3],
                 "width_mm": 4.4,
                 "length_mm": 1.2,
-                "depth_mm": 4.0,
+                "depth_mm": 1.5,
                 "z_anchor": "ground",
-                "description": "Narrow channel for tab cantilever in -Y wall."
+                "z_center_mm": 1.5,
+                "description": "Narrow channel for spring latch in -Y wall."
             },
             {
                 "shape": "rect",
@@ -198,8 +199,9 @@
                 "width_mm": 4.4,
                 "length_mm": 2.0,
                 "depth_mm": 1.5,
-                "z_anchor": "cavity_start",
-                "description": "Wide recess for barb snap-fit in -Y wall."
+                "z_anchor": "ground",
+                "z_center_mm": 1.5,
+                "description": "Wide recess for spring hook snap-fit in -Y wall."
             },
             {
                 "shape": "rect",
@@ -207,9 +209,10 @@
                 "position_mm": [0, 24.3],
                 "width_mm": 4.4,
                 "length_mm": 1.2,
-                "depth_mm": 4.0,
+                "depth_mm": 1.5,
                 "z_anchor": "ground",
-                "description": "Narrow channel for tab cantilever in +Y wall."
+                "z_center_mm": 1.5,
+                "description": "Narrow channel for ledge tab in +Y wall."
             },
             {
                 "shape": "rect",
@@ -218,8 +221,9 @@
                 "width_mm": 4.4,
                 "length_mm": 2.0,
                 "depth_mm": 1.5,
-                "z_anchor": "cavity_start",
-                "description": "Wide recess for barb snap-fit in +Y wall."
+                "z_anchor": "ground",
+                "z_center_mm": 1.5,
+                "description": "Wide recess for ledge tab in +Y wall."
             }
         ]
     }

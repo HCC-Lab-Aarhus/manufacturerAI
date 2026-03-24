@@ -520,8 +520,8 @@ class ComponentResolver:
                 rotate_3d = None
                 if feat.rotate:
                     rotate_3d = feat.rotate
-                    if feat.z_center_mm is not None:
-                        z_base = z_base + feat.z_center_mm
+                if feat.z_center_mm is not None:
+                    z_base = z_base + feat.z_center_mm
 
                 frags.append(ScadFragment(
                     type="cutout",

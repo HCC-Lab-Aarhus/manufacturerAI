@@ -88,12 +88,10 @@ def _generate_shape_scad(extra: ExtraPart) -> PlacedExtra:
 
 TAB_WIDTH: float = 4.0
 TAB_DEPTH: float = 0.8
-TAB_HEIGHT: float = 2.5
+TAB_HEIGHT: float = 1.5
 LOOP_WIDTH: float = 4.0
-LOOP_HEIGHT: float = 4.0
+LOOP_HEIGHT: float = 3.0
 LOOP_THICKNESS: float = 1.0
-HOOK_HEIGHT: float = 1.2
-HOOK_DEPTH: float = 0.5
 
 
 def _generate_hatch_scad(extra: ExtraPart, channels: BodyChannels | None = None, body_height: float = 0) -> PlacedExtra:
@@ -104,8 +102,8 @@ def _generate_hatch_scad(extra: ExtraPart, channels: BodyChannels | None = None,
 
     slit_w = LOOP_WIDTH + 1.0
     arm_gap = LOOP_THICKNESS * 2
-    spring_depth = LOOP_THICKNESS * 2 + arm_gap
     bend_r = arm_gap / 2 + LOOP_THICKNESS / 2
+    slit_depth = LOOP_THICKNESS + arm_gap
 
     preamble = [
         f"hatch_w = {w:.3f};",
@@ -114,16 +112,16 @@ def _generate_hatch_scad(extra: ExtraPart, channels: BodyChannels | None = None,
         f"loop_w = {LOOP_WIDTH:.3f};",
         f"loop_h = {LOOP_HEIGHT:.3f};",
         f"loop_t = {LOOP_THICKNESS:.3f};",
-        f"hook_h = {HOOK_HEIGHT:.3f};",
-        f"hook_d = {HOOK_DEPTH:.3f};",
+        f"tab_d = {TAB_DEPTH:.3f};",
+        f"tab_h = {TAB_HEIGHT:.3f};",
         f"slit_w = {slit_w:.3f};",
         f"arm_gap = {arm_gap:.3f};",
         f"bend_r = {bend_r:.3f};",
         "",
         "module spring_latch() {",
         "  cube([loop_w, loop_t, loop_h]);",
-        "  translate([0, -hook_d, 2])",
-        "    cube([loop_w, hook_d + loop_t, hook_h]);",
+        "  translate([0, -tab_d, hatch_t])",
+        "    cube([loop_w, tab_d + loop_t, tab_h]);",
         "  translate([loop_w/2, loop_t + arm_gap/2, loop_h])",
         "    rotate([90, 0, 90])",
         "      rotate_extrude(angle=180, $fn=32)",
@@ -140,29 +138,54 @@ def _generate_hatch_scad(extra: ExtraPart, channels: BodyChannels | None = None,
     lines = [
         "difference() {",
         f"  cube([hatch_w, hatch_l, hatch_t]);",
-        f"  translate([(hatch_w - slit_w) / 2, -hook_d - 1 + 2, -1])",
-        f"    cube([slit_w, {spring_depth:.3f} + hook_d, hatch_t + 2]);",
+        f"  translate([(hatch_w - slit_w) / 2, 0, -1])",
+        f"    cube([slit_w, {slit_depth:.3f}, hatch_t + 2]);",
         "}",
         "",
-        "translate([(hatch_w - loop_w) / 2, 2, 0])",
-        "  spring_latch();",
-        "",
-        f"translate([{tab_x:.3f}, hatch_l - 1, hatch_t])",
-        f"  cube([{tw:.3f}, {TAB_DEPTH:.3f}, {TAB_HEIGHT:.3f}]);",
     ]
 
     if channels:
         clearance = 0.3
         r = channels.diameter_mm / 2 - clearance
         cz_local = CAVITY_START_MM + channels.center_z_mm
+
+        lines.append("difference() {")
+        lines.append(f"  translate([(hatch_w - loop_w) / 2, 0, 0])")
+        lines.append(f"    spring_latch();")
+        for i in range(channels.count):
+            offset = (i - (channels.count - 1) / 2) * channels.spacing_mm
+            cx = w / 2 + offset
+            lines.append(f"  intersection() {{")
+            lines.append(f"    translate([{cx:.3f}, -1, {cz_local:.3f}])")
+            lines.append(f"      rotate([-90, 0, 0])")
+            lines.append(f"        cylinder(h = {l + 2:.3f}, r = {r:.3f}, $fn = 32);")
+            lines.append(f"    translate([{cx - r:.3f}, -1, 0])")
+            lines.append(f"      cube([{2 * r:.3f}, {l + 2:.3f}, {cz_local:.3f}]);")
+            lines.append(f"  }}")
+        lines.append("}")
+    else:
+        lines.append(f"translate([(hatch_w - loop_w) / 2, 0, 0])")
+        lines.append(f"  spring_latch();")
+
+    lines.append("")
+    lines.append(f"translate([{tab_x:.3f}, hatch_l, hatch_t])")
+    lines.append(f"  cube([{tw:.3f}, tab_d, tab_h]);")
+
+    if channels:
         mold_h = cz_local - t
         mold_w = (channels.count - 1) * channels.spacing_mm + 2 * r
         mold_x = (w - mold_w) / 2
+
+        spring_clearance_w = slit_w + 0.4
+        spring_clearance_y = slit_depth + bend_r + LOOP_THICKNESS
+        spring_cx = (w - spring_clearance_w) / 2
 
         lines.append("")
         lines.append("difference() {")
         lines.append(f"  translate([{mold_x:.3f}, 0, {t:.3f}])")
         lines.append(f"    cube([{mold_w:.3f}, {l:.3f}, {mold_h:.3f}]);")
+        lines.append(f"  translate([{spring_cx:.3f}, -1, 0])")
+        lines.append(f"    cube([{spring_clearance_w:.3f}, {spring_clearance_y + 1:.3f}, {mold_h + t + 1:.3f}]);")
         for i in range(channels.count):
             offset = (i - (channels.count - 1) / 2) * channels.spacing_mm
             cx = w / 2 + offset
