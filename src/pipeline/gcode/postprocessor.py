@@ -338,31 +338,11 @@ def _ink_pause_block(
 
 
 def _pause_block(label: str, z: float, instructions: list[str]) -> list[str]:
-    """Generate a firmware pause block (M601) with user instructions.
+    """Generate a component-insertion pause block.
 
-    ``M601`` on the MK3S / Core One:
-    - Retracts filament
-    - Parks the head
-    - Beeps and shows LCD prompt
-    - Waits for user to press the knob
-    - Resumes print
-
-    After the firmware resumes, we insert a **nozzle wipe** sequence
-    that moves to the front-left bed edge and wipes back and forth at
-    Z = 0.2 mm (barely touching the bed surface) to scrub off any
-    filament blob accumulated during the pause.  Then the nozzle
-    retracts, lifts, and returns to the paused Z height — the slicer's
-    own travel commands position X/Y back to the print.
+    Homes the head, beeps, and issues ``M0`` (unconditional stop) so the
+    user can insert components.  Pressing the knob resumes the print.
     """
-    # Wipe geometry (front-left corner of the bed)
-    wipe_y = 1.0        # 1 mm from front edge
-    wipe_x_start = 5.0  # start of wipe stroke
-    wipe_x_end = 45.0   # end of wipe stroke
-    wipe_z = 0.2        # just touching the bed surface
-    wipe_speed = 3000    # mm/min (50 mm/s)
-    travel_speed = 12000 # mm/min (200 mm/s)
-    wipe_passes = 3      # back-and-forth strokes
-
     lines = [
         "",
         "; " + "=" * 50,
@@ -374,28 +354,18 @@ def _pause_block(label: str, z: float, instructions: list[str]) -> list[str]:
     lines.extend([
         "; " + "=" * 50,
         "",
-        "M300 S1000 P2000 ; beep before pause",
-        "; Park head and wait for user",
-        "M601 ; pause print — press knob to resume",
+        "G91 ; relative positioning",
+        "G1 Z1 F1000 ; lift head",
+        "G90 ; absolute positioning",
         "",
-        "; ── Nozzle wipe after resume ──────────────────────",
-        "; Scrub nozzle on the front bed edge to remove any",
-        "; filament blob accumulated during the pause.",
-        "G1 E-1.4 F3600 ; retract filament",
-        f"G0 Z{max(z, 5.0):.2f} F720 ; safe Z height",
-        f"G0 X{wipe_x_start:.1f} Y{wipe_y:.1f} F{travel_speed} ; travel to wipe start",
-        f"G0 Z{wipe_z:.2f} F720 ; lower to wipe height",
-    ])
-
-    # Wipe strokes
-    for i in range(wipe_passes):
-        lines.append(f"G0 X{wipe_x_end:.1f} Y{wipe_y:.1f} F{wipe_speed} ; wipe stroke {i*2+1}")
-        lines.append(f"G0 X{wipe_x_start:.1f} Y{wipe_y:.1f} F{wipe_speed} ; wipe stroke {i*2+2}")
-
-    lines.extend([
-        f"G0 Z{max(z + 2.0, 5.0):.2f} F720 ; lift after wipe",
-        "G1 E1.3 F1200 ; unretract (slightly less to avoid blob)",
-        "; ── End nozzle wipe ───────────────────────────────",
+        "G1 X0 Y0 F3000 ; move to home",
+        "",
+        "G91 ; relative positioning",
+        "G1 Z-1 F1000 ; lower head back down",
+        "G90 ; absolute positioning",
+        "",
+        "M300 S1000 P2000 ; beep",
+        "M0 ; wait for user — press knob to resume",
         "",
     ])
     return lines
