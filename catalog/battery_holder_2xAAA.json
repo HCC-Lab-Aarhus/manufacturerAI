@@ -24,7 +24,6 @@
         ],
         "blocks_routing": true,
         "keepout_margin_mm": 2.0,
-        "pause_z_mm": 15.0,
         "extras": [
             {
                 "label": "battery hatch",

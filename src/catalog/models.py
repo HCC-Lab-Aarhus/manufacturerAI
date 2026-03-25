@@ -70,7 +70,6 @@ class Mounting:
     keepout_margin_mm: float
     cap: Cap | None = None
     installed_height_mm: float | None = None  # height of component top above cavity floor when installed (for through-hole DIP etc.)
-    pause_z_mm: float | None = None           # explicit pause Z (from build plate) at which this component is inserted
     extras: list[ExtraPart] = field(default_factory=list)
 
 

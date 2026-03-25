@@ -16,7 +16,6 @@
         ],
         "blocks_routing": false,
         "keepout_margin_mm": 3.0,
-        "pause_z_mm": 12.0,
         "cap": {
             "diameter_mm": 9.0,
             "height_mm": 4.0,

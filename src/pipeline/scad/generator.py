@@ -158,7 +158,6 @@ def run_scad_step(
                 body_height_mm=cat.protrusion_height_mm,
                 mounting_style=comp.mounting_style or cat.mounting.style,
                 pin_length_mm=cat.pin_length_mm,
-                pause_z_mm=cat.mounting.pause_z_mm,
             ))
 
     # Copy button outlines from UI placements to placed components
@@ -178,8 +177,7 @@ def run_scad_step(
             continue
         # Set per-component pause_z so pin grooves are capped
         ctx.pause_z = pause_z_for_component(
-            cat.protrusion_height_mm, comp_pause_infos, base_h,
-            pause_z_mm=cat.mounting.pause_z_mm,
+            cat.protrusion_height_mm, base_h,
             mounting_style=comp.mounting_style or cat.mounting.style,
             pin_length_mm=cat.pin_length_mm,
         )

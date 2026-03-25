@@ -215,10 +215,6 @@ COMPONENT_OFFSET_MM: float = 1.0
 CAVITY_START_MM: float = FLOOR_MM + COMPONENT_OFFSET_MM
 CEILING_MM: float = 2.0
 
-PAUSE_NOZZLE_CLEARANCE_MM: float = 2.0
-"""Minimum gap between the tallest component in a pause group and the
-Z height at which the nozzle resumes printing."""
-
 
 def component_z_range(
     mounting_style: str,

@@ -16,8 +16,7 @@
         ],
         "blocks_routing": false,
         "keepout_margin_mm": 5.0,
-        "installed_height_mm": 6.1,
-        "pause_z_mm": 12.0
+        "installed_height_mm": 6.1
     },
     "pin_length_mm": 3.7,
     "pins": [

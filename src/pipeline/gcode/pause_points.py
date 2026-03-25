@@ -24,11 +24,8 @@ from src.pipeline.config import (
     FLOOR_MM,
     CAVITY_START_MM,
     CEILING_MM,
-    PAUSE_NOZZLE_CLEARANCE_MM,
     component_z_range,
 )
-
-DEFAULT_SHELL_HEIGHT_MM = 19.0  # typical: 15.0 cavity + 2.0 floor + 2.0 ceiling
 
 
 @dataclass
@@ -39,7 +36,6 @@ class ComponentPauseInfo:
     body_height_mm: float
     mounting_style: str = "internal"
     pin_length_mm: float | None = None
-    pause_z_mm: float | None = None  # explicit override from catalog
 
 
 @dataclass
@@ -60,8 +56,6 @@ class PausePoints:
     total_height: float
     layer_height: float
 
-    # ── Convenience properties (backward-compat) ──────────────
-
     @property
     def ink_layer_z(self) -> float:
         return self.pauses[0].z
@@ -81,78 +75,40 @@ def _snap_to_layer(z: float, layer_h: float) -> float:
     return math.floor(z / layer_h) * layer_h
 
 
-def _fallback_pause_z(
-    body_height_mm: float,
-    shell_height: float,
-    layer_height: float,
-    mounting_style: str = "internal",
-    pin_length_mm: float | None = None,
-) -> float:
-    """Compute a pause Z when no explicit pause_z_mm is set."""
-    ceil_start = shell_height - CEILING_MM
-    _, body_top = component_z_range(mounting_style, body_height_mm, pin_length_mm, ceil_start)
-    z = body_top + PAUSE_NOZZLE_CLEARANCE_MM
-    return _snap_to_layer(min(z, ceil_start), layer_height)
-
-
 def pause_z_for_component(
     body_height_mm: float,
-    all_components: list[ComponentPauseInfo],
     shell_height: float,
     layer_height: float = 0.2,
-    pause_z_mm: float | None = None,
     mounting_style: str = "internal",
     pin_length_mm: float | None = None,
 ) -> float:
     """Return the pause Z at which a component is inserted.
 
-    If *pause_z_mm* is provided (from catalog), it is snapped to the
-    nearest layer boundary and used directly.  Otherwise falls back to
-    a computed value from body height + nozzle clearance.
+    The pause is placed at the component body top — the last printed
+    layer before the component cavity is closed off.
     """
-    if pause_z_mm is not None:
-        return _snap_to_layer(pause_z_mm, layer_height)
-    return _fallback_pause_z(
-        body_height_mm, shell_height, layer_height,
-        mounting_style=mounting_style, pin_length_mm=pin_length_mm,
-    )
+    ceil_start = shell_height - CEILING_MM
+    _, body_top = component_z_range(mounting_style, body_height_mm, pin_length_mm, ceil_start)
+    return _snap_to_layer(min(body_top, ceil_start), layer_height)
 
 
 def compute_pause_points(
-    shell_height: float | None = None,
+    shell_height: float,
     layer_height: float = 0.2,
     components: list[ComponentPauseInfo] | None = None,
     jumper_count: int = 0,
 ) -> PausePoints:
     """Determine pause Z-heights for the multi-stage print.
 
-    Components with an explicit ``pause_z_mm`` are grouped by that
-    value.  Components without one get a computed Z from their body
-    height.  Duplicate Z values are merged into a single pause.
+    Each component's pause Z is derived from its body top via
+    ``component_z_range``.  Components sharing the same Z are
+    merged into a single pause.
 
     When *jumper_count* > 0 a "jumpers" pause is inserted at
     ``CAVITY_START_MM`` so jumper wires can be placed in their
     channels before cavity walls cover them.
-
-    Parameters
-    ----------
-    shell_height : float, optional
-        Total enclosure height.  Defaults to ``DEFAULT_SHELL_HEIGHT_MM``.
-    layer_height : float
-        Slicer layer height in mm.  Default ``0.2``.
-    components : list[ComponentPauseInfo], optional
-        Placed components for multi-stage grouping.  When *None* the
-        function falls back to a single component pause at ceil_start.
-    jumper_count : int
-        Number of jumper wires in the routing.  When > 0 a dedicated
-        pause is added for jumper wire insertion.
-
-    Returns
-    -------
-    PausePoints
     """
-    h = shell_height or DEFAULT_SHELL_HEIGHT_MM
-    ceil_start = h - CEILING_MM
+    ceil_start = shell_height - CEILING_MM
 
     ink_z = _snap_to_layer(FLOOR_MM, layer_height)
     ink_layer = round(ink_z / layer_height)
@@ -161,8 +117,6 @@ def compute_pause_points(
         PausePoint(z=ink_z, layer_number=ink_layer, label="ink"),
     ]
 
-    # Jumper wire pause — insert wires into their channels before
-    # cavity walls cover the jumper layer.
     if jumper_count > 0:
         jumper_z = _snap_to_layer(CAVITY_START_MM, layer_height)
         jumper_layer = round(jumper_z / layer_height)
@@ -170,20 +124,11 @@ def compute_pause_points(
             z=jumper_z, layer_number=jumper_layer, label="jumpers",
         ))
 
-    if not components:
-        # Backward compat: single component pause at ceil_start
-        comp_z = _snap_to_layer(ceil_start, layer_height)
-        comp_layer = round(comp_z / layer_height)
-        pauses.append(PausePoint(
-            z=comp_z, layer_number=comp_layer,
-            label="components",
-        ))
-    else:
-        # Group components by their resolved pause Z
+    if components:
         z_groups: dict[float, list[str]] = {}
         for c in components:
             z = pause_z_for_component(
-                c.body_height_mm, components, h, layer_height, c.pause_z_mm,
+                c.body_height_mm, shell_height, layer_height,
                 mounting_style=c.mounting_style, pin_length_mm=c.pin_length_mm,
             )
             z_groups.setdefault(z, []).append(c.instance_id)
@@ -195,9 +140,16 @@ def compute_pause_points(
                 label="components",
                 components=z_groups[z],
             ))
+    else:
+        comp_z = _snap_to_layer(ceil_start, layer_height)
+        comp_layer = round(comp_z / layer_height)
+        pauses.append(PausePoint(
+            z=comp_z, layer_number=comp_layer,
+            label="components",
+        ))
 
     return PausePoints(
         pauses=pauses,
-        total_height=h,
+        total_height=shell_height,
         layer_height=layer_height,
     )

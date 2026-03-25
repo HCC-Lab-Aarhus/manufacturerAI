@@ -138,9 +138,6 @@ def component_to_dict(c: Component) -> dict:
         }
     if c.mounting.installed_height_mm is not None:
         d["mounting"]["installed_height_mm"] = c.mounting.installed_height_mm
-    if c.mounting.pause_z_mm is not None:
-        d["mounting"]["pause_z_mm"] = c.mounting.pause_z_mm
-
     # Optional fields
     if c.pin_groups:
         d["pin_groups"] = [
