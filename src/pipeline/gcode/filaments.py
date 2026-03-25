@@ -351,6 +351,23 @@ FILAMENTS: dict[str, FilamentDef] = {
             "full_fan_speed_layer":             "4",
         },
     ),
+    "generic_nylon": FilamentDef(
+        id="generic_nylon",
+        label="Generic Nylon",
+        overrides={
+            "temperature":                      "250",
+            "first_layer_temperature":          "250",
+            "filament_temperature":             "250",
+            "filament_first_layer_temperature":  "250",
+            "bed_temperature":                  "100",
+            "first_layer_bed_temperature":      "100",
+            "fan_always_on":                    "0",
+            "min_fan_speed":                    "0",
+            "max_fan_speed":                    "0",
+            "disable_fan_first_layers":         "3",
+            "full_fan_speed_layer":             "4",
+        },
+    ),
 }
 
 
