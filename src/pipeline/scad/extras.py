@@ -97,7 +97,7 @@ LOOP_THICKNESS: float = 1.0
 def _generate_hatch_scad(extra: ExtraPart, channels: BodyChannels | None = None, body_height: float = 0) -> PlacedExtra:
     """Generate SCAD for a hatch panel with spring latch, ledge tab, and optional battery mold."""
     w = extra.width_mm or 24.4
-    l = extra.length_mm or 47.4
+    l = extra.length_mm or 45.9
     t = extra.thickness_mm or 1.5
 
     slit_w = LOOP_WIDTH + 1.0
