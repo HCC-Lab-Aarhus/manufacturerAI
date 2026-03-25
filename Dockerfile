@@ -6,12 +6,25 @@ WORKDIR /app
 
 # Install arduino-cli and the AVR core for firmware compilation
 ARG ARDUINO_CLI_VERSION=1.4.1
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl ca-certificates \
     && curl -fsSL "https://github.com/arduino/arduino-cli/releases/download/v${ARDUINO_CLI_VERSION}/arduino-cli_${ARDUINO_CLI_VERSION}_Linux_64bit.tar.gz" \
        | tar -xz -C /usr/local/bin arduino-cli \
     && arduino-cli core install arduino:avr \
     && apt-get purge -y curl && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/* /root/.arduino15/staging
+
+# Install OpenSCAD nightly (AppImage, extracted — FUSE unavailable in containers)
+ARG OPENSCAD_SNAPSHOT=OpenSCAD-2026.03.20.ai21790-x86_64.AppImage
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && curl -fsSL -o /tmp/openscad.AppImage \
+        "https://files.openscad.org/snapshots/${OPENSCAD_SNAPSHOT}" \
+    && chmod +x /tmp/openscad.AppImage \
+    && cd /opt && /tmp/openscad.AppImage --appimage-extract \
+    && ln -s /opt/squashfs-root/AppRun /usr/local/bin/openscad \
+    && rm /tmp/openscad.AppImage \
+    && apt-get purge -y curl && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
