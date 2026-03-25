@@ -261,6 +261,7 @@ def collect_and_generate_extras(
     if not extras:
         return ""
 
+    enc_min_x = min(p[0] for p in flat_pts)
     enc_max_x = max(p[0] for p in flat_pts)
     enc_min_y = min(p[1] for p in flat_pts)
 
@@ -290,6 +291,14 @@ def collect_and_generate_extras(
         parts.append("")
 
         current_x = place_x + extra.footprint_x / 2 + PART_GAP
+
+    extras_max_x = current_x - PART_GAP
+    balance_x = enc_min_x + enc_max_x - extras_max_x
+    if balance_x < enc_min_x:
+        parts.append("// Bbox balance — preserves enclosure centering under slicer auto-center")
+        parts.append(f"translate([{balance_x:.3f}, {enc_min_y:.3f}, 0])")
+        parts.append("  cube([0.1, 0.1, 0.1]);")
+        parts.append("")
 
     log.info("Extra parts: %d generated", len(extras))
     return "\n".join(parts)
