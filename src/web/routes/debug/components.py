@@ -26,7 +26,7 @@ from src.pipeline.scad.fragment import (
 )
 from src.pipeline.scad.traces import TRACE_WIDTH as SCAD_TRACE_WIDTH
 
-from ._common import load_slicer_params, SlicerParams
+from ._common import DEBUG_CONFIG, load_slicer_params, SlicerParams
 
 PINHOLE_TAPER_D: float = 3.5
 
@@ -536,7 +536,7 @@ def _pinhole_gcode(
             x_pos += extrusion_w
 
     # ── Print the plate bases (one per component) ──
-    plate_layers = max(1, round(FLOOR_MM / z))
+    plate_layers = DEBUG_CONFIG.layers
     for pl in range(1, plate_layers + 1):
         lz = z * pl
         cur_z = lz
@@ -644,14 +644,13 @@ def _pinhole_bitmap(
 async def generate_components(
     printer: str = Query("coreone"),
     filament: str = Query("prusament_pla"),
-    padding: float = Query(5),
 ) -> dict[str, Any]:
     """Generate G-code + bitmap for multi-component test."""
     pdef = get_printer(printer)
     fdef = get_filament(filament)
     grid = sweep_grid(pdef)
 
-    gcode, layouts = _pinhole_gcode(pdef, fdef, load_slicer_params(printer), padding)
+    gcode, layouts = _pinhole_gcode(pdef, fdef, load_slicer_params(printer), DEBUG_CONFIG.padding)
     bitmap = _pinhole_bitmap(pdef, grid, layouts)
 
     bb_x = min(ly.plate_x for ly in layouts)
