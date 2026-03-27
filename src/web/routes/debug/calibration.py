@@ -89,9 +89,6 @@ def _calibration_gcode(
             "G92 E0",
         ]
 
-    if sp.fan_always_on:
-        lines.append(f"M106 S{int(sp.min_fan_speed * 2.55)} ; fan on")
-
     lines += [
         "",
         "G90 ; absolute positioning",
@@ -122,7 +119,7 @@ def _calibration_gcode(
         for (nx, ny) in sq_pts:
             dist = math.hypot(nx - prev_x, ny - prev_y)
             e += dist * e_per_mm
-            lines.append(f"G1 X{nx:.2f} Y{ny:.2f} E{e:.4f} F{sp.perimeter_feed}")
+            lines.append(f"G1 X{nx:.2f} Y{ny:.2f} E{e:.4f} F{sp.first_layer_feed}")
             prev_x, prev_y = nx, ny
 
     e -= 4.0

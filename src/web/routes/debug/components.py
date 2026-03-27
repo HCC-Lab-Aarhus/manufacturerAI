@@ -268,12 +268,11 @@ def _pinhole_gcode(
         ]
 
     lines += ["", "G90 ; absolute positioning", "M82 ; absolute extrusion", ""]
-    if sp.fan_always_on:
-        lines.append(f"M106 S{int(sp.min_fan_speed * 2.55)} ; fan on")
-        lines.append("")
 
     e = 0.0
     cur_z = 0.0
+    peri_f = sp.first_layer_feed
+    fill_f = sp.first_layer_feed
 
     # ── Shared G-code helpers ──
 
@@ -294,7 +293,7 @@ def _pinhole_gcode(
         for nx, ny in [(x1, y0), (x1, y1), (x0, y1), (x0, y0)]:
             dist = math.hypot(nx - prev[0], ny - prev[1])
             e += dist * e_per_mm
-            lines.append(f"G1 X{nx:.3f} Y{ny:.3f} E{e:.4f} F{sp.perimeter_feed}")
+            lines.append(f"G1 X{nx:.3f} Y{ny:.3f} E{e:.4f} F{peri_f}")
             prev = (nx, ny)
         inset = extrusion_w / 2
         ix0, iy0 = x0 + inset, y0 + inset
@@ -303,13 +302,13 @@ def _pinhole_gcode(
         going_up = True
         while x_pos <= ix1 + 0.001:
             if going_up:
-                lines.append(f"G1 X{x_pos:.3f} Y{iy0:.3f} E{e:.4f} F{sp.infill_feed}")
+                lines.append(f"G1 X{x_pos:.3f} Y{iy0:.3f} E{e:.4f} F{fill_f}")
                 e += (iy1 - iy0) * e_per_mm
-                lines.append(f"G1 X{x_pos:.3f} Y{iy1:.3f} E{e:.4f} F{sp.infill_feed}")
+                lines.append(f"G1 X{x_pos:.3f} Y{iy1:.3f} E{e:.4f} F{fill_f}")
             else:
-                lines.append(f"G1 X{x_pos:.3f} Y{iy1:.3f} E{e:.4f} F{sp.infill_feed}")
+                lines.append(f"G1 X{x_pos:.3f} Y{iy1:.3f} E{e:.4f} F{fill_f}")
                 e += (iy1 - iy0) * e_per_mm
-                lines.append(f"G1 X{x_pos:.3f} Y{iy0:.3f} E{e:.4f} F{sp.infill_feed}")
+                lines.append(f"G1 X{x_pos:.3f} Y{iy0:.3f} E{e:.4f} F{fill_f}")
             going_up = not going_up
             x_pos += extrusion_w
         if do_iron:
@@ -479,11 +478,11 @@ def _pinhole_gcode(
                     e += sp.retract_length
                     lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; unretract")
                     e += abs(sb - sa) * e_per_mm
-                    lines.append(f"G1 X{x_a:.3f} Y{sb:.3f} E{e:.4f} F{sp.perimeter_feed}")
+                    lines.append(f"G1 X{x_a:.3f} Y{sb:.3f} E{e:.4f} F{peri_f}")
                 return
         dist = math.hypot(x_b - x_a, y_b - y_a)
         e += dist * e_per_mm
-        lines.append(f"G1 X{x_b:.3f} Y{y_b:.3f} E{e:.4f} F{sp.perimeter_feed}")
+        lines.append(f"G1 X{x_b:.3f} Y{y_b:.3f} E{e:.4f} F{peri_f}")
 
     n_walls = 3
 
@@ -532,7 +531,7 @@ def _pinhole_gcode(
                 e += sp.retract_length
                 lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; unretract")
                 e += abs(sy_b - sy_a) * e_per_mm
-                lines.append(f"G1 X{x_pos:.3f} Y{sy_b:.3f} E{e:.4f} F{sp.infill_feed}")
+                lines.append(f"G1 X{x_pos:.3f} Y{sy_b:.3f} E{e:.4f} F{fill_f}")
             going_up = not going_up
             x_pos += extrusion_w
 
@@ -541,9 +540,15 @@ def _pinhole_gcode(
     for pl in range(1, plate_layers + 1):
         lz = z * pl
         cur_z = lz
+        actual_layer = pl - 1
+        peri_f = sp.first_layer_feed if actual_layer == 0 else sp.perimeter_feed
+        fill_f = sp.first_layer_feed if actual_layer == 0 else sp.infill_feed
         lines.append(";LAYER_CHANGE")
         lines.append(f";Z:{lz:.1f}")
         lines.append(f"G1 Z{lz:.2f} F600")
+        fan_pwm = sp.fan_pwm_for_layer(actual_layer)
+        if fan_pwm > 0:
+            lines.append(f"M106 S{fan_pwm}")
         for ly in layouts:
             _rect_perimeter_infill_iron(ly.plate_x, ly.plate_y, ly.plate_w, ly.plate_h)
     _iron_trace_channels()
@@ -554,9 +559,15 @@ def _pinhole_gcode(
     for layer in range(1, max_block_layers + 1):
         lz = z * (plate_layers + layer)
         cur_z = lz
+        actual_layer = plate_layers + layer - 1
+        peri_f = sp.first_layer_feed if actual_layer == 0 else sp.perimeter_feed
+        fill_f = sp.first_layer_feed if actual_layer == 0 else sp.infill_feed
         lines.append(";LAYER_CHANGE")
         lines.append(f";Z:{lz:.1f}")
         lines.append(f"G1 Z{lz:.2f} F600")
+        fan_pwm = sp.fan_pwm_for_layer(actual_layer)
+        if fan_pwm > 0:
+            lines.append(f"M106 S{fan_pwm}")
         for ly in layouts:
             if lz > ly.block_z_top + 0.001:
                 continue

@@ -40,6 +40,9 @@ class SlicerParams:
     ironing_spacing: float
     ironing_flowrate: float
     ironing_speed: float
+    first_layer_speed: float
+    disable_fan_first_layers: int
+    full_fan_speed_layer: int
     fan_always_on: bool
     min_fan_speed: int
     max_fan_speed: int
@@ -78,6 +81,24 @@ class SlicerParams:
     def ironing_feed(self) -> int:
         return int(self.ironing_speed * 60)
 
+    @property
+    def first_layer_feed(self) -> int:
+        return int(self.first_layer_speed * 60)
+
+    def fan_pwm_for_layer(self, layer: int) -> int:
+        if not self.fan_always_on:
+            return 0
+        if layer < self.disable_fan_first_layers:
+            return 0
+        full_pwm = int(self.min_fan_speed * 2.55)
+        if layer >= self.full_fan_speed_layer:
+            return full_pwm
+        span = self.full_fan_speed_layer - self.disable_fan_first_layers
+        if span <= 0:
+            return full_pwm
+        frac = (layer - self.disable_fan_first_layers + 1) / span
+        return int(full_pwm * frac)
+
 
 def load_slicer_params(printer_id: str | None = None) -> SlicerParams:
     pdef = get_printer(printer_id)
@@ -111,6 +132,9 @@ def load_slicer_params(printer_id: str | None = None) -> SlicerParams:
         ironing_spacing=_f("ironing_spacing", 0.1),
         ironing_flowrate=_pct("ironing_flowrate", 0.08),
         ironing_speed=_f("ironing_speed", 15),
+        first_layer_speed=_f("first_layer_speed", 20),
+        disable_fan_first_layers=int(_f("disable_fan_first_layers", 1)),
+        full_fan_speed_layer=int(_f("full_fan_speed_layer", 4)),
         fan_always_on=_f("fan_always_on", 1) > 0,
         min_fan_speed=int(_f("min_fan_speed", 100)),
         max_fan_speed=int(_f("max_fan_speed", 100)),
