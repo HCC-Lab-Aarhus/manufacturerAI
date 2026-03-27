@@ -31,15 +31,15 @@ async def generate_all_tests(
 
     files: dict[str, str] = {}
 
-    cal = await generate_calibration(
-        printer=printer, filament=filament_ids[0],
-        box_size=100, padding=5, square_size=5,
-    )
-    files["calibration.gcode"] = cal["gcode"]
-    files["calibration_bitmap.txt"] = cal["bitmap"]
-
     for fil_id in filament_ids:
         folder = FILAMENT_FOLDERS.get(fil_id, fil_id)
+
+        cal = await generate_calibration(
+            printer=printer, filament=fil_id,
+            box_size=100, padding=5, square_size=5,
+        )
+        files[f"{folder}/calibration.gcode"] = cal["gcode"]
+        files[f"{folder}/calibration.txt"] = cal["bitmap"]
 
         r = await generate_components(printer=printer, filament=fil_id, padding=5)
         files[f"{folder}/components.gcode"] = r["gcode"]
