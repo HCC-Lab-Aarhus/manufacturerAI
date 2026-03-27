@@ -17,13 +17,14 @@ FILAMENT_FOLDERS: dict[str, str] = {
     "generic_abs": "ABS",
     "prusament_petg": "PETG",
     "prusament_tpu_95a": "TPU",
+    "generic_nylon": "NYLON",
 }
 
 
 @router.post("/generate-all")
 async def generate_all_tests(
     printer: str = Query("mk3s"),
-    filaments: str = Query("prusament_pla,generic_abs,prusament_petg,prusament_tpu_95a"),
+    filaments: str = Query("prusament_pla,generic_abs,prusament_petg,prusament_tpu_95a,generic_nylon"),
 ):
     """Generate all integration test files and return as JSON."""
     filament_ids = [f.strip() for f in filaments.split(",") if f.strip()]
