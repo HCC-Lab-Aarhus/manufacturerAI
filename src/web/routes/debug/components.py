@@ -26,7 +26,7 @@ from src.pipeline.scad.fragment import (
 )
 from src.pipeline.scad.traces import TRACE_WIDTH as SCAD_TRACE_WIDTH
 
-from ._common import _Z_HOP
+from ._common import load_slicer_params, SlicerParams
 
 PINHOLE_TAPER_D: float = 3.5
 
@@ -209,9 +209,8 @@ def _compute_component_layout(
 def _pinhole_gcode(
     pdef: PrinterDef,
     fdef: FilamentDef,
+    sp: SlicerParams,
     pad: float,
-    z: float = 0.2,
-    feed: float = 1200,
 ) -> tuple[str, list[_CompLayout]]:
     """Generate G-code for multi-component cube-trace test.
 
@@ -219,20 +218,18 @@ def _pinhole_gcode(
 
     Returns (gcode_str, layouts).
     """
-    layouts = _compute_component_layout(pdef, pad, z)
+    layouts = _compute_component_layout(pdef, pad, sp.layer_height)
 
     nozzle_temp = int(fdef.overrides.get("first_layer_temperature",
                       fdef.overrides.get("temperature", "215")))
     bed_temp = int(fdef.overrides.get("first_layer_bed_temperature",
                    fdef.overrides.get("bed_temperature", "40")))
 
-    nozzle_d = 0.4
-    filament_d = 1.75
-    extrusion_w = nozzle_d * 1.125
-    filament_area = math.pi * (filament_d / 2) ** 2
-    e_per_mm = (z * extrusion_w) / filament_area
-    iron_spacing = 0.1
-    iron_flow = 0.05
+    z = sp.layer_height
+    extrusion_w = sp.extrusion_w
+    e_per_mm = sp.e_per_mm(z)
+    iron_spacing = sp.ironing_spacing
+    iron_flow = sp.ironing_flowrate
 
     nom_w = pdef.nominal_bed_width
     nom_d = pdef.nominal_bed_depth
@@ -246,8 +243,8 @@ def _pinhole_gcode(
         f"; components: {comp_names}",
         f"; printer_model = {pdef.id}",
         f"; bed_shape = 0x0,{bw_i}x0,{bw_i}x{bd_i},0x{bd_i}",
-        f"; nozzle_diameter = {nozzle_d}",
-        f"; filament_diameter = {filament_d}",
+        f"; nozzle_diameter = {sp.nozzle_d}",
+        f"; filament_diameter = {sp.filament_d}",
         "",
         "; --- Start sequence ---",
         f"M140 S{bed_temp} ; set bed temp",
@@ -271,6 +268,9 @@ def _pinhole_gcode(
         ]
 
     lines += ["", "G90 ; absolute positioning", "M82 ; absolute extrusion", ""]
+    if sp.fan_always_on:
+        lines.append(f"M106 S{int(sp.min_fan_speed * 2.55)} ; fan on")
+        lines.append("")
 
     e = 0.0
     cur_z = 0.0
@@ -283,18 +283,18 @@ def _pinhole_gcode(
     ) -> None:
         nonlocal e
         x1, y1 = x0 + w, y0 + h
-        e -= 0.8
-        lines.append(f"G1 E{e:.4f} F2400 ; retract")
-        lines.append(f"G1 Z{cur_z + _Z_HOP:.2f} F720 ; z-hop")
-        lines.append(f"G1 X{x0:.3f} Y{y0:.3f} F3000 ; travel")
+        e -= sp.retract_length
+        lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; retract")
+        lines.append(f"G1 Z{cur_z + sp.retract_lift:.2f} F720 ; z-hop")
+        lines.append(f"G1 X{x0:.3f} Y{y0:.3f} F{sp.travel_feed} ; travel")
         lines.append(f"G1 Z{cur_z:.2f} F720 ; lower")
-        e += 0.8
-        lines.append(f"G1 E{e:.4f} F2400 ; unretract")
+        e += sp.retract_length
+        lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; unretract")
         prev = (x0, y0)
         for nx, ny in [(x1, y0), (x1, y1), (x0, y1), (x0, y0)]:
             dist = math.hypot(nx - prev[0], ny - prev[1])
             e += dist * e_per_mm
-            lines.append(f"G1 X{nx:.3f} Y{ny:.3f} E{e:.4f} F{feed}")
+            lines.append(f"G1 X{nx:.3f} Y{ny:.3f} E{e:.4f} F{sp.perimeter_feed}")
             prev = (nx, ny)
         inset = extrusion_w / 2
         ix0, iy0 = x0 + inset, y0 + inset
@@ -303,38 +303,38 @@ def _pinhole_gcode(
         going_up = True
         while x_pos <= ix1 + 0.001:
             if going_up:
-                lines.append(f"G1 X{x_pos:.3f} Y{iy0:.3f} E{e:.4f} F{feed}")
+                lines.append(f"G1 X{x_pos:.3f} Y{iy0:.3f} E{e:.4f} F{sp.infill_feed}")
                 e += (iy1 - iy0) * e_per_mm
-                lines.append(f"G1 X{x_pos:.3f} Y{iy1:.3f} E{e:.4f} F{feed}")
+                lines.append(f"G1 X{x_pos:.3f} Y{iy1:.3f} E{e:.4f} F{sp.infill_feed}")
             else:
-                lines.append(f"G1 X{x_pos:.3f} Y{iy1:.3f} E{e:.4f} F{feed}")
+                lines.append(f"G1 X{x_pos:.3f} Y{iy1:.3f} E{e:.4f} F{sp.infill_feed}")
                 e += (iy1 - iy0) * e_per_mm
-                lines.append(f"G1 X{x_pos:.3f} Y{iy0:.3f} E{e:.4f} F{feed}")
+                lines.append(f"G1 X{x_pos:.3f} Y{iy0:.3f} E{e:.4f} F{sp.infill_feed}")
             going_up = not going_up
             x_pos += extrusion_w
         if do_iron:
             iron_epmm = e_per_mm * iron_flow
             lines.append(";TYPE:Ironing")
-            e -= 0.8
-            lines.append(f"G1 E{e:.4f} F2400 ; retract")
-            lines.append(f"G1 Z{cur_z + _Z_HOP:.2f} F720 ; z-hop")
-            lines.append(f"G1 X{ix1:.3f} Y{iy0:.3f} F3000")
+            e -= sp.retract_length
+            lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; retract")
+            lines.append(f"G1 Z{cur_z + sp.retract_lift:.2f} F720 ; z-hop")
+            lines.append(f"G1 X{ix1:.3f} Y{iy0:.3f} F{sp.travel_feed}")
             lines.append(f"G1 Z{cur_z:.2f} F720 ; lower")
-            e += 0.8
-            lines.append(f"G1 E{e:.4f} F2400 ; unretract")
+            e += sp.retract_length
+            lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; unretract")
             x_pos = ix1
             going_down = True
             while x_pos >= ix0 - 0.001:
                 e += (iy1 - iy0) * iron_epmm
                 if going_down:
-                    lines.append(f"G1 X{x_pos:.3f} Y{iy1:.3f} E{e:.5f} F900")
+                    lines.append(f"G1 X{x_pos:.3f} Y{iy1:.3f} E{e:.5f} F{sp.ironing_feed}")
                 else:
-                    lines.append(f"G1 X{x_pos:.3f} Y{iy0:.3f} E{e:.5f} F900")
+                    lines.append(f"G1 X{x_pos:.3f} Y{iy0:.3f} E{e:.5f} F{sp.ironing_feed}")
                 going_down = not going_down
                 x_pos -= iron_spacing
                 if x_pos >= ix0 - 0.001:
                     e += iron_spacing * iron_epmm
-                    lines.append(f"G1 X{x_pos:.3f} E{e:.5f} F900")
+                    lines.append(f"G1 X{x_pos:.3f} E{e:.5f} F{sp.ironing_feed}")
 
     cut_hw = SCAD_TRACE_WIDTH / 2
 
@@ -350,26 +350,26 @@ def _pinhole_gcode(
                 x_hi = pin_x
                 if x_hi <= x_lo:
                     continue
-                e -= 0.8
-                lines.append(f"G1 E{e:.4f} F2400 ; retract")
-                lines.append(f"G1 Z{cur_z + _Z_HOP:.2f} F720 ; z-hop")
-                lines.append(f"G1 X{x_hi:.3f} Y{y_lo:.3f} F3000")
+                e -= sp.retract_length
+                lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; retract")
+                lines.append(f"G1 Z{cur_z + sp.retract_lift:.2f} F720 ; z-hop")
+                lines.append(f"G1 X{x_hi:.3f} Y{y_lo:.3f} F{sp.travel_feed}")
                 lines.append(f"G1 Z{cur_z:.2f} F720 ; lower")
-                e += 0.8
-                lines.append(f"G1 E{e:.4f} F2400 ; unretract")
+                e += sp.retract_length
+                lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; unretract")
                 x_pos = x_hi
                 going_down = True
                 while x_pos >= x_lo - 0.001:
                     e += (y_hi - y_lo) * iron_epmm
                     if going_down:
-                        lines.append(f"G1 X{x_pos:.3f} Y{y_hi:.3f} E{e:.5f} F900")
+                        lines.append(f"G1 X{x_pos:.3f} Y{y_hi:.3f} E{e:.5f} F{sp.ironing_feed}")
                     else:
-                        lines.append(f"G1 X{x_pos:.3f} Y{y_lo:.3f} E{e:.5f} F900")
+                        lines.append(f"G1 X{x_pos:.3f} Y{y_lo:.3f} E{e:.5f} F{sp.ironing_feed}")
                     going_down = not going_down
                     x_pos -= iron_spacing
                     if x_pos >= x_lo - 0.001:
                         e += iron_spacing * iron_epmm
-                        lines.append(f"G1 X{x_pos:.3f} E{e:.5f} F900")
+                        lines.append(f"G1 X{x_pos:.3f} E{e:.5f} F{sp.ironing_feed}")
 
     def _frag_y_excl(
         frag: ScadFragment, x: float,
@@ -471,19 +471,19 @@ def _pinhole_gcode(
                 ordered = segs if going_up else list(reversed(segs))
                 for s in ordered:
                     sa, sb = (s[0], s[1]) if going_up else (s[1], s[0])
-                    e -= 0.8
-                    lines.append(f"G1 E{e:.4f} F2400 ; retract")
-                    lines.append(f"G1 Z{z_layer + _Z_HOP:.2f} F720 ; z-hop")
-                    lines.append(f"G1 X{x_a:.3f} Y{sa:.3f} F3000")
+                    e -= sp.retract_length
+                    lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; retract")
+                    lines.append(f"G1 Z{z_layer + sp.retract_lift:.2f} F720 ; z-hop")
+                    lines.append(f"G1 X{x_a:.3f} Y{sa:.3f} F{sp.travel_feed}")
                     lines.append(f"G1 Z{z_layer:.2f} F720 ; lower")
-                    e += 0.8
-                    lines.append(f"G1 E{e:.4f} F2400 ; unretract")
+                    e += sp.retract_length
+                    lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; unretract")
                     e += abs(sb - sa) * e_per_mm
-                    lines.append(f"G1 X{x_a:.3f} Y{sb:.3f} E{e:.4f} F{feed}")
+                    lines.append(f"G1 X{x_a:.3f} Y{sb:.3f} E{e:.4f} F{sp.perimeter_feed}")
                 return
         dist = math.hypot(x_b - x_a, y_b - y_a)
         e += dist * e_per_mm
-        lines.append(f"G1 X{x_b:.3f} Y{y_b:.3f} E{e:.4f} F{feed}")
+        lines.append(f"G1 X{x_b:.3f} Y{y_b:.3f} E{e:.4f} F{sp.perimeter_feed}")
 
     n_walls = 3
 
@@ -500,13 +500,13 @@ def _pinhole_gcode(
             wx1 = x1 - offset
             wy1 = y1 - offset
 
-            e -= 0.8
-            lines.append(f"G1 E{e:.4f} F2400 ; retract")
-            lines.append(f"G1 Z{z_layer + _Z_HOP:.2f} F720 ; z-hop")
-            lines.append(f"G1 X{wx0:.3f} Y{wy0:.3f} F3000 ; travel")
+            e -= sp.retract_length
+            lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; retract")
+            lines.append(f"G1 Z{z_layer + sp.retract_lift:.2f} F720 ; z-hop")
+            lines.append(f"G1 X{wx0:.3f} Y{wy0:.3f} F{sp.travel_feed} ; travel")
             lines.append(f"G1 Z{z_layer:.2f} F720 ; lower")
-            e += 0.8
-            lines.append(f"G1 E{e:.4f} F2400 ; unretract")
+            e += sp.retract_length
+            lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; unretract")
             corners = [(wx1, wy0), (wx1, wy1), (wx0, wy1), (wx0, wy0)]
             prev = (wx0, wy0)
             for nx, ny in corners:
@@ -524,15 +524,15 @@ def _pinhole_gcode(
             ordered = segs if going_up else list(reversed(segs))
             for s in ordered:
                 sy_a, sy_b = (s[0], s[1]) if going_up else (s[1], s[0])
-                e -= 0.8
-                lines.append(f"G1 E{e:.4f} F2400 ; retract")
-                lines.append(f"G1 Z{z_layer + _Z_HOP:.2f} F720 ; z-hop")
-                lines.append(f"G1 X{x_pos:.3f} Y{sy_a:.3f} F3000")
+                e -= sp.retract_length
+                lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; retract")
+                lines.append(f"G1 Z{z_layer + sp.retract_lift:.2f} F720 ; z-hop")
+                lines.append(f"G1 X{x_pos:.3f} Y{sy_a:.3f} F{sp.travel_feed}")
                 lines.append(f"G1 Z{z_layer:.2f} F720 ; lower")
-                e += 0.8
-                lines.append(f"G1 E{e:.4f} F2400 ; unretract")
+                e += sp.retract_length
+                lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; unretract")
                 e += abs(sy_b - sy_a) * e_per_mm
-                lines.append(f"G1 X{x_pos:.3f} Y{sy_b:.3f} E{e:.4f} F{feed}")
+                lines.append(f"G1 X{x_pos:.3f} Y{sy_b:.3f} E{e:.4f} F{sp.infill_feed}")
             going_up = not going_up
             x_pos += extrusion_w
 
@@ -563,14 +563,14 @@ def _pinhole_gcode(
             _block_with_fragments(ly, lz)
 
     e -= 4.0
-    lines.append(f"G1 E{e:.4f} F3000 ; retract")
+    lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; retract")
     lines += [
         "",
         "G91 ; relative positioning",
         "G1 Z1 F1000 ; lift head",
         "G90 ; absolute positioning",
         "",
-        "G1 X0 Y0 F3000 ; move to home",
+        f"G1 X0 Y0 F{sp.travel_feed} ; move to home",
         "",
         "G91 ; relative positioning",
         "G1 Z-1 F1000 ; lower head back down",
@@ -583,7 +583,7 @@ def _pinhole_gcode(
         "M104 S0 ; turn off nozzle",
         "M140 S0 ; turn off heatbed",
         "M107 ; turn off fan",
-        f"G1 X0 Y{nom_d:.0f} F3000 ; park head",
+        f"G1 X0 Y{nom_d:.0f} F{sp.travel_feed} ; park head",
         "M84 ; disable motors",
     ]
 
@@ -640,7 +640,7 @@ async def generate_components(
     fdef = get_filament(filament)
     grid = sweep_grid(pdef)
 
-    gcode, layouts = _pinhole_gcode(pdef, fdef, padding)
+    gcode, layouts = _pinhole_gcode(pdef, fdef, load_slicer_params(printer), padding)
     bitmap = _pinhole_bitmap(pdef, grid, layouts)
 
     bb_x = min(ly.plate_x for ly in layouts)

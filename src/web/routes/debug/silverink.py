@@ -11,7 +11,7 @@ from src.pipeline.config import (
 from src.pipeline.gcode.filaments import get_filament, FilamentDef
 from src.pipeline.manifest import generate_manifest
 
-from ._common import _Z_HOP
+from ._common import load_slicer_params, SlicerParams
 
 router = APIRouter()
 
@@ -19,12 +19,11 @@ router = APIRouter()
 def _silverink_test_gcode(
     pdef: PrinterDef,
     fdef: FilamentDef,
+    sp: SlicerParams,
     pad: float,
     rect_w: float,
     rect_h: float,
     layers: int = 4,
-    z: float = 0.2,
-    feed: float = 1200,
 ) -> str:
     """Generate G-code for silverink test rectangles with ironing.
 
@@ -36,14 +35,12 @@ def _silverink_test_gcode(
     bed_temp = int(fdef.overrides.get("first_layer_bed_temperature",
                    fdef.overrides.get("bed_temperature", "40")))
 
-    nozzle_d = 0.4
-    filament_d = 1.75
-    extrusion_w = nozzle_d * 1.125  # 0.45 mm
-    filament_area = math.pi * (filament_d / 2) ** 2
-    e_per_mm = (z * extrusion_w) / filament_area
+    z = sp.layer_height
+    e_per_mm = sp.e_per_mm(z)
+    extrusion_w = sp.extrusion_w
     infill_spacing = extrusion_w
-    iron_spacing = 0.1
-    iron_flow = 0.05
+    iron_spacing = sp.ironing_spacing
+    iron_flow = sp.ironing_flowrate
 
     nom_w = pdef.nominal_bed_width
     nom_d = pdef.nominal_bed_depth
@@ -67,8 +64,8 @@ def _silverink_test_gcode(
         f"; rect {rect_w}x{rect_h} mm, {layers} layers, ironing on top",
         f"; printer_model = {pdef.id}",
         f"; bed_shape = 0x0,{bw_i}x0,{bw_i}x{bd_i},0x{bd_i}",
-        f"; nozzle_diameter = {nozzle_d}",
-        f"; filament_diameter = {filament_d}",
+        f"; nozzle_diameter = {sp.nozzle_d}",
+        f"; filament_diameter = {sp.filament_d}",
         "",
         "; --- Start sequence ---",
         f"M140 S{bed_temp} ; set bed temp",
@@ -101,6 +98,9 @@ def _silverink_test_gcode(
         ]
 
     lines += ["", "G90 ; absolute positioning", "M82 ; absolute extrusion", ""]
+    if sp.fan_always_on:
+        lines.append(f"M106 S{int(sp.min_fan_speed * 2.55)} ; fan on")
+        lines.append("")
 
     e = 0.0
 
@@ -115,19 +115,19 @@ def _silverink_test_gcode(
             x1, y1 = ox + rect_w, oy + rect_h
 
             # Perimeter
-            e -= 0.8
-            lines.append(f"G1 E{e:.4f} F2400 ; retract")
-            lines.append(f"G1 Z{lz + _Z_HOP:.2f} F720 ; z-hop")
-            lines.append(f"G1 X{x0:.3f} Y{y0:.3f} F3000 ; travel")
+            e -= sp.retract_length
+            lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; retract")
+            lines.append(f"G1 Z{lz + sp.retract_lift:.2f} F720 ; z-hop")
+            lines.append(f"G1 X{x0:.3f} Y{y0:.3f} F{sp.travel_feed} ; travel")
             lines.append(f"G1 Z{lz:.2f} F720 ; lower")
-            e += 0.8
-            lines.append(f"G1 E{e:.4f} F2400 ; unretract")
+            e += sp.retract_length
+            lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; unretract")
 
             prev = (x0, y0)
             for nx, ny in [(x1, y0), (x1, y1), (x0, y1), (x0, y0)]:
                 dist = math.hypot(nx - prev[0], ny - prev[1])
                 e += dist * e_per_mm
-                lines.append(f"G1 X{nx:.3f} Y{ny:.3f} E{e:.4f} F{feed}")
+                lines.append(f"G1 X{nx:.3f} Y{ny:.3f} E{e:.4f} F{sp.perimeter_feed}")
                 prev = (nx, ny)
 
             # Rectilinear infill (Y-direction lines)
@@ -140,18 +140,18 @@ def _silverink_test_gcode(
             while x_pos <= ix1 + 0.001:
                 if going_up:
                     lines.append(
-                        f"G1 X{x_pos:.3f} Y{iy0:.3f} E{e:.4f} F{feed}")
+                        f"G1 X{x_pos:.3f} Y{iy0:.3f} E{e:.4f} F{sp.infill_feed}")
                     dist = iy1 - iy0
                     e += dist * e_per_mm
                     lines.append(
-                        f"G1 X{x_pos:.3f} Y{iy1:.3f} E{e:.4f} F{feed}")
+                        f"G1 X{x_pos:.3f} Y{iy1:.3f} E{e:.4f} F{sp.infill_feed}")
                 else:
                     lines.append(
-                        f"G1 X{x_pos:.3f} Y{iy1:.3f} E{e:.4f} F{feed}")
+                        f"G1 X{x_pos:.3f} Y{iy1:.3f} E{e:.4f} F{sp.infill_feed}")
                     dist = iy1 - iy0
                     e += dist * e_per_mm
                     lines.append(
-                        f"G1 X{x_pos:.3f} Y{iy0:.3f} E{e:.4f} F{feed}")
+                        f"G1 X{x_pos:.3f} Y{iy0:.3f} E{e:.4f} F{sp.infill_feed}")
                 going_up = not going_up
                 x_pos += infill_spacing
 
@@ -168,13 +168,13 @@ def _silverink_test_gcode(
                 ix0, iy0 = x0 + inset, y0 + inset
                 ix1, iy1 = x1 - inset, y1 - inset
 
-                e -= 0.8
-                lines.append(f"G1 E{e:.4f} F2400 ; retract")
-                lines.append(f"G1 Z{lz + _Z_HOP:.2f} F720 ; z-hop")
-                lines.append(f"G1 X{ix1:.3f} Y{iy0:.3f} F3000 ; travel")
+                e -= sp.retract_length
+                lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; retract")
+                lines.append(f"G1 Z{lz + sp.retract_lift:.2f} F720 ; z-hop")
+                lines.append(f"G1 X{ix1:.3f} Y{iy0:.3f} F{sp.travel_feed} ; travel")
                 lines.append(f"G1 Z{lz:.2f} F720 ; lower")
-                e += 0.8
-                lines.append(f"G1 E{e:.4f} F2400 ; unretract")
+                e += sp.retract_length
+                lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; unretract")
 
                 x_pos = ix1
                 going_down = True
@@ -183,26 +183,26 @@ def _silverink_test_gcode(
                     e += dist * iron_epmm
                     if going_down:
                         lines.append(
-                            f"G1 X{x_pos:.3f} Y{iy1:.3f} E{e:.5f} F900")
+                            f"G1 X{x_pos:.3f} Y{iy1:.3f} E{e:.5f} F{sp.ironing_feed}")
                     else:
                         lines.append(
-                            f"G1 X{x_pos:.3f} Y{iy0:.3f} E{e:.5f} F900")
+                            f"G1 X{x_pos:.3f} Y{iy0:.3f} E{e:.5f} F{sp.ironing_feed}")
                     going_down = not going_down
                     x_pos -= iron_spacing
                     if x_pos >= ix0 - 0.001:
                         e += iron_spacing * iron_epmm
                         lines.append(
-                            f"G1 X{x_pos:.3f} E{e:.5f} F900")
+                            f"G1 X{x_pos:.3f} E{e:.5f} F{sp.ironing_feed}")
 
     e -= 4.0
-    lines.append(f"G1 E{e:.4f} F3000 ; retract")
+    lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; retract")
     lines += [
         "",
         "G91 ; relative positioning",
         "G1 Z1 F1000 ; lift head",
         "G90 ; absolute positioning",
         "",
-        "G1 X0 Y0 F3000 ; move to home",
+        f"G1 X0 Y0 F{sp.travel_feed} ; move to home",
         "",
         "G91 ; relative positioning",
         "G1 Z-1 F1000 ; lower head back down",
@@ -215,7 +215,7 @@ def _silverink_test_gcode(
         "M104 S0 ; turn off nozzle",
         "M140 S0 ; turn off heatbed",
         "M107 ; turn off fan",
-        f"G1 X0 Y{nom_d:.0f} F3000 ; park head",
+        f"G1 X0 Y{nom_d:.0f} F{sp.travel_feed} ; park head",
         "M84 ; disable motors",
     ]
 
@@ -297,7 +297,7 @@ async def generate_silverink_test(
     grid = sweep_grid(pdef)
 
     gcode = _silverink_test_gcode(
-        pdef, fdef, padding, rect_width, rect_height, layers)
+        pdef, fdef, load_slicer_params(printer), padding, rect_width, rect_height, layers)
     bitmap = _silverink_test_bitmap(
         pdef, grid, padding, rect_width, rect_height)
 

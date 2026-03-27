@@ -9,7 +9,7 @@ from src.pipeline.config import get_printer, PrinterDef, SweepGrid, sweep_grid
 from src.pipeline.gcode.filaments import get_filament, FilamentDef
 from src.pipeline.manifest import generate_manifest
 
-from ._common import _Z_HOP
+from ._common import load_slicer_params, SlicerParams
 
 router = APIRouter()
 
@@ -17,11 +17,10 @@ router = APIRouter()
 def _calibration_gcode(
     pdef: PrinterDef,
     fdef: FilamentDef,
+    sp: SlicerParams,
     box: float,
     pad: float,
     sq: float,
-    z: float = 0.3,
-    feed: float = 1200,
 ) -> str:
     """Generate G-code that prints three alignment squares plus a ruler.
 
@@ -36,11 +35,8 @@ def _calibration_gcode(
     bed_temp = int(fdef.overrides.get("first_layer_bed_temperature",
                    fdef.overrides.get("bed_temperature", "40")))
 
-    nozzle_d = 0.4
-    filament_d = 1.75
-    extrusion_w = nozzle_d * 1.125  # 0.45 mm
-    filament_area = math.pi * (filament_d / 2) ** 2
-    e_per_mm = (z * extrusion_w) / filament_area
+    z = sp.first_layer_height
+    e_per_mm = sp.e_per_mm(z)
 
     nom_w = pdef.nominal_bed_width
     nom_d = pdef.nominal_bed_depth
@@ -60,8 +56,8 @@ def _calibration_gcode(
         f"; bed {nom_w}x{nom_d}  box {box}  pad {pad}  sq {sq}",
         f"; printer_model = {pdef.id}",
         f"; bed_shape = 0x0,{bw_i}x0,{bw_i}x{bd_i},0x{bd_i}",
-        f"; nozzle_diameter = {nozzle_d}",
-        f"; filament_diameter = {filament_d}",
+        f"; nozzle_diameter = {sp.nozzle_d}",
+        f"; filament_diameter = {sp.filament_d}",
         "",
         "; --- Start sequence ---",
         f"M140 S{bed_temp} ; set bed temp",
@@ -93,6 +89,9 @@ def _calibration_gcode(
             "G92 E0",
         ]
 
+    if sp.fan_always_on:
+        lines.append(f"M106 S{int(sp.min_fan_speed * 2.55)} ; fan on")
+
     lines += [
         "",
         "G90 ; absolute positioning",
@@ -105,13 +104,13 @@ def _calibration_gcode(
 
     for i, (ox, oy) in enumerate(corners):
         lines.append(f"; Square {i + 1} at ({ox:.2f}, {oy:.2f})")
-        e -= 0.8
-        lines.append(f"G1 E{e:.4f} F2400 ; retract")
-        lines.append(f"G1 Z{z + _Z_HOP:.2f} F720 ; z-hop")
-        lines.append(f"G1 X{ox:.2f} Y{oy:.2f} F3000 ; travel")
+        e -= sp.retract_length
+        lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; retract")
+        lines.append(f"G1 Z{z + sp.retract_lift:.2f} F720 ; z-hop")
+        lines.append(f"G1 X{ox:.2f} Y{oy:.2f} F{sp.travel_feed} ; travel")
         lines.append(f"G1 Z{z:.2f} F720 ; lower")
-        e += 0.8
-        lines.append(f"G1 E{e:.4f} F2400 ; unretract")
+        e += sp.retract_length
+        lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; unretract")
 
         sq_pts = [
             (ox + sq, oy),
@@ -123,18 +122,18 @@ def _calibration_gcode(
         for (nx, ny) in sq_pts:
             dist = math.hypot(nx - prev_x, ny - prev_y)
             e += dist * e_per_mm
-            lines.append(f"G1 X{nx:.2f} Y{ny:.2f} E{e:.4f} F{feed}")
+            lines.append(f"G1 X{nx:.2f} Y{ny:.2f} E{e:.4f} F{sp.perimeter_feed}")
             prev_x, prev_y = nx, ny
 
     e -= 4.0
-    lines.append(f"G1 E{e:.4f} F3000 ; retract")
+    lines.append(f"G1 E{e:.4f} F{sp.retract_feed} ; retract")
     lines += [
         "",
         "G91 ; relative positioning",
         "G1 Z1 F1000 ; lift head",
         "G90 ; absolute positioning",
         "",
-        "G1 X0 Y0 F3000 ; move to home",
+        f"G1 X0 Y0 F{sp.travel_feed} ; move to home",
         "",
         "G91 ; relative positioning",
         "G1 Z-1 F1000 ; lower head back down",
@@ -147,7 +146,7 @@ def _calibration_gcode(
         "M104 S0 ; turn off nozzle",
         "M140 S0 ; turn off heatbed",
         "M107 ; turn off fan",
-        f"G1 X0 Y{nom_d:.0f} F3000 ; park head",
+        f"G1 X0 Y{nom_d:.0f} F{sp.travel_feed} ; park head",
         "M84 ; disable motors",
     ]
 
@@ -221,7 +220,8 @@ async def generate_calibration(
     fdef = get_filament(filament)
     grid = sweep_grid(pdef)
 
-    gcode = _calibration_gcode(pdef, fdef, box_size, padding, square_size)
+    sp = load_slicer_params(printer)
+    gcode = _calibration_gcode(pdef, fdef, sp, box_size, padding, square_size)
     bitmap = _calibration_bitmap(pdef, grid, box_size, padding, square_size)
 
     part_origin_x = pdef.nominal_bed_width / 2 - box_size / 2
