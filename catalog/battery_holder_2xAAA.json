@@ -103,54 +103,42 @@
             {
                 "shape": "rect",
                 "label": "V+ dome window",
-                "position_mm": [6.75, 26.0],
+                "position_mm": [6.75, 23.25],
                 "width_mm": 5.0,
                 "length_mm": 4.0,
                 "depth_mm": 12.5,
                 "z_anchor": "cavity_start",
-                "description": "Opening for dome contact on V+ plate to reach battery."
+                "description": "Opening for dome contact on V+ plate to reach battery, starts at plate inner face."
             },
             {
                 "shape": "rect",
-                "label": "GND dome window",
-                "position_mm": [-6.75, 26.0],
-                "width_mm": 5.0,
-                "length_mm": 4.0,
+                "label": "GND spring insertion slot",
+                "position_mm": [-6.75, 19.0],
+                "width_mm": 10.0,
+                "length_mm": 20.0,
                 "depth_mm": 12.5,
                 "z_anchor": "cavity_start",
-                "description": "Opening for dome contact on GND plate to reach battery."
+                "description": "Open-top slot from channel center through roof at GND spring to allow insertion."
+            },
+            {
+                "shape": "rect",
+                "label": "bridging spring insertion slot",
+                "position_mm": [6.75, -19.0],
+                "width_mm": 10.0,
+                "length_mm": 20.0,
+                "depth_mm": 12.5,
+                "z_anchor": "cavity_start",
+                "description": "Open-top slot from channel center through roof at bridging plate spring to allow insertion."
             },
             {
                 "shape": "rect",
                 "label": "inter-cell dome window",
-                "position_mm": [0, -26.0],
-                "width_mm": 21.6,
+                "position_mm": [-6.75, -23.25],
+                "width_mm": 5.0,
                 "length_mm": 4.0,
                 "depth_mm": 12.5,
                 "z_anchor": "cavity_start",
-                "description": "Opening for both domes on bridging plate to reach batteries."
-            },
-            {
-                "shape": "rect",
-                "label": "GND spring support blocker",
-                "position_mm": [-6.75, 19.0],
-                "width_mm": 5.0,
-                "length_mm": 10.0,
-                "depth_mm": 7.5,
-                "z_anchor": "cavity_start",
-                "z_center_mm": 5.0,
-                "description": "Open-top slot from channel center through roof at GND spring to eliminate overhang supports."
-            },
-            {
-                "shape": "rect",
-                "label": "bridging spring support blocker",
-                "position_mm": [6.75, -19.0],
-                "width_mm": 5.0,
-                "length_mm": 10.0,
-                "depth_mm": 7.5,
-                "z_anchor": "cavity_start",
-                "z_center_mm": 5.0,
-                "description": "Open-top slot from channel center through roof at bridging plate spring to eliminate overhang supports."
+                "description": "Opening for dome contact on inter-cell bridging plate to reach battery, starts at plate inner face."
             },
             {
                 "shape": "rect",
@@ -204,17 +192,6 @@
             },
             {
                 "shape": "rect",
-                "label": "hatch tab channel near",
-                "position_mm": [0, -24.3],
-                "width_mm": 4.4,
-                "length_mm": 1.2,
-                "depth_mm": 1.5,
-                "z_anchor": "ground",
-                "z_center_mm": 1.5,
-                "description": "Narrow channel for spring latch in -Y wall."
-            },
-            {
-                "shape": "rect",
                 "label": "hatch tab catch near",
                 "position_mm": [0, -24.3],
                 "width_mm": 4.4,
@@ -223,17 +200,6 @@
                 "z_anchor": "ground",
                 "z_center_mm": 1.5,
                 "description": "Wide recess for spring hook snap-fit in -Y wall."
-            },
-            {
-                "shape": "rect",
-                "label": "hatch tab channel far",
-                "position_mm": [0, 24.3],
-                "width_mm": 4.4,
-                "length_mm": 1.2,
-                "depth_mm": 1.5,
-                "z_anchor": "ground",
-                "z_center_mm": 1.5,
-                "description": "Narrow channel for ledge tab in +Y wall."
             },
             {
                 "shape": "rect",
