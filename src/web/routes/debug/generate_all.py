@@ -8,6 +8,7 @@ from .layers import generate_layers
 from .spacing import generate_spacing
 from .channel import generate_channel
 from .solid_squares import generate_solid_squares
+from .surface_test import generate_surface_test
 from .width import generate_width
 
 router = APIRouter()
@@ -63,5 +64,8 @@ async def generate_all_tests(
         r = await generate_solid_squares(printer=printer, filament=fil_id)
         files[f"{folder}/solid_squares.gcode"] = r["gcode"]
         files[f"{folder}/solid_squares.txt"] = r["bitmap"]
+
+    r = await generate_surface_test(printer=printer)
+    files["surface_test.txt"] = r["bitmap"]
 
     return {"files": files}
