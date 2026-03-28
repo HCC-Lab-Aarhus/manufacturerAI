@@ -17,67 +17,50 @@ FILAMENT_FOLDERS: dict[str, str] = {
     "generic_abs": "ABS",
     "prusament_petg": "PETG",
     "prusament_tpu_95a": "TPU",
+    "generic_nylon": "NYLON",
 }
 
 
 @router.post("/generate-all")
 async def generate_all_tests(
     printer: str = Query("mk3s"),
-    filaments: str = Query("prusament_pla,generic_abs,prusament_petg,prusament_tpu_95a"),
+    filaments: str = Query("prusament_pla,generic_abs,prusament_petg,prusament_tpu_95a,generic_nylon"),
 ):
     """Generate all integration test files and return as JSON."""
     filament_ids = [f.strip() for f in filaments.split(",") if f.strip()]
 
     files: dict[str, str] = {}
 
-    cal = await generate_calibration(
-        printer=printer, filament=filament_ids[0],
-        box_size=100, padding=5, square_size=5,
-    )
-    files["calibration.gcode"] = cal["gcode"]
-    files["calibration_bitmap.txt"] = cal["bitmap"]
-
     for fil_id in filament_ids:
         folder = FILAMENT_FOLDERS.get(fil_id, fil_id)
 
-        r = await generate_components(printer=printer, filament=fil_id, padding=5)
+        cal = await generate_calibration(printer=printer, filament=fil_id)
+        files[f"{folder}/calibration.gcode"] = cal["gcode"]
+        files[f"{folder}/calibration.txt"] = cal["bitmap"]
+
+        r = await generate_components(printer=printer, filament=fil_id)
         files[f"{folder}/components.gcode"] = r["gcode"]
         files[f"{folder}/components.txt"] = r["bitmap"]
 
-        r = await generate_layers(
-            printer=printer, filament=fil_id, padding=5,
-            rect_width=10, rect_height=20, layers=4,
-        )
+        r = await generate_layers(printer=printer, filament=fil_id)
         files[f"{folder}/layers.gcode"] = r["gcode"]
         files[f"{folder}/layers_1.txt"] = r["bitmap_1"]
         files[f"{folder}/layers_2.txt"] = r["bitmap_2"]
         files[f"{folder}/layers_3.txt"] = r["bitmap_3"]
 
-        r = await generate_spacing(
-            printer=printer, filament=fil_id, padding=5,
-            rect_width=40, rect_height=20, layers=4,
-        )
+        r = await generate_spacing(printer=printer, filament=fil_id)
         files[f"{folder}/spacing.gcode"] = r["gcode"]
         files[f"{folder}/spacing.txt"] = r["bitmap"]
 
-        r = await generate_channel(
-            printer=printer, filament=fil_id, padding=5,
-            rect_width=40, rect_height=20, layers=4,
-        )
+        r = await generate_channel(printer=printer, filament=fil_id)
         files[f"{folder}/channel.gcode"] = r["gcode"]
         files[f"{folder}/channel.txt"] = r["bitmap"]
 
-        r = await generate_width(
-            printer=printer, filament=fil_id, padding=5,
-            rect_width=40, rect_height=20, layers=4,
-        )
+        r = await generate_width(printer=printer, filament=fil_id)
         files[f"{folder}/width.gcode"] = r["gcode"]
         files[f"{folder}/width.txt"] = r["bitmap"]
 
-        r = await generate_solid_squares(
-            printer=printer, filament=fil_id, padding=5,
-            rect_width=10, rect_height=20, layers=10,
-        )
+        r = await generate_solid_squares(printer=printer, filament=fil_id)
         files[f"{folder}/solid_squares.gcode"] = r["gcode"]
         files[f"{folder}/solid_squares.txt"] = r["bitmap"]
 

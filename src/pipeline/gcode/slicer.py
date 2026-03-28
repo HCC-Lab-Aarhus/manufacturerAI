@@ -109,6 +109,8 @@ def slice_stl(
     printer: str | None = None,
     filament: str | None = None,
     filament_override_path: Path | None = None,
+    center: tuple[float, float] | None = None,
+    extra_overrides: list[Path] | None = None,
     timeout_s: int = 300,
 ) -> tuple[bool, str, Path | None]:
     """Slice *stl_path* and write G-code.
@@ -131,6 +133,13 @@ def slice_stl(
         Used only if *filament_override_path* is not provided.
     filament_override_path : Path, optional
         Pre-written filament override ``.ini``.
+    center : tuple[float, float], optional
+        ``(X, Y)`` bed coordinate for the model centre.  Passed to
+        PrusaSlicer as ``--center X,Y``.  When *None*, PrusaSlicer
+        auto-centres on the build plate.
+    extra_overrides : list[Path], optional
+        Additional ``--load`` ini files applied after the main profile
+        and filament overrides.
     timeout_s : int
         CLI timeout in seconds.
 
@@ -154,6 +163,9 @@ def slice_stl(
 
     cmd = [exe, "--export-gcode"]
 
+    if center is not None:
+        cmd += ["--center", f"{center[0]:.3f},{center[1]:.3f}"]
+
     # Directives from the profile (e.g. --printer-profile, --thumbnails)
     # are applied first so the profile's --load overrides sit on top.
     cmd += profile_cli_args
@@ -169,6 +181,10 @@ def slice_stl(
     if filament_override_path and filament_override_path.exists():
         cmd += ["--load", str(filament_override_path)]
         log.info("Filament overrides loaded: %s", filament_override_path)
+
+    for p in (extra_overrides or []):
+        if p.exists():
+            cmd += ["--load", str(p)]
 
     cmd += ["--output", str(output_gcode), str(stl_path)]
 

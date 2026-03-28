@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import math
+import re
+import tempfile
+from pathlib import Path
 from typing import Any
 from dataclasses import dataclass
 
@@ -10,10 +13,9 @@ from src.catalog.loader import load_catalog, get_component
 from src.catalog.models import Component
 from src.pipeline.config import (
     get_printer, PrinterDef, SweepGrid, sweep_grid,
-    TRACE_RULES,
     component_z_range, FLOOR_MM, CAVITY_START_MM, CEILING_MM, TRACE_HEIGHT_MM,
 )
-from src.pipeline.gcode.filaments import get_filament, FilamentDef
+from src.pipeline.gcode.filaments import get_filament
 from src.pipeline.manifest import generate_manifest
 from src.pipeline.placer.models import PlacedComponent
 from src.pipeline.design.models import Outline, Enclosure, OutlineVertex
@@ -25,8 +27,16 @@ from src.pipeline.scad.fragment import (
     PolygonGeometry, SegmentGeometry, CapsuleGeometry,
 )
 from src.pipeline.scad.traces import TRACE_WIDTH as SCAD_TRACE_WIDTH
+from src.pipeline.scad.compiler import compile_scad
+from src.pipeline.gcode.slicer import slice_stl
+from src.pipeline.gcode.postprocessor import (
+    postprocess_gcode, _segment_near_traces, _MOVE_RE,
+)
 
-from ._common import _Z_HOP
+from ._common import (
+    DEBUG_CONFIG, load_slicer_params,
+    _PROFILES_DIR, _DEBUG_OVERRIDE,
+)
 
 PINHOLE_TAPER_D: float = 3.5
 
@@ -206,388 +216,169 @@ def _compute_component_layout(
     return layouts
 
 
-def _pinhole_gcode(
-    pdef: PrinterDef,
-    fdef: FilamentDef,
-    pad: float,
-    z: float = 0.2,
-    feed: float = 1200,
-) -> tuple[str, list[_CompLayout]]:
-    """Generate G-code for multi-component cube-trace test.
+def _frag_scad_lines(frag: ScadFragment) -> list[str]:
+    """Convert a single ScadFragment to OpenSCAD code lines.
 
-    Each component sits on its own plate with traces extending left.
-
-    Returns (gcode_str, layouts).
+    Handles all geometry types including tapered (pin funnels) and
+    tilted (3-D rotated) variants — mirrors the dispatch logic in the
+    pipeline's emit.py but without the Y-mirror wrapper.
     """
-    layouts = _compute_component_layout(pdef, pad, z)
+    _EPS = 0.001
+    g = frag.geometry
 
-    nozzle_temp = int(fdef.overrides.get("first_layer_temperature",
-                      fdef.overrides.get("temperature", "215")))
-    bed_temp = int(fdef.overrides.get("first_layer_bed_temperature",
-                   fdef.overrides.get("bed_temperature", "40")))
+    if frag.taper_scale > 0:
+        scale = frag.taper_scale
+        if isinstance(g, CylinderGeometry):
+            r_top = g.r * scale
+            return [
+                f"translate([{g.cx:.3f}, {g.cy:.3f}, {frag.z_base - _EPS:.3f}])",
+                f"  cylinder(h = {frag.depth + 2 * _EPS:.3f}, "
+                f"r1 = {g.r + _EPS:.3f}, r2 = {r_top + _EPS:.3f});",
+            ]
+        if isinstance(g, RectGeometry):
+            return [
+                f"translate([{g.cx:.3f}, {g.cy:.3f}, {frag.z_base - _EPS:.3f}])",
+                f"  linear_extrude(height = {frag.depth + 2 * _EPS:.3f}, "
+                f"scale = [{scale:.4f}, {scale:.4f}])",
+                f"    square([{g.width + 2 * _EPS:.3f}, {g.height + 2 * _EPS:.3f}], "
+                f"center = true);",
+            ]
 
-    nozzle_d = 0.4
-    filament_d = 1.75
-    extrusion_w = nozzle_d * 1.125
-    filament_area = math.pi * (filament_d / 2) ** 2
-    e_per_mm = (z * extrusion_w) / filament_area
-    iron_spacing = 0.1
-    iron_flow = 0.05
+    if frag.tilt_deg or frag.rotate_3d:
+        if frag.rotate_3d:
+            rx, ry, rz = frag.rotate_3d
+            z_center = frag.z_base
+            length = frag.depth
+        else:
+            z_center = frag.z_base + frag.depth / 2
+            length = frag.tilt_length
+            rx, ry, rz = 0, frag.tilt_deg, frag.rotation_deg
+        rot_str = f"rotate([{rx:.1f}, {ry:.1f}, {rz:.1f}])"
 
-    nom_w = pdef.nominal_bed_width
-    nom_d = pdef.nominal_bed_depth
+        if isinstance(g, CylinderGeometry):
+            base_lines = [
+                f"translate([{g.cx:.3f}, {g.cy:.3f}, {z_center:.3f}])",
+                f"  {rot_str}",
+                f"    cylinder(h = {length + 2 * _EPS:.3f}, "
+                f"r = {g.r + _EPS:.3f}, center = true);",
+            ]
+        elif isinstance(g, RectGeometry):
+            base_lines = [
+                f"translate([{g.cx:.3f}, {g.cy:.3f}, {z_center:.3f}])",
+                f"  {rot_str}",
+                f"    linear_extrude(height = {length + 2 * _EPS:.3f}, center = true)",
+                f"      square([{g.width + 2 * _EPS:.3f}, "
+                f"{g.height + 2 * _EPS:.3f}], center = true);",
+            ]
+        else:
+            return [f"// unsupported tilted geometry: {frag.label}"]
 
-    bw_i, bd_i = int(nom_w), int(nom_d)
-    comp_names = ", ".join(ly.catalog.id for ly in layouts)
-    lines = [
-        "; Cube-trace test - separate plates per component",
-        f"; Printer: {pdef.label}  Filament: {fdef.label}",
-        f"; bed {nom_w}x{nom_d}  pad {pad}",
-        f"; components: {comp_names}",
-        f"; printer_model = {pdef.id}",
-        f"; bed_shape = 0x0,{bw_i}x0,{bw_i}x{bd_i},0x{bd_i}",
-        f"; nozzle_diameter = {nozzle_d}",
-        f"; filament_diameter = {filament_d}",
-        "",
-        "; --- Start sequence ---",
-        f"M140 S{bed_temp} ; set bed temp",
-        f"M104 S{nozzle_temp} ; set nozzle temp (parallel heating)",
-        f"M190 S{bed_temp} ; wait for bed temp",
-        f"M109 S{nozzle_temp} ; wait for nozzle temp",
-        "G28 ; home all axes",
-    ]
+        if frag.clip_half:
+            big = max(
+                length,
+                g.r if isinstance(g, CylinderGeometry) else max(g.width, g.height),
+            ) + 10
+            clip_z = z_center if frag.clip_half == "top" else z_center - big
+            cx = g.cx if isinstance(g, (CylinderGeometry, RectGeometry)) else 0
+            cy = g.cy if isinstance(g, (CylinderGeometry, RectGeometry)) else 0
+            return [
+                "intersection() {",
+                *[f"  {l}" for l in base_lines],
+                f"  translate([{cx - big:.3f}, {cy - big:.3f}, {clip_z:.3f}])",
+                f"    cube([{2 * big:.3f}, {2 * big:.3f}, {big:.3f}]);",
+                "}",
+            ]
+        return base_lines
 
-    is_mk3 = "mk3" in pdef.id.lower()
-    if is_mk3:
-        lines += [
-            "G1 Z0.20 F720", "G1 Y-3 F1000", "G92 E0",
-            "G1 X60 E9 F1000", "G1 X100 E12.5 F1000", "G92 E0", "M221 S95",
+    if isinstance(g, CylinderGeometry):
+        return [
+            f"translate([{g.cx:.3f}, {g.cy:.3f}, {frag.z_base - _EPS:.3f}])",
+            f"  cylinder(h = {frag.depth + 2 * _EPS:.3f}, r = {g.r + _EPS:.3f});",
+        ]
+
+    if isinstance(g, RectGeometry):
+        pts = g.to_polygon()
+    elif isinstance(g, SegmentGeometry):
+        pts = g.to_polygon()
+    elif isinstance(g, PolygonGeometry):
+        pts = g.points
+    elif isinstance(g, CapsuleGeometry):
+        return [
+            f"translate([0, 0, {frag.z_base - _EPS:.3f}])",
+            f"  linear_extrude(height = {frag.depth + 2 * _EPS:.3f})",
+            f"    hull() {{",
+            f"      translate([{g.x1:.3f}, {g.y1:.3f}]) circle(r = {g.r1:.3f});",
+            f"      translate([{g.x2:.3f}, {g.y2:.3f}]) circle(r = {g.r2:.3f});",
+            f"    }}",
         ]
     else:
-        lines += [
-            "G29 ; auto bed leveling", "G92 E0", "G1 Z2 F720",
-            "G1 X5 Y5 F3000", f"G1 Z{z:.2f} F600",
-            "G1 X60 E9 F1000 ; purge line", "G92 E0",
+        return [f"// unsupported geometry: {frag.label}"]
+
+    if pts and len(pts) >= 3:
+        pts_str = ", ".join(f"[{p[0]:.3f}, {p[1]:.3f}]" for p in pts)
+        return [
+            f"translate([0, 0, {frag.z_base - _EPS:.3f}])",
+            f"  linear_extrude(height = {frag.depth + 2 * _EPS:.3f})",
+            f"    polygon(points = [{pts_str}]);",
         ]
+    return [f"// empty fragment: {frag.label}"]
 
-    lines += ["", "G90 ; absolute positioning", "M82 ; absolute extrusion", ""]
 
-    e = 0.0
-    cur_z = 0.0
+def _build_components_scad(
+    layouts: list[_CompLayout],
+    fragments: list[ScadFragment],
+    plate_z: float,
+) -> str:
+    """Build OpenSCAD source for the component debug test.
 
-    # ── Shared G-code helpers ──
-
-    def _rect_perimeter_infill_iron(
-        x0: float, y0: float, w: float, h: float,
-        do_iron: bool = False,
-    ) -> None:
-        nonlocal e
-        x1, y1 = x0 + w, y0 + h
-        e -= 0.8
-        lines.append(f"G1 E{e:.4f} F2400 ; retract")
-        lines.append(f"G1 Z{cur_z + _Z_HOP:.2f} F720 ; z-hop")
-        lines.append(f"G1 X{x0:.3f} Y{y0:.3f} F3000 ; travel")
-        lines.append(f"G1 Z{cur_z:.2f} F720 ; lower")
-        e += 0.8
-        lines.append(f"G1 E{e:.4f} F2400 ; unretract")
-        prev = (x0, y0)
-        for nx, ny in [(x1, y0), (x1, y1), (x0, y1), (x0, y0)]:
-            dist = math.hypot(nx - prev[0], ny - prev[1])
-            e += dist * e_per_mm
-            lines.append(f"G1 X{nx:.3f} Y{ny:.3f} E{e:.4f} F{feed}")
-            prev = (nx, ny)
-        inset = extrusion_w / 2
-        ix0, iy0 = x0 + inset, y0 + inset
-        ix1, iy1 = x1 - inset, y1 - inset
-        x_pos = ix0
-        going_up = True
-        while x_pos <= ix1 + 0.001:
-            if going_up:
-                lines.append(f"G1 X{x_pos:.3f} Y{iy0:.3f} E{e:.4f} F{feed}")
-                e += (iy1 - iy0) * e_per_mm
-                lines.append(f"G1 X{x_pos:.3f} Y{iy1:.3f} E{e:.4f} F{feed}")
-            else:
-                lines.append(f"G1 X{x_pos:.3f} Y{iy1:.3f} E{e:.4f} F{feed}")
-                e += (iy1 - iy0) * e_per_mm
-                lines.append(f"G1 X{x_pos:.3f} Y{iy0:.3f} E{e:.4f} F{feed}")
-            going_up = not going_up
-            x_pos += extrusion_w
-        if do_iron:
-            iron_epmm = e_per_mm * iron_flow
-            lines.append(";TYPE:Ironing")
-            e -= 0.8
-            lines.append(f"G1 E{e:.4f} F2400 ; retract")
-            lines.append(f"G1 Z{cur_z + _Z_HOP:.2f} F720 ; z-hop")
-            lines.append(f"G1 X{ix1:.3f} Y{iy0:.3f} F3000")
-            lines.append(f"G1 Z{cur_z:.2f} F720 ; lower")
-            e += 0.8
-            lines.append(f"G1 E{e:.4f} F2400 ; unretract")
-            x_pos = ix1
-            going_down = True
-            while x_pos >= ix0 - 0.001:
-                e += (iy1 - iy0) * iron_epmm
-                if going_down:
-                    lines.append(f"G1 X{x_pos:.3f} Y{iy1:.3f} E{e:.5f} F900")
-                else:
-                    lines.append(f"G1 X{x_pos:.3f} Y{iy0:.3f} E{e:.5f} F900")
-                going_down = not going_down
-                x_pos -= iron_spacing
-                if x_pos >= ix0 - 0.001:
-                    e += iron_spacing * iron_epmm
-                    lines.append(f"G1 X{x_pos:.3f} E{e:.5f} F900")
-
-    cut_hw = SCAD_TRACE_WIDTH / 2
-
-    def _iron_trace_channels() -> None:
-        nonlocal e
-        iron_epmm = e_per_mm * iron_flow
-        lines.append(";TYPE:Ironing - trace channels")
-        for ly in layouts:
-            for pin_x, pin_y, _hr in ly.pins:
-                y_lo = pin_y - cut_hw
-                y_hi = pin_y + cut_hw
-                x_lo = ly.plate_x
-                x_hi = pin_x
-                if x_hi <= x_lo:
-                    continue
-                e -= 0.8
-                lines.append(f"G1 E{e:.4f} F2400 ; retract")
-                lines.append(f"G1 Z{cur_z + _Z_HOP:.2f} F720 ; z-hop")
-                lines.append(f"G1 X{x_hi:.3f} Y{y_lo:.3f} F3000")
-                lines.append(f"G1 Z{cur_z:.2f} F720 ; lower")
-                e += 0.8
-                lines.append(f"G1 E{e:.4f} F2400 ; unretract")
-                x_pos = x_hi
-                going_down = True
-                while x_pos >= x_lo - 0.001:
-                    e += (y_hi - y_lo) * iron_epmm
-                    if going_down:
-                        lines.append(f"G1 X{x_pos:.3f} Y{y_hi:.3f} E{e:.5f} F900")
-                    else:
-                        lines.append(f"G1 X{x_pos:.3f} Y{y_lo:.3f} E{e:.5f} F900")
-                    going_down = not going_down
-                    x_pos -= iron_spacing
-                    if x_pos >= x_lo - 0.001:
-                        e += iron_spacing * iron_epmm
-                        lines.append(f"G1 X{x_pos:.3f} E{e:.5f} F900")
-
-    def _frag_y_excl(
-        frag: ScadFragment, x: float,
-    ) -> tuple[float, float] | None:
-        geom = frag.geometry
-        s = max(frag.taper_scale, 1.0) if frag.taper_scale > 0 else 1.0
-        if isinstance(geom, RectGeometry):
-            hw = geom.width / 2 * s
-            if abs(x - geom.cx) <= hw:
-                hh = geom.height / 2 * s
-                return (geom.cy - hh, geom.cy + hh)
-        elif isinstance(geom, CylinderGeometry):
-            r = geom.r * s
-            dx = x - geom.cx
-            if abs(dx) <= r:
-                hc = math.sqrt(r ** 2 - dx ** 2)
-                return (geom.cy - hc, geom.cy + hc)
-        elif isinstance(geom, PolygonGeometry):
-            xs = [p[0] for p in geom.points]
-            if min(xs) <= x <= max(xs):
-                ys = [p[1] for p in geom.points]
-                return (min(ys), max(ys))
-        elif isinstance(geom, (SegmentGeometry, CapsuleGeometry)):
-            if isinstance(geom, SegmentGeometry):
-                poly = geom.to_polygon()
-                xs = [p[0] for p in poly]
-                if min(xs) <= x <= max(xs):
-                    ys = [p[1] for p in poly]
-                    return (min(ys), max(ys))
-            else:
-                xmin = min(geom.x1 - geom.r1, geom.x2 - geom.r2)
-                xmax = max(geom.x1 + geom.r1, geom.x2 + geom.r2)
-                if xmin <= x <= xmax:
-                    ymin = min(geom.y1 - geom.r1, geom.y2 - geom.r2)
-                    ymax = max(geom.y1 + geom.r1, geom.y2 + geom.r2)
-                return (ymin, ymax)
-        return None
-
-    def _trace_excl_at(
-        ly: _CompLayout, x: float,
-    ) -> list[tuple[float, float]]:
-        raw: list[tuple[float, float]] = []
-        for pin_x, pin_y, _hr in ly.pins:
-            if x < ly.plate_x - 0.001 or x > pin_x + 0.001:
-                continue
-            raw.append((pin_y - cut_hw, pin_y + cut_hw))
-        return raw
-
-    trace_z_top = FLOOR_MM + TRACE_HEIGHT_MM
-
-    def _fragment_excl_at(
-        ly: _CompLayout, x: float, z_layer: float,
-    ) -> list[tuple[float, float]]:
-        raw: list[tuple[float, float]] = []
-        if z_layer <= trace_z_top + 0.001:
-            raw.extend(_trace_excl_at(ly, x))
-        for frag in ly.fragments:
-            if frag.z_base > z_layer or z_layer > frag.z_base + frag.depth:
-                continue
-            excl = _frag_y_excl(frag, x)
-            if excl is not None:
-                raw.append(excl)
-        raw.sort()
-        merged: list[tuple[float, float]] = []
-        for a, b in raw:
-            if merged and a <= merged[-1][1]:
-                merged[-1] = (merged[-1][0], max(merged[-1][1], b))
-            else:
-                merged.append((a, b))
-        return merged
-
-    def _split_y(
-        lo: float, hi: float, excls: list[tuple[float, float]],
-    ) -> list[tuple[float, float]]:
-        segs = [(lo, hi)]
-        for ea, eb in excls:
-            ns: list[tuple[float, float]] = []
-            for s0, s1 in segs:
-                if eb <= s0 or ea >= s1:
-                    ns.append((s0, s1))
-                else:
-                    if s0 < ea:
-                        ns.append((s0, ea))
-                    if eb < s1:
-                        ns.append((eb, s1))
-            segs = ns
-        return segs
-
-    def _wall_edge(x_a: float, y_a: float, x_b: float, y_b: float,
-                   ly: _CompLayout, z_layer: float) -> None:
-        nonlocal e
-        is_vertical = abs(x_a - x_b) < 0.001
-        if is_vertical and z_layer <= trace_z_top + 0.001:
-            excls = _trace_excl_at(ly, x_a)
-            if excls:
-                lo, hi = min(y_a, y_b), max(y_a, y_b)
-                segs = _split_y(lo, hi, excls)
-                going_up = y_b > y_a
-                ordered = segs if going_up else list(reversed(segs))
-                for s in ordered:
-                    sa, sb = (s[0], s[1]) if going_up else (s[1], s[0])
-                    e -= 0.8
-                    lines.append(f"G1 E{e:.4f} F2400 ; retract")
-                    lines.append(f"G1 Z{z_layer + _Z_HOP:.2f} F720 ; z-hop")
-                    lines.append(f"G1 X{x_a:.3f} Y{sa:.3f} F3000")
-                    lines.append(f"G1 Z{z_layer:.2f} F720 ; lower")
-                    e += 0.8
-                    lines.append(f"G1 E{e:.4f} F2400 ; unretract")
-                    e += abs(sb - sa) * e_per_mm
-                    lines.append(f"G1 X{x_a:.3f} Y{sb:.3f} E{e:.4f} F{feed}")
-                return
-        dist = math.hypot(x_b - x_a, y_b - y_a)
-        e += dist * e_per_mm
-        lines.append(f"G1 X{x_b:.3f} Y{y_b:.3f} E{e:.4f} F{feed}")
-
-    n_walls = 3
-
-    def _block_with_fragments(ly: _CompLayout, z_layer: float) -> None:
-        nonlocal e
-        x0, y0 = ly.block_x, ly.block_y
-        w, h = ly.block_w, ly.block_h
-        x1, y1 = x0 + w, y0 + h
-
-        for wall in range(n_walls):
-            offset = extrusion_w * wall
-            wx0 = x0 + offset
-            wy0 = y0 + offset
-            wx1 = x1 - offset
-            wy1 = y1 - offset
-
-            e -= 0.8
-            lines.append(f"G1 E{e:.4f} F2400 ; retract")
-            lines.append(f"G1 Z{z_layer + _Z_HOP:.2f} F720 ; z-hop")
-            lines.append(f"G1 X{wx0:.3f} Y{wy0:.3f} F3000 ; travel")
-            lines.append(f"G1 Z{z_layer:.2f} F720 ; lower")
-            e += 0.8
-            lines.append(f"G1 E{e:.4f} F2400 ; unretract")
-            corners = [(wx1, wy0), (wx1, wy1), (wx0, wy1), (wx0, wy0)]
-            prev = (wx0, wy0)
-            for nx, ny in corners:
-                _wall_edge(prev[0], prev[1], nx, ny, ly, z_layer)
-                prev = (nx, ny)
-
-        inset = n_walls * extrusion_w - extrusion_w / 2
-        ix0, iy0 = x0 + inset, y0 + inset
-        ix1, iy1 = x1 - inset, y1 - inset
-        x_pos = ix0
-        going_up = True
-        while x_pos <= ix1 + 0.001:
-            excls = _fragment_excl_at(ly, x_pos, z_layer)
-            segs = _split_y(iy0, iy1, excls)
-            ordered = segs if going_up else list(reversed(segs))
-            for s in ordered:
-                sy_a, sy_b = (s[0], s[1]) if going_up else (s[1], s[0])
-                e -= 0.8
-                lines.append(f"G1 E{e:.4f} F2400 ; retract")
-                lines.append(f"G1 Z{z_layer + _Z_HOP:.2f} F720 ; z-hop")
-                lines.append(f"G1 X{x_pos:.3f} Y{sy_a:.3f} F3000")
-                lines.append(f"G1 Z{z_layer:.2f} F720 ; lower")
-                e += 0.8
-                lines.append(f"G1 E{e:.4f} F2400 ; unretract")
-                e += abs(sy_b - sy_a) * e_per_mm
-                lines.append(f"G1 X{x_pos:.3f} Y{sy_b:.3f} E{e:.4f} F{feed}")
-            going_up = not going_up
-            x_pos += extrusion_w
-
-    # ── Print the plate bases (one per component) ──
-    plate_layers = max(1, round(FLOOR_MM / z))
-    for pl in range(1, plate_layers + 1):
-        lz = z * pl
-        cur_z = lz
-        lines.append(";LAYER_CHANGE")
-        lines.append(f";Z:{lz:.1f}")
-        lines.append(f"G1 Z{lz:.2f} F600")
-        for ly in layouts:
-            _rect_perimeter_infill_iron(ly.plate_x, ly.plate_y, ly.plate_w, ly.plate_h)
-    _iron_trace_channels()
-
-    # ── Print raised blocks ──
-    max_block_z_top = max(ly.block_z_top for ly in layouts)
-    max_block_layers = max(1, round((max_block_z_top - FLOOR_MM) / z))
-    for layer in range(1, max_block_layers + 1):
-        lz = z * (plate_layers + layer)
-        cur_z = lz
-        lines.append(";LAYER_CHANGE")
-        lines.append(f";Z:{lz:.1f}")
-        lines.append(f"G1 Z{lz:.2f} F600")
-        for ly in layouts:
-            if lz > ly.block_z_top + 0.001:
-                continue
-            _block_with_fragments(ly, lz)
-
-    e -= 4.0
-    lines.append(f"G1 E{e:.4f} F3000 ; retract")
-    lines += [
+    Creates rectangular plates and blocks as the body, then subtracts
+    all fragment cutouts (pin holes, body pockets, trace channels, etc.)
+    using a ``difference()`` CSG operation.  No Y-mirror is applied so
+    that the resulting STL coordinates match bed / bitmap coordinates.
+    """
+    lines = [
+        "// manufacturerAI — debug component test (auto-generated)",
+        "$fn = 32;",
         "",
-        "G91 ; relative positioning",
-        "G1 Z1 F1000 ; lift head",
-        "G90 ; absolute positioning",
-        "",
-        "G1 X0 Y0 F3000 ; move to home",
-        "",
-        "G91 ; relative positioning",
-        "G1 Z-1 F1000 ; lower head back down",
-        "G90 ; absolute positioning",
-        "",
-        ";silverink",
-        "",
-        "; --- End sequence ---",
-        "G4 ; wait for moves to finish",
-        "M104 S0 ; turn off nozzle",
-        "M140 S0 ; turn off heatbed",
-        "M107 ; turn off fan",
-        f"G1 X0 Y{nom_d:.0f} F3000 ; park head",
-        "M84 ; disable motors",
     ]
 
-    return "\n".join(lines), layouts
+    cutouts = [f for f in fragments if f.type == "cutout"]
+    additions = [f for f in fragments if f.type == "addition"]
+
+    if cutouts:
+        lines.append("difference() {")
+        lines.append("  union() {")
+        indent = "    "
+    elif additions:
+        lines.append("union() {")
+        indent = "  "
+    else:
+        indent = ""
+
+    for ly in layouts:
+        lines.append(f"{indent}translate([{ly.plate_x:.3f}, {ly.plate_y:.3f}, 0])")
+        lines.append(f"{indent}  cube([{ly.plate_w:.3f}, {ly.plate_h:.3f}, {plate_z:.3f}]);")
+        lines.append(f"{indent}translate([{ly.block_x:.3f}, {ly.block_y:.3f}, 0])")
+        lines.append(f"{indent}  cube([{ly.block_w:.3f}, {ly.block_h:.3f}, {ly.block_z_top:.3f}]);")
+
+    for a in additions:
+        frag_lines = _frag_scad_lines(a)
+        lines.extend(f"{indent}{l}" for l in frag_lines)
+
+    if cutouts or additions:
+        lines.append("  }" if cutouts else "}")
+
+    if cutouts:
+        lines.append("")
+        for c in cutouts:
+            if c.label:
+                lines.append(f"  // {c.label}")
+            frag_lines = _frag_scad_lines(c)
+            lines.extend(f"  {l}" for l in frag_lines)
+        lines.append("}")
+
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _pinhole_bitmap(
@@ -629,24 +420,170 @@ def _pinhole_bitmap(
     return "\n".join(result)
 
 
+_Z_COMMENT = re.compile(r"^;Z:([\d.]+)")
+
+
+def _keep_ironing_near_traces(
+    gcode: str,
+    trace_segs: list[tuple[float, float, float, float]],
+    ink_z: float,
+) -> str:
+    """Keep ironing extrusion only near trace segments, suppress elsewhere.
+
+    Inverse of the pipeline's ``_filter_ironing_at_ink_layer``: converts
+    ironing extrusion moves that are NOT near any trace into travel
+    moves (G0), so only the trace paths get ironed.
+    """
+    lines = gcode.splitlines()
+    out: list[str] = []
+    current_z = 0.0
+    track_x, track_y = 0.0, 0.0
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
+
+        z_m = _Z_COMMENT.match(line)
+        if z_m:
+            current_z = float(z_m.group(1))
+
+        m_pos = _MOVE_RE.match(line)
+        if m_pos:
+            if m_pos.group("x"):
+                track_x = float(m_pos.group("x"))
+            if m_pos.group("y"):
+                track_y = float(m_pos.group("y"))
+
+        if line.strip() == ";TYPE:Ironing" and abs(current_z - ink_z) < 0.05:
+            out.append(line)
+            i += 1
+            cur_x, cur_y = track_x, track_y
+
+            while i < len(lines):
+                ln = lines[i]
+                if ln.startswith(";TYPE:") or ln.startswith(";LAYER_CHANGE"):
+                    break
+
+                m = _MOVE_RE.match(ln)
+                if m and (m.group("x") or m.group("y")):
+                    nx = float(m.group("x")) if m.group("x") else cur_x
+                    ny = float(m.group("y")) if m.group("y") else cur_y
+
+                    if _segment_near_traces(cur_x, cur_y, nx, ny, trace_segs):
+                        out.append(ln)
+                    else:
+                        coords = ""
+                        if m.group("x"):
+                            coords += f" X{m.group('x')}"
+                        if m.group("y"):
+                            coords += f" Y{m.group('y')}"
+                        out.append(f"G0{coords} ; ironing suppressed (no trace)")
+
+                    cur_x, cur_y = nx, ny
+                else:
+                    out.append(ln)
+                    if m:
+                        if m.group("x"):
+                            cur_x = float(m.group("x"))
+                        if m.group("y"):
+                            cur_y = float(m.group("y"))
+                i += 1
+            continue
+
+        out.append(line)
+        i += 1
+
+    return "\n".join(out)
+
+
 @router.post("/components")
 async def generate_components(
     printer: str = Query("coreone"),
     filament: str = Query("prusament_pla"),
-    padding: float = Query(5),
 ) -> dict[str, Any]:
-    """Generate G-code + bitmap for multi-component test."""
+    """Generate G-code + bitmap for multi-component test.
+
+    Uses the real pipeline flow: resolve_component() for cutout fragments,
+    OpenSCAD for CSG compilation (pin holes, body pockets, trace channels),
+    and PrusaSlicer for G-code generation.
+    """
     pdef = get_printer(printer)
     fdef = get_filament(filament)
     grid = sweep_grid(pdef)
+    sp = load_slicer_params(printer)
 
-    gcode, layouts = _pinhole_gcode(pdef, fdef, padding)
+    layouts = _compute_component_layout(pdef, DEBUG_CONFIG.padding, sp.layer_height)
     bitmap = _pinhole_bitmap(pdef, grid, layouts)
+
+    plate_z = FLOOR_MM
+
+    all_frags: list[ScadFragment] = []
+    trace_segs: list[tuple[float, float, float, float]] = []
+    for ly in layouts:
+        all_frags.extend(ly.fragments)
+        for pin_x, pin_y, _hr in ly.pins:
+            all_frags.append(ScadFragment(
+                type="cutout",
+                geometry=SegmentGeometry(
+                    ly.plate_x, pin_y, pin_x, pin_y, SCAD_TRACE_WIDTH,
+                ),
+                z_base=FLOOR_MM,
+                depth=TRACE_HEIGHT_MM,
+                label=f"trace {ly.catalog.id}",
+            ))
+            trace_segs.append((ly.plate_x, pin_y, pin_x, pin_y))
+
+    scad_src = _build_components_scad(layouts, all_frags, plate_z)
 
     bb_x = min(ly.plate_x for ly in layouts)
     bb_y = min(ly.plate_y for ly in layouts)
     bb_x2 = max(ly.plate_x + ly.plate_w for ly in layouts)
     bb_y2 = max(ly.plate_y + ly.plate_h for ly in layouts)
+    center = ((bb_x + bb_x2) / 2, (bb_y + bb_y2) / 2)
+
+    with tempfile.TemporaryDirectory(prefix="debug_comp_") as tmpdir:
+        tmp = Path(tmpdir)
+        scad_path = tmp / "components.scad"
+        scad_path.write_text(scad_src, encoding="utf-8")
+
+        ok, msg, stl_path = compile_scad(scad_path)
+        if not ok:
+            raise RuntimeError(f"OpenSCAD compilation failed: {msg}")
+
+        comp_override = tmp / "components_ironing.ini"
+        comp_override.write_text(
+            "top_solid_layers = 3\n",
+            encoding="utf-8",
+        )
+        overrides: list[Path] = []
+        if _DEBUG_OVERRIDE.exists():
+            overrides.append(_DEBUG_OVERRIDE)
+        overrides.append(comp_override)
+
+        slicer_gcode = tmp / "slicer_output.gcode"
+        ok, msg, _ = slice_stl(
+            stl_path,
+            output_gcode=slicer_gcode,
+            printer=printer,
+            filament=fdef.id,
+            center=center,
+            extra_overrides=overrides,
+        )
+        if not ok:
+            raise RuntimeError(f"PrusaSlicer failed: {msg}")
+
+        final_gcode = tmp / "components.gcode"
+        postprocess_gcode(
+            gcode_path=slicer_gcode,
+            output_path=final_gcode,
+            ink_z=FLOOR_MM,
+            trace_segments=trace_segs,
+        )
+
+        gcode = _keep_ironing_near_traces(
+            final_gcode.read_text(encoding="utf-8"),
+            trace_segs, FLOOR_MM,
+        )
 
     manifest = generate_manifest(
         grid=grid,
