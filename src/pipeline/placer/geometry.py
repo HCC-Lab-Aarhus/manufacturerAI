@@ -40,9 +40,6 @@ def footprint_envelope_halfdims(
     ``footprint_halfdims``.
     """
     body_hw, body_hh = footprint_halfdims(cat, rotation_deg)
-    if not cat.pins:
-        return (body_hw, body_hh)
-
     max_x = body_hw
     max_y = body_hh
     rad = math.radians(rotation_deg)
@@ -50,13 +47,28 @@ def footprint_envelope_halfdims(
     sin_r = math.sin(rad)
     for pin in cat.pins:
         px, py = pin.position_mm
-        # Rotated pin offset from component centre
         rx = abs(px * cos_r - py * sin_r)
         ry = abs(px * sin_r + py * cos_r)
-        # Include half the hole diameter so the full pad is covered
         pad = pin.hole_diameter_mm / 2
         max_x = max(max_x, rx + pad)
         max_y = max(max_y, ry + pad)
+    for feat in cat.scad_features:
+        fx, fy = feat.position_mm
+        rfx = abs(fx * cos_r - fy * sin_r)
+        rfy = abs(fx * sin_r + fy * cos_r)
+        if feat.shape == "circle":
+            fr = (feat.diameter_mm or 0) / 2
+            max_x = max(max_x, rfx + fr)
+            max_y = max(max_y, rfy + fr)
+        else:
+            fw = (feat.width_mm or 0) / 2
+            fh = (feat.length_mm or 0) / 2
+            feat_cos = round(abs(cos_r), 9)
+            feat_sin = round(abs(sin_r), 9)
+            feat_hw = fw * feat_cos + fh * feat_sin
+            feat_hh = fw * feat_sin + fh * feat_cos
+            max_x = max(max_x, rfx + feat_hw)
+            max_y = max(max_y, rfy + feat_hh)
     return (max_x, max_y)
 
 
