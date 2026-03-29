@@ -108,7 +108,7 @@ async def stream_design_events(sid: str, after: int = Query(0)):
 
             if task.status != "running":
                 break
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.05)
 
     return StreamingResponse(
         event_stream(),
