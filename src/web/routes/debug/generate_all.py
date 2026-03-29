@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Query
 
 from .calibration import generate_calibration
+from .combined import generate_combined
 from .components import generate_components
 from .spacing import generate_spacing
 from .surface_test import generate_surface_test
@@ -35,6 +36,10 @@ async def generate_all_tests(
         cal = await generate_calibration(printer=printer, filament=fil_id)
         files[f"{folder}/calibration.gcode"] = cal["gcode"]
         files[f"{folder}/calibration.txt"] = cal["bitmap"]
+
+        r = await generate_combined(printer=printer, filament=fil_id)
+        files[f"{folder}/combined.gcode"] = r["gcode"]
+        files[f"{folder}/combined.txt"] = r["bitmap"]
 
         r = await generate_components(printer=printer, filament=fil_id)
         files[f"{folder}/components.gcode"] = r["gcode"]

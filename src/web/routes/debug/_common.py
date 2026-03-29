@@ -10,7 +10,7 @@ from src.pipeline.config import get_printer, PrinterDef
 from src.pipeline.gcode.filaments import FilamentDef
 
 _PROFILES_DIR = Path(__file__).resolve().parents[4] / "pipeline" / "gcode" / "profiles"
-_DEBUG_OVERRIDE = _PROFILES_DIR / "debug_override.ini"
+DEBUG_OVERRIDE = _PROFILES_DIR / "debug_override.ini"
 
 _Z_HOP: float = 1.0
 
@@ -29,6 +29,15 @@ class DebugConfig:
 
 DEBUG_CONFIG = DebugConfig()
 
+
+def render_bitmap(rows: int, cols: int, ink_cells: set[tuple[int, int]]) -> str:
+    result: list[str] = []
+    for r in range(rows - 1, -1, -1):
+        line_chars: list[str] = []
+        for c in range(cols):
+            line_chars.append('1' if (r, c) in ink_cells else '0')
+        result.append(''.join(line_chars))
+    return "\n".join(result)
 
 
 def _parse_ini(path: Path) -> dict[str, str]:
@@ -287,7 +296,7 @@ def slice_debug_boxes(
             printer=printer_id or pdef.id,
             filament=fdef.id,
             center=center,
-            extra_overrides=[_DEBUG_OVERRIDE],
+            extra_overrides=[DEBUG_OVERRIDE],
         )
         if not ok:
             raise RuntimeError(f"PrusaSlicer failed: {msg}")

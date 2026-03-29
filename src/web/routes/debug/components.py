@@ -34,8 +34,8 @@ from src.pipeline.gcode.postprocessor import (
 )
 
 from ._common import (
-    DEBUG_CONFIG, load_slicer_params,
-    _PROFILES_DIR, _DEBUG_OVERRIDE,
+    DEBUG_CONFIG, load_slicer_params, render_bitmap,
+    _PROFILES_DIR, DEBUG_OVERRIDE,
 )
 
 PINHOLE_TAPER_D: float = 3.5
@@ -54,7 +54,7 @@ _COMPONENT_CONFIGS: list[tuple[str, float]] = [
 
 
 @dataclass
-class _CompLayout:
+class CompLayout:
     catalog: Component
     cx: float
     cy: float
@@ -71,11 +71,13 @@ class _CompLayout:
     plate_h: float
 
 
-def _compute_component_layout(
+def compute_component_layout(
     pdef: PrinterDef,
     pad: float,
     z: float = 0.2,
-) -> list[_CompLayout]:
+    y_start: float | None = None,
+    x_start: float | None = None,
+) -> list[CompLayout]:
     """Compute layout for catalog components, each on its own plate.
 
     Uses the real pipeline's component_z_range() for Z heights and
@@ -86,7 +88,7 @@ def _compute_component_layout(
     The battery is rotated 90° so its two pins separate in Y and the
     traces extending left to the plate edge don't collide.
 
-    Returns a list of _CompLayout, each with its own plate coordinates.
+    Returns a list of CompLayout, each with its own plate coordinates.
     """
     cat = load_catalog()
 
@@ -136,13 +138,13 @@ def _compute_component_layout(
     total_plate_h = sum(
         bi[2] + 2 * pad for bi in block_infos
     ) + _COMP_GAP * (len(block_infos) - 1)
-    y_cursor = (nom_d - total_plate_h) / 2
+    y_cursor = y_start if y_start is not None else (nom_d - total_plate_h) / 2
 
-    layouts: list[_CompLayout] = []
+    layouts: list[CompLayout] = []
     for comp, bw, bh, body_top, rot, enclosure_h in block_infos:
         plate_w = _TRACE_RUN + bw + 2 * pad
         plate_h = bh + 2 * pad
-        plate_x = (nom_w - plate_w) / 2
+        plate_x = x_start if x_start is not None else (nom_w - plate_w) / 2
         plate_y = y_cursor
 
         outline = Outline(points=[
@@ -201,7 +203,7 @@ def _compute_component_layout(
         )
         block_z_top = min(max(frag_z_top, body_top), ceil_start)
 
-        layouts.append(_CompLayout(
+        layouts.append(CompLayout(
             catalog=comp, cx=cx, cy=cy,
             block_x=block_x, block_y=block_y,
             block_w=bw, block_h=bh,
@@ -216,7 +218,7 @@ def _compute_component_layout(
     return layouts
 
 
-def _frag_scad_lines(frag: ScadFragment) -> list[str]:
+def frag_scad_lines(frag: ScadFragment) -> list[str]:
     """Convert a single ScadFragment to OpenSCAD code lines.
 
     Handles all geometry types including tapered (pin funnels) and
@@ -325,7 +327,7 @@ def _frag_scad_lines(frag: ScadFragment) -> list[str]:
 
 
 def _build_components_scad(
-    layouts: list[_CompLayout],
+    layouts: list[CompLayout],
     fragments: list[ScadFragment],
     plate_z: float,
 ) -> str:
@@ -362,7 +364,7 @@ def _build_components_scad(
         lines.append(f"{indent}  cube([{ly.block_w:.3f}, {ly.block_h:.3f}, {ly.block_z_top:.3f}]);")
 
     for a in additions:
-        frag_lines = _frag_scad_lines(a)
+        frag_lines = frag_scad_lines(a)
         lines.extend(f"{indent}{l}" for l in frag_lines)
 
     if cutouts or additions:
@@ -373,7 +375,7 @@ def _build_components_scad(
         for c in cutouts:
             if c.label:
                 lines.append(f"  // {c.label}")
-            frag_lines = _frag_scad_lines(c)
+            frag_lines = frag_scad_lines(c)
             lines.extend(f"  {l}" for l in frag_lines)
         lines.append("}")
 
@@ -381,12 +383,11 @@ def _build_components_scad(
     return "\n".join(lines)
 
 
-def _pinhole_bitmap(
-    pdef: PrinterDef,
+def component_ink_cells(
     grid: SweepGrid,
-    layouts: list[_CompLayout],
-) -> str:
-    """Generate bitmap with traces for all component pins."""
+    layouts: list[CompLayout],
+) -> set[tuple[int, int]]:
+    """Ink cells for component trace lines."""
     px = grid.pixel_size_mm
     cols = grid.data_cols
     rows = grid.data_rows
@@ -410,14 +411,16 @@ def _pinhole_bitmap(
                     for c in range(c0, c1 + 1):
                         ink_cells.add((r, c))
 
-    result: list[str] = []
-    for r in range(rows - 1, -1, -1):
-        line_chars = []
-        for c in range(cols):
-            line_chars.append('1' if (r, c) in ink_cells else '0')
-        result.append(''.join(line_chars))
+    return ink_cells
 
-    return "\n".join(result)
+
+def _pinhole_bitmap(
+    pdef: PrinterDef,
+    grid: SweepGrid,
+    layouts: list[CompLayout],
+) -> str:
+    """Generate bitmap with traces for all component pins."""
+    return render_bitmap(grid.data_rows, grid.data_cols, component_ink_cells(grid, layouts))
 
 
 _Z_COMMENT = re.compile(r"^;Z:([\d.]+)")
@@ -512,7 +515,7 @@ async def generate_components(
     grid = sweep_grid(pdef)
     sp = load_slicer_params(printer)
 
-    layouts = _compute_component_layout(pdef, DEBUG_CONFIG.padding, sp.layer_height)
+    layouts = compute_component_layout(pdef, DEBUG_CONFIG.padding, sp.layer_height)
     bitmap = _pinhole_bitmap(pdef, grid, layouts)
 
     plate_z = FLOOR_MM
@@ -556,8 +559,8 @@ async def generate_components(
             encoding="utf-8",
         )
         overrides: list[Path] = []
-        if _DEBUG_OVERRIDE.exists():
-            overrides.append(_DEBUG_OVERRIDE)
+        if DEBUG_OVERRIDE.exists():
+            overrides.append(DEBUG_OVERRIDE)
         overrides.append(comp_override)
 
         slicer_gcode = tmp / "slicer_output.gcode"

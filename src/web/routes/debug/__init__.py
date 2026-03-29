@@ -17,6 +17,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from .calibration import router as _calibration
+from .combined import router as _combined
 from .components import router as _components
 from .spacing import router as _spacing
 from .width import router as _width
@@ -26,6 +27,7 @@ from .generate_all import router as _generate_all
 router = APIRouter(prefix="/debug", tags=["debug"])
 
 router.include_router(_calibration)
+router.include_router(_combined)
 router.include_router(_components)
 router.include_router(_spacing)
 router.include_router(_width)
