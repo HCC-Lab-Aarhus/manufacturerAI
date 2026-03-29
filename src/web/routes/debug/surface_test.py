@@ -16,7 +16,7 @@ N_PADS = 10
 PAD_WIDTH_MM = 9.545
 PAD_HEIGHT_MM = 9.4
 PAD_PITCH_MM = 13.0
-PAD_X_MIN_BED = 122.384
+PAD_X_MIN_BED = 127.084
 PAD_Y_FIRST_BED = 36.005
 
 PAD_POSITIONS_BED: list[tuple[float, float, float, float]] = [
