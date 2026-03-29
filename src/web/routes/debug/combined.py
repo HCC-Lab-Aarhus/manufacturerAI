@@ -18,7 +18,7 @@ from src.pipeline.gcode.postprocessor import postprocess_gcode
 
 from ._common import (
     DEBUG_CONFIG, load_slicer_params, render_bitmap,
-    DEBUG_OVERRIDE,
+    DEBUG_OVERRIDE, _inject_silverink_marker,
 )
 from .spacing import spacing_box_ink_cells, spacing_plate_width_px
 from .width import width_all_ink_cells, width_plate_width_px
@@ -76,8 +76,9 @@ async def generate_combined(
     pdef = get_printer(printer)
     fdef = get_filament(filament)
     grid = sweep_grid(pdef)
+    sp = load_slicer_params(printer)
 
-    plate_z = FLOOR_MM
+    plate_z = sp.layer_height * 10
     pad = DEBUG_CONFIG.padding
     plate_h_mm = DEBUG_CONFIG.landscape_height
     px_mm = grid.pixel_size_mm
@@ -122,8 +123,14 @@ async def generate_combined(
         if not ok or stl_path is None:
             raise RuntimeError(f"OpenSCAD compilation failed: {msg}")
 
-        comp_override = tmp / "combined_ironing.ini"
-        comp_override.write_text("top_solid_layers = 3\n", encoding="utf-8")
+        comp_override = tmp / "combined_override.ini"
+        comp_override.write_text(
+            "fill_density = 100%\n"
+            "fill_pattern = rectilinear\n"
+            "top_solid_layers = 10\n"
+            "bottom_solid_layers = 10\n",
+            encoding="utf-8",
+        )
         overrides: list[Path] = []
         if DEBUG_OVERRIDE.exists():
             overrides.append(DEBUG_OVERRIDE)
@@ -149,7 +156,9 @@ async def generate_combined(
             trace_segments=[],
         )
 
-        gcode = final_gcode.read_text(encoding="utf-8")
+        gcode = _inject_silverink_marker(
+            final_gcode.read_text(encoding="utf-8")
+        )
 
     manifest = generate_manifest(
         grid=grid,
