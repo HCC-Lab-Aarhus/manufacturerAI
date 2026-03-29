@@ -4,10 +4,7 @@ from fastapi import APIRouter, Query
 
 from .calibration import generate_calibration
 from .components import generate_components
-from .layers import generate_layers
 from .spacing import generate_spacing
-from .channel import generate_channel
-from .solid_squares import generate_solid_squares
 from .surface_test import generate_surface_test
 from .width import generate_width
 
@@ -43,27 +40,13 @@ async def generate_all_tests(
         files[f"{folder}/components.gcode"] = r["gcode"]
         files[f"{folder}/components.txt"] = r["bitmap"]
 
-        r = await generate_layers(printer=printer, filament=fil_id)
-        files[f"{folder}/layers.gcode"] = r["gcode"]
-        files[f"{folder}/layers_1.txt"] = r["bitmap_1"]
-        files[f"{folder}/layers_2.txt"] = r["bitmap_2"]
-        files[f"{folder}/layers_3.txt"] = r["bitmap_3"]
-
         r = await generate_spacing(printer=printer, filament=fil_id)
         files[f"{folder}/spacing.gcode"] = r["gcode"]
         files[f"{folder}/spacing.txt"] = r["bitmap"]
 
-        r = await generate_channel(printer=printer, filament=fil_id)
-        files[f"{folder}/channel.gcode"] = r["gcode"]
-        files[f"{folder}/channel.txt"] = r["bitmap"]
-
         r = await generate_width(printer=printer, filament=fil_id)
         files[f"{folder}/width.gcode"] = r["gcode"]
         files[f"{folder}/width.txt"] = r["bitmap"]
-
-        r = await generate_solid_squares(printer=printer, filament=fil_id)
-        files[f"{folder}/solid_squares.gcode"] = r["gcode"]
-        files[f"{folder}/solid_squares.txt"] = r["bitmap"]
 
     r = await generate_surface_test(printer=printer)
     files["surface_test.txt"] = r["bitmap"]

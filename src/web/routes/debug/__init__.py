@@ -17,25 +17,17 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from .calibration import router as _calibration
-from .silverink import router as _silverink
 from .components import router as _components
-from .layers import router as _layers
 from .spacing import router as _spacing
-from .channel import router as _channel
 from .width import router as _width
-from .solid_squares import router as _solid_squares
 from .surface_test import router as _surface_test
 from .generate_all import router as _generate_all
 
 router = APIRouter(prefix="/debug", tags=["debug"])
 
 router.include_router(_calibration)
-router.include_router(_silverink)
 router.include_router(_components)
-router.include_router(_layers)
 router.include_router(_spacing)
-router.include_router(_channel)
 router.include_router(_width)
-router.include_router(_solid_squares)
 router.include_router(_surface_test)
 router.include_router(_generate_all)
