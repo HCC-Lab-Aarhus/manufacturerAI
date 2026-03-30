@@ -48,6 +48,15 @@ async def start_compile(sid: str, force: bool = Query(False)):
             s.pipeline_state["scad"] = "done"
             s.save()
 
+            # Compile extras STL if extras.scad exists
+            extras_scad = s.artifact_path("extras.scad")
+            if extras_scad.exists():
+                extras_stl = s.artifact_path("extras.stl")
+                ok2, msg2, _ = compile_scad(extras_scad, extras_stl, cancel=cancel, timeout=600)
+                if not ok2:
+                    import logging
+                    logging.getLogger(__name__).error("Extras STL compile failed: %s", msg2)
+
     threading.Thread(target=_do_compile, daemon=True).start()
     return {"status": "compiling"}
 

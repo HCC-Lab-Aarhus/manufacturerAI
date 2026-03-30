@@ -34,6 +34,7 @@ class GcodePipelineResult:
     success: bool
     message: str
     gcode_path: Path | None = None
+    extras_gcode_path: Path | None = None
     pause_points: PausePoints | None = None
     postprocess: PostProcessResult | None = None
     stages: list[str] = field(default_factory=list)
@@ -105,14 +106,7 @@ def run_gcode_pipeline(
     stages.append(f"Pause points: {pause_summary}")
     log.info("Pause points: %s", pause_summary)
 
-    # ── 1b. Prefer print_plate.stl (enclosure + battery hatch) ──
-    print_plate = stl_path.parent / "print_plate.stl"
-    if print_plate.exists():
-        log.info("Found print_plate.stl — slicing combined model")
-        stl_path = print_plate
-        stages.append("Using print_plate.stl (enclosure + battery hatch)")
-
-    # ── 2. Slice STL ──────────────────────────────────────────────
+    # ── 2. Slice enclosure STL ─────────────────────────────────────
     slicer_output = output_dir / "_slicer_output.gcode"
     log.info("Slicing %s → %s", stl_path, slicer_output)
     stages.append(f"Slicing {stl_path.name} with PrusaSlicer...")
@@ -124,6 +118,33 @@ def run_gcode_pipeline(
         printer=printer,
         filament_override_path=filament_ini,
     )
+
+    # ── 2b. Slice extras STL if present ──────────────────────────
+    extras_stl = stl_path.parent / "extras.stl"
+    extras_gcode_path: Path | None = None
+    bed_center = (pdef.nominal_bed_width / 2, pdef.nominal_bed_depth / 2)
+    if extras_stl.exists():
+        extras_slicer_out = output_dir / "_extras_slicer_output.gcode"
+        extras_final = output_dir / "extras.gcode"
+        log.info("Slicing extras: %s", extras_stl)
+        stages.append(f"Slicing {extras_stl.name} (separate print)...")
+        eok, emsg, extras_slicer_path = slice_stl(
+            extras_stl,
+            output_gcode=extras_slicer_out,
+            profile_path=slicer_profile,
+            printer=printer,
+            filament_override_path=filament_ini,
+            center=bed_center,
+        )
+        if eok and extras_slicer_path:
+            # Extras are a plain print — just rename, no post-processing
+            extras_slicer_path.rename(extras_final)
+            extras_gcode_path = extras_final
+            stages.append(f"Extras sliced: {extras_final.name}")
+            log.info("Extras sliced: %s", extras_final)
+        else:
+            log.warning("Extras slicing failed: %s", emsg)
+            stages.append(f"Extras slicing failed: {emsg}")
 
     # Clean up filament override .ini (no longer needed after slicing)
     if filament_ini and filament_ini.exists():
@@ -178,6 +199,7 @@ def run_gcode_pipeline(
         success=True,
         message="G-code pipeline completed successfully.",
         gcode_path=final_gcode,
+        extras_gcode_path=extras_gcode_path,
         pause_points=pauses,
         postprocess=pp_result,
         stages=stages,

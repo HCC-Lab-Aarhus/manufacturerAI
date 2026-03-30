@@ -22,10 +22,14 @@ async def download_bundle(sid: str):
     if not bitmap_path.exists():
         raise HTTPException(404, "Missing trace_bitmap.txt — run the bitmap step first")
 
+    extras_gcode_path = s.artifact_path("extras.gcode")
+
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.write(gcode_path, "enclosure.gcode")
         zf.write(bitmap_path, "trace_bitmap.txt")
+        if extras_gcode_path.exists():
+            zf.write(extras_gcode_path, "extras.gcode")
     buf.seek(0)
 
     return StreamingResponse(

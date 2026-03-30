@@ -232,13 +232,19 @@ def run_scad_step(
         placement.components, cat_index, outline, enclosure,
         ceil_start, flat_pts,
     )
-    if extras_scad:
-        scad_str += extras_scad
 
     # ── 9. Write to session folder ────────────────────────────────
     scad_path: Path = session.artifact_path("enclosure.scad")
     scad_path.parent.mkdir(parents=True, exist_ok=True)
     scad_path.write_text(scad_str, encoding="utf-8")
+
+    # Write extras to a separate SCAD file (sliced independently)
+    extras_scad_path: Path | None = None
+    if extras_scad:
+        extras_scad_path = session.artifact_path("extras.scad")
+        extras_scad_path.write_text(extras_scad, encoding="utf-8")
+        log.info("Wrote %s (%.1f kB)", extras_scad_path.name,
+                 len(extras_scad.encode()) / 1024)
 
     log.info(
         "Wrote %s (%.1f kB, %d lines)",
@@ -261,5 +267,14 @@ def run_scad_step(
             log.error("STL render failed: %s", msg)
             session.pipeline_state["stl"] = "error"
         session.save()
+
+        # Compile extras STL if the SCAD was generated
+        if extras_scad_path and extras_scad_path.exists():
+            extras_stl = session.artifact_path("extras.stl")
+            ok2, msg2, _ = compile_scad(extras_scad_path, extras_stl)
+            if ok2:
+                log.info("Extras STL rendered: %s", extras_stl.name)
+            else:
+                log.error("Extras STL render failed: %s", msg2)
 
     return scad_path

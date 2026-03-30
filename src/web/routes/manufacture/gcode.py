@@ -83,7 +83,7 @@ async def start_gcode(
             if result.success:
                 s.pipeline_state["gcode"] = "complete"
                 s.save()
-                set_gcode_state(sid, {
+                state_dict = {
                     "status": "done",
                     "message": result.message,
                     "stages": result.stages,
@@ -92,7 +92,12 @@ async def start_gcode(
                         if result.gcode_path and Path(result.gcode_path).exists()
                         else 0
                     ),
-                })
+                    "has_extras": result.extras_gcode_path is not None
+                                  and Path(result.extras_gcode_path).exists(),
+                }
+                if state_dict["has_extras"]:
+                    state_dict["extras_gcode_bytes"] = Path(result.extras_gcode_path).stat().st_size
+                set_gcode_state(sid, state_dict)
             else:
                 set_gcode_state(sid, {"status": "error", "message": result.message, "stages": result.stages})
         except Exception as exc:
@@ -111,12 +116,17 @@ async def poll_gcode(sid: str):
         return cur
     gcode = s.artifact_path("enclosure.gcode")
     if gcode.exists():
-        return {
+        extras = s.artifact_path("extras.gcode")
+        resp = {
             "status": "done",
             "message": "G-code pipeline completed successfully.",
             "stages": [],
             "gcode_bytes": gcode.stat().st_size,
+            "has_extras": extras.exists(),
         }
+        if extras.exists():
+            resp["extras_gcode_bytes"] = extras.stat().st_size
+        return resp
     return {"status": "pending"}
 
 
@@ -127,4 +137,14 @@ async def download_gcode(sid: str):
     if not path.exists():
         raise HTTPException(404, "No enclosure.gcode — run the G-code pipeline first")
     return FileResponse(path, media_type="text/plain", filename="enclosure.gcode",
+                        headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+
+
+@router.get("/sessions/{sid}/manufacture/gcode/extras/download")
+async def download_extras_gcode(sid: str):
+    s = load_session_or_404(sid)
+    path = s.artifact_path("extras.gcode")
+    if not path.exists():
+        raise HTTPException(404, "No extras.gcode — this design has no extra parts")
+    return FileResponse(path, media_type="text/plain", filename="extras.gcode",
                         headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
