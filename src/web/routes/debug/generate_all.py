@@ -8,6 +8,7 @@ from .combined import generate_combined
 from .components import generate_components
 from .spacing import generate_spacing
 from .surface_test import generate_surface_test
+from .via import generate_via
 from .width import generate_width
 
 router = APIRouter()
@@ -49,6 +50,11 @@ async def generate_all_tests(
         r = await generate_width(printer=printer, filament=fil_id)
         files[f"{folder}/width.gcode"] = r["gcode"]
         files[f"{folder}/width.txt"] = r["bitmap"]
+
+        r = await generate_via(printer=printer, filament=fil_id)
+        files[f"{folder}/via.gcode"] = r["gcode"]
+        files[f"{folder}/via1.txt"] = r["bitmap1"]
+        files[f"{folder}/via2.txt"] = r["bitmap2"]
 
     r = await generate_surface_test(printer=printer)
     files["surface_test.txt"] = r["bitmap"]
