@@ -18,27 +18,27 @@ from ._common import load_slicer_params, render_bitmap
 
 router = APIRouter()
 
-BASE_SIZE_MM = 40.0
-PAD_SIZE_MM = 20.0
-HOLE_DIAMETER_MM = 1.0
+BOX_SIZE_MM = 20.0
+HOLE_DIAMETER_MM = 2.0
 TRACE_WIDTH_MM = 1.0
+TUNNEL_WIDTH_MM = 2.0
+TUNNEL_HEIGHT_MM = 0.2
 N_BASE_LAYERS = 4
 
-_Z_PARAM = re.compile(r"\bZ([\d.]+)")
-_Z_COMMENT = re.compile(r";Z:([\d.]+)")
 
-
-def _build_base_scad(base_z: float) -> str:
-    return f"cube([{BASE_SIZE_MM:.3f}, {BASE_SIZE_MM:.3f}, {base_z:.3f}]);\n"
-
-
-def _build_pad_scad(pad_z: float) -> str:
+def _build_via_scad(base_z: float, tunnel_h: float, layer_h: float) -> str:
+    half_x = BOX_SIZE_MM / 2
+    center_y = BOX_SIZE_MM / 2
+    total_z = base_z + tunnel_h + layer_h
+    tunnel_y_offset = center_y - TUNNEL_WIDTH_MM / 2
     return (
         "$fn = 32;\n"
         "difference() {\n"
-        f"  cube([{PAD_SIZE_MM:.3f}, {PAD_SIZE_MM:.3f}, {pad_z:.3f}]);\n"
-        f"  translate([{PAD_SIZE_MM / 2:.3f}, {PAD_SIZE_MM / 2:.3f}, -0.01])\n"
-        f"    cylinder(d={HOLE_DIAMETER_MM}, h={pad_z + 0.02:.3f});\n"
+        f"  cube([{BOX_SIZE_MM:.3f}, {BOX_SIZE_MM:.3f}, {total_z:.3f}]);\n"
+        f"  translate([-0.01, {tunnel_y_offset:.3f}, {base_z:.3f}])\n"
+        f"    cube([{half_x + 0.01:.3f}, {TUNNEL_WIDTH_MM:.3f}, {tunnel_h:.3f}]);\n"
+        f"  translate([{half_x:.3f}, {center_y:.3f}, {base_z - 0.01:.3f}])\n"
+        f"    cylinder(d={HOLE_DIAMETER_MM}, h={tunnel_h + layer_h + 0.02:.3f});\n"
         "}\n"
     )
 
@@ -61,76 +61,34 @@ def _silverink_block(n: int) -> list[str]:
     ]
 
 
-def _extract_gcode_sections(gcode: str) -> tuple[str, str, str]:
-    """Split PrusaSlicer gcode into (start, body, end)."""
+def _inject_via_silverink_markers(gcode: str, base_z: float) -> str:
+    _Z_PAT = re.compile(r"^;Z:([\d.]+)")
     lines = gcode.split("\n")
-
-    body_start = 0
-    for i, line in enumerate(lines):
-        if line.strip() == ";LAYER_CHANGE":
-            body_start = i
-            break
-
-    body_end = len(lines)
-    for i in range(len(lines) - 1, -1, -1):
-        s = lines[i].strip()
-        if s.startswith("M104") and "S0" in s:
-            body_end = i
-            break
-
-    return (
-        "\n".join(lines[:body_start]),
-        "\n".join(lines[body_start:body_end]),
-        "\n".join(lines[body_end:]),
-    )
-
-
-def _offset_gcode_z(body: str, z_offset: float) -> str:
-    """Shift all Z positions and ;Z: comments in G-code by *z_offset*."""
     out: list[str] = []
-    for line in body.split("\n"):
-        s = line.strip()
-        if s.startswith(("G0 ", "G1 ")):
-            s = _Z_PARAM.sub(
-                lambda m: f"Z{float(m.group(1)) + z_offset:.3f}", s
-            )
-        elif s.startswith(";Z:"):
-            s = _Z_COMMENT.sub(
-                lambda m: f";Z:{float(m.group(1)) + z_offset:.3f}", s
-            )
-        out.append(s)
+    marker1_done = False
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        if not marker1_done and stripped == ";LAYER_CHANGE":
+            for j in range(i + 1, min(i + 5, len(lines))):
+                m = _Z_PAT.match(lines[j].strip())
+                if m:
+                    if float(m.group(1)) > base_z + 0.01:
+                        out.extend(_silverink_block(1))
+                        marker1_done = True
+                    break
+
+        out.append(line)
+
+    for i in range(len(out) - 1, -1, -1):
+        s = out[i].strip()
+        if s.startswith("M104") and "S0" in s:
+            out[i:i] = _silverink_block(2)
+            return "\n".join(out)
+
+    out.extend(_silverink_block(2))
     return "\n".join(out)
-
-
-def _find_max_print_z(gcode: str) -> float:
-    """Return the highest ;Z: value found in the gcode."""
-    best = 0.0
-    for line in gcode.split("\n"):
-        m = _Z_COMMENT.search(line)
-        if m:
-            z = float(m.group(1))
-            if z > best:
-                best = z
-    return best
-
-
-def _stitch_via_gcode(base_gcode: str, pad_gcode: str, z_offset: float) -> str:
-    """Combine independently-sliced base and pad gcode with silverink markers."""
-    base_start, base_body, base_end = _extract_gcode_sections(base_gcode)
-    _, pad_body, _ = _extract_gcode_sections(pad_gcode)
-
-    adjusted_pad = _offset_gcode_z(pad_body, z_offset=z_offset)
-
-    parts: list[str] = [
-        base_start,
-        base_body,
-        *_silverink_block(1),
-        "G92 E0",
-        adjusted_pad,
-        *_silverink_block(2),
-        base_end,
-    ]
-    return "\n".join(parts)
 
 
 def _trace_cells(
@@ -163,11 +121,21 @@ async def generate_via(
     printer: str = Query("coreone"),
     filament: str = Query("prusament_pla"),
 ) -> dict[str, Any]:
-    """Generate a via test: two ink layers connected through a plastic hole.
+    """Generate a via test: single model with an internal tunnel for the trace.
 
-    The base and pad are sliced as independent STLs so that PrusaSlicer
-    irons the full top surface of each piece.  The resulting gcode
-    sections are stitched together with silverink markers in between.
+    Cross-section (X-Z at Y=center):
+
+        LEFT       CENTER        RIGHT
+        ┌──────────┬──○──────────┐  top (ironed, bitmap2)
+        │  ROOF    │    SOLID    │
+        │  ┌───┘   │             │  tunnel 2mm wide, 1mm tall
+        │  │TUNNEL  │             │
+        ├──┴───────┴─────────────┤  base top (ironed, bitmap1)
+        │     BASE (4 layers)    │
+        └────────────────────────┘
+
+    Single 20×20 box with downward-L shaped void:
+    horizontal tunnel (left edge → center) + via hole (center → top).
     """
     pdef = get_printer(printer)
     fdef = get_filament(filament)
@@ -176,17 +144,24 @@ async def generate_via(
 
     layer_h = sp.layer_height
     base_z = layer_h * N_BASE_LAYERS
-    pad_z = layer_h * 2
 
     nom_w = pdef.nominal_bed_width
     nom_d = pdef.nominal_bed_depth
     cx, cy = nom_w / 2, nom_d / 2
 
-    base_bed_x = cx - BASE_SIZE_MM / 2
-    base_bed_y = cy - BASE_SIZE_MM / 2
+    base_bed_x = cx - BOX_SIZE_MM / 2
+    base_bed_y = cy - BOX_SIZE_MM / 2
+
+    scad_src = _build_via_scad(base_z, TUNNEL_HEIGHT_MM, layer_h)
 
     with tempfile.TemporaryDirectory(prefix="debug_via_") as tmpdir:
         tmp = Path(tmpdir)
+        scad_path = tmp / "via.scad"
+        scad_path.write_text(scad_src, encoding="utf-8")
+
+        ok, msg, stl_path = compile_scad(scad_path)
+        if not ok or stl_path is None:
+            raise RuntimeError(f"OpenSCAD compilation failed: {msg}")
 
         via_override = tmp / "via_override.ini"
         via_override.write_text(
@@ -204,53 +179,22 @@ async def generate_via(
             "skirts = 0\n",
             encoding="utf-8",
         )
-        overrides = [via_override]
 
-        # --- base (40 x 40, N_BASE_LAYERS layers, ironed top) ---
-        base_scad = tmp / "base.scad"
-        base_scad.write_text(_build_base_scad(base_z), encoding="utf-8")
-        ok, msg, base_stl = compile_scad(base_scad)
-        if not ok or base_stl is None:
-            raise RuntimeError(f"OpenSCAD base failed: {msg}")
-
-        base_gcode_path = tmp / "base.gcode"
+        gcode_path = tmp / "via.gcode"
         ok, msg, _ = slice_stl(
-            base_stl,
-            output_gcode=base_gcode_path,
+            stl_path,
+            output_gcode=gcode_path,
             printer=printer,
             filament=fdef.id,
             center=(cx, cy),
-            extra_overrides=overrides,
+            extra_overrides=[via_override],
         )
         if not ok:
-            raise RuntimeError(f"PrusaSlicer base failed: {msg}")
+            raise RuntimeError(f"PrusaSlicer failed: {msg}")
 
-        # --- pad (20 x 20, 1 layer with 1 mm hole, ironed top) ---
-        pad_scad = tmp / "pad.scad"
-        pad_scad.write_text(_build_pad_scad(pad_z), encoding="utf-8")
-        ok, msg, pad_stl = compile_scad(pad_scad)
-        if not ok or pad_stl is None:
-            raise RuntimeError(f"OpenSCAD pad failed: {msg}")
-
-        pad_gcode_path = tmp / "pad.gcode"
-        ok, msg, _ = slice_stl(
-            pad_stl,
-            output_gcode=pad_gcode_path,
-            printer=printer,
-            filament=fdef.id,
-            center=(cx, cy),
-            extra_overrides=overrides,
-        )
-        if not ok:
-            raise RuntimeError(f"PrusaSlicer pad failed: {msg}")
-
-        base_gcode_text = base_gcode_path.read_text(encoding="utf-8")
-        actual_base_z = _find_max_print_z(base_gcode_text)
-
-        gcode = _stitch_via_gcode(
-            base_gcode_text,
-            pad_gcode_path.read_text(encoding="utf-8"),
-            actual_base_z,
+        gcode = _inject_via_silverink_markers(
+            gcode_path.read_text(encoding="utf-8"),
+            base_z,
         )
 
     trace_width_px = max(1, round(TRACE_WIDTH_MM / grid.pixel_size_mm))
@@ -260,9 +204,9 @@ async def generate_via(
     )
     bitmap1 = render_bitmap(grid.data_rows, grid.data_cols, bitmap1_cells)
 
-    pad_right = cx + PAD_SIZE_MM / 2
+    box_right = base_bed_x + BOX_SIZE_MM
     bitmap2_cells = _trace_cells(
-        grid, cx, pad_right, cy, trace_width_px,
+        grid, cx, box_right, cy, trace_width_px,
     )
     bitmap2 = render_bitmap(grid.data_rows, grid.data_cols, bitmap2_cells)
 
@@ -270,8 +214,8 @@ async def generate_via(
         grid=grid,
         part_origin_x_mm=base_bed_x,
         part_origin_y_mm=base_bed_y,
-        part_width_mm=BASE_SIZE_MM,
-        part_depth_mm=BASE_SIZE_MM,
+        part_width_mm=BOX_SIZE_MM,
+        part_depth_mm=BOX_SIZE_MM,
         gcode_file="via.gcode",
         bitmap_file="via_1.txt",
         printer=pdef,

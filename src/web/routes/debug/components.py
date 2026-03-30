@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import re
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -29,9 +28,7 @@ from src.pipeline.scad.fragment import (
 from src.pipeline.scad.traces import TRACE_WIDTH as SCAD_TRACE_WIDTH
 from src.pipeline.scad.compiler import compile_scad
 from src.pipeline.gcode.slicer import slice_stl
-from src.pipeline.gcode.postprocessor import (
-    postprocess_gcode, _segment_near_traces, _MOVE_RE,
-)
+from src.pipeline.gcode.postprocessor import postprocess_gcode
 
 from ._common import (
     DEBUG_CONFIG, load_slicer_params, render_bitmap,
@@ -63,12 +60,48 @@ class CompLayout:
     block_w: float
     block_h: float
     block_z_top: float
-    pins: list[tuple[float, float, float]]
+    pins: list[tuple[float, float, float, str]]
     fragments: list[ScadFragment]
     plate_x: float
     plate_y: float
     plate_w: float
     plate_h: float
+    used_pin_ids: set[str] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.used_pin_ids is None:
+            self.used_pin_ids = {pid for *_, pid in self.pins}
+
+
+def _select_used_pins(
+    comp: Component,
+    pin_positions: dict[str, tuple[float, float]],
+    plate_x: float,
+) -> set[str]:
+    """Select one pin per allocatable group; all non-group pins are used.
+
+    For allocatable pin groups (e.g. tactile button sides A/B where
+    pins are internally shorted), only the pin closest to the plate
+    edge needs a trace.  All other pins are used unconditionally.
+    """
+    grouped_pins: set[str] = set()
+    used: set[str] = set()
+
+    for pg in comp.pin_groups or []:
+        if not pg.allocatable:
+            continue
+        grouped_pins.update(pg.pin_ids)
+        best_pin = min(
+            pg.pin_ids,
+            key=lambda pid: abs(pin_positions[pid][0] - plate_x),
+        )
+        used.add(best_pin)
+
+    for pin in comp.pins:
+        if pin.id not in grouped_pins:
+            used.add(pin.id)
+
+    return used
 
 
 def compute_component_layout(
@@ -172,7 +205,7 @@ def compute_component_layout(
         cy = block_y + bh / 2
 
         pin_positions: dict[str, tuple[float, float]] = {}
-        pins: list[tuple[float, float, float]] = []
+        pins: list[tuple[float, float, float, str]] = []
         for pin in comp.pins:
             px_rel, py_rel = float(pin.position_mm[0]), float(pin.position_mm[1])
             if rot:
@@ -183,7 +216,9 @@ def compute_component_layout(
             py = cy + py_rel
             pin_positions[pin.id] = (px, py)
             hole_r = (pin.hole_diameter_mm + PINHOLE_CLEARANCE) / 2
-            pins.append((px, py, hole_r))
+            pins.append((px, py, hole_r, pin.id))
+
+        used_pin_ids = _select_used_pins(comp, pin_positions, plate_x)
 
         placed = PlacedComponent(
             instance_id=comp.id,
@@ -212,6 +247,7 @@ def compute_component_layout(
             fragments=fragments,
             plate_x=plate_x, plate_y=plate_y,
             plate_w=plate_w, plate_h=plate_h,
+            used_pin_ids=used_pin_ids,
         ))
         y_cursor += plate_h + _COMP_GAP
 
@@ -387,7 +423,7 @@ def component_ink_cells(
     grid: SweepGrid,
     layouts: list[CompLayout],
 ) -> set[tuple[int, int]]:
-    """Ink cells for component trace lines."""
+    """Ink cells for component trace lines (used pins only)."""
     px = grid.pixel_size_mm
     cols = grid.data_cols
     rows = grid.data_rows
@@ -397,7 +433,9 @@ def component_ink_cells(
     ink_cells: set[tuple[int, int]] = set()
 
     for ly in layouts:
-        for pin_x, pin_y, _hr in ly.pins:
+        for pin_x, pin_y, _hr, pin_id in ly.pins:
+            if pin_id not in ly.used_pin_ids:
+                continue
             bx0, by = grid.bed_to_bitmap(ly.plate_x, pin_y)
             bx1, _ = grid.bed_to_bitmap(pin_x, pin_y)
 
@@ -423,82 +461,6 @@ def _pinhole_bitmap(
     return render_bitmap(grid.data_rows, grid.data_cols, component_ink_cells(grid, layouts))
 
 
-_Z_COMMENT = re.compile(r"^;Z:([\d.]+)")
-
-
-def _keep_ironing_near_traces(
-    gcode: str,
-    trace_segs: list[tuple[float, float, float, float]],
-    ink_z: float,
-) -> str:
-    """Keep ironing extrusion only near trace segments, suppress elsewhere.
-
-    Inverse of the pipeline's ``_filter_ironing_at_ink_layer``: converts
-    ironing extrusion moves that are NOT near any trace into travel
-    moves (G0), so only the trace paths get ironed.
-    """
-    lines = gcode.splitlines()
-    out: list[str] = []
-    current_z = 0.0
-    track_x, track_y = 0.0, 0.0
-    i = 0
-
-    while i < len(lines):
-        line = lines[i]
-
-        z_m = _Z_COMMENT.match(line)
-        if z_m:
-            current_z = float(z_m.group(1))
-
-        m_pos = _MOVE_RE.match(line)
-        if m_pos:
-            if m_pos.group("x"):
-                track_x = float(m_pos.group("x"))
-            if m_pos.group("y"):
-                track_y = float(m_pos.group("y"))
-
-        if line.strip() == ";TYPE:Ironing" and abs(current_z - ink_z) < 0.05:
-            out.append(line)
-            i += 1
-            cur_x, cur_y = track_x, track_y
-
-            while i < len(lines):
-                ln = lines[i]
-                if ln.startswith(";TYPE:") or ln.startswith(";LAYER_CHANGE"):
-                    break
-
-                m = _MOVE_RE.match(ln)
-                if m and (m.group("x") or m.group("y")):
-                    nx = float(m.group("x")) if m.group("x") else cur_x
-                    ny = float(m.group("y")) if m.group("y") else cur_y
-
-                    if _segment_near_traces(cur_x, cur_y, nx, ny, trace_segs):
-                        out.append(ln)
-                    else:
-                        coords = ""
-                        if m.group("x"):
-                            coords += f" X{m.group('x')}"
-                        if m.group("y"):
-                            coords += f" Y{m.group('y')}"
-                        out.append(f"G0{coords} ; ironing suppressed (no trace)")
-
-                    cur_x, cur_y = nx, ny
-                else:
-                    out.append(ln)
-                    if m:
-                        if m.group("x"):
-                            cur_x = float(m.group("x"))
-                        if m.group("y"):
-                            cur_y = float(m.group("y"))
-                i += 1
-            continue
-
-        out.append(line)
-        i += 1
-
-    return "\n".join(out)
-
-
 @router.post("/components")
 async def generate_components(
     printer: str = Query("coreone"),
@@ -522,9 +484,12 @@ async def generate_components(
 
     all_frags: list[ScadFragment] = []
     trace_segs: list[tuple[float, float, float, float]] = []
+    pad_centers: list[tuple[float, float]] = []
     for ly in layouts:
         all_frags.extend(ly.fragments)
-        for pin_x, pin_y, _hr in ly.pins:
+        for pin_x, pin_y, _hr, pin_id in ly.pins:
+            if pin_id not in ly.used_pin_ids:
+                continue
             all_frags.append(ScadFragment(
                 type="cutout",
                 geometry=SegmentGeometry(
@@ -535,6 +500,7 @@ async def generate_components(
                 label=f"trace {ly.catalog.id}",
             ))
             trace_segs.append((ly.plate_x, pin_y, pin_x, pin_y))
+            pad_centers.append((pin_x, pin_y))
 
     scad_src = _build_components_scad(layouts, all_frags, plate_z)
 
@@ -581,12 +547,10 @@ async def generate_components(
             output_path=final_gcode,
             ink_z=FLOOR_MM,
             trace_segments=trace_segs,
+            pad_centers=pad_centers,
         )
 
-        gcode = _keep_ironing_near_traces(
-            final_gcode.read_text(encoding="utf-8"),
-            trace_segs, FLOOR_MM,
-        )
+        gcode = final_gcode.read_text(encoding="utf-8")
 
     manifest = generate_manifest(
         grid=grid,
