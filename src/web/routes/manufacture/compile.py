@@ -43,6 +43,11 @@ async def start_compile(sid: str, force: bool = Query(False)):
     def _do_compile():
         from src.pipeline.scad.compiler import compile_scad
         ok, msg, out = compile_scad(scad_path, stl_path, cancel=cancel, timeout=600)
+        if ok:
+            extras_scad = s.artifact_path("extras.scad")
+            if extras_scad.exists():
+                extras_stl = s.artifact_path("extras.stl")
+                compile_scad(extras_scad, extras_stl, cancel=cancel, timeout=600)
         set_compile_state(sid, {"status": "done" if ok else "error", "message": msg, "cancel": cancel})
         if ok:
             s.pipeline_state["scad"] = "done"
