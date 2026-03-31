@@ -78,6 +78,7 @@ async def start_gcode(
                 filament=s.filament_id,
                 silverink_only=silverink_only,
                 component_infos=comp_infos,
+                placement_result=placement_data,
             )
             if result.success:
                 s.pipeline_state["gcode"] = "complete"

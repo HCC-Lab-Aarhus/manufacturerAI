@@ -214,6 +214,7 @@ TRACE_HEIGHT_MM: float = 0.3
 COMPONENT_OFFSET_MM: float = 0.6
 CAVITY_START_MM: float = FLOOR_MM + COMPONENT_OFFSET_MM
 CEILING_MM: float = 2.0
+PIN_FLOOR_PENETRATION: float = 0.6
 
 
 def component_z_range(

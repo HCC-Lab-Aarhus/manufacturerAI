@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from src.catalog.models import Component
-from src.pipeline.config import CAVITY_START_MM, FLOOR_MM, component_z_range
+from src.pipeline.config import CAVITY_START_MM, FLOOR_MM, PIN_FLOOR_PENETRATION, component_z_range
 from src.pipeline.design.models import Outline, Enclosure
 from src.pipeline.placer.models import PlacedComponent
 
@@ -337,8 +337,9 @@ class ComponentResolver:
 
         Each pin gets up to two vertical zones:
 
-          1. **Shaft** (FLOOR_MM → funnel_bottom): straight hole from
-             the trace surface up to the start of the funnel.
+          1. **Shaft** ((FLOOR_MM - penetration) → funnel_bottom): straight
+             hole that descends a few layers below the trace surface,
+             creating small holes on the trace layer for pins to seat into.
           2. **Tapered funnel** (funnel_bottom → body_floor_z): smooth
              cone/pyramid widening downward for easy pin insertion.
              The funnel sits directly below the body pocket so the
@@ -357,7 +358,7 @@ class ComponentResolver:
         funnel_bottom = max(funnel_top - PINHOLE_TAPER_DEPTH, FLOOR_MM)
         actual_taper = funnel_top - funnel_bottom
 
-        shaft_bottom = FLOOR_MM
+        shaft_bottom = FLOOR_MM - PIN_FLOOR_PENETRATION
         shaft_h = max(funnel_bottom - shaft_bottom, 0.0)
 
         for pin in self.catalog.pins:

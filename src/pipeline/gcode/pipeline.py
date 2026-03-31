@@ -51,6 +51,7 @@ def run_gcode_pipeline(
     filament: str = "",
     silverink_only: bool = False,
     component_infos: list[ComponentPauseInfo] | None = None,
+    placement_result: dict | None = None,
 ) -> GcodePipelineResult:
     """Run the full G-code pipeline: slice → inject pauses → output.
 
@@ -144,7 +145,7 @@ def run_gcode_pipeline(
         routing_result=routing_result,
     )
     pad_centers = extract_pad_centers(
-        routing_result=routing_result,
+        placement_result=placement_result,
     )
     if trace_segs:
         stages.append(f"Trace segments: {len(trace_segs)} segments, {len(pad_centers)} pads")

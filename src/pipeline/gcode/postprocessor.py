@@ -569,8 +569,14 @@ def postprocess_gcode(
     raw_lines = gcode_path.read_text(encoding="utf-8").splitlines()
 
     # ── Pre-generate custom trace ironing ─────────────────────────
-    from src.pipeline.gcode.ink_traces import generate_trace_ironing_gcode
-    custom_ironing_lines = generate_trace_ironing_gcode(trace_segs, pads) if trace_segs else []
+    from src.pipeline.gcode.ink_traces import generate_trace_ironing_gcode, generate_pad_ironing_gcode
+    from src.pipeline.config import PIN_FLOOR_PENETRATION
+    custom_ironing_lines = generate_trace_ironing_gcode(
+        trace_segs, pads, ink_z=ink_z, pad_z_drop=PIN_FLOOR_PENETRATION,
+    ) if trace_segs else []
+    pad_z = ink_z - PIN_FLOOR_PENETRATION
+    custom_pad_ironing_lines = generate_pad_ironing_gcode(pads) if pads else []
+    pad_ironing_injected = False
 
     out: list[str] = []
     total_layers = 0
@@ -638,6 +644,17 @@ def postprocess_gcode(
             # Leaving the ink layer
             if in_ink_layer and z_val > ink_z + 0.01:
                 in_ink_layer = False
+
+            # ── Pad ironing on the pad Z layer ───────────────
+            # Inject pad ironing when we pass the pad_z layer.
+            # This happens before the ink layer so pads are ironed
+            # on an earlier (lower) layer than traces.
+            if (not pad_ironing_injected
+                    and custom_pad_ironing_lines
+                    and z_val > pad_z + 0.01):
+                pad_ironing_injected = True
+                out.extend(custom_pad_ironing_lines)
+                stages.append(f"Pad ironing at Z={pad_z:.2f}")
 
             # ── Ink layer pause ──────────────────────────────
             # Trigger one layer ABOVE ink_z so the floor layer
