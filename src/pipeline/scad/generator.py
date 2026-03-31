@@ -160,15 +160,18 @@ def run_scad_step(
                 pin_length_mm=cat.pin_length_mm,
             ))
 
-    # Copy button outlines from UI placements to placed components
-    ui_outline_map = {
-        up.instance_id: up.button_outline
+    # Tessellate button shapes from UI placements into point-list outlines
+    from src.pipeline.design.shape2d import tessellate_shape
+    ui_shape_map = {
+        up.instance_id: up.button_shape
         for up in physical.ui_placements
-        if up.button_outline is not None
+        if up.button_shape is not None
     }
     for comp in placement.components:
-        if comp.instance_id in ui_outline_map:
-            comp.button_outline = ui_outline_map[comp.instance_id]
+        shape = ui_shape_map.get(comp.instance_id)
+        if shape is not None:
+            outline_obj = tessellate_shape(shape)
+            comp.button_outline = [[v.x, v.y] for v in outline_obj.points]
 
     for comp in placement.components:
         cat = cat_index.get(comp.catalog_id)

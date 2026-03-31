@@ -243,7 +243,7 @@ class UIPlacement:
     edge_index: int | None = None       # side-mount: which outline edge (0-based)
     conform_to_surface: bool = True     # angle cutout to follow local surface normal
     mounting_style: str | None = None   # override from allowed_styles
-    button_outline: list[list[float]] | None = None  # custom button shape [[x,y], ...]
+    button_shape: dict | None = None    # CSG shape tree for button cap
 
 
 @dataclass
