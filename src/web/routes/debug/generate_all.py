@@ -55,6 +55,7 @@ async def generate_all_tests(
         files[f"{folder}/via.gcode"] = r["gcode"]
         files[f"{folder}/via1.txt"] = r["bitmap1"]
         files[f"{folder}/via2.txt"] = r["bitmap2"]
+        files[f"{folder}/via3.txt"] = r["bitmap3"]
 
     r = await generate_surface_test(printer=printer)
     files["surface_test.txt"] = r["bitmap"]
