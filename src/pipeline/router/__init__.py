@@ -5,20 +5,19 @@ Submodules:
   grid          Discretized routing grid (free/blocked cells).
   pathfinder    A* pathfinding (point-to-point and point-to-tree).
   pins          Pin resolution and dynamic pin allocation.
-  solution      Mutable routing solution with snapshot/restore.
-  engine        Main routing algorithm (iterative improvement).
+  engine        Main routing algorithm (greedy with retry).
   serialization JSON conversion (routing_to_dict, parse_routing).
   bitmap        Trace bitmap generation (sweep-grid-aligned txt file).
 """
 
-from .models import Trace, JumperWire, RoutingResult, RouterConfig
+from .models import Trace, RoutingResult, RouterConfig
 from .engine import route_traces
 from .serialization import routing_to_dict, parse_routing
 from .bitmap import generate_trace_bitmap, write_trace_bitmap
 
 __all__ = [
     # Models
-    "Trace", "JumperWire", "RoutingResult", "RouterConfig",
+    "Trace", "RoutingResult", "RouterConfig",
     # Engine
     "route_traces",
     # Serialization

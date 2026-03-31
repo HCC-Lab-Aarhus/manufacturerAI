@@ -95,8 +95,7 @@ class TestRouterProfile(unittest.TestCase):
         print(f"\n{'='*70}")
         print(f"  TOTAL route_traces: {total*1000:.1f} ms")
         print(f"  Nets: {len(result.traces)}, "
-              f"Failed: {len(result.failed_nets)}, "
-              f"Jumpers: {len(result.jumpers)}")
+              f"Failed: {len(result.failed_nets)}")
         print(f"{'='*70}")
         self.assertTrue(result.ok)
 
@@ -161,7 +160,7 @@ class TestRouterProfile(unittest.TestCase):
         # Phase 4b: Priority ordering
         with timed_phase("4b_priority_ordering", phases):
             ordering = _priority_order(
-                net_ids, net_pad_map, pads_map, grid, config, pin_voronoi,
+                net_ids, net_pad_map, pads_map,
             )
 
         # Phase 5: Solution construction
@@ -186,8 +185,7 @@ class TestRouterProfile(unittest.TestCase):
                 best_score = solution.score()
                 stall = 0
                 for iteration in range(config.max_improve_iterations):
-                    jc = solution.jumper_count()
-                    targets = solution.worst_nets(k=max(3, jc // 2))
+                    targets = solution.worst_nets(k=3)
                     if not targets:
                         break
                     neighborhood = solution.neighborhood(targets)
@@ -458,8 +456,7 @@ class TestLargeDesignProfile(unittest.TestCase):
         print(f"\n{'='*70}")
         print(f"  LARGE DESIGN route_traces: {total*1000:.1f} ms")
         print(f"  Nets routed: {len(routed)}/{len(placement.nets)}, "
-              f"Failed: {len(result.failed_nets)}, "
-              f"Jumpers: {len(result.jumpers)}")
+              f"Failed: {len(result.failed_nets)}")
         if result.failed_nets:
             print(f"  Failed: {result.failed_nets}")
         print(f"{'='*70}")
@@ -520,7 +517,7 @@ class TestLargeDesignProfile(unittest.TestCase):
 
         with timed_phase("4b_priority_ordering", phases):
             ordering = _priority_order(
-                net_ids, net_pad_map, pads_map, grid, config, pin_voronoi,
+                net_ids, net_pad_map, pads_map,
             )
 
         with timed_phase("5_solution_init", phases):
@@ -542,8 +539,7 @@ class TestLargeDesignProfile(unittest.TestCase):
                 best_score = solution.score()
                 stall = 0
                 for iteration in range(config.max_improve_iterations):
-                    jc = solution.jumper_count()
-                    targets = solution.worst_nets(k=max(3, jc // 2))
+                    targets = solution.worst_nets(k=3)
                     if not targets:
                         break
                     neighborhood = solution.neighborhood(targets)
@@ -579,7 +575,6 @@ class TestLargeDesignProfile(unittest.TestCase):
         print(f"{'='*70}")
         print(f"  Initial score: {initial_score}")
         print(f"  Final score:   {solution.score()}")
-        print(f"  Jumpers:       {solution.jumper_count()}")
         print(f"  Result OK:     {result.ok}")
         print(f"{'='*70}")
 
@@ -668,7 +663,7 @@ class TestLargeDesignProfile(unittest.TestCase):
             net_ids, net_pad_map, placement, catalog, grid,
         )
         ordering = _priority_order(
-            net_ids, net_pad_map, pads_map, grid, config, pin_voronoi,
+            net_ids, net_pad_map, pads_map,
         )
 
         # Save originals
@@ -681,9 +676,6 @@ class TestLargeDesignProfile(unittest.TestCase):
         orig_has_foreign = sol_mod.Solution._has_foreign_cells
         orig_find_crossed = sol_mod.Solution._find_crossed_nets
         orig_try_rip = sol_mod.Solution._try_rip_reroute
-        orig_try_jumper = sol_mod.Solution._try_jumper
-        orig_commit_full = sol_mod.Solution._commit_full_jumper
-        orig_relax = sol_mod.Solution._relax_tree
         orig_commit = sol_mod.Solution._commit
 
         # Per-net accumulator
@@ -701,9 +693,6 @@ class TestLargeDesignProfile(unittest.TestCase):
                 "has_foreign_calls": 0, "has_foreign_time": 0.0,
                 "find_crossed_calls": 0, "find_crossed_time": 0.0,
                 "rip_reroute_calls": 0, "rip_reroute_time": 0.0,
-                "try_jumper_calls": 0, "try_jumper_time": 0.0,
-                "commit_full_calls": 0, "commit_full_time": 0.0,
-                "relax_time": 0.0,
                 "commit_calls": 0, "commit_time": 0.0,
                 "strategy": "unknown",
             }
@@ -774,34 +763,11 @@ class TestLargeDesignProfile(unittest.TestCase):
             s["rip_reroute_time"] += time.perf_counter() - t0
             return result
 
-        def tracked_try_jumper(self_obj, *args, **kwargs):
-            s = _get_stats()
-            s["try_jumper_calls"] += 1
-            t0 = time.perf_counter()
-            result = orig_try_jumper(self_obj, *args, **kwargs)
-            s["try_jumper_time"] += time.perf_counter() - t0
-            return result
-
-        def tracked_commit_full(self_obj, *args, **kwargs):
-            s = _get_stats()
-            s["commit_full_calls"] += 1
-            t0 = time.perf_counter()
-            result = orig_commit_full(self_obj, *args, **kwargs)
-            s["commit_full_time"] += time.perf_counter() - t0
-            return result
-
-        def tracked_relax(self_obj, net_id):
-            s = _get_stats()
-            t0 = time.perf_counter()
-            result = orig_relax(self_obj, net_id)
-            s["relax_time"] += time.perf_counter() - t0
-            return result
-
-        def tracked_commit(self_obj, net_id, paths, pads, jumpers=None):
+        def tracked_commit(self_obj, net_id, paths, pads):
             s = _get_stats()
             s["commit_calls"] += 1
             t0 = time.perf_counter()
-            result = orig_commit(self_obj, net_id, paths, pads, jumpers)
+            result = orig_commit(self_obj, net_id, paths, pads)
             s["commit_time"] += time.perf_counter() - t0
             return result
 
@@ -815,9 +781,6 @@ class TestLargeDesignProfile(unittest.TestCase):
         sol_mod.Solution._has_foreign_cells = tracked_has_foreign
         sol_mod.Solution._find_crossed_nets = tracked_find_crossed
         sol_mod.Solution._try_rip_reroute = tracked_try_rip
-        sol_mod.Solution._try_jumper = tracked_try_jumper
-        sol_mod.Solution._commit_full_jumper = tracked_commit_full
-        sol_mod.Solution._relax_tree = tracked_relax
         sol_mod.Solution._commit = tracked_commit
 
         try:
@@ -843,21 +806,13 @@ class TestLargeDesignProfile(unittest.TestCase):
                 net_times.append((nid, len(pads), elapsed))
 
                 # Determine which strategy was used
-                route = solution.routes.get(nid)
                 s = net_stats[nid]
-                if route and route.jumpers:
-                    if s["commit_full_calls"] > 0:
-                        s["strategy"] = "full_jumper"
-                    elif s["try_jumper_calls"] > 0:
-                        s["strategy"] = "segment_jumper"
-                    else:
-                        s["strategy"] = "jumper_multi"
-                elif s["rip_reroute_calls"] > 0:
+                if s["rip_reroute_calls"] > 0:
                     s["strategy"] = "rip_reroute"
                 elif s["find_path_calls"] > 0 or s["find_path_to_tree_calls"] > 0:
                     s["strategy"] = "clean"
                 else:
-                    s["strategy"] = "unknown"
+                    s["strategy"] = "failed"
 
             total_initial = time.perf_counter() - total_t0
 
@@ -904,11 +859,6 @@ class TestLargeDesignProfile(unittest.TestCase):
                 totals["find_crossed_time"] += s["find_crossed_time"]
                 totals["rip_reroute_calls"] += s["rip_reroute_calls"]
                 totals["rip_reroute_time"] += s["rip_reroute_time"]
-                totals["try_jumper_calls"] += s["try_jumper_calls"]
-                totals["try_jumper_time"] += s["try_jumper_time"]
-                totals["commit_full_calls"] += s["commit_full_calls"]
-                totals["commit_full_time"] += s["commit_full_time"]
-                totals["relax_time"] += s["relax_time"]
                 totals["commit_calls"] += s["commit_calls"]
                 totals["commit_time"] += s["commit_time"]
 
@@ -941,15 +891,8 @@ class TestLargeDesignProfile(unittest.TestCase):
                  totals["find_crossed_time"])
             _row("try_rip_reroute", totals["rip_reroute_calls"],
                  totals["rip_reroute_time"])
-            _row("try_jumper", totals["try_jumper_calls"],
-                 totals["try_jumper_time"])
-            _row("commit_full_jumper", totals["commit_full_calls"],
-                 totals["commit_full_time"])
             _row("commit (block_trace)", totals["commit_calls"],
                  totals["commit_time"])
-            _row("relax_tree", len([s for s in net_stats.values()
-                                    if s["relax_time"] > 0]),
-                 totals["relax_time"])
 
             if fp_lens:
                 print(f"\n  find_path lengths: "
@@ -992,9 +935,6 @@ class TestLargeDesignProfile(unittest.TestCase):
             sol_mod.Solution._has_foreign_cells = orig_has_foreign
             sol_mod.Solution._find_crossed_nets = orig_find_crossed
             sol_mod.Solution._try_rip_reroute = orig_try_rip
-            sol_mod.Solution._try_jumper = orig_try_jumper
-            sol_mod.Solution._commit_full_jumper = orig_commit_full
-            sol_mod.Solution._relax_tree = orig_relax
             sol_mod.Solution._commit = orig_commit
 
     def test_large_improvement_loop_profiling(self):
@@ -1028,7 +968,7 @@ class TestLargeDesignProfile(unittest.TestCase):
             net_ids, net_pad_map, placement, catalog, grid,
         )
         ordering = _priority_order(
-            net_ids, net_pad_map, pads_map, grid, config, pin_voronoi,
+            net_ids, net_pad_map, pads_map,
         )
 
         solution = Solution(
@@ -1057,8 +997,7 @@ class TestLargeDesignProfile(unittest.TestCase):
 
             for iteration in range(config.max_improve_iterations):
                 iter_t0 = time.perf_counter()
-                jc = solution.jumper_count()
-                targets = solution.worst_nets(k=max(3, jc // 2))
+                targets = solution.worst_nets(k=3)
                 if not targets:
                     print(f"  {iteration+1:>4d} no-targets — stopping")
                     break

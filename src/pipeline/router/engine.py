@@ -1,11 +1,10 @@
-﻿"""Main routing engine â€” iterative improvement with jumper-first strategy.
+"""Main routing engine — greedy Manhattan trace routing with iterative improvement.
 
 Algorithm:
   1. Build routing grid, block component bodies, protect pin cells.
   2. Resolve pin positions for all nets (with dynamic MCU allocation).
-  3. Sort nets by isolation-length priority.
-  4. Route all nets sequentially (jumpers allowed) â†’ guaranteed complete
-     initial solution with zero failed nets.
+  3. Sort nets by priority (pin count, then HPWL).
+  4. Route all nets via the Solution class (clean A* with crossing rip-up).
   5. Iteratively improve: rip up worst nets + neighbors, re-route in
      perturbed order. Keep best result seen. Stop when perfect or stalled.
 """
@@ -25,9 +24,10 @@ from src.pipeline.placer.geometry import footprint_halfdims
 from .grid import RoutingGrid
 from .models import RoutingResult, RouterConfig
 from .pins import (
+    PinPool,
     pin_world_xy, build_pin_pools,
     resolve_pin_ref, get_pin_world_pos,
-    allocate_best_pin, PinPool,
+    allocate_best_pin,
 )
 from .solution import Solution, NetPad, _PinRef
 
@@ -35,7 +35,7 @@ from .solution import Solution, NetPad, _PinRef
 log = logging.getLogger(__name__)
 
 
-# â”€â”€ Main entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Main entry point ───────────────────────────────────────────────
 
 
 def route_traces(
@@ -44,7 +44,7 @@ def route_traces(
     *,
     config: RouterConfig | None = None,
 ) -> RoutingResult:
-    """Route all nets. Always returns a complete result (zero failed nets)."""
+    """Route all nets using iterative improvement."""
     if config is None:
         config = RouterConfig()
 
@@ -54,7 +54,7 @@ def route_traces(
         placement.outline.hole_vertices or None,
     )
 
-    log.info("Router: %d components, %d nets, area=%.1f mmÂ²",
+    log.info("Router: %d components, %d nets, area=%.1f mm²",
              len(placement.components), len(placement.nets), outline_poly.area)
 
     if not outline_poly.is_valid or outline_poly.area <= 0:
@@ -96,7 +96,7 @@ def route_traces(
     pads_map, pin_assignments = _resolve_all_pads(
         net_ids, net_pad_map, placement, catalog, grid,
     )
-    ordering = _priority_order(net_ids, net_pad_map, pads_map, grid, config, pin_voronoi)
+    ordering = _priority_order(net_ids, net_pad_map, pads_map)
 
     # 5. Build solution and route initial pass
     solution = Solution(
@@ -117,11 +117,9 @@ def route_traces(
     best = solution.snapshot()
     best_score = solution.score()
     stall = 0
-    pin_shift_tried = False
 
     for iteration in range(config.max_improve_iterations):
-        jc = solution.jumper_count()
-        targets = solution.worst_nets(k=max(3, jc // 2))
+        targets = solution.worst_nets(k=3)
         if not targets:
             break
 
@@ -129,38 +127,20 @@ def route_traces(
         before = solution.score()
 
         solution.rip_up(neighborhood)
-
         new_order = _perturb(neighborhood, targets, iteration)
         solution.route_nets(new_order, pads_map)
-
         after = solution.score()
 
         if after < before:
             best = solution.snapshot()
             best_score = after
             stall = 0
-            pin_shift_tried = False
-            log.info("Iter %d: improved %s â†’ %s", iteration + 1, before, after)
+            log.info("Iter %d: improved %s → %s", iteration + 1, before, after)
             if solution.is_perfect():
                 break
         else:
             solution.restore(best)
             stall += 1
-
-            if not pin_shift_tried and stall >= 3 and jc > 0:
-                pin_shift_tried = True
-                shifted = _try_pin_shifts(
-                    solution, net_pad_map, pads_map, pin_assignments,
-                    ordering, placement, catalog,
-                )
-                if shifted:
-                    best = solution.snapshot()
-                    best_score = solution.score()
-                    stall = 0
-                    if solution.is_perfect():
-                        break
-                    continue
-
             if stall >= config.stall_limit:
                 log.info(
                     "Stalled for %d iterations (iteration %d of %d), stopping",
@@ -172,21 +152,16 @@ def route_traces(
 
     routed = len(solution.routes)
     missing = len(net_ids) - routed
-    jc = solution.jumper_count()
     if missing > 0:
-        log.warning("Router: %d/%d nets routed (%d missing, %d jumper wires)",
-                    routed, len(net_ids), missing, jc)
-    elif jc > 0:
-        log.info("Router: all %d nets routed (%d jumper wires)",
-                 len(net_ids), jc)
+        log.warning("Router: %d/%d nets routed (%d missing)",
+                    routed, len(net_ids), missing)
     else:
         log.info("Router: all %d nets routed", len(net_ids))
 
     return solution.to_result()
 
 
-# â”€â”€ Net reference parsing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
+# ── Net reference parsing ──────────────────────────────────────────
 
 def _parse_net_refs(
     placement: FullPlacement,
@@ -229,8 +204,7 @@ def _parse_net_refs(
     return net_pad_map
 
 
-# â”€â”€ Pad resolution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
+# ── Pad resolution ─────────────────────────────────────────────────
 
 def _resolve_all_pads(
     net_ids: list[str],
@@ -351,24 +325,15 @@ def _resolve_pads(
     return result if len(result) == len(refs) else None
 
 
-# â”€â”€ Priority ordering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Priority ordering ──────────────────────────────────────────────
 
 
 def _priority_order(
     net_ids: list[str],
     net_pad_map: dict[str, list[_PinRef]],
     pads_map: dict[str, list[NetPad]],
-    grid: RoutingGrid,
-    config: RouterConfig,
-    pin_voronoi: dict[int, str] | None,
 ) -> list[str]:
-    """Sort nets by Manhattan distance heuristic (hardest first).
-
-    Uses bounding-box semi-perimeter (HPWL) as a fast proxy for
-    routing difficulty instead of performing full isolation A* per net.
-    """
     hpwl: dict[str, int] = {}
-
     for nid in net_ids:
         pads = pads_map.get(nid)
         if pads is None or len(pads) < 2:
@@ -389,7 +354,7 @@ def _priority_order(
     return ordered
 
 
-# â”€â”€ Ordering perturbation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Ordering perturbation ──────────────────────────────────────────
 
 
 def _perturb(
@@ -397,7 +362,6 @@ def _perturb(
     targets: list[str],
     iteration: int,
 ) -> list[str]:
-    """Generate a perturbed ordering biased toward routing target nets first."""
     ordering = list(neighborhood)
     if not targets:
         random.shuffle(ordering)
@@ -427,170 +391,7 @@ def _perturb(
     return ordering
 
 
-# ── Pin-shift improvement ──────────────────────────────────────────
-
-
-def _find_shared_groups(
-    net_a: str,
-    net_b: str,
-    net_pad_map: dict[str, list[_PinRef]],
-) -> list[tuple[str, str]]:
-    """Find (instance_id, group_id) pairs where both nets use a group pin."""
-    groups_a = {
-        (ref.instance_id, ref.pin_or_group)
-        for ref in net_pad_map.get(net_a, []) if ref.is_group
-    }
-    groups_b = {
-        (ref.instance_id, ref.pin_or_group)
-        for ref in net_pad_map.get(net_b, []) if ref.is_group
-    }
-    return list(groups_a & groups_b)
-
-
-def _find_group_nets(
-    instance_id: str,
-    group_id: str,
-    net_pad_map: dict[str, list[_PinRef]],
-    pads_map: dict[str, list[NetPad]],
-) -> list[str]:
-    """Find all routed nets using a specific pin group on an instance."""
-    result = []
-    for nid, refs in net_pad_map.items():
-        if nid not in pads_map:
-            continue
-        for ref in refs:
-            if (ref.instance_id == instance_id
-                    and ref.pin_or_group == group_id
-                    and ref.is_group):
-                result.append(nid)
-                break
-    return result
-
-
-def _circular_shift_pins(
-    group_nets: list[str],
-    instance_id: str,
-    group_id: str,
-    net_pad_map: dict[str, list[_PinRef]],
-    pads_map: dict[str, list[NetPad]],
-    pin_assignments: dict[str, str],
-    placement: FullPlacement,
-    catalog: CatalogResult,
-    grid: RoutingGrid,
-) -> None:
-    """Circular-shift physical pin assignments by one position.
-
-    Nets are sorted by their current pin world-position so the shift
-    moves each net to its spatial neighbour's pin."""
-    entries: list[tuple[str, int, str, float, float]] = []
-    for nid in group_nets:
-        pads = pads_map.get(nid)
-        if pads is None:
-            continue
-        for i, pad in enumerate(pads):
-            if pad.instance_id == instance_id and pad.group_id == group_id:
-                entries.append((nid, i, pad.pin_id, pad.world_x, pad.world_y))
-                break
-
-    if len(entries) < 2:
-        return
-
-    entries.sort(key=lambda e: (e[3], e[4]))
-
-    pins = [e[2] for e in entries]
-    shifted = pins[1:] + pins[:1]
-
-    for (nid, pad_idx, _old_pin, _, _), new_pin in zip(entries, shifted):
-        pos = get_pin_world_pos(instance_id, new_pin, placement, catalog)
-        if pos is None:
-            continue
-        gx, gy = grid.world_to_grid(pos[0], pos[1])
-
-        pads_map[nid][pad_idx] = NetPad(
-            instance_id=instance_id,
-            pin_id=new_pin,
-            group_id=group_id,
-            gx=gx, gy=gy,
-            world_x=pos[0], world_y=pos[1],
-        )
-
-        for ref in net_pad_map.get(nid, []):
-            if (ref.instance_id == instance_id
-                    and ref.pin_or_group == group_id
-                    and ref.is_group):
-                key = f"{nid}|{ref.raw}"
-                pin_assignments[key] = f"{instance_id}:{new_pin}"
-                break
-
-
-def _try_pin_shifts(
-    solution: Solution,
-    net_pad_map: dict[str, list[_PinRef]],
-    pads_map: dict[str, list[NetPad]],
-    pin_assignments: dict[str, str],
-    ordering: list[str],
-    placement: FullPlacement,
-    catalog: CatalogResult,
-) -> bool:
-    """Try circular pin shifts for nets whose jumpers cross shared pin groups.
-
-    For each jumper, identify the trace it crosses.  If the jumper net and
-    the crossed net share a logical pin group (e.g. both use mcu_1:gpio),
-    collect *all* nets on that group, shift their physical assignments by
-    one position, rip them up, and re-route in the original ordering."""
-    seen_groups: set[tuple[str, str]] = set()
-    before = solution.score()
-
-    for nid in list(solution.routes):
-        route = solution.routes[nid]
-        if not route.jumpers:
-            continue
-        for jumper in route.jumpers:
-            crossed_nid = solution.crossed_net_for_jumper(jumper)
-            if crossed_nid is None:
-                continue
-
-            shared = _find_shared_groups(nid, crossed_nid, net_pad_map)
-            for inst_id, group_id in shared:
-                if (inst_id, group_id) in seen_groups:
-                    continue
-                seen_groups.add((inst_id, group_id))
-
-                group_nids = _find_group_nets(
-                    inst_id, group_id, net_pad_map, pads_map,
-                )
-                if len(group_nids) < 2:
-                    continue
-
-                snap = solution.snapshot()
-                saved_pads = {
-                    n: list(pads_map[n]) for n in group_nids if n in pads_map
-                }
-                saved_assigns = dict(pin_assignments)
-
-                _circular_shift_pins(
-                    group_nids, inst_id, group_id,
-                    net_pad_map, pads_map, pin_assignments,
-                    placement, catalog, solution.grid,
-                )
-
-                solution.rip_up(group_nids)
-                route_order = [n for n in ordering if n in set(group_nids)]
-                solution.route_nets(route_order, pads_map)
-
-                after = solution.score()
-                if after < before:
-                    log.info("Pin shift (%s:%s, %d nets): %s -> %s",
-                             inst_id, group_id, len(group_nids), before, after)
-                    return True
-
-                solution.restore(snap)
-                for n, old in saved_pads.items():
-                    pads_map[n] = old
-                pin_assignments.clear()
-                pin_assignments.update(saved_assigns)
-
-    return False
+# ── Component blocking ─────────────────────────────────────────────
 
 
 def _block_components(
@@ -647,7 +448,7 @@ def _block_components(
                     grid.protect_cell(gx + dx, gy + dy)
 
 
-# â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Helpers ────────────────────────────────────────────────────────
 
 
 def _compute_pad_radius(cfg: RouterConfig) -> int:
@@ -708,4 +509,3 @@ def _build_all_pin_cells(
             gx, gy = grid.world_to_grid(wx, wy)
             result[f"{pc.instance_id}:{pin.id}"] = {(gx, gy)}
     return result
-

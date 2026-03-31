@@ -33,7 +33,7 @@ from .outline import tessellate_outline
 from .layers import shell_body_lines
 from .emit import generate_scad
 from .compiler import compile_scad
-from .traces import build_trace_fragments, build_jumper_fragments
+from .traces import build_trace_fragments
 from .resolver import resolve_component, ResolverContext
 from .fragment import ScadFragment, PolygonGeometry
 from .buttons import build_button_configs, generate_all_buttons_scad
@@ -192,17 +192,13 @@ def run_scad_step(
     trace_frags = build_trace_fragments(routing, ceil_start)
     all_fragments.extend(trace_frags)
 
-    # ── 6b. Jumper wire pinhole fragments ─────────────────────────
-    jumper_frags = build_jumper_fragments(routing, ceil_start)
-    all_fragments.extend(jumper_frags)
-
-    # ── 6c. Outline holes ───────────────────────────────────────
+    # ── 6b. Outline holes ───────────────────────────────────────
     # Holes are built directly into the shell body polyhedron by
     # shell_body_lines() — no cutout fragments needed.
 
-    log.info("Fragments: %d component + %d trace + %d jumper = %d total",
-             len(all_fragments) - len(trace_frags) - len(jumper_frags),
-             len(trace_frags), len(jumper_frags), len(all_fragments))
+    log.info("Fragments: %d component + %d trace = %d total",
+             len(all_fragments) - len(trace_frags),
+             len(trace_frags), len(all_fragments))
 
     # ── 7. Compute metadata for header comment ────────────────────
     height_grid = sample_height_grid(outline, enclosure, resolution_mm=2.0)
