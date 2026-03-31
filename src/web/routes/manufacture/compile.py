@@ -79,3 +79,17 @@ async def download_stl(sid: str):
         filename="enclosure.stl",
         headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"},
     )
+
+
+@router.get("/sessions/{sid}/manufacture/extras-stl")
+async def download_extras_stl(sid: str):
+    s = load_session_or_404(sid)
+    stl_path = s.artifact_path("extras.stl")
+    if not stl_path.exists():
+        raise HTTPException(404, "No extras.stl — either no extra parts or compile not run yet")
+    return FileResponse(
+        stl_path,
+        media_type="application/octet-stream",
+        filename="extras.stl",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"},
+    )
