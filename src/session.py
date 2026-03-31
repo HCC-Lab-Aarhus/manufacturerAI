@@ -27,6 +27,7 @@ from typing import Any, ClassVar
 
 from src.pipeline.config import DEFAULT_PRINTER
 
+DEFAULT_FILAMENT = "pla"
 
 ROOT = Path(__file__).resolve().parent.parent
 SESSIONS_DIR = ROOT / "outputs" / "sessions"
@@ -41,6 +42,7 @@ class Session:
     description: str = ""
     name: str = ""                       # LLM-generated friendly name
     printer_id: str = DEFAULT_PRINTER
+    filament_id: str = DEFAULT_FILAMENT
     pipeline_state: dict = field(default_factory=dict)  # stage -> status
     pipeline_errors: dict = field(default_factory=dict)  # stage -> {error, reason, responsible_agent}
 
@@ -64,6 +66,7 @@ class Session:
             "description": self.description,
             "name": self.name,
             "printer_id": self.printer_id,
+            "filament_id": self.filament_id,
             "pipeline_state": self.pipeline_state,
             "pipeline_errors": self.pipeline_errors,
         }
@@ -266,6 +269,7 @@ def load_session(session_id: str) -> Session | None:
         description=meta.get("description", ""),
         name=meta.get("name", ""),
         printer_id=meta.get("printer_id", DEFAULT_PRINTER),
+        filament_id=meta.get("filament_id", DEFAULT_FILAMENT),
         pipeline_state=meta.get("pipeline_state", {}),
         pipeline_errors=meta.get("pipeline_errors", {}),
     )
