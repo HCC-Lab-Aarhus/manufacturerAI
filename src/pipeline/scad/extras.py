@@ -28,7 +28,6 @@ from .buttons import (
 
 log = logging.getLogger(__name__)
 
-PLATE_SPACING: float = 5.0
 PART_GAP: float = 3.0
 
 
@@ -213,12 +212,12 @@ def collect_and_generate_extras(
     outline: Outline,
     enclosure: Enclosure,
     ceil_start: float,
-    flat_pts: list[list[float]],
 ) -> str:
-    """Collect all extra parts and generate positioned SCAD.
+    """Collect all extra parts and generate a standalone SCAD file.
 
-    Extra parts are placed in a row to the right of the enclosure.
-    Returns a SCAD string to append to the main enclosure output.
+    Extra parts are laid out in a row on their own build plate,
+    starting at the origin.  Returns a complete SCAD string for
+    a separate ``extras.scad`` file, or "" if no extras exist.
     """
     extras: list[PlacedExtra] = []
 
@@ -261,14 +260,9 @@ def collect_and_generate_extras(
     if not extras:
         return ""
 
-    enc_min_x = min(p[0] for p in flat_pts)
-    enc_max_x = max(p[0] for p in flat_pts)
-    enc_min_y = min(p[1] for p in flat_pts)
-
     parts: list[str] = []
-    parts.append("")
     parts.append("// ============================================================")
-    parts.append("// Extra parts — printed on the build plate next to the enclosure")
+    parts.append("// Extra parts — separate build plate")
     parts.append("// ============================================================")
     parts.append("")
 
@@ -277,28 +271,19 @@ def collect_and_generate_extras(
             parts.extend(extra.preamble)
             parts.append("")
 
-    current_x = enc_max_x + PLATE_SPACING
+    current_x = 0.0
 
     for extra in extras:
         place_x = current_x + extra.footprint_x / 2
-        place_y = enc_min_y
 
         parts.append(f"// {extra.label}")
-        parts.append(f"translate([{place_x:.3f}, {place_y:.3f}, 0]) {{")
+        parts.append(f"translate([{place_x:.3f}, 0, 0]) {{")
         for line in extra.scad_lines:
             parts.append(f"  {line}")
         parts.append("}")
         parts.append("")
 
         current_x = place_x + extra.footprint_x / 2 + PART_GAP
-
-    extras_max_x = current_x - PART_GAP
-    balance_x = enc_min_x + enc_max_x - extras_max_x
-    if balance_x < enc_min_x:
-        parts.append("// Bbox balance — preserves enclosure centering under slicer auto-center")
-        parts.append(f"translate([{balance_x:.3f}, {enc_min_y:.3f}, 0])")
-        parts.append("  cube([0.1, 0.1, 0.1]);")
-        parts.append("")
 
     log.info("Extra parts: %d generated", len(extras))
     return "\n".join(parts)

@@ -230,10 +230,8 @@ def run_scad_step(
     # ── 8b. Generate extra parts (buttons, hatches, etc.) ───────────
     extras_scad = collect_and_generate_extras(
         placement.components, cat_index, outline, enclosure,
-        ceil_start, flat_pts,
+        ceil_start,
     )
-    if extras_scad:
-        scad_str += extras_scad
 
     # ── 9. Write to session folder ────────────────────────────────
     scad_path: Path = session.artifact_path("enclosure.scad")
@@ -246,6 +244,17 @@ def run_scad_step(
         len(scad_str.encode()) / 1024,
         scad_str.count("\n"),
     )
+
+    extras_path: Path | None = None
+    if extras_scad:
+        extras_path = session.artifact_path("extras.scad")
+        extras_path.write_text(extras_scad, encoding="utf-8")
+        log.info(
+            "Wrote %s (%.1f kB, %d lines)",
+            extras_path.name,
+            len(extras_scad.encode()) / 1024,
+            extras_scad.count("\n"),
+        )
 
     session.pipeline_state["scad"] = "done"
     session.save()
@@ -260,6 +269,15 @@ def run_scad_step(
         else:
             log.error("STL render failed: %s", msg)
             session.pipeline_state["stl"] = "error"
+
+        if extras_path is not None:
+            extras_stl = session.artifact_path("extras.stl")
+            ok_e, msg_e, _ = compile_scad(extras_path, extras_stl)
+            if ok_e:
+                log.info("Extras STL rendered: %s", extras_stl.name)
+            else:
+                log.error("Extras STL render failed: %s", msg_e)
+
         session.save()
 
     return scad_path
