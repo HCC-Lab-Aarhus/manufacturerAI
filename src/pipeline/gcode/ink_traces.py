@@ -221,6 +221,7 @@ def generate_trace_ironing_gcode(
     lines: list[str] = [
         ";TYPE:Ironing",
         "; custom trace-following ironing",
+        f"G0 Z{ink_z:.3f} F720 ; ensure trace ironing Z",
     ]
     cumulative_e = 0.0
 

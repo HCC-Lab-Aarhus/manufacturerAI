@@ -649,11 +649,15 @@ def postprocess_gcode(
             # Inject pad ironing when we pass the pad_z layer.
             # This happens before the ink layer so pads are ironed
             # on an earlier (lower) layer than traces.
+            # The pad ironing G-code includes its own Z moves to
+            # descend to pad_z and return to current_z.
             if (not pad_ironing_injected
                     and custom_pad_ironing_lines
                     and z_val > pad_z + 0.01):
                 pad_ironing_injected = True
+                out.append(f"G0 Z{pad_z:.3f} F720 ; lower to pad ironing Z")
                 out.extend(custom_pad_ironing_lines)
+                out.append(f"G0 Z{z_val:.3f} F720 ; return to layer Z")
                 stages.append(f"Pad ironing at Z={pad_z:.2f}")
 
             # ── Ink layer pause ──────────────────────────────
