@@ -36,6 +36,9 @@ def _is_windows() -> bool:
     return sys.platform == "win32"
 
 
+from src.pipeline import safe_path as _safe_path
+
+
 def check_scad(scad_path: Path) -> tuple[bool, str]:
     """Syntax-check an OpenSCAD file without rendering. Returns (ok, message).
 
@@ -52,7 +55,7 @@ def check_scad(scad_path: Path) -> tuple[bool, str]:
     tmp_csg = Path(tempfile.mktemp(suffix=".csg"))
     try:
         result = subprocess.run(
-            [exe, "-o", str(tmp_csg), str(scad_path)],
+            [exe, "-o", _safe_path(tmp_csg), _safe_path(scad_path)],
             capture_output=True,
             text=True,
             timeout=30,
@@ -104,7 +107,7 @@ def compile_scad(
         stl_path = scad_path.with_suffix(".stl")
 
     log_path = stl_path.with_suffix(".openscad.log")
-    cmd = [exe, "-o", str(stl_path), str(scad_path)]
+    cmd = [exe, "-o", _safe_path(stl_path), _safe_path(scad_path)]
     log.info("Running: %s", " ".join(cmd))
 
     try:

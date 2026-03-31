@@ -13,6 +13,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.pipeline import safe_path as _safe_path
+
 log = logging.getLogger(__name__)
 
 # Board FQBN for ATmega328P (Arduino Uno compatible)
@@ -89,8 +91,8 @@ def compile_sketch(
         cli,
         "compile",
         "--fqbn", fqbn,
-        "--output-dir", str(build_dir),
-        str(sketch_dir),
+        "--output-dir", _safe_path(build_dir),
+        _safe_path(sketch_dir),
     ]
 
     log.info("Compiling sketch: %s", " ".join(cmd))
@@ -101,7 +103,7 @@ def compile_sketch(
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
-            cwd=str(output_dir),
+            cwd=_safe_path(output_dir),
         )
     except subprocess.TimeoutExpired:
         return CompileResult(

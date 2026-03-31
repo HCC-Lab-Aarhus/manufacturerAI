@@ -13,6 +13,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from src.pipeline import safe_path as _safe_path
 from src.pipeline.config import get_printer
 
 log = logging.getLogger(__name__)
@@ -169,7 +170,7 @@ def slice_stl(
     # Directives from the profile (e.g. --printer-profile, --thumbnails)
     # are applied first so the profile's --load overrides sit on top.
     cmd += profile_cli_args
-    cmd += ["--load", str(profile_path)]
+    cmd += ["--load", _safe_path(profile_path)]
 
     # Filament overrides (temperature, bed, cooling) are loaded *after*
     # the printer profile so they take final precedence.
@@ -179,14 +180,14 @@ def slice_stl(
             filament, stl_path.parent,
         )
     if filament_override_path and filament_override_path.exists():
-        cmd += ["--load", str(filament_override_path)]
+        cmd += ["--load", _safe_path(filament_override_path)]
         log.info("Filament overrides loaded: %s", filament_override_path)
 
     for p in (extra_overrides or []):
         if p.exists():
-            cmd += ["--load", str(p)]
+            cmd += ["--load", _safe_path(p)]
 
-    cmd += ["--output", str(output_gcode), str(stl_path)]
+    cmd += ["--output", _safe_path(output_gcode), _safe_path(stl_path)]
 
     log.info("Slicing: %s", " ".join(cmd))
 
