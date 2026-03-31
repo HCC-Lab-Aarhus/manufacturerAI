@@ -2,12 +2,12 @@
 
 Each button is a separate OpenSCAD module placed next to the enclosure on the
 build plate.  The button geometry snaps onto the switch actuator cylinder and
-its top surface follows the curvature of the enclosure lid.
+has a flat cap on top.
 
 Button anatomy (bottom to top as printed):
     1. Socket   — ring that grips around the switch actuator cylinder
     2. Stem     — shaft extending up through the enclosure cavity & ceiling
-    3. Cap      — visible top surface following the enclosure curvature
+    3. Cap      — flat visible top surface
 
 The matching ceiling cutout is generated separately by the resolver using the
 button outline (with clearance) so the button slides freely up and down.
@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from src.catalog.models import Body, Component, SwitchActuator
 from src.pipeline.config import CAVITY_START_MM, CEILING_MM
 from src.pipeline.design.models import Outline, Enclosure
-from src.pipeline.design.height_field import blended_height, sample_height_grid, surface_normal_at
 from src.pipeline.placer.models import PlacedComponent
 
 log = logging.getLogger(__name__)
@@ -53,9 +52,6 @@ class ButtonConfig:
     actuator: SwitchActuator
     # Enclosure geometry
     ceil_start: float               # Z where ceiling starts (enclosure.height_mm - CEILING_MM)
-    surface_z: float                # blended_height at button centre
-    surface_dzdx: float             # surface gradient in X (mm/mm)
-    surface_dzdy: float             # surface gradient in Y (mm/mm)
 
 
 def _circle_polygon(radius: float, n: int = CIRCLE_FACETS) -> list[list[float]]:
@@ -122,9 +118,6 @@ def build_button_configs(
     actuator defined in its catalog cap."""
     configs: list[ButtonConfig] = []
 
-    # Pre-sample the height grid for surface normal computation
-    height_grid = sample_height_grid(outline, enclosure, resolution_mm=1.0)
-
     for comp in components:
         cat = catalog_index.get(comp.catalog_id)
         if cat is None:
@@ -143,17 +136,6 @@ def build_button_configs(
         # Stem must fit through the switch body opening
         stem_outline = _offset_polygon(_body_polygon(cat.body), -BUTTON_CLEARANCE_MM)
 
-        # Surface height & gradient at button position
-        surface_z = blended_height(comp.x_mm, comp.y_mm, outline, enclosure)
-        nx, ny, nz = surface_normal_at(comp.x_mm, comp.y_mm, height_grid)
-        # Convert normal to surface gradient: dz/dx = -nx/nz, dz/dy = -ny/nz
-        if abs(nz) > 1e-6:
-            dzdx = -nx / nz
-            dzdy = -ny / nz
-        else:
-            dzdx = 0.0
-            dzdy = 0.0
-
         configs.append(ButtonConfig(
             instance_id=comp.instance_id,
             cx=comp.x_mm,
@@ -163,9 +145,6 @@ def build_button_configs(
             stem_outline=stem_outline,
             actuator=cap.actuator,
             ceil_start=ceil_start,
-            surface_z=surface_z,
-            surface_dzdx=dzdx,
-            surface_dzdy=dzdy,
         ))
 
     return configs
@@ -199,18 +178,8 @@ def generate_button_scad(config: ButtonConfig) -> list[str]:
 
     stem_height = gap_to_ceiling + CEILING_MM  # traverses from switch top through ceiling
 
-    # Cap height: minimum thickness + surface tilt range
-    # Compute tilt delta across the cap extent
     outline = config.outline
-    if outline:
-        max_x = max(abs(p[0]) for p in outline)
-        max_y = max(abs(p[1]) for p in outline)
-    else:
-        max_x = max_y = 5.0
-
-    tilt_range = (abs(config.surface_dzdx) * max_x +
-                  abs(config.surface_dzdy) * max_y)
-    cap_base_height = MIN_CAP_THICKNESS_MM + tilt_range
+    cap_base_height = MIN_CAP_THICKNESS_MM
 
     # ── Socket ─────────────────────────────────────────────────────
     lines.append(f"// Custom button: {cid}")
@@ -229,54 +198,14 @@ def generate_button_scad(config: ButtonConfig) -> list[str]:
     lines.append(f"  linear_extrude(height = {stem_height:.3f})")
     lines.append(f"    polygon(points = [{stem_pts_str}]);")
 
-    # ── Cap with surface-following top ─────────────────────────────
+    # ── Cap (flat top) ─────────────────────────────────────────────
     cap_z_start = socket_h + stem_height
     cap_outline_str = _fmt_pts(outline)
 
-    # Build a polyhedron cap whose top face follows the surface gradient.
-    # Bottom ring: flat at cap_z_start
-    # Top ring: tilted by (dzdx, dzdy) relative to centre
-    n = len(outline)
-    if n < 3:
-        # Fallback: simple extrusion
-        lines.append(f"// Cap")
-        lines.append(f"translate([0, 0, {cap_z_start:.3f}])")
-        lines.append(f"  linear_extrude(height = {cap_base_height:.3f})")
-        lines.append(f"    polygon(points = [{cap_outline_str}]);")
-    else:
-        # Polyhedron cap with tilted top surface
-        lines.append(f"// Cap (top follows surface curvature)")
-        lines.append(f"polyhedron(")
-
-        # Build vertex list: bottom ring then top ring
-        pts_3d: list[str] = []
-        for p in outline:
-            pts_3d.append(f"[{p[0]:.3f}, {p[1]:.3f}, {cap_z_start:.3f}]")
-        for p in outline:
-            # Top Z = cap_z_start + cap_base_height + gradient offset
-            dz = config.surface_dzdx * p[0] + config.surface_dzdy * p[1]
-            top_z = cap_z_start + cap_base_height + dz
-            # Clamp: ensure minimum cap thickness
-            top_z = max(top_z, cap_z_start + MIN_CAP_THICKNESS_MM)
-            pts_3d.append(f"[{p[0]:.3f}, {p[1]:.3f}, {top_z:.3f}]")
-
-        lines.append(f"  points = [{', '.join(pts_3d)}],")
-
-        # Build face list (OpenSCAD: CW from outside, i.e. right-hand normal inward)
-        faces: list[str] = []
-        # Bottom face: normal must point up (+Z, inward) → forward vertex order
-        bottom = list(range(n))
-        faces.append("[" + ", ".join(str(i) for i in bottom) + "]")
-        # Top face: normal must point down (-Z, inward) → reverse vertex order
-        top = list(range(2 * n - 1, n - 1, -1))
-        faces.append("[" + ", ".join(str(i) for i in top) + "]")
-        # Side faces: normal must point inward (toward axis)
-        for i in range(n):
-            j = (i + 1) % n
-            faces.append(f"[{i}, {n + i}, {n + j}, {j}]")
-
-        lines.append(f"  faces = [{', '.join(faces)}]")
-        lines.append(f");")
+    lines.append(f"// Cap")
+    lines.append(f"translate([0, 0, {cap_z_start:.3f}])")
+    lines.append(f"  linear_extrude(height = {cap_base_height:.3f})")
+    lines.append(f"    polygon(points = [{cap_outline_str}]);")
 
     return lines
 
