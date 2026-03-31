@@ -43,6 +43,7 @@ class Session:
     name: str = ""                       # LLM-generated friendly name
     printer_id: str = DEFAULT_PRINTER
     filament_id: str = DEFAULT_FILAMENT
+    model_id: str = "medium"
     pipeline_state: dict = field(default_factory=dict)  # stage -> status
     pipeline_errors: dict = field(default_factory=dict)  # stage -> {error, reason, responsible_agent}
 
@@ -67,6 +68,7 @@ class Session:
             "name": self.name,
             "printer_id": self.printer_id,
             "filament_id": self.filament_id,
+            "model_id": self.model_id,
             "pipeline_state": self.pipeline_state,
             "pipeline_errors": self.pipeline_errors,
         }
@@ -270,6 +272,7 @@ def load_session(session_id: str) -> Session | None:
         name=meta.get("name", ""),
         printer_id=meta.get("printer_id", DEFAULT_PRINTER),
         filament_id=meta.get("filament_id", DEFAULT_FILAMENT),
+        model_id=meta.get("model_id", "medium"),
         pipeline_state=meta.get("pipeline_state", {}),
         pipeline_errors=meta.get("pipeline_errors", {}),
     )

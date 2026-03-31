@@ -31,6 +31,7 @@ def _make_agent(design: dict | None = None) -> DesignAgent:
     session = MagicMock()
     session.read_artifact.return_value = design
     session.printer_id = "default"
+    session.model_id = "medium"
 
     with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}), \
          patch("src.agent.core.anthropic"):
