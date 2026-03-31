@@ -453,7 +453,12 @@ class DesignAgent(_BaseAgent):
 
     def _save_and_validate(self, design: dict) -> str:
         """Persist the design, compute outline, validate, return status + current document."""
+        for p in design.get("ui_placements", []):
+            if p.get("mounting_style") == "side" and p.get("edge_index") is None:
+                del p["mounting_style"]
+
         self.session.write_artifact("design.json", design)
+        self._design_text = json.dumps(design, indent=2)
 
         name = design.get("name") or ""
         if name:
