@@ -78,7 +78,7 @@ async def generate_combined(
     grid = sweep_grid(pdef)
     sp = load_slicer_params(printer)
 
-    plate_z = sp.layer_height * 10
+    plate_z = sp.layer_height * 20
     pad = DEBUG_CONFIG.padding
     plate_h_mm = DEBUG_CONFIG.landscape_height
     px_mm = grid.pixel_size_mm

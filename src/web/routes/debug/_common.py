@@ -18,7 +18,7 @@ _Z_HOP: float = 1.0
 @dataclass(frozen=True)
 class DebugConfig:
     padding: float = 5.0
-    layers: int = 4
+    layers: int = 10
     cal_box_size: float = 100.0
     cal_square_size: float = 5.0
     portrait_width: float = 10.0
