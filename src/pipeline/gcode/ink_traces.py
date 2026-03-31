@@ -12,6 +12,7 @@ main print G-code by the post-processor.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Sequence
 
 log = logging.getLogger(__name__)
@@ -142,6 +143,108 @@ def extract_trace_segments(
 
     log.info("Extracted %d trace segments from %d traces", len(segments), len(traces))
     return segments
+
+
+def extract_pad_centers(
+    routing_result: dict,
+) -> list[tuple[float, float]]:
+    """Return unique pin-endpoint positions from routed traces.
+
+    Each trace path starts and ends at a pin.  The first and last
+    waypoints of every trace are collected and deduplicated (within
+    0.01 mm) to produce the set of pad centres.
+    """
+    if not routing_result:
+        return []
+
+    traces = routing_result.get("traces", [])
+    seen: set[tuple[int, int]] = set()
+    centers: list[tuple[float, float]] = []
+
+    for trace in traces:
+        path = trace.get("path", [])
+        if len(path) < 2:
+            continue
+        for pt in (path[0], path[-1]):
+            key = (round(pt[0] * 100), round(pt[1] * 100))
+            if key not in seen:
+                seen.add(key)
+                centers.append((float(pt[0]), float(pt[1])))
+
+    log.info("Extracted %d pad centres from %d traces", len(centers), len(traces))
+    return centers
+
+
+# ── Trace-following ironing G-code ────────────────────────────────
+
+IRONING_SPEED = 1200       # mm/min
+IRONING_WIDTH = 1.0        # mm — single-pass width
+IRONING_FLOW_PCT = 0.15    # fraction of normal flow
+PAD_RADIUS = 1.0           # mm — half-size of pad area
+PAD_LINE_SPACING = 0.4     # mm — spacing between pad ironing lines
+
+
+def generate_trace_ironing_gcode(
+    trace_segs: list[tuple[float, float, float, float]],
+    pad_centers: list[tuple[float, float]],
+    *,
+    layer_height: float = 0.2,
+    ironing_width: float = IRONING_WIDTH,
+    ironing_speed: float = IRONING_SPEED,
+    flow_pct: float = IRONING_FLOW_PCT,
+    pad_radius: float = PAD_RADIUS,
+    pad_line_spacing: float = PAD_LINE_SPACING,
+) -> list[str]:
+    """Generate ironing G-code that follows trace paths with pads at pins.
+
+    Produces a single-pass, 1 mm wide ironing line along each trace
+    segment, plus a small filled pad at each pin endpoint.
+
+    Parameters
+    ----------
+    trace_segs : list
+        ``(x1, y1, x2, y2)`` trace segments in bed coords.
+    pad_centers : list
+        ``(x, y)`` positions of pin pads in bed coords.
+    """
+    filament_area = math.pi * (1.75 / 2) ** 2
+    e_per_mm = (layer_height * ironing_width * flow_pct) / filament_area
+
+    lines: list[str] = [
+        ";TYPE:Ironing",
+        "; custom trace-following ironing",
+    ]
+    cumulative_e = 0.0
+
+    for x1, y1, x2, y2 in trace_segs:
+        length = math.hypot(x2 - x1, y2 - y1)
+        if length < 0.01:
+            continue
+        de = e_per_mm * length
+        lines.append(f"G0 X{x1:.3f} Y{y1:.3f} F21000")
+        cumulative_e += de
+        lines.append(f"G1 X{x2:.3f} Y{y2:.3f} E{cumulative_e:.5f} F{ironing_speed:.0f}")
+
+    for cx, cy in pad_centers:
+        y_lo = cy - pad_radius
+        y_hi = cy + pad_radius
+        y_pos = y_lo
+        forward = True
+        while y_pos <= y_hi + 0.001:
+            x_lo = cx - pad_radius
+            x_hi = cx + pad_radius
+            sx, ex = (x_lo, x_hi) if forward else (x_hi, x_lo)
+            lines.append(f"G0 X{sx:.3f} Y{y_pos:.3f} F21000")
+            seg_len = abs(x_hi - x_lo)
+            de = e_per_mm * seg_len
+            cumulative_e += de
+            lines.append(f"G1 X{ex:.3f} Y{y_pos:.3f} E{cumulative_e:.5f} F{ironing_speed:.0f}")
+            forward = not forward
+            y_pos += pad_line_spacing
+
+    log.info("Generated trace ironing: %d trace segments, %d pads, %d lines",
+             len(trace_segs), len(pad_centers), len(lines))
+    return lines
 
 
 # ── Path simplification ───────────────────────────────────────────
