@@ -245,7 +245,7 @@ def run_profiled_route():
         _block_components, _build_all_pin_cells, _build_pin_voronoi,
         _compute_pad_radius, _compute_pin_clearance_cells,
         _parse_net_refs, _resolve_all_pads, _priority_order,
-        _perturb, _try_pin_shifts,
+        _perturb,
     )
     from src.pipeline.router.solution import Solution
     from src.pipeline.router import pathfinder as pf_mod
@@ -416,11 +416,8 @@ def run_profiled_route():
     orig_unblock_voronoi = Solution._unblock_voronoi
     orig_find_crossed = Solution._find_crossed_nets
     orig_has_foreign = Solution._has_foreign_cells
-    orig_relax_tree = Solution._relax_tree
     orig_commit = Solution._commit
     orig_try_rip_reroute = Solution._try_rip_reroute
-    orig_try_jumper = Solution._try_jumper
-    orig_commit_full_jumper = Solution._commit_full_jumper
     orig_snapshot = Solution.snapshot
     orig_restore = Solution.restore
     orig_rip_up = Solution.rip_up
@@ -441,10 +438,6 @@ def run_profiled_route():
         with ht.section("has_foreign_cells"):
             return orig_has_foreign(self, *a, **kw)
 
-    def timed_relax_tree(self, *a, **kw):
-        with ht.section("relax_tree"):
-            return orig_relax_tree(self, *a, **kw)
-
     def timed_commit(self, *a, **kw):
         with ht.section("commit"):
             return orig_commit(self, *a, **kw)
@@ -452,14 +445,6 @@ def run_profiled_route():
     def timed_try_rip_reroute(self, *a, **kw):
         with ht.section("try_rip_reroute"):
             return orig_try_rip_reroute(self, *a, **kw)
-
-    def timed_try_jumper(self, *a, **kw):
-        with ht.section("try_jumper"):
-            return orig_try_jumper(self, *a, **kw)
-
-    def timed_commit_full_jumper(self, *a, **kw):
-        with ht.section("commit_full_jumper"):
-            return orig_commit_full_jumper(self, *a, **kw)
 
     def timed_snapshot(self, *a, **kw):
         with ht.section("snapshot"):
@@ -477,11 +462,8 @@ def run_profiled_route():
     Solution._unblock_voronoi = timed_unblock_voronoi
     Solution._find_crossed_nets = timed_find_crossed
     Solution._has_foreign_cells = timed_has_foreign
-    Solution._relax_tree = timed_relax_tree
     Solution._commit = timed_commit
     Solution._try_rip_reroute = timed_try_rip_reroute
-    Solution._try_jumper = timed_try_jumper
-    Solution._commit_full_jumper = timed_commit_full_jumper
     Solution.snapshot = timed_snapshot
     Solution.restore = timed_restore
     Solution.rip_up = timed_rip_up
@@ -528,7 +510,7 @@ def run_profiled_route():
                     )
                 with ht.section("priority_order"):
                     ordering = _priority_order(
-                        net_ids, net_pad_map, pads_map, grid, config, pin_voronoi,
+                        net_ids, net_pad_map, pads_map,
                     )
 
             # ── Phase 4: Solution construction ──
@@ -555,11 +537,9 @@ def run_profiled_route():
                     best = solution.snapshot()
                     best_score = solution.score()
                     stall = 0
-                    pin_shift_tried = False
 
                     for iteration in range(config.max_improve_iterations):
-                        jc = solution.jumper_count()
-                        targets = solution.worst_nets(k=max(3, jc // 2))
+                        targets = solution.worst_nets(k=3)
                         if not targets:
                             break
 
@@ -578,7 +558,6 @@ def run_profiled_route():
                             best = solution.snapshot()
                             best_score = after
                             stall = 0
-                            pin_shift_tried = False
                             print(f"  Iter {iteration+1}: improved {before} -> {after}")
                             if solution.is_perfect():
                                 print("  Perfect solution found!")
@@ -587,22 +566,6 @@ def run_profiled_route():
                             solution.restore(best)
                             stall += 1
                             print(f"  Iter {iteration+1}: no improvement (stall {stall})")
-
-                            if not pin_shift_tried and stall >= 3 and jc > 0:
-                                pin_shift_tried = True
-                                with ht.section("pin_shifts"):
-                                    shifted = _try_pin_shifts(
-                                        solution, net_pad_map, pads_map,
-                                        pin_assignments, ordering,
-                                        placement, catalog,
-                                    )
-                                if shifted:
-                                    best = solution.snapshot()
-                                    best_score = solution.score()
-                                    stall = 0
-                                    if solution.is_perfect():
-                                        break
-                                    continue
 
                             if stall >= config.stall_limit:
                                 print(f"  Stalled for {stall} iterations, stopping")
@@ -624,11 +587,8 @@ def run_profiled_route():
         Solution._unblock_voronoi = orig_unblock_voronoi
         Solution._find_crossed_nets = orig_find_crossed
         Solution._has_foreign_cells = orig_has_foreign
-        Solution._relax_tree = orig_relax_tree
         Solution._commit = orig_commit
         Solution._try_rip_reroute = orig_try_rip_reroute
-        Solution._try_jumper = orig_try_jumper
-        Solution._commit_full_jumper = orig_commit_full_jumper
         Solution.snapshot = orig_snapshot
         Solution.restore = orig_restore
         Solution.rip_up = orig_rip_up

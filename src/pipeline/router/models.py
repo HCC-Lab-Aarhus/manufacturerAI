@@ -19,43 +19,12 @@ class Trace:
 
 
 @dataclass
-class JumperEndpoint:
-    """One end of a jumper wire.
-
-    When the jumper lands on an existing component pin, `pin_center`
-    is set and the physical solder point is offset outward so two
-    holes never overlap.  The SCAD generator uses these fields to
-    emit the correct capsule-shaped cutout.
-    """
-
-    x: float
-    y: float
-    pin_center: tuple[float, float] | None = None
-    pin_radius_mm: float = 0.0
-
-
-@dataclass
-class JumperWire:
-    """A physical jumper wire bridging a planarity conflict.
-
-    The wire arches over existing traces through the air.  Each endpoint
-    is a solder point that occupies real grid space (pad + clearance).
-    """
-
-    net_id: str
-    start: JumperEndpoint
-    end: JumperEndpoint
-    length_mm: float
-
-
-@dataclass
 class RoutingResult:
     """Complete routing result, ready for the SCAD generator."""
 
     traces: list[Trace]
     pin_assignments: dict[str, str]     # "mcu_1:gpio" -> "mcu_1:PD2"
     failed_nets: list[str]
-    jumpers: list[JumperWire] = field(default_factory=list)
     debug_grids: list[dict] = field(default_factory=list)
 
     @property
@@ -87,8 +56,8 @@ class RouterConfig:
     # ── Router-only knobs ──────────────────────────────────────
     turn_penalty: int = 5                # A* cost penalty for changing direction
     crossing_cost: int = 50              # A* cost penalty for crossing an existing trace
-    max_improve_iterations: int = 60     # iterative rip-up improvement rounds
-    stall_limit: int = 20                # stop after this many non-improving iterations
+    max_improve_iterations: int = 60     # iterative improvement rounds
+    stall_limit: int = 20               # stop after this many rounds with no improvement
 
 
 # Module-level defaults (used when no RouterConfig is passed)

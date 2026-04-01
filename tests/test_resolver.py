@@ -259,9 +259,11 @@ class TestBatteryResolver(unittest.TestCase):
         ledges = [f for f in self.frags if "hatch ledge" in f.label]
         self.assertEqual(len(ledges), 2)
 
-    def test_no_pin_shafts(self):
+    def test_pin_shafts_penetrate_below_trace(self):
         shafts = [f for f in self.frags if f.label.startswith("pin bat_1:")]
-        self.assertEqual(len(shafts), 0, "bottom-mount body sits at cavity start; no shaft room")
+        self.assertEqual(len(shafts), len(self.cat.pins))
+        for s in shafts:
+            self.assertLess(s.z_base, FLOOR_MM)
 
     def test_pin_funnel_count(self):
         funnels = [f for f in self.frags if "pin funnel" in f.label]

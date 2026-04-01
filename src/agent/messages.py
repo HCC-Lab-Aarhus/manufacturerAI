@@ -21,6 +21,20 @@ _DESIGN_TOOLS = {"edit_design"}
 _KEEP_VERBATIM = {"submit_circuit"}
 
 
+def strip_thinking_blocks(messages: list[dict]) -> list[dict]:
+    """Return a copy of messages with all thinking blocks removed."""
+    result = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            filtered = [b for b in content if b.get("type") != "thinking"]
+            if filtered:
+                result.append({**msg, "content": filtered})
+        else:
+            result.append(msg)
+    return result
+
+
 def serialize_content(content: list) -> list[dict]:
     """Convert API response content blocks to serializable dicts.
 

@@ -348,7 +348,7 @@ Same dome/ridge types. Use for palm swells on the bottom or rocking-base shapes.
 | `edge_index` | integer | side-mount only | Which outline edge (0-based) |
 | `mounting_style` | string | no | Override default mounting (must be in component's `allowed_styles`) |
 | `conform_to_surface` | boolean | no | Conform to curved top surface (default: true) |
-| `button_outline` | array | no | Custom button cap as `[[x,y], ...]` points (mm) relative to button centre |
+| `button_shape` | object | no | CSG shape tree for the button cap (same primitives as the device shape), centred at `[0, 0]` |
 
 ### Top-Mount
 ```json
@@ -361,13 +361,25 @@ Same dome/ridge types. Use for palm swells on the bottom or rocking-base shapes.
 ```
 
 ### Custom Button Shape
+Button caps are defined using the **same CSG primitive system** as the device silhouette. The shape is centred at `[0, 0]` (the button's own local coordinates).
 ```json
 {{
     "instance_id": "btn_1",
     "catalog_id": "tactile_button_6x6",
     "x_mm": 25, "y_mm": 40,
-    "button_outline": [[-5, -4], [5, -4], [5, 4], [-5, 4]]
+    "button_shape": {{"type": "rectangle", "center": [0, 0], "size": [10, 8], "corner_radius": 2}}
 }}
+```
+A circular button:
+```json
+"button_shape": {{"type": "ellipse", "center": [0, 0], "radius": 6}}
+```
+A compound button (e.g. a D-pad):
+```json
+"button_shape": {{"op": "union", "children": [
+    {{"type": "rectangle", "center": [0, 0], "size": [4, 14], "corner_radius": 1}},
+    {{"type": "rectangle", "center": [0, 0], "size": [14, 4], "corner_radius": 1}}
+]}}
 ```
 
 Button guidelines:

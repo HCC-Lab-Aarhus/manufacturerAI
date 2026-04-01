@@ -19,7 +19,7 @@ from ._common import load_slicer_params, render_bitmap
 router = APIRouter()
 
 BOX_SIZE_MM = 20.0
-HOLE_DIAMETER_MM = 2.0
+HOLE_DIAMETER_MM = 3.0
 TRACE_WIDTH_MM = 1.0
 TUNNEL_WIDTH_MM = 2.0
 TUNNEL_HEIGHT_MM = 0.2
@@ -84,10 +84,10 @@ def _inject_via_silverink_markers(gcode: str, base_z: float) -> str:
     for i in range(len(out) - 1, -1, -1):
         s = out[i].strip()
         if s.startswith("M104") and "S0" in s:
-            out[i:i] = _silverink_block(2)
+            out[i:i] = _silverink_block(2) + _silverink_block(3)
             return "\n".join(out)
 
-    out.extend(_silverink_block(2))
+    out.extend(_silverink_block(2) + _silverink_block(3))
     return "\n".join(out)
 
 
@@ -112,6 +112,30 @@ def _trace_cells(
         for dr in range(-half, half + width_px % 2):
             r = r_center + dr
             if 0 <= r < grid.data_rows:
+                cells.add((r, c))
+    return cells
+
+
+def _hole_cells(
+    grid: SweepGrid,
+    bed_cx: float,
+    bed_cy: float,
+    diameter_mm: float,
+) -> set[tuple[int, int]]:
+    px = grid.pixel_size_mm
+    bx, by = grid.bed_to_bitmap(bed_cx, bed_cy)
+    c_center = bx / px
+    r_center = by / px
+    radius_px = diameter_mm / (2 * px)
+
+    cells: set[tuple[int, int]] = set()
+    r_lo = max(0, int(math.floor(r_center - radius_px)))
+    r_hi = min(grid.data_rows - 1, int(math.ceil(r_center + radius_px)))
+    c_lo = max(0, int(math.floor(c_center - radius_px)))
+    c_hi = min(grid.data_cols - 1, int(math.ceil(c_center + radius_px)))
+    for r in range(r_lo, r_hi + 1):
+        for c in range(c_lo, c_hi + 1):
+            if (r - r_center) ** 2 + (c - c_center) ** 2 <= radius_px ** 2:
                 cells.add((r, c))
     return cells
 
@@ -210,6 +234,9 @@ async def generate_via(
     )
     bitmap2 = render_bitmap(grid.data_rows, grid.data_cols, bitmap2_cells)
 
+    bitmap3_cells = _hole_cells(grid, cx, cy, HOLE_DIAMETER_MM)
+    bitmap3 = render_bitmap(grid.data_rows, grid.data_cols, bitmap3_cells)
+
     manifest = generate_manifest(
         grid=grid,
         part_origin_x_mm=base_bed_x,
@@ -225,5 +252,6 @@ async def generate_via(
         "gcode": gcode,
         "bitmap1": bitmap1,
         "bitmap2": bitmap2,
+        "bitmap3": bitmap3,
         "contract": manifest.to_dict(),
     }

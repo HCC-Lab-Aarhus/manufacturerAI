@@ -20,7 +20,7 @@ from pathlib import Path
 from src.pipeline.config import get_printer
 from src.pipeline.gcode.slicer import slice_stl
 from src.pipeline.gcode.pause_points import compute_pause_points, PausePoints, ComponentPauseInfo
-from src.pipeline.gcode.ink_traces import extract_trace_segments
+from src.pipeline.gcode.ink_traces import extract_trace_segments, extract_pad_centers
 from src.pipeline.gcode.postprocessor import postprocess_gcode, PostProcessResult, compute_bed_offset
 from src.pipeline.gcode.filaments import get_filament, write_filament_overrides
 
@@ -51,6 +51,7 @@ def run_gcode_pipeline(
     filament: str = "",
     silverink_only: bool = False,
     component_infos: list[ComponentPauseInfo] | None = None,
+    placement_result: dict | None = None,
 ) -> GcodePipelineResult:
     """Run the full G-code pipeline: slice → inject pauses → output.
 
@@ -139,16 +140,30 @@ def run_gcode_pipeline(
         )
     stages.append(f"Slicing succeeded: {slicer_gcode_path}")
 
-    # ── 3. Extract trace segments for ironing filter ──
+    # ── 3. Extract trace segments and pad centres for ironing ──
     trace_segs = extract_trace_segments(
         routing_result=routing_result,
     )
+    pad_centers = extract_pad_centers(
+        placement_result=placement_result,
+    )
     if trace_segs:
-        stages.append(f"Trace segments: {len(trace_segs)} segments for ironing filter")
+        stages.append(f"Trace segments: {len(trace_segs)} segments, {len(pad_centers)} pads")
 
     # ── 3c. Compute bed offset (PrusaSlicer centres model on nominal bed) ──
     bed_offset = compute_bed_offset(stl_path, bed_size=(pdef.nominal_bed_width, pdef.nominal_bed_depth))
     stages.append(f"Bed offset: ({bed_offset[0]:.1f}, {bed_offset[1]:.1f}) mm")
+
+    # ── 3d. Transform trace/pad coords from model-space to bed-space ──
+    # The SCAD emitter wraps the model in mirror([0,1,0]) which
+    # negates all Y in the STL.  Trace/pad coordinates come from the
+    # router in unmirored model-space, so we apply the same Y-negate
+    # then shift by the bed offset to match the slicer G-code.
+    dx, dy = bed_offset
+    if trace_segs:
+        trace_segs = [(x1 + dx, -y1 + dy, x2 + dx, -y2 + dy) for x1, y1, x2, y2 in trace_segs]
+    if pad_centers:
+        pad_centers = [(x + dx, -y + dy) for x, y in pad_centers]
 
     # ── 4. Post-process ───────────────────────────────────────────
     final_gcode = output_dir / "enclosure.gcode"
@@ -162,7 +177,7 @@ def run_gcode_pipeline(
             (p.z, p.label, p.components) for p in pauses.pauses if p.label != "ink"
         ],
         trace_segments=trace_segs,
-        bed_offset=bed_offset,
+        pad_centers=pad_centers,
         silverink_only=silverink_only,
     )
     stages.extend(pp_result.stages)

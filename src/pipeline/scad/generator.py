@@ -33,7 +33,7 @@ from .outline import tessellate_outline
 from .layers import shell_body_lines
 from .emit import generate_scad
 from .compiler import compile_scad
-from .traces import build_trace_fragments, build_jumper_fragments
+from .traces import build_trace_fragments
 from .resolver import resolve_component, ResolverContext
 from .fragment import ScadFragment, PolygonGeometry
 from .buttons import build_button_configs, generate_all_buttons_scad
@@ -160,15 +160,18 @@ def run_scad_step(
                 pin_length_mm=cat.pin_length_mm,
             ))
 
-    # Copy button outlines from UI placements to placed components
-    ui_outline_map = {
-        up.instance_id: up.button_outline
+    # Tessellate button shapes from UI placements into point-list outlines
+    from src.pipeline.design.shape2d import tessellate_shape
+    ui_shape_map = {
+        up.instance_id: up.button_shape
         for up in physical.ui_placements
-        if up.button_outline is not None
+        if up.button_shape is not None
     }
     for comp in placement.components:
-        if comp.instance_id in ui_outline_map:
-            comp.button_outline = ui_outline_map[comp.instance_id]
+        shape = ui_shape_map.get(comp.instance_id)
+        if shape is not None:
+            outline_obj = tessellate_shape(shape)
+            comp.button_outline = [[v.x, v.y] for v in outline_obj.points]
 
     for comp in placement.components:
         cat = cat_index.get(comp.catalog_id)
@@ -189,17 +192,13 @@ def run_scad_step(
     trace_frags = build_trace_fragments(routing, ceil_start)
     all_fragments.extend(trace_frags)
 
-    # ── 6b. Jumper wire pinhole fragments ─────────────────────────
-    jumper_frags = build_jumper_fragments(routing, ceil_start)
-    all_fragments.extend(jumper_frags)
-
-    # ── 6c. Outline holes ───────────────────────────────────────
+    # ── 6b. Outline holes ───────────────────────────────────────
     # Holes are built directly into the shell body polyhedron by
     # shell_body_lines() — no cutout fragments needed.
 
-    log.info("Fragments: %d component + %d trace + %d jumper = %d total",
-             len(all_fragments) - len(trace_frags) - len(jumper_frags),
-             len(trace_frags), len(jumper_frags), len(all_fragments))
+    log.info("Fragments: %d component + %d trace = %d total",
+             len(all_fragments) - len(trace_frags),
+             len(trace_frags), len(all_fragments))
 
     # ── 7. Compute metadata for header comment ────────────────────
     height_grid = sample_height_grid(outline, enclosure, resolution_mm=2.0)
@@ -230,10 +229,8 @@ def run_scad_step(
     # ── 8b. Generate extra parts (buttons, hatches, etc.) ───────────
     extras_scad = collect_and_generate_extras(
         placement.components, cat_index, outline, enclosure,
-        ceil_start, flat_pts,
+        ceil_start,
     )
-    if extras_scad:
-        scad_str += extras_scad
 
     # ── 9. Write to session folder ────────────────────────────────
     scad_path: Path = session.artifact_path("enclosure.scad")
@@ -246,6 +243,17 @@ def run_scad_step(
         len(scad_str.encode()) / 1024,
         scad_str.count("\n"),
     )
+
+    extras_path: Path | None = None
+    if extras_scad:
+        extras_path = session.artifact_path("extras.scad")
+        extras_path.write_text(extras_scad, encoding="utf-8")
+        log.info(
+            "Wrote %s (%.1f kB, %d lines)",
+            extras_path.name,
+            len(extras_scad.encode()) / 1024,
+            extras_scad.count("\n"),
+        )
 
     session.pipeline_state["scad"] = "done"
     session.save()
@@ -260,6 +268,15 @@ def run_scad_step(
         else:
             log.error("STL render failed: %s", msg)
             session.pipeline_state["stl"] = "error"
+
+        if extras_path is not None:
+            extras_stl = session.artifact_path("extras.stl")
+            ok_e, msg_e, _ = compile_scad(extras_path, extras_stl)
+            if ok_e:
+                log.info("Extras STL rendered: %s", extras_stl.name)
+            else:
+                log.error("Extras STL render failed: %s", msg_e)
+
         session.save()
 
     return scad_path

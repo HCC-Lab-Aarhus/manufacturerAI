@@ -21,10 +21,10 @@ from src.pipeline.design.shape2d import validate_shape
 from src.pipeline.circuit import validate_circuit
 from src.session import Session
 
-from .config import MODEL, MAX_TOKENS, MAX_TURNS, TOKEN_BUDGET
+from .config import MODEL, MAX_TOKENS, MAX_TURNS, TOKEN_BUDGET, get_model
 from .tools import DESIGN_TOOLS, CIRCUIT_TOOLS, SETUP_TOOLS
 from .prompt import build_design_prompt, build_circuit_prompt, build_circuit_user_prompt, build_setup_prompt, catalog_summary
-from .messages import serialize_content, sanitize_messages, prune_messages
+from .messages import serialize_content, sanitize_messages, prune_messages, strip_thinking_blocks
 
 EMPTY_DESIGN: dict = {
     "device_description": "",
@@ -67,6 +67,10 @@ class _BaseAgent:
         self.session = session
         self._last_invalidated: list[str] = []
         self._design_feedback: str | None = None
+
+        mdef = get_model(session.model_id)
+        self._api_model = mdef.api_model
+        self._supports_thinking = mdef.supports_thinking
 
         saved = session.read_artifact(self.conversation_file)
         self.messages: list[dict] = sanitize_messages(saved) if isinstance(saved, list) else []
@@ -125,18 +129,21 @@ class _BaseAgent:
             content_blocks: list[dict] = []
             stop_reason = None
             api_messages = prune_messages(self.messages)
+            if not self._supports_thinking:
+                api_messages = strip_thinking_blocks(api_messages)
 
             try:
-                async with self.client.messages.stream(
-                    model=MODEL,
-                    max_tokens=MAX_TOKENS,
-                    thinking={
-                        "type": "adaptive",
-                    },
-                    system=system,
-                    tools=tools,
-                    messages=api_messages,
-                ) as stream:
+                stream_kwargs = {
+                    "model": self._api_model,
+                    "max_tokens": MAX_TOKENS,
+                    "system": system,
+                    "tools": tools,
+                    "messages": api_messages,
+                }
+                if self._supports_thinking:
+                    stream_kwargs["thinking"] = {"type": "adaptive"}
+
+                async with self.client.messages.stream(**stream_kwargs) as stream:
                     async for event in stream:
                         if cancel_event and cancel_event.is_set():
                             await stream.close()
@@ -164,7 +171,7 @@ class _BaseAgent:
             # Token counting (best-effort)
             try:
                 token_count = await self.client.messages.count_tokens(
-                    model=MODEL,
+                    model=self._api_model,
                     messages=api_messages,
                     system=system,
                     tools=tools,
@@ -453,7 +460,12 @@ class DesignAgent(_BaseAgent):
 
     def _save_and_validate(self, design: dict) -> str:
         """Persist the design, compute outline, validate, return status + current document."""
+        for p in design.get("ui_placements", []):
+            if p.get("mounting_style") == "side" and p.get("edge_index") is None:
+                del p["mounting_style"]
+
         self.session.write_artifact("design.json", design)
+        self._design_text = json.dumps(design, indent=2)
 
         name = design.get("name") or ""
         if name:

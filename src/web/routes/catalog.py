@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 
 from src.pipeline.config import PRINTERS
 from src.pipeline.gcode.filaments import FILAMENTS
+from src.agent.config import MODELS
 from src.web.routes._deps import get_catalog, reload_catalog
 
 router = APIRouter(tags=["catalog"])
@@ -49,5 +50,15 @@ async def list_filaments():
         "filaments": [
             {"id": f.id, "label": f.label}
             for f in FILAMENTS.values()
+        ]
+    }
+
+
+@router.get("/models")
+async def list_models():
+    return {
+        "models": [
+            {"id": m.id, "label": m.label, "api_model": m.api_model}
+            for m in MODELS.values()
         ]
     }

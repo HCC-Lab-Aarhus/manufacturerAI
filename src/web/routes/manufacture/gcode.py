@@ -20,7 +20,6 @@ router = APIRouter()
 async def start_gcode(
     sid: str,
     force: bool = Query(False),
-    filament: str = Query(...),
     silverink_only: bool = Query(False),
 ):
     s = load_session_or_404(sid)
@@ -76,9 +75,10 @@ async def start_gcode(
                 routing_result=routing_data,
                 shell_height=shell_height,
                 printer=s.printer_id,
-                filament=filament,
+                filament=s.filament_id,
                 silverink_only=silverink_only,
                 component_infos=comp_infos,
+                placement_result=placement_data,
             )
             if result.success:
                 s.pipeline_state["gcode"] = "complete"

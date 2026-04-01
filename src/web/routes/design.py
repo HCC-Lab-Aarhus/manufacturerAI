@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from src.session import load_session
 from src.agent import (
     DesignAgent, DESIGN_TOOLS,
-    MODEL, TOKEN_BUDGET,
+    MODEL, TOKEN_BUDGET, get_model,
     build_design_prompt, prune_messages, sanitize_messages,
 )
 from src.pipeline.design import parse_design, validate_design, parse_physical_design, validate_physical_design
@@ -357,7 +357,7 @@ def get_design_tokens(sid: str):
     client = anthropic.Anthropic()
     try:
         result = client.messages.count_tokens(
-            model=MODEL,
+            model=get_model(s.model_id).api_model,
             messages=pruned,
             system=system,
             tools=DESIGN_TOOLS,

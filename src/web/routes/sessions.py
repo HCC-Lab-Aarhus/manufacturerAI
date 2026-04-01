@@ -8,6 +8,8 @@ from pydantic import BaseModel
 from src.catalog import catalog_to_dict
 from src.session import create_session
 from src.pipeline.config import get_printer
+from src.pipeline.gcode.filaments import get_filament
+from src.agent.config import get_model, MODELS
 from src.web.routes._deps import (
     get_catalog, load_session_or_404, invalidate_downstream,
 )
@@ -39,6 +41,8 @@ async def get_session(sid: str):
         "description": s.description,
         "name": s.name,
         "printer_id": s.printer_id,
+        "filament_id": s.filament_id,
+        "model_id": s.model_id,
         "pipeline_state": s.pipeline_state,
         "pipeline_errors": s.pipeline_errors,
         "artifacts": s.artifacts,
@@ -61,6 +65,37 @@ async def set_printer(sid: str, printer_id: str = Query(...)):
         "invalidated_steps": invalidated,
         "artifacts": s.artifacts,
         "pipeline_errors": s.pipeline_errors,
+    }
+
+
+@router.put("/sessions/{sid}/filament")
+async def set_filament(sid: str, filament_id: str = Query(...)):
+    s = load_session_or_404(sid)
+    fdef = get_filament(filament_id)
+    old_id = s.filament_id
+    s.filament_id = fdef.id
+    invalidated: list[str] = []
+    if old_id != fdef.id:
+        invalidated = invalidate_downstream(s, "scad")
+    s.save()
+    return {
+        "filament_id": fdef.id,
+        "label": fdef.label,
+        "invalidated_steps": invalidated,
+        "artifacts": s.artifacts,
+        "pipeline_errors": s.pipeline_errors,
+    }
+
+
+@router.put("/sessions/{sid}/model")
+async def set_model(sid: str, model_id: str = Query(...)):
+    s = load_session_or_404(sid)
+    mdef = get_model(model_id)
+    s.model_id = mdef.id
+    s.save()
+    return {
+        "model_id": mdef.id,
+        "label": mdef.label,
     }
 
 

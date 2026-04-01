@@ -43,6 +43,11 @@ async def start_compile(sid: str, force: bool = Query(False)):
     def _do_compile():
         from src.pipeline.scad.compiler import compile_scad
         ok, msg, out = compile_scad(scad_path, stl_path, cancel=cancel, timeout=600)
+        if ok:
+            extras_scad = s.artifact_path("extras.scad")
+            if extras_scad.exists():
+                extras_stl = s.artifact_path("extras.stl")
+                compile_scad(extras_scad, extras_stl, cancel=cancel, timeout=600)
         set_compile_state(sid, {"status": "done" if ok else "error", "message": msg, "cancel": cancel})
         if ok:
             s.pipeline_state["scad"] = "done"
@@ -77,5 +82,19 @@ async def download_stl(sid: str):
         stl_path,
         media_type="application/octet-stream",
         filename="enclosure.stl",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"},
+    )
+
+
+@router.get("/sessions/{sid}/manufacture/extras-stl")
+async def download_extras_stl(sid: str):
+    s = load_session_or_404(sid)
+    stl_path = s.artifact_path("extras.stl")
+    if not stl_path.exists():
+        raise HTTPException(404, "No extras.stl — either no extra parts or compile not run yet")
+    return FileResponse(
+        stl_path,
+        media_type="application/octet-stream",
+        filename="extras.stl",
         headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"},
     )

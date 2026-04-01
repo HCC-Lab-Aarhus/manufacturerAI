@@ -137,15 +137,6 @@ def compute_bed_offset(
     return offset_x, offset_y
 
 
-def _offset_segments(
-    segs: list[tuple[float, float, float, float]],
-    dx: float,
-    dy: float,
-) -> list[tuple[float, float, float, float]]:
-    """Translate all segments by (dx, dy)."""
-    return [(x1 + dx, y1 + dy, x2 + dx, y2 + dy) for x1, y1, x2, y2 in segs]
-
-
 def _offset_ink_gcode(
     lines: list[str],
     dx: float,
@@ -531,7 +522,7 @@ def postprocess_gcode(
     ink_z: float,
     component_pauses: list[tuple[float, str, list[str]]] | None = None,
     trace_segments: list[tuple[float, float, float, float]] | None = None,
-    bed_offset: tuple[float, float] | None = None,
+    pad_centers: list[tuple[float, float]] | None = None,
     silverink_only: bool = False,
 ) -> PostProcessResult:
     """Read slicer G-code, inject pauses and ink, write result.
@@ -551,11 +542,11 @@ def postprocess_gcode(
         instance_ids to insert.  Falls back to a single pause at the
         highest Z if *None*.
     trace_segments : list or None
-        Trace path segments as ``(x1, y1, x2, y2)`` in mm.  Used to
-        filter ironing moves over trace channels.
-    bed_offset : tuple or None
-        ``(dx, dy)`` offset from model-local coords to bed coords.
-        Computed from ``compute_bed_offset(stl_path, bed_size)``.
+        Trace path segments as ``(x1, y1, x2, y2)`` in bed-space mm.
+        Used to generate custom trace-following ironing.
+    pad_centers : list or None
+        ``(x, y)`` positions of pin pads in bed-space mm.  A small
+        ironing pad is generated at each position.
 
     Returns
     -------
@@ -567,6 +558,7 @@ def postprocess_gcode(
         )
 
     trace_segs = trace_segments or []
+    pads = pad_centers or []
 
     # Normalise component pauses into a sorted list of (z, label, ids)
     pending_comp_pauses: list[tuple[float, str, list[str]]] = sorted(
@@ -576,14 +568,15 @@ def postprocess_gcode(
 
     raw_lines = gcode_path.read_text(encoding="utf-8").splitlines()
 
-    # ── Apply bed offset ─────────────────────────────────────────
-    # PrusaSlicer auto-centres the model on the bed.  Trace/ink
-    # coordinates are in model-local space, so we need to shift them.
-    offset_x, offset_y = bed_offset if bed_offset else (0.0, 0.0)
-
-    if trace_segs and (offset_x or offset_y):
-        trace_segs = _offset_segments(trace_segs, offset_x, offset_y)
-        log.info("Trace segments shifted by (%.3f, %.3f) to match bed", offset_x, offset_y)
+    # ── Pre-generate custom trace ironing ─────────────────────────
+    from src.pipeline.gcode.ink_traces import generate_trace_ironing_gcode, generate_pad_ironing_gcode
+    from src.pipeline.config import PIN_FLOOR_PENETRATION
+    custom_ironing_lines = generate_trace_ironing_gcode(
+        trace_segs, pads, ink_z=ink_z, pad_z_drop=PIN_FLOOR_PENETRATION,
+    ) if trace_segs else []
+    pad_z = ink_z - PIN_FLOOR_PENETRATION
+    custom_pad_ironing_lines = generate_pad_ironing_gcode(pads) if pads else []
+    pad_ironing_injected = False
 
     out: list[str] = []
     total_layers = 0
@@ -651,6 +644,21 @@ def postprocess_gcode(
             # Leaving the ink layer
             if in_ink_layer and z_val > ink_z + 0.01:
                 in_ink_layer = False
+
+            # ── Pad ironing on the pad Z layer ───────────────
+            # Inject pad ironing when we pass the pad_z layer.
+            # This happens before the ink layer so pads are ironed
+            # on an earlier (lower) layer than traces.
+            # The pad ironing G-code includes its own Z moves to
+            # descend to pad_z and return to current_z.
+            if (not pad_ironing_injected
+                    and custom_pad_ironing_lines
+                    and z_val > pad_z + 0.01):
+                pad_ironing_injected = True
+                out.append(f"G0 Z{pad_z:.3f} F720 ; lower to pad ironing Z")
+                out.extend(custom_pad_ironing_lines)
+                out.append(f"G0 Z{z_val:.3f} F720 ; return to layer Z")
+                stages.append(f"Pad ironing at Z={pad_z:.2f}")
 
             # ── Ink layer pause ──────────────────────────────
             # Trigger one layer ABOVE ink_z so the floor layer
@@ -745,17 +753,14 @@ def postprocess_gcode(
                 stages.append(f"Component pause '{cp_label}' at Z={cp_z:.2f}")
                 comp_pause_idx += 1
 
-        # ── Ink-layer ironing: keep as-is ──────────────────
-        # The entire ink-layer floor must be ironed — including the
-        # trace channel areas — so that micro-gaps from FDM printing
-        # are sealed and conductive ink cannot seep through.  We do
-        # NOT filter or suppress any ironing moves at this Z; the
-        # slicer's ironing pass is used unmodified.
+        # ── Ink-layer ironing: replace with trace-following ironing ──
+        # Instead of the slicer's full-surface ironing, we inject a
+        # single-pass 1 mm wide ironing along the actual trace paths,
+        # plus small pads at each used pin endpoint.
 
-        # ── Strip ironing from non-ink layers ─────────────
-        # We only need ironing at the ink layer for a smooth, sealed
-        # floor surface.  Ironing on other layers (battery compartment
-        # floor, shell ceiling, etc.) is unnecessary and wastes time.
+        # ── Strip ironing from all layers ─────────────────
+        # Non-ink layers: unnecessary, wastes time.
+        # Ink layer: replaced by custom trace-following ironing.
         #
         # PrusaSlicer emits a travel preamble before each ironing
         # section (retract → G92 E0 → lift → travel → lower →
@@ -861,10 +866,25 @@ def postprocess_gcode(
             )
             continue  # don't append the ;TYPE:…infill line itself
 
+        is_ink_layer_ironing = (
+            stripped_line == ';TYPE:Ironing'
+            and abs(current_z - ink_z) <= 0.05
+            and custom_ironing_lines
+        )
         strip_ironing = (
             stripped_line == ';TYPE:Ironing'
-            and (abs(current_z - ink_z) > 0.05 or silverink_only)
+            and (abs(current_z - ink_z) > 0.05 or silverink_only or is_ink_layer_ironing)
         )
+        if is_ink_layer_ironing:
+            i += 1
+            while i < len(raw_lines):
+                nxt = raw_lines[i].strip()
+                if nxt.startswith(';TYPE:') or nxt.startswith(';LAYER_CHANGE'):
+                    break
+                i += 1
+            out.extend(custom_ironing_lines)
+            stages.append("Replaced ink-layer ironing with trace-following ironing")
+            continue
         if strip_ironing:
             # Collect all lines in the ironing section
             section: list[str] = []

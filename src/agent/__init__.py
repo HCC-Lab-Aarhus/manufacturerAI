@@ -9,8 +9,8 @@ from .prompt import (
     build_circuit_user_prompt,
     build_setup_prompt,
 )
-from .messages import serialize_content, sanitize_messages, prune_messages
-from .config import MODEL, MAX_TOKENS, MAX_TURNS, TOKEN_BUDGET
+from .messages import serialize_content, sanitize_messages, prune_messages, strip_thinking_blocks
+from .config import MODEL, MAX_TOKENS, MAX_TURNS, TOKEN_BUDGET, MODELS, get_model
 
 __all__ = [
     # Core
