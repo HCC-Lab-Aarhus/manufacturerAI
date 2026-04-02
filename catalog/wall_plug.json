@@ -1,0 +1,81 @@
+{
+    "id": "wall_plug",
+    "name": "Wall Plug Connector",
+    "description": "PCB-mount AC wall plug connector. Body is 26.58×3.92×5.76mm. Two 5.04mm-diameter prongs (22mm long) extend from the front face for plugging into a wall outlet. On the back, L-shaped leads first extend 7.06mm horizontally (3.77mm wide, 3.07mm tall), then bend downward into 0.82mm-diameter pins that descend 8.40mm for through-hole mounting. Mounts through the enclosure side wall so the prongs protrude outside the device. Cutout matches the full body cross-section.",
+    "ui_placement": true,
+    "body": {
+        "shape": "rect",
+        "width_mm": 26.58,
+        "length_mm": 3.92,
+        "height_mm": 5.76
+    },
+    "mounting": {
+        "style": "side",
+        "allowed_styles": [
+            "side"
+        ],
+        "blocks_routing": false,
+        "keepout_margin_mm": 2.0
+    },
+    "pin_length_mm": 8.40,
+    "pins": [
+        {
+            "id": "L",
+            "label": "Live",
+            "position_mm": [
+                -9.5,
+                -9.02
+            ],
+            "direction": "in",
+            "voltage_v": null,
+            "current_max_ma": 10000,
+            "hole_diameter_mm": 1.0,
+            "description": "Live AC terminal. L-shaped lead bends down from the back of the body into a 0.82mm pin.",
+            "shape": {
+                "type": "circle"
+            }
+        },
+        {
+            "id": "N",
+            "label": "Neutral",
+            "position_mm": [
+                9.5,
+                -9.02
+            ],
+            "direction": "in",
+            "voltage_v": null,
+            "current_max_ma": 10000,
+            "hole_diameter_mm": 1.0,
+            "description": "Neutral AC terminal. L-shaped lead bends down from the back of the body into a 0.82mm pin.",
+            "shape": {
+                "type": "circle"
+            }
+        }
+    ],
+    "internal_nets": [],
+    "configurable": {},
+    "scad": {
+        "features": [
+            {
+                "shape": "rect",
+                "label": "L-bend lead channel (Live)",
+                "position_mm": [-9.5, -5.49],
+                "width_mm": 3.77,
+                "length_mm": 7.06,
+                "depth_mm": 3.07,
+                "z_anchor": "cavity_start",
+                "description": "Clearance for the horizontal portion of the L-shaped Live lead extending from the back of the body to the pin drop point."
+            },
+            {
+                "shape": "rect",
+                "label": "L-bend lead channel (Neutral)",
+                "position_mm": [9.5, -5.49],
+                "width_mm": 3.77,
+                "length_mm": 7.06,
+                "depth_mm": 3.07,
+                "z_anchor": "cavity_start",
+                "description": "Clearance for the horizontal portion of the L-shaped Neutral lead extending from the back of the body to the pin drop point."
+            }
+        ]
+    }
+}
