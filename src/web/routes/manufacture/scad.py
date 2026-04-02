@@ -12,7 +12,7 @@ router = APIRouter()
 
 
 @router.post("/sessions/{sid}/manufacture/scad")
-async def run_scad(sid: str):
+async def run_scad(sid: str, two_part: str | None = None):
     s = load_session_or_404(sid)
     require_placement(s)
 
@@ -21,10 +21,11 @@ async def run_scad(sid: str):
         return {"status": "running"}
 
     set_pipeline_task(sid, "scad", PipelineTask(status="running"))
+    enclosure_style = "two_part" if two_part == "true" else None
 
     def _do():
         try:
-            scad_path = run_scad_step(s)
+            scad_path = run_scad_step(s, enclosure_style_override=enclosure_style)
             s.clear_step_error("scad")
             set_pipeline_task(sid, "scad", PipelineTask(status="done"))
         except Exception as exc:

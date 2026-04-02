@@ -217,6 +217,8 @@ class Enclosure:
     bottom_surface: BottomSurface | None = None
     edge_top: EdgeProfile = field(default_factory=EdgeProfile)
     edge_bottom: EdgeProfile = field(default_factory=EdgeProfile)
+    enclosure_style: str = "solid"          # "solid" | "two_part"
+    split_z_mm: float | None = None         # custom split height (auto-computed if None)
 
     def to_dict(self) -> dict:
         d: dict = {"height_mm": self.height_mm}
@@ -228,6 +230,10 @@ class Enclosure:
             d["edge_top"] = self.edge_top.to_dict()
         if self.edge_bottom.type != "none":
             d["edge_bottom"] = self.edge_bottom.to_dict()
+        if self.enclosure_style != "solid":
+            d["enclosure_style"] = self.enclosure_style
+        if self.split_z_mm is not None:
+            d["split_z_mm"] = self.split_z_mm
         return d
 
 

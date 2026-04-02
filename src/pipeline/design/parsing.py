@@ -123,12 +123,19 @@ def _parse_enclosure(data: dict) -> Enclosure:
         bottom_surface = _parse_bottom_surface(data["bottom_surface"])
     edge_top    = _parse_edge_profile(data.get("edge_top"))
     edge_bottom = _parse_edge_profile(data.get("edge_bottom"))
+    style_raw = data.get("enclosure_style", "solid")
+    enclosure_style = style_raw if style_raw in ("solid", "two_part") else "solid"
+    split_z_raw = data.get("split_z_mm")
+    split_z_mm = float(split_z_raw) if split_z_raw is not None else None
+
     return Enclosure(
         height_mm=height_mm,
         top_surface=top_surface,
         bottom_surface=bottom_surface,
         edge_top=edge_top,
         edge_bottom=edge_bottom,
+        enclosure_style=enclosure_style,
+        split_z_mm=split_z_mm,
     )
 
 

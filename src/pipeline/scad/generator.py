@@ -17,7 +17,7 @@ from pathlib import Path
 
 from src.catalog.loader import load_catalog
 from src.catalog.models import Component
-from src.pipeline.config import CAVITY_START_MM, CEILING_MM
+from src.pipeline.config import CAVITY_START_MM, CEILING_MM, SPLIT_OVERLAP_MM
 from src.pipeline.design.parsing import parse_physical_design, parse_circuit, build_design_spec
 from src.pipeline.design.height_field import blended_height, blended_bottom_height, sample_height_grid
 from src.pipeline.design.models import Outline
@@ -38,6 +38,8 @@ from .resolver import resolve_component, ResolverContext
 from .fragment import ScadFragment, PolygonGeometry
 from .buttons import build_button_configs, generate_all_buttons_scad
 from .extras import collect_and_generate_extras
+from .split import compute_split_z
+from .snap_fit import compute_snap_positions, snap_post_fragments, snap_clip_fragments
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +47,7 @@ log = logging.getLogger(__name__)
 def run_scad_step(
     session: Session,
     compile_stl: bool = False,
+    enclosure_style_override: str | None = None,
 ) -> Path:
     """Generate ``enclosure.scad`` for the session.
 
@@ -77,6 +80,10 @@ def run_scad_step(
 
     outline   = physical.outline
     enclosure = physical.enclosure
+
+    if enclosure_style_override and enclosure_style_override in ("solid", "two_part"):
+        enclosure.enclosure_style = enclosure_style_override
+
     placement = assemble_full_placement(placement_raw, outline, circuit.nets, enclosure)
 
     if routing_raw is not None:
@@ -127,7 +134,16 @@ def run_scad_step(
         bz_min, bz_max, variable_bottom,
     )
 
-    # ── 4. Compute shell body layers ──────────────────────────
+    # ── Branch: two-part enclosure mode ───────────────────────────
+    if enclosure.enclosure_style == "two_part":
+        return _generate_two_part(
+            session, physical, outline, enclosure, placement, routing,
+            catalog, flat_pts, top_zs, bottom_zs,
+            z_max=z_max, variable_height=variable_height,
+            compile_stl=compile_stl,
+        )
+
+    # ── 4. Compute shell body layers (solid mode) ─────────────────
     body_lines = shell_body_lines(outline, enclosure, flat_pts, top_zs=top_zs, bottom_zs=bottom_zs)
     log.info("Shell body: %d SCAD lines", len(body_lines))
 
@@ -280,3 +296,225 @@ def run_scad_step(
         session.save()
 
     return scad_path
+
+
+# ── Two-part enclosure generation ──────────────────────────────────────────────
+
+
+def _resolve_components_for_part(
+    part: str,
+    placement, physical, outline, enclosure,
+    routing, cat_index, flat_pts, top_zs,
+    base_h, ceil_start, cavity_depth,
+):
+    """Resolve component fragments for a specific part ('bottom' or 'top')."""
+    ctx = ResolverContext(
+        outline=outline,
+        enclosure=enclosure,
+        base_h=base_h,
+        ceil_start=ceil_start,
+        cavity_depth=cavity_depth,
+        blended_height_fn=blended_height,
+        part=part,
+    )
+
+    # Tessellate button shapes
+    from src.pipeline.design.shape2d import tessellate_shape
+    ui_shape_map = {
+        up.instance_id: up.button_shape
+        for up in physical.ui_placements
+        if up.button_shape is not None
+    }
+    for comp in placement.components:
+        shape = ui_shape_map.get(comp.instance_id)
+        if shape is not None:
+            outline_obj = tessellate_shape(shape)
+            comp.button_outline = [[v.x, v.y] for v in outline_obj.points]
+
+    all_fragments: list[ScadFragment] = []
+    for comp in placement.components:
+        cat = cat_index.get(comp.catalog_id)
+        if cat is None:
+            continue
+        ctx.pause_z = pause_z_for_component(
+            cat.protrusion_height_mm, base_h,
+            mounting_style=comp.mounting_style or cat.mounting.style,
+            pin_length_mm=cat.pin_length_mm,
+        )
+        frags = resolve_component(comp, cat, ctx)
+        all_fragments.extend(frags)
+
+    return all_fragments
+
+
+def _generate_two_part(
+    session: Session,
+    physical, outline, enclosure, placement, routing,
+    catalog, flat_pts, top_zs, bottom_zs,
+    *,
+    z_max: float,
+    variable_height: bool,
+    compile_stl: bool,
+) -> Path:
+    """Generate ``enclosure_bottom.scad`` and ``enclosure_top.scad``.
+
+    Called when ``enclosure.enclosure_style == "two_part"``.
+    """
+    base_h = enclosure.height_mm
+    ceil_start = base_h - CEILING_MM
+    cavity_depth = ceil_start - CAVITY_START_MM
+    cat_index: dict[str, Component] = {c.id: c for c in catalog.components}
+
+    # ── Compute split height ──────────────────────────────────────
+    split_z = compute_split_z(enclosure, placement.components, cat_index)
+
+    # ── Snap-fit positions ────────────────────────────────────────
+    snap_positions = compute_snap_positions(flat_pts)
+
+    # ── BOTTOM part ───────────────────────────────────────────────
+    bottom_top_zs = [split_z] * len(flat_pts)
+
+    bottom_body_lines = shell_body_lines(
+        outline, enclosure, flat_pts,
+        top_zs=bottom_top_zs, bottom_zs=bottom_zs,
+        skip_edge_top=True,
+        open_top=True,
+    )
+    log.info("Bottom shell body: %d SCAD lines", len(bottom_body_lines))
+
+    # Bottom fragments: floor-level stuff + support platforms
+    bottom_frags = _resolve_components_for_part(
+        "bottom", placement, physical, outline, enclosure,
+        routing, cat_index, flat_pts, top_zs,
+        base_h, ceil_start, cavity_depth,
+    )
+
+    # Add trace channels (they live in the floor)
+    trace_frags = build_trace_fragments(routing, ceil_start)
+    bottom_frags.extend(trace_frags)
+
+    # Add snap posts
+    bottom_frags.extend(snap_post_fragments(snap_positions, split_z))
+
+    log.info("Bottom fragments: %d total", len(bottom_frags))
+
+    height_grid = sample_height_grid(outline, enclosure, resolution_mm=2.0)
+    max_h = z_max
+    for row in height_grid["grid"]:
+        for h in row:
+            if h is not None and h > max_h:
+                max_h = h
+
+    bottom_metadata = {
+        "components":       len(placement.components),
+        "traces":           len(routing.traces),
+        "fragments":        len(bottom_frags),
+        "base_height_mm":   enclosure.height_mm,
+        "max_height_mm":    round(split_z, 1),
+        "footprint_verts":  len(flat_pts),
+        "variable_height":  False,
+        "part":             "bottom",
+        "split_z_mm":       round(split_z, 2),
+    }
+
+    bottom_scad = generate_scad(
+        bottom_body_lines, bottom_frags,
+        session_id=session.id,
+        metadata=bottom_metadata,
+        outline_pts=flat_pts,
+    )
+
+    # ── TOP part ──────────────────────────────────────────────────
+    top_bottom_zs = [split_z - SPLIT_OVERLAP_MM] * len(flat_pts)
+
+    top_body_lines = shell_body_lines(
+        outline, enclosure, flat_pts,
+        top_zs=top_zs, bottom_zs=top_bottom_zs,
+        skip_edge_bottom=True,
+        open_bottom=True,
+    )
+    log.info("Top shell body: %d SCAD lines", len(top_body_lines))
+
+    # Top fragments: ceiling cutouts only
+    top_frags = _resolve_components_for_part(
+        "top", placement, physical, outline, enclosure,
+        routing, cat_index, flat_pts, top_zs,
+        base_h, ceil_start, cavity_depth,
+    )
+
+    # Add snap clips
+    top_frags.extend(snap_clip_fragments(snap_positions, split_z))
+
+    log.info("Top fragments: %d total", len(top_frags))
+
+    top_metadata = {
+        "components":       len(placement.components),
+        "traces":           0,
+        "fragments":        len(top_frags),
+        "base_height_mm":   enclosure.height_mm,
+        "max_height_mm":    round(max_h, 1),
+        "footprint_verts":  len(flat_pts),
+        "variable_height":  variable_height,
+        "part":             "top",
+        "split_z_mm":       round(split_z, 2),
+    }
+
+    top_scad = generate_scad(
+        top_body_lines, top_frags,
+        session_id=session.id,
+        metadata=top_metadata,
+        outline_pts=flat_pts,
+    )
+
+    # ── Generate extras (buttons, hatches — same for both modes) ──
+    extras_scad = collect_and_generate_extras(
+        placement.components, cat_index, outline, enclosure,
+        ceil_start,
+    )
+
+    # ── Write files ───────────────────────────────────────────────
+    out_dir = session.artifact_path("enclosure_bottom.scad").parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    bottom_path = session.artifact_path("enclosure_bottom.scad")
+    bottom_path.write_text(bottom_scad, encoding="utf-8")
+    log.info("Wrote %s (%.1f kB)", bottom_path.name, len(bottom_scad.encode()) / 1024)
+
+    top_path = session.artifact_path("enclosure_top.scad")
+    top_path.write_text(top_scad, encoding="utf-8")
+    log.info("Wrote %s (%.1f kB)", top_path.name, len(top_scad.encode()) / 1024)
+
+    extras_path: Path | None = None
+    if extras_scad:
+        extras_path = session.artifact_path("extras.scad")
+        extras_path.write_text(extras_scad, encoding="utf-8")
+        log.info("Wrote %s (%.1f kB)", extras_path.name, len(extras_scad.encode()) / 1024)
+
+    session.pipeline_state["scad"] = "done"
+    session.save()
+
+    # ── Optional: compile to STL ──────────────────────────────────
+    if compile_stl:
+        for scad_p, stl_name in [
+            (bottom_path, "enclosure_bottom.stl"),
+            (top_path, "enclosure_top.stl"),
+        ]:
+            stl_path = session.artifact_path(stl_name)
+            ok, msg, _ = compile_scad(scad_p, stl_path)
+            if ok:
+                log.info("STL rendered: %s", stl_path.name)
+            else:
+                log.error("STL render failed for %s: %s", stl_name, msg)
+
+        if extras_path is not None:
+            extras_stl = session.artifact_path("extras.stl")
+            ok_e, msg_e, _ = compile_scad(extras_path, extras_stl)
+            if ok_e:
+                log.info("Extras STL rendered: %s", extras_stl.name)
+            else:
+                log.error("Extras STL render failed: %s", msg_e)
+
+        session.pipeline_state["stl"] = "done"
+        session.save()
+
+    return bottom_path
