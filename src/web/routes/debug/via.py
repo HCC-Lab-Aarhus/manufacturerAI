@@ -25,22 +25,43 @@ TUNNEL_WIDTH_MM = 2.0
 TUNNEL_HEIGHT_MM = 0.2
 N_BASE_LAYERS = 4
 
+GRID_COLS = 3
+GRID_ROWS = 2
+GRID_GAP_MM = 5.0
+
+
+def _grid_offsets() -> list[tuple[float, float]]:
+    offsets: list[tuple[float, float]] = []
+    for row in range(GRID_ROWS):
+        for col in range(GRID_COLS):
+            ox = col * (BOX_SIZE_MM + GRID_GAP_MM)
+            oy = row * (BOX_SIZE_MM + GRID_GAP_MM)
+            offsets.append((ox, oy))
+    return offsets
+
 
 def _build_via_scad(base_z: float, tunnel_h: float, layer_h: float) -> str:
     half_x = BOX_SIZE_MM / 2
     center_y = BOX_SIZE_MM / 2
     total_z = base_z + tunnel_h + layer_h
     tunnel_y_offset = center_y - TUNNEL_WIDTH_MM / 2
-    return (
-        "$fn = 32;\n"
-        "difference() {\n"
-        f"  cube([{BOX_SIZE_MM:.3f}, {BOX_SIZE_MM:.3f}, {total_z:.3f}]);\n"
-        f"  translate([-0.01, {tunnel_y_offset:.3f}, {base_z:.3f}])\n"
-        f"    cube([{half_x + 0.01:.3f}, {TUNNEL_WIDTH_MM:.3f}, {tunnel_h:.3f}]);\n"
-        f"  translate([{half_x:.3f}, {center_y:.3f}, {base_z - 0.01:.3f}])\n"
-        f"    cylinder(d={HOLE_DIAMETER_MM}, h={tunnel_h + layer_h + 0.02:.3f});\n"
+
+    single = (
+        "module via_box() {\n"
+        "  difference() {\n"
+        f"    cube([{BOX_SIZE_MM:.3f}, {BOX_SIZE_MM:.3f}, {total_z:.3f}]);\n"
+        f"    translate([-0.01, {tunnel_y_offset:.3f}, {base_z:.3f}])\n"
+        f"      cube([{half_x + 0.01:.3f}, {TUNNEL_WIDTH_MM:.3f}, {tunnel_h:.3f}]);\n"
+        f"    translate([{half_x:.3f}, {center_y:.3f}, {base_z - 0.01:.3f}])\n"
+        f"      cylinder(d={HOLE_DIAMETER_MM}, h={tunnel_h + layer_h + 0.02:.3f});\n"
+        "  }\n"
         "}\n"
     )
+
+    lines = ["$fn = 32;\n", single]
+    for ox, oy in _grid_offsets():
+        lines.append(f"translate([{ox:.3f}, {oy:.3f}, 0]) via_box();\n")
+    return "".join(lines)
 
 
 def _silverink_block(n: int) -> list[str]:
@@ -145,21 +166,22 @@ async def generate_via(
     printer: str = Query("coreone"),
     filament: str = Query("prusament_pla"),
 ) -> dict[str, Any]:
-    """Generate a via test: single model with an internal tunnel for the trace.
+    """Generate a via test: 6 identical boxes (3×2 grid) on one build plate.
 
-    Cross-section (X-Z at Y=center):
+    Cross-section of each box (X-Z at Y=center):
 
         LEFT       CENTER        RIGHT
         ┌──────────┬──○──────────┐  top (ironed, bitmap2)
         │  ROOF    │    SOLID    │
-        │  ┌───┘   │             │  tunnel 2mm wide, 1mm tall
+        │  ┌───┘   │             │  tunnel 2mm wide, 0.2mm tall
         │  │TUNNEL  │             │
         ├──┴───────┴─────────────┤  base top (ironed, bitmap1)
         │     BASE (4 layers)    │
         └────────────────────────┘
 
-    Single 20×20 box with downward-L shaped void:
+    Each 20×20 box has a downward-L shaped void:
     horizontal tunnel (left edge → center) + via hole (center → top).
+    All 3 bitmaps contain ink data for all 6 copies.
     """
     pdef = get_printer(printer)
     fdef = get_filament(filament)
@@ -171,10 +193,13 @@ async def generate_via(
 
     nom_w = pdef.nominal_bed_width
     nom_d = pdef.nominal_bed_depth
-    cx, cy = nom_w / 2, nom_d / 2
 
-    base_bed_x = cx - BOX_SIZE_MM / 2
-    base_bed_y = cy - BOX_SIZE_MM / 2
+    offsets = _grid_offsets()
+    total_w = GRID_COLS * BOX_SIZE_MM + (GRID_COLS - 1) * GRID_GAP_MM
+    total_d = GRID_ROWS * BOX_SIZE_MM + (GRID_ROWS - 1) * GRID_GAP_MM
+
+    group_bed_x = nom_w / 2 - total_w / 2
+    group_bed_y = nom_d / 2 - total_d / 2
 
     scad_src = _build_via_scad(base_z, TUNNEL_HEIGHT_MM, layer_h)
 
@@ -204,6 +229,8 @@ async def generate_via(
             encoding="utf-8",
         )
 
+        cx = nom_w / 2
+        cy = nom_d / 2
         gcode_path = tmp / "via.gcode"
         ok, msg, _ = slice_stl(
             stl_path,
@@ -223,26 +250,37 @@ async def generate_via(
 
     trace_width_px = max(1, round(TRACE_WIDTH_MM / grid.pixel_size_mm))
 
-    bitmap1_cells = _trace_cells(
-        grid, base_bed_x, cx, cy, trace_width_px,
-    )
+    bitmap1_cells: set[tuple[int, int]] = set()
+    bitmap2_cells: set[tuple[int, int]] = set()
+    bitmap3_cells: set[tuple[int, int]] = set()
+
+    for ox, oy in offsets:
+        box_bed_x = group_bed_x + ox
+        box_bed_y = group_bed_y + oy
+        box_cx = box_bed_x + BOX_SIZE_MM / 2
+        box_cy = box_bed_y + BOX_SIZE_MM / 2
+
+        bitmap1_cells |= _trace_cells(
+            grid, box_bed_x, box_cx, box_cy, trace_width_px,
+        )
+
+        box_right = box_bed_x + BOX_SIZE_MM
+        bitmap2_cells |= _trace_cells(
+            grid, box_cx, box_right, box_cy, trace_width_px,
+        )
+
+        bitmap3_cells |= _hole_cells(grid, box_cx, box_cy, HOLE_DIAMETER_MM)
+
     bitmap1 = render_bitmap(grid.data_rows, grid.data_cols, bitmap1_cells)
-
-    box_right = base_bed_x + BOX_SIZE_MM
-    bitmap2_cells = _trace_cells(
-        grid, cx, box_right, cy, trace_width_px,
-    )
     bitmap2 = render_bitmap(grid.data_rows, grid.data_cols, bitmap2_cells)
-
-    bitmap3_cells = _hole_cells(grid, cx, cy, HOLE_DIAMETER_MM)
     bitmap3 = render_bitmap(grid.data_rows, grid.data_cols, bitmap3_cells)
 
     manifest = generate_manifest(
         grid=grid,
-        part_origin_x_mm=base_bed_x,
-        part_origin_y_mm=base_bed_y,
-        part_width_mm=BOX_SIZE_MM,
-        part_depth_mm=BOX_SIZE_MM,
+        part_origin_x_mm=group_bed_x,
+        part_origin_y_mm=group_bed_y,
+        part_width_mm=total_w,
+        part_depth_mm=total_d,
         gcode_file="via.gcode",
         bitmap_file="via_1.txt",
         printer=pdef,
