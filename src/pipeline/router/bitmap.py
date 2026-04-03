@@ -36,34 +36,27 @@ def _segment_cells(
 ) -> set[tuple[int, int]]:
     """Rasterize one line segment with thickness into bitmap cells.
 
-    For axis-aligned segments the fast rectangular fill is used.
-    For diagonal segments the line is walked at sub-pixel steps and
-    all pixels within ``half_w`` of the centreline are marked.
+    Uses pixel-center-to-segment distance for all orientations so that
+    trace width is identical whether the segment is vertical, horizontal,
+    or diagonal.  Axis-aligned segments use a tight bounding-box scan;
+    diagonals use a walk along the centreline for efficiency.
     """
     cells: set[tuple[int, int]] = set()
     dx = x1 - x0
     dy = y1 - y0
 
-    if abs(dx) < 1e-9:
-        col_min = max(0, int(math.floor((x0 - half_w) / pixel_size)))
-        col_max = min(cols - 1, int(math.floor((x0 + half_w) / pixel_size)))
-        y_lo, y_hi = (min(y0, y1), max(y0, y1))
-        row_min = max(0, int(math.floor(y_lo / pixel_size)))
-        row_max = min(rows - 1, int(math.floor(y_hi / pixel_size)))
-        for r in range(row_min, row_max + 1):
-            for c in range(col_min, col_max + 1):
-                cells.add((r, c))
-        return cells
+    col_min = max(0, int(math.floor((min(x0, x1) - half_w) / pixel_size)))
+    col_max = min(cols - 1, int(math.floor((max(x0, x1) + half_w) / pixel_size)))
+    row_min = max(0, int(math.floor((min(y0, y1) - half_w) / pixel_size)))
+    row_max = min(rows - 1, int(math.floor((max(y0, y1) + half_w) / pixel_size)))
 
-    if abs(dy) < 1e-9:
-        row_min = max(0, int(math.floor((y0 - half_w) / pixel_size)))
-        row_max = min(rows - 1, int(math.floor((y0 + half_w) / pixel_size)))
-        x_lo, x_hi = (min(x0, x1), max(x0, x1))
-        col_min = max(0, int(math.floor(x_lo / pixel_size)))
-        col_max = min(cols - 1, int(math.floor(x_hi / pixel_size)))
+    if abs(dx) < 1e-9 or abs(dy) < 1e-9:
         for r in range(row_min, row_max + 1):
+            py = (r + 0.5) * pixel_size
             for c in range(col_min, col_max + 1):
-                cells.add((r, c))
+                px = (c + 0.5) * pixel_size
+                if _point_seg_dist(px, py, x0, y0, x1, y1) <= half_w:
+                    cells.add((r, c))
         return cells
 
     seg_len = math.hypot(dx, dy)
@@ -84,8 +77,7 @@ def _segment_cells(
                 if 0 <= r < rows and 0 <= c < cols:
                     px = (c + 0.5) * pixel_size
                     py = (r + 0.5) * pixel_size
-                    dist = _point_seg_dist(px, py, x0, y0, x1, y1)
-                    if dist <= half_w:
+                    if _point_seg_dist(px, py, x0, y0, x1, y1) <= half_w:
                         cells.add((r, c))
 
     return cells
