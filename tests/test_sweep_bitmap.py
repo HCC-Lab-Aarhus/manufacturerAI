@@ -1,4 +1,4 @@
-"""Tests for the bed bitmap geometry, bitmap generation, and calibration bitmap.
+"""Tests for the bed bitmap geometry and bitmap generation.
 
 Covers:
   - PrintheadConfig derived properties
@@ -6,7 +6,6 @@ Covers:
   - BedBitmap.bed_to_pixel() coordinate transform
   - get_printer() fallback behaviour
   - generate_trace_bitmap() rasterization correctness
-  - _calibration_bitmap() structure
 """
 
 from __future__ import annotations
@@ -25,7 +24,6 @@ from src.pipeline.config import (
 )
 from src.pipeline.router.models import Trace, RoutingResult
 from src.pipeline.router.bitmap import generate_trace_bitmap
-from src.web.routes.debug.calibration import _calibration_bitmap
 
 
 # ── Pixel resolution constant ──────────────────────────────────────
@@ -213,60 +211,6 @@ class TestGenerateTraceBitmap(unittest.TestCase):
         self.assertGreater(len(inked_rows), 0)
         expected_rows = max(1, round(trace_w / self.grid.pixel_size_mm))
         self.assertAlmostEqual(len(inked_rows), expected_rows, delta=2)
-
-
-# ── _calibration_bitmap() ─────────────────────────────────────────
-
-class TestCalibrationBitmap(unittest.TestCase):
-
-    def setUp(self):
-        self.pdef = PRINTERS["coreone"]
-        self.grid = bed_bitmap(self.pdef)
-        self.bitmap = _calibration_bitmap(self.pdef, self.grid, 100, 5, 5)
-        self.lines = self.bitmap.split('\n')
-
-    def test_row_count(self):
-        self.assertEqual(len(self.lines), self.grid.rows)
-
-    def test_col_count(self):
-        for i, line in enumerate(self.lines):
-            self.assertEqual(len(line), self.grid.cols, f"row {i}")
-
-    def test_only_binary_chars(self):
-        chars = set(self.bitmap.replace('\n', ''))
-        self.assertTrue(chars.issubset({'0', '1'}))
-
-    def test_has_ink(self):
-        total_ink = self.bitmap.count('1')
-        self.assertGreater(total_ink, 0)
-
-    def test_three_squares_present(self):
-        rows = self.lines
-        mid_r = len(rows) // 2
-        mid_c = self.grid.cols // 2
-
-        def quadrant_ink(r_start, r_end, c_start, c_end):
-            return sum(
-                rows[r][c] == '1'
-                for r in range(r_start, r_end)
-                for c in range(c_start, c_end)
-            )
-
-        q_tl = quadrant_ink(0, mid_r, 0, mid_c)
-        q_tr = quadrant_ink(0, mid_r, mid_c, self.grid.cols)
-        q_bl = quadrant_ink(mid_r, len(rows), 0, mid_c)
-        q_br = quadrant_ink(mid_r, len(rows), mid_c, self.grid.cols)
-
-        nonzero = [q for q in [q_tl, q_tr, q_bl, q_br] if q > 0]
-        self.assertGreaterEqual(len(nonzero), 3, "Expected ink in at least 3 quadrants")
-
-    def test_mk3s_calibration_dimensions(self):
-        pdef = PRINTERS["mk3s"]
-        grid = bed_bitmap(pdef)
-        bitmap = _calibration_bitmap(pdef, grid, 100, 5, 5)
-        lines = bitmap.split('\n')
-        self.assertEqual(len(lines), grid.rows)
-        self.assertEqual(len(lines[0]), grid.cols)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import tempfile
 from pathlib import Path
 from typing import Any
 from dataclasses import dataclass
@@ -11,10 +10,9 @@ from fastapi import APIRouter, Query
 from src.catalog.loader import load_catalog, get_component
 from src.catalog.models import Component
 from src.pipeline.config import (
-    get_printer, PrinterDef, BedBitmap, bed_bitmap,
+    get_printer, PrinterDef, bed_bitmap,
     component_z_range, FLOOR_MM, CAVITY_START_MM, CEILING_MM, TRACE_HEIGHT_MM,
 )
-from src.pipeline.gcode.filaments import get_filament
 from src.pipeline.placer.models import PlacedComponent
 from src.pipeline.design.models import Outline, Enclosure, OutlineVertex
 from src.pipeline.scad.resolver import (
@@ -25,14 +23,8 @@ from src.pipeline.scad.fragment import (
     PolygonGeometry, SegmentGeometry, CapsuleGeometry,
 )
 from src.pipeline.scad.traces import TRACE_WIDTH as SCAD_TRACE_WIDTH
-from src.pipeline.scad.compiler import compile_scad
-from src.pipeline.gcode.slicer import slice_stl
-from src.pipeline.gcode.postprocessor import postprocess_gcode
 
-from ._common import (
-    DEBUG_CONFIG, load_slicer_params, render_bitmap,
-    _PROFILES_DIR, DEBUG_OVERRIDE,
-)
+from ._common import DEBUG_CONFIG, load_slicer_params, run_debug_pipeline
 
 PINHOLE_TAPER_D: float = 3.5
 
@@ -77,12 +69,6 @@ def _select_used_pins(
     pin_positions: dict[str, tuple[float, float]],
     plate_x: float,
 ) -> set[str]:
-    """Select one pin per allocatable group; all non-group pins are used.
-
-    For allocatable pin groups (e.g. tactile button sides A/B where
-    pins are internally shorted), only the pin closest to the plate
-    edge needs a trace.  All other pins are used unconditionally.
-    """
     grouped_pins: set[str] = set()
     used: set[str] = set()
 
@@ -110,22 +96,7 @@ def compute_component_layout(
     y_start: float | None = None,
     x_start: float | None = None,
 ) -> list[CompLayout]:
-    """Compute layout for catalog components, each on its own plate.
-
-    Uses the real pipeline's component_z_range() for Z heights and
-    resolve_component() for SCAD cutout fragments (body pockets, pin
-    holes, pin bridges, SCAD features, hatches).
-
-    Plates are stacked vertically and centred horizontally on the bed.
-    The battery is rotated 90° so its two pins separate in Y and the
-    traces extending left to the plate edge don't collide.
-
-    Returns a list of CompLayout, each with its own plate coordinates.
-    """
     cat = load_catalog()
-
-    nom_w = pdef.nominal_bed_width
-    nom_d = pdef.nominal_bed_depth
 
     block_infos: list[tuple[Component, float, float, float, float, float]] = []
     for cid, rot in _COMPONENT_CONFIGS:
@@ -170,13 +141,14 @@ def compute_component_layout(
     total_plate_h = sum(
         bi[2] + 2 * pad for bi in block_infos
     ) + _COMP_GAP * (len(block_infos) - 1)
-    y_cursor = y_start if y_start is not None else (nom_d - total_plate_h) / 2
+
+    y_cursor = y_start if y_start is not None else 0.0
 
     layouts: list[CompLayout] = []
     for comp, bw, bh, body_top, rot, enclosure_h in block_infos:
         plate_w = _TRACE_RUN + bw + 2 * pad
         plate_h = bh + 2 * pad
-        plate_x = x_start if x_start is not None else (nom_w - plate_w) / 2
+        plate_x = x_start if x_start is not None else 0.0
         plate_y = y_cursor
 
         outline = Outline(points=[
@@ -254,12 +226,6 @@ def compute_component_layout(
 
 
 def frag_scad_lines(frag: ScadFragment) -> list[str]:
-    """Convert a single ScadFragment to OpenSCAD code lines.
-
-    Handles all geometry types including tapered (pin funnels) and
-    tilted (3-D rotated) variants — mirrors the dispatch logic in the
-    pipeline's emit.py but without the Y-mirror wrapper.
-    """
     _EPS = 0.001
     g = frag.geometry
 
@@ -366,15 +332,7 @@ def _build_components_scad(
     fragments: list[ScadFragment],
     plate_z: float,
 ) -> str:
-    """Build OpenSCAD source for the component debug test.
-
-    Creates rectangular plates and blocks as the body, then subtracts
-    all fragment cutouts (pin holes, body pockets, trace channels, etc.)
-    using a ``difference()`` CSG operation.  No Y-mirror is applied so
-    that the resulting STL coordinates match bed / bitmap coordinates.
-    """
     lines = [
-        "// manufacturerAI — debug component test (auto-generated)",
         "$fn = 32;",
         "",
     ]
@@ -418,72 +376,20 @@ def _build_components_scad(
     return "\n".join(lines)
 
 
-def component_ink_cells(
-    grid: BedBitmap,
-    layouts: list[CompLayout],
-) -> set[tuple[int, int]]:
-    """Ink cells for component trace lines (used pins only)."""
-    px = grid.pixel_size_mm
-    cols = grid.cols
-    rows = grid.rows
-    trace_width_nozzles = max(1, int(round(SCAD_TRACE_WIDTH / px)))
-    half_trace = trace_width_nozzles // 2
-
-    ink_cells: set[tuple[int, int]] = set()
-
-    for ly in layouts:
-        for pin_x, pin_y, _hr, pin_id in ly.pins:
-            if pin_id not in ly.used_pin_ids:
-                continue
-            pix_x0, pix_y = grid.bed_to_pixel(ly.plate_x, pin_y)
-            pix_x1, _ = grid.bed_to_pixel(pin_x, pin_y)
-
-            c0 = max(0, int(math.floor(pix_x0)))
-            c1 = min(cols - 1, int(math.floor(pix_x1)))
-            r_center = int(round(pix_y))
-
-            for dc in range(-half_trace, half_trace + 1):
-                r = r_center + dc
-                if 0 <= r < rows:
-                    for c in range(c0, c1 + 1):
-                        ink_cells.add((r, c))
-
-    return ink_cells
-
-
-def _pinhole_bitmap(
-    pdef: PrinterDef,
-    grid: BedBitmap,
-    layouts: list[CompLayout],
-) -> str:
-    """Generate bitmap with traces for all component pins."""
-    return render_bitmap(grid.rows, grid.cols, component_ink_cells(grid, layouts))
-
-
 @router.post("/components")
 async def generate_components(
     printer: str = Query("coreone"),
     filament: str = Query("prusament_pla"),
 ) -> dict[str, Any]:
-    """Generate G-code + bitmap for multi-component test.
-
-    Uses the real pipeline flow: resolve_component() for cutout fragments,
-    OpenSCAD for CSG compilation (pin holes, body pockets, trace channels),
-    and PrusaSlicer for G-code generation.
-    """
     pdef = get_printer(printer)
-    fdef = get_filament(filament)
-    grid = bed_bitmap(pdef)
     sp = load_slicer_params(printer)
 
     layouts = compute_component_layout(pdef, DEBUG_CONFIG.padding, sp.layer_height)
-    bitmap = _pinhole_bitmap(pdef, grid, layouts)
 
     plate_z = FLOOR_MM
 
     all_frags: list[ScadFragment] = []
-    trace_segs: list[tuple[float, float, float, float]] = []
-    pad_centers: list[tuple[float, float]] = []
+    trace_paths: list[list[tuple[float, float]]] = []
     for ly in layouts:
         all_frags.extend(ly.fragments)
         for pin_x, pin_y, _hr, pin_id in ly.pins:
@@ -498,8 +404,7 @@ async def generate_components(
                 depth=TRACE_HEIGHT_MM,
                 label=f"trace {ly.catalog.id}",
             ))
-            trace_segs.append((ly.plate_x, pin_y, pin_x, pin_y))
-            pad_centers.append((pin_x, pin_y))
+            trace_paths.append([(ly.plate_x, pin_y), (pin_x, pin_y)])
 
     scad_src = _build_components_scad(layouts, all_frags, plate_z)
 
@@ -507,51 +412,14 @@ async def generate_components(
     bb_y = min(ly.plate_y for ly in layouts)
     bb_x2 = max(ly.plate_x + ly.plate_w for ly in layouts)
     bb_y2 = max(ly.plate_y + ly.plate_h for ly in layouts)
-    center = ((bb_x + bb_x2) / 2, (bb_y + bb_y2) / 2)
+    model_center = ((bb_x + bb_x2) / 2, (bb_y + bb_y2) / 2)
 
-    with tempfile.TemporaryDirectory(prefix="debug_comp_") as tmpdir:
-        tmp = Path(tmpdir)
-        scad_path = tmp / "components.scad"
-        scad_path.write_text(scad_src, encoding="utf-8")
+    max_z = max(ly.block_z_top for ly in layouts)
+    shell_height = max(max_z, FLOOR_MM + CEILING_MM)
 
-        ok, msg, stl_path = compile_scad(scad_path)
-        if not ok:
-            raise RuntimeError(f"OpenSCAD compilation failed: {msg}")
-
-        comp_override = tmp / "components_ironing.ini"
-        comp_override.write_text(
-            "top_solid_layers = 3\n",
-            encoding="utf-8",
-        )
-        overrides: list[Path] = []
-        if DEBUG_OVERRIDE.exists():
-            overrides.append(DEBUG_OVERRIDE)
-        overrides.append(comp_override)
-
-        slicer_gcode = tmp / "slicer_output.gcode"
-        ok, msg, _ = slice_stl(
-            stl_path,
-            output_gcode=slicer_gcode,
-            printer=printer,
-            filament=fdef.id,
-            center=center,
-            extra_overrides=overrides,
-        )
-        if not ok:
-            raise RuntimeError(f"PrusaSlicer failed: {msg}")
-
-        final_gcode = tmp / "components.gcode"
-        postprocess_gcode(
-            gcode_path=slicer_gcode,
-            output_path=final_gcode,
-            ink_z=FLOOR_MM,
-            trace_segments=trace_segs,
-            pad_centers=pad_centers,
-        )
-
-        gcode = final_gcode.read_text(encoding="utf-8")
-
-    return {
-        "gcode": gcode,
-        "bitmap": bitmap,
-    }
+    return run_debug_pipeline(
+        scad_src, trace_paths, model_center,
+        printer, filament,
+        shell_height=shell_height,
+        extra_overrides=["top_solid_layers = 3\n"],
+    )

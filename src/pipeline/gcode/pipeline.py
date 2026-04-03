@@ -52,6 +52,7 @@ def run_gcode_pipeline(
     silverink_only: bool = False,
     component_infos: list[ComponentPauseInfo] | None = None,
     placement_result: dict | None = None,
+    extra_overrides: list[Path] | None = None,
 ) -> GcodePipelineResult:
     """Run the full G-code pipeline: slice → inject pauses → output.
 
@@ -125,6 +126,7 @@ def run_gcode_pipeline(
         printer=printer,
         filament_override_path=filament_ini,
         center=pdef.usable_center,
+        extra_overrides=extra_overrides,
     )
 
     # Clean up filament override .ini (no longer needed after slicing)
