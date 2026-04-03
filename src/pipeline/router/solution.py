@@ -196,6 +196,49 @@ class Solution:
         )
         return [nid for nid, _ in by_length[:k]]
 
+    def random_nets(self, k: int = 3) -> list[str]:
+        """Return k random routed net IDs (for diversified refinement)."""
+        import random as _rnd
+        ids = list(self.routes.keys())
+        if len(ids) <= k:
+            return ids
+        return _rnd.sample(ids, k)
+
+    def find_blockers(
+        self, missing: list[str], pads_map: dict[str, list[NetPad]],
+    ) -> set[str]:
+        """Identify routed nets that would be crossed when routing *missing* nets."""
+        blockers: set[str] = set()
+        for nid in missing:
+            pads = pads_map.get(nid)
+            if not pads or len(pads) < 2:
+                continue
+            paths, ok = self._find_paths(
+                nid, pads, crossing_cost=self.config.crossing_cost,
+            )
+            if ok and paths:
+                blockers.update(self._find_crossed_nets(paths, nid))
+        return blockers
+
+    def refine_single_net(
+        self, net_id: str, pads: list[NetPad],
+    ) -> bool:
+        """Rip up one net and re-route it; keep only if trace is shorter."""
+        route = self.routes.get(net_id)
+        if route is None:
+            return False
+        old_cells = route.trace_cells
+        snap = self.snapshot()
+
+        self.rip_up([net_id])
+        self.route_net(net_id, pads)
+
+        new_route = self.routes.get(net_id)
+        if new_route is None or new_route.trace_cells >= old_cells:
+            self.restore(snap)
+            return False
+        return True
+
     def neighborhood(self, seeds: list[str]) -> list[str]:
         """Given seed net IDs, find all nets that share grid cells with
         them (adjacent or overlapping clearance zones)."""
