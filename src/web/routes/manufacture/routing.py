@@ -25,7 +25,8 @@ async def run_routing(sid: str):
     if existing and existing.status == "running":
         return {"status": "running"}
 
-    set_pipeline_task(sid, "routing", PipelineTask(status="running"))
+    task = PipelineTask(status="running")
+    set_pipeline_task(sid, "routing", task)
 
     def _do():
         try:
@@ -45,9 +46,13 @@ async def run_routing(sid: str):
                 msg = info.get("message", "")
                 set_pipeline_task(sid, "routing", PipelineTask(
                     status="running", message=msg,
+                    cancel_event=task.cancel_event,
                 ))
 
-            result = route_traces(full_placement, cat, on_progress=_on_progress)
+            result = route_traces(full_placement, cat, on_progress=_on_progress, cancel=task.cancel_event)
+
+            if task.cancel_event.is_set():
+                return
 
             if not result.ok:
                 total = len({t.net_id for t in result.traces} | set(result.failed_nets))

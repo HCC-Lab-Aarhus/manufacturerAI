@@ -47,6 +47,7 @@ class PipelineTask:
     error: str | None = None
     result: Any = None
     detail: dict[str, Any] | None = None
+    cancel_event: threading.Event = field(default_factory=threading.Event)
 
 
 # ── Registry ──────────────────────────────────────────────────────

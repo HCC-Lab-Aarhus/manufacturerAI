@@ -66,10 +66,14 @@ async def run_bitmap(sid: str):
     if existing and existing.status == "running":
         return {"status": "running"}
 
-    set_pipeline_task(sid, "bitmap", PipelineTask(status="running"))
+    task = PipelineTask(status="running")
+    set_pipeline_task(sid, "bitmap", task)
 
     def _do():
         try:
+            if task.cancel_event.is_set():
+                return
+
             require_placement(s)
             require_routing(s)
             _generate_and_save_bitmap(s)

@@ -20,11 +20,15 @@ async def run_scad(sid: str, two_part: str | None = None):
     if existing and existing.status == "running":
         return {"status": "running"}
 
-    set_pipeline_task(sid, "scad", PipelineTask(status="running"))
+    task = PipelineTask(status="running")
+    set_pipeline_task(sid, "scad", task)
     enclosure_style = "two_part" if two_part == "true" else None
 
     def _do():
         try:
+            if task.cancel_event.is_set():
+                return
+
             scad_path = run_scad_step(s, enclosure_style_override=enclosure_style)
             s.clear_step_error("scad")
             set_pipeline_task(sid, "scad", PipelineTask(status="done"))
