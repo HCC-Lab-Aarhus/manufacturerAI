@@ -25,7 +25,7 @@ def _build_snapshot(sid: str) -> dict[str, dict[str, Any]]:
     for step in PIPELINE_STEPS:
         task = tasks.get(step)
         if task:
-            entry: dict[str, Any] = {"status": task.status, "message": task.error or ""}
+            entry: dict[str, Any] = {"status": task.status, "message": task.message or task.error or ""}
             if task.detail:
                 entry["detail"] = task.detail
             snapshot[step] = entry
