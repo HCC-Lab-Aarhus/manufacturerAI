@@ -103,8 +103,12 @@ def _merge_polygon_fragments(
             pts = _fragment_to_polygon(m)
             if pts is None or len(pts) < 3:
                 continue
+            # Carry over holes from PolygonGeometry if present
+            holes = None
+            if isinstance(m.geometry, PolygonGeometry) and m.geometry.holes:
+                holes = [h for h in m.geometry.holes if len(h) >= 3]
             try:
-                sp = _SPoly(pts)
+                sp = _SPoly(pts, holes or [])
                 if not sp.is_valid:
                     sp = sp.buffer(0)
                 if sp.is_valid and not sp.is_empty:

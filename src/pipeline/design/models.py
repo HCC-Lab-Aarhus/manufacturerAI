@@ -250,6 +250,7 @@ class UIPlacement:
     conform_to_surface: bool = True     # angle cutout to follow local surface normal
     mounting_style: str | None = None   # override from allowed_styles
     button_shape: dict | None = None    # CSG shape tree for button cap
+    button_outline: list[list[float]] | None = None  # raw point-list outline [[x,y], ...]
 
 
 @dataclass

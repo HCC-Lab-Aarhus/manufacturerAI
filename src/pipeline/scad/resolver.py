@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from src.catalog.models import Component
-from src.pipeline.config import CAVITY_START_MM, FLOOR_MM, PIN_FLOOR_PENETRATION, component_z_range
+from src.pipeline.config import CAVITY_START_MM, FLOOR_MM, PIN_FLOOR_PENETRATION, SPLIT_OVERLAP_MM, component_z_range
 from src.pipeline.design.models import Outline, Enclosure
 from src.pipeline.placer.models import PlacedComponent
 
@@ -38,6 +38,7 @@ class ResolverContext:
     blended_height_fn: Callable[..., float]
     pause_z: float | None = None  # per-component insertion pause Z (caps pin grooves)
     part: str = "full"            # "full" | "bottom" | "top" — two-part filtering
+    split_z: float | None = None  # Z where halves meet (two-part mode)
 
 
 class ComponentResolver:
@@ -65,10 +66,6 @@ class ComponentResolver:
     def resolve(self) -> list[ScadFragment]:
         part = self.ctx.part
 
-        if part == "top":
-            # Top part only gets ceiling cutouts (cap/LED holes)
-            return self._top_only_ceiling_cutouts()
-
         style = self.placed.mounting_style or self.catalog.mounting.style
         if style == "top":
             frags = self._top_mount()
@@ -83,10 +80,15 @@ class ComponentResolver:
         frags.extend(self._pinhole_fragments())
         frags.extend(self._scad_feature_fragments())
 
-        if part == "bottom":
-            # Bottom part: remove ceiling cutouts, add support platforms
+        if part == "top":
+            # Top part: keep fragments whose top edge is above split_z,
+            # plus ceiling cutouts.  Drop floor-level stuff.
+            split_z = self.ctx.split_z or 0.0
+            frags = [f for f in frags if (f.z_base + f.depth) > split_z + 0.01]
+            frags.extend(self._top_only_ceiling_cutouts())
+        elif part == "bottom":
+            # Bottom part: remove ceiling cutouts
             frags = [f for f in frags if f.z_base < self.ctx.ceil_start - 0.01]
-            frags.extend(self._support_platform_fragments())
 
         return frags
 
@@ -512,10 +514,23 @@ class ComponentResolver:
             else:
                 z_base = CAVITY_START_MM
 
+            # In top-part mode, extend cavity_start features down to
+            # the bottom of the top shell so plate slits are open for
+            # inserting metal plates from below.
+            z_extend = 0.0
+            if (self.ctx.part == "top" and self.ctx.split_z is not None
+                    and feat.z_anchor in (None, "cavity_start", "")):
+                top_bottom = self.ctx.split_z - SPLIT_OVERLAP_MM
+                z_extend = z_base - top_bottom
+                if z_extend > 0:
+                    z_base = top_bottom
+                else:
+                    z_extend = 0.0
+
             if feat.through_surface:
                 depth = max(self._surface_depth(), 1.0)
             elif feat.depth_mm:
-                depth = feat.depth_mm
+                depth = feat.depth_mm + z_extend
             else:
                 depth = self.ctx.cavity_depth
 

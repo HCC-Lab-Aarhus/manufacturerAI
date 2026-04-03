@@ -16,11 +16,14 @@ router = APIRouter()
 @router.post("/sessions/{sid}/manufacture/compile")
 async def start_compile(sid: str, force: bool = Query(False)):
     s = load_session_or_404(sid)
+    two_part = s.has_artifact("enclosure_bottom.scad")
     scad_path = s.artifact_path("enclosure.scad")
+    if not scad_path.exists() and two_part:
+        scad_path = s.artifact_path("enclosure_bottom.scad")
     if not scad_path.exists():
         raise HTTPException(400, "No enclosure.scad yet — run SCAD first")
 
-    stl_path = s.artifact_path("enclosure.stl")
+    stl_path = s.artifact_path("enclosure_bottom.stl" if two_part else "enclosure.stl")
     cur = get_compile_state(sid)
 
     if not force and stl_path.exists() and cur is None:
@@ -42,7 +45,19 @@ async def start_compile(sid: str, force: bool = Query(False)):
 
     def _do_compile():
         from src.pipeline.scad.compiler import compile_scad
-        ok, msg, out = compile_scad(scad_path, stl_path, cancel=cancel, timeout=600)
+        if two_part:
+            # Compile both halves
+            bottom_scad = s.artifact_path("enclosure_bottom.scad")
+            bottom_stl = s.artifact_path("enclosure_bottom.stl")
+            ok, msg, out = compile_scad(bottom_scad, bottom_stl, cancel=cancel, timeout=600)
+            if ok:
+                top_scad = s.artifact_path("enclosure_top.scad")
+                top_stl = s.artifact_path("enclosure_top.stl")
+                ok2, msg2, out2 = compile_scad(top_scad, top_stl, cancel=cancel, timeout=600)
+                if not ok2:
+                    ok, msg = ok2, msg2
+        else:
+            ok, msg, out = compile_scad(scad_path, stl_path, cancel=cancel, timeout=600)
         if ok:
             extras_scad = s.artifact_path("extras.scad")
             if extras_scad.exists():
@@ -61,6 +76,8 @@ async def start_compile(sid: str, force: bool = Query(False)):
 async def poll_compile(sid: str):
     s = load_session_or_404(sid)
     stl_path = s.artifact_path("enclosure.stl")
+    if not stl_path.exists():
+        stl_path = s.artifact_path("enclosure_bottom.stl")
     state = get_compile_state(sid)
     if state:
         out = {"status": state["status"], "message": state.get("message", "")}

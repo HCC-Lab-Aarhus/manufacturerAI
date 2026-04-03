@@ -42,8 +42,9 @@ class CylinderGeometry:
 
 @dataclass
 class PolygonGeometry:
-    """Arbitrary 2-D polygon as CCW vertex list."""
+    """Arbitrary 2-D polygon as CCW vertex list, with optional holes."""
     points: list[list[float]]
+    holes: list[list[list[float]]] | None = None
 
 
 @dataclass

@@ -50,7 +50,7 @@ async def poll_scad(sid: str):
             resp["detail"] = task.detail
         return resp
     s = load_session_or_404(sid)
-    if s.has_artifact("enclosure.scad"):
+    if s.has_artifact("enclosure.scad") or s.has_artifact("enclosure_bottom.scad"):
         return {"status": "done"}
     return {"status": "idle"}
 
@@ -60,11 +60,20 @@ async def get_scad(sid: str):
     s = load_session_or_404(sid)
     scad_path = s.artifact_path("enclosure.scad")
     if not scad_path.exists():
+        scad_path = s.artifact_path("enclosure_bottom.scad")
+    if not scad_path.exists():
         raise HTTPException(404, "No enclosure.scad yet")
     scad_text = scad_path.read_text(encoding="utf-8")
-    return {
+    two_part = s.has_artifact("enclosure_bottom.scad")
+    resp: dict = {
         "status": "done",
         "scad": scad_text,
         "scad_lines": scad_text.count("\n"),
         "scad_bytes": len(scad_text),
+        "two_part": two_part,
     }
+    if two_part:
+        top_path = s.artifact_path("enclosure_top.scad")
+        if top_path.exists():
+            resp["scad_top"] = top_path.read_text(encoding="utf-8")
+    return resp

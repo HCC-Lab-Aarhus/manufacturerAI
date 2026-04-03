@@ -13,11 +13,15 @@ Public entry point
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 
 from src.catalog.loader import load_catalog
 from src.catalog.models import Component
-from src.pipeline.config import CAVITY_START_MM, CEILING_MM, SPLIT_OVERLAP_MM
+from src.pipeline.config import (
+    CAVITY_START_MM, CEILING_MM, FLOOR_MM, SPLIT_OVERLAP_MM, TRACE_HEIGHT_MM,
+    component_z_range,
+)
 from src.pipeline.design.parsing import parse_physical_design, parse_circuit, build_design_spec
 from src.pipeline.design.height_field import blended_height, blended_bottom_height, sample_height_grid
 from src.pipeline.design.models import Outline
@@ -30,7 +34,7 @@ from src.pipeline.gcode.pause_points import (
 from src.session import Session
 
 from .outline import tessellate_outline
-from .layers import shell_body_lines
+from .layers import shell_body_lines, _safe_inset_polygon_pts
 from .emit import generate_scad
 from .compiler import compile_scad
 from .traces import build_trace_fragments
@@ -134,6 +138,19 @@ def run_scad_step(
         bz_min, bz_max, variable_bottom,
     )
 
+    # ── Clean up stale artifacts from the opposite mode ─────────────
+    if enclosure.enclosure_style == "two_part":
+        for name in ("enclosure.scad", "enclosure.stl"):
+            p = session.artifact_path(name)
+            if p.exists():
+                p.unlink()
+    else:
+        for name in ("enclosure_bottom.scad", "enclosure_top.scad",
+                      "enclosure_bottom.stl", "enclosure_top.stl"):
+            p = session.artifact_path(name)
+            if p.exists():
+                p.unlink()
+
     # ── Branch: two-part enclosure mode ───────────────────────────
     if enclosure.enclosure_style == "two_part":
         return _generate_two_part(
@@ -176,18 +193,24 @@ def run_scad_step(
                 pin_length_mm=cat.pin_length_mm,
             ))
 
-    # Tessellate button shapes from UI placements into point-list outlines
+    # Tessellate button shapes from UI placements into point-list outlines.
+    # Two sources: button_shape (CSG dict, needs tessellation) or
+    # button_outline (raw point list, used directly).
     from src.pipeline.design.shape2d import tessellate_shape
-    ui_shape_map = {
-        up.instance_id: up.button_shape
-        for up in physical.ui_placements
-        if up.button_shape is not None
-    }
+    ui_shape_map: dict[str, dict] = {}
+    ui_outline_map: dict[str, list[list[float]]] = {}
+    for up in physical.ui_placements:
+        if up.button_shape is not None:
+            ui_shape_map[up.instance_id] = up.button_shape
+        elif up.button_outline is not None:
+            ui_outline_map[up.instance_id] = up.button_outline
     for comp in placement.components:
         shape = ui_shape_map.get(comp.instance_id)
         if shape is not None:
             outline_obj = tessellate_shape(shape)
             comp.button_outline = [[v.x, v.y] for v in outline_obj.points]
+        elif comp.instance_id in ui_outline_map:
+            comp.button_outline = ui_outline_map[comp.instance_id]
 
     for comp in placement.components:
         cat = cat_index.get(comp.catalog_id)
@@ -306,6 +329,7 @@ def _resolve_components_for_part(
     placement, physical, outline, enclosure,
     routing, cat_index, flat_pts, top_zs,
     base_h, ceil_start, cavity_depth,
+    split_z: float | None = None,
 ):
     """Resolve component fragments for a specific part ('bottom' or 'top')."""
     ctx = ResolverContext(
@@ -316,20 +340,25 @@ def _resolve_components_for_part(
         cavity_depth=cavity_depth,
         blended_height_fn=blended_height,
         part=part,
+        split_z=split_z,
     )
 
-    # Tessellate button shapes
+    # Tessellate button shapes / copy raw outlines
     from src.pipeline.design.shape2d import tessellate_shape
-    ui_shape_map = {
-        up.instance_id: up.button_shape
-        for up in physical.ui_placements
-        if up.button_shape is not None
-    }
+    ui_shape_map: dict[str, dict] = {}
+    ui_outline_map: dict[str, list[list[float]]] = {}
+    for up in physical.ui_placements:
+        if up.button_shape is not None:
+            ui_shape_map[up.instance_id] = up.button_shape
+        elif up.button_outline is not None:
+            ui_outline_map[up.instance_id] = up.button_outline
     for comp in placement.components:
         shape = ui_shape_map.get(comp.instance_id)
         if shape is not None:
             outline_obj = tessellate_shape(shape)
             comp.button_outline = [[v.x, v.y] for v in outline_obj.points]
+        elif comp.instance_id in ui_outline_map:
+            comp.button_outline = ui_outline_map[comp.instance_id]
 
     all_fragments: list[ScadFragment] = []
     for comp in placement.components:
@@ -368,9 +397,6 @@ def _generate_two_part(
     # ── Compute split height ──────────────────────────────────────
     split_z = compute_split_z(enclosure, placement.components, cat_index)
 
-    # ── Snap-fit positions ────────────────────────────────────────
-    snap_positions = compute_snap_positions(flat_pts)
-
     # ── BOTTOM part ───────────────────────────────────────────────
     bottom_top_zs = [split_z] * len(flat_pts)
 
@@ -378,7 +404,6 @@ def _generate_two_part(
         outline, enclosure, flat_pts,
         top_zs=bottom_top_zs, bottom_zs=bottom_zs,
         skip_edge_top=True,
-        open_top=True,
     )
     log.info("Bottom shell body: %d SCAD lines", len(bottom_body_lines))
 
@@ -387,14 +412,29 @@ def _generate_two_part(
         "bottom", placement, physical, outline, enclosure,
         routing, cat_index, flat_pts, top_zs,
         base_h, ceil_start, cavity_depth,
+        split_z=split_z,
     )
 
-    # Add trace channels (they live in the floor)
+    # Add trace channels — shifted into the floor so they appear as
+    # visible grooves when looking down at the bottom tray.
     trace_frags = build_trace_fragments(routing, ceil_start)
+    for tf in trace_frags:
+        tf.z_base = FLOOR_MM - TRACE_HEIGHT_MM
     bottom_frags.extend(trace_frags)
 
-    # Add snap posts
-    bottom_frags.extend(snap_post_fragments(snap_positions, split_z))
+    # Interior cavity — hollows out the bottom above the floor so traces
+    # are visible from above (tray shape: floor + perimeter walls).
+    _TRAY_WALL_MM = 2.0
+    cavity_depth = split_z - FLOOR_MM
+    if cavity_depth > 0.05:
+        cavity_pts = _safe_inset_polygon_pts(flat_pts, _TRAY_WALL_MM)
+        bottom_frags.append(ScadFragment(
+            type="cutout",
+            geometry=PolygonGeometry(points=cavity_pts),
+            z_base=FLOOR_MM,
+            depth=cavity_depth,
+            label="bottom interior cavity",
+        ))
 
     log.info("Bottom fragments: %d total", len(bottom_frags))
 
@@ -431,19 +471,247 @@ def _generate_two_part(
         outline, enclosure, flat_pts,
         top_zs=top_zs, bottom_zs=top_bottom_zs,
         skip_edge_bottom=True,
-        open_bottom=True,
     )
     log.info("Top shell body: %d SCAD lines", len(top_body_lines))
 
-    # Top fragments: ceiling cutouts only
+    # Top fragments: component cavities + ceiling cutouts
     top_frags = _resolve_components_for_part(
         "top", placement, physical, outline, enclosure,
         routing, cat_index, flat_pts, top_zs,
         base_h, ceil_start, cavity_depth,
+        split_z=split_z,
     )
 
-    # Add snap clips
-    top_frags.extend(snap_clip_fragments(snap_positions, split_z))
+    # Interior cavity — hollow out the top shell, but keep walls
+    # around component compartments so they have material.
+    _TRAY_WALL_MM = 2.0
+    _COMP_WALL_MM = 1.5          # extra wall around each component footprint
+    top_interior_bottom = split_z - SPLIT_OVERLAP_MM
+    top_cavity_depth = ceil_start - top_interior_bottom
+    if top_cavity_depth > 0.5:
+        from shapely.geometry import Polygon as _SPoly
+        from shapely.ops import unary_union as _sunion
+
+        cavity_pts = _safe_inset_polygon_pts(flat_pts, _TRAY_WALL_MM)
+        cavity_poly = _SPoly(cavity_pts)
+        if not cavity_poly.is_valid:
+            cavity_poly = cavity_poly.buffer(0)
+
+        # Subtract expanded footprint only for components with channels
+        # (battery holder) so compartment walls remain for metal plates.
+        # All other components are fully hollowed out by the cavity.
+        comp_polys = []
+        for comp in placement.components:
+            cat = cat_index.get(comp.catalog_id)
+            if cat is None:
+                continue
+            if not cat.body.channels:
+                continue  # no compartment walls needed
+            style = comp.mounting_style or cat.mounting.style
+            _, body_top = component_z_range(
+                style, cat.body.height_mm, cat.pin_length_mm, ceil_start,
+            )
+            if body_top <= split_z:
+                continue  # entirely in bottom half
+            body = cat.body
+            bw = body.width_mm or 0.0
+            bl = body.length_mm or bw
+
+            # Start from body extents, then expand to cover SCAD features
+            # (plate channels, spring slots, etc.) so the keep zone has
+            # solid material for every slit to cut into.
+            max_hx = bw / 2
+            max_hy = bl / 2
+            for feat in cat.scad_features:
+                fx = abs(feat.position_mm[0]) if feat.position_mm else 0.0
+                fy = abs(feat.position_mm[1]) if feat.position_mm else 0.0
+                fw = (feat.width_mm or 0.0) / 2
+                fl = (feat.length_mm or 0.0) / 2
+                max_hx = max(max_hx, fx + fw)
+                max_hy = max(max_hy, fy + fl)
+
+            hw = max_hx + _COMP_WALL_MM
+            hl = max_hy + _COMP_WALL_MM
+            cx, cy = comp.x_mm, comp.y_mm
+            corners = [(-hw, -hl), (hw, -hl), (hw, hl), (-hw, hl)]
+            rot = math.radians(comp.rotation_deg or 0)
+            if abs(rot) > 1e-6:
+                cos_r, sin_r = math.cos(rot), math.sin(rot)
+                corners = [(x * cos_r - y * sin_r, x * sin_r + y * cos_r)
+                           for x, y in corners]
+            footprint = _SPoly([(cx + x, cy + y) for x, y in corners])
+            if footprint.is_valid and not footprint.is_empty:
+                comp_polys.append(footprint)
+
+        if comp_polys:
+            keep_zone = _sunion(comp_polys)
+            cavity_poly = cavity_poly.difference(keep_zone)
+
+        # Add radial divider walls between top-mounted button clusters.
+        # Walls go from the button-ring center toward the outline edge,
+        # placed at the bisector angle between adjacent buttons.
+        _WALL_HALF_W = 1.0  # half-width of each radial wall (mm)
+        top_btn_angles: list[float] = []
+        btn_cx_sum, btn_cy_sum, btn_count = 0.0, 0.0, 0
+        for comp in placement.components:
+            cat = cat_index.get(comp.catalog_id)
+            if cat is None:
+                continue
+            style = comp.mounting_style or cat.mounting.style
+            if style != "top":
+                continue
+            _, body_top = component_z_range(
+                style, cat.body.height_mm, cat.pin_length_mm, ceil_start,
+            )
+            if body_top <= split_z:
+                continue
+            btn_cx_sum += comp.x_mm
+            btn_cy_sum += comp.y_mm
+            btn_count += 1
+
+        if btn_count >= 3:
+            bcx = btn_cx_sum / btn_count
+            bcy = btn_cy_sum / btn_count
+            for comp in placement.components:
+                cat = cat_index.get(comp.catalog_id)
+                if cat is None:
+                    continue
+                style = comp.mounting_style or cat.mounting.style
+                if style != "top":
+                    continue
+                _, body_top = component_z_range(
+                    style, cat.body.height_mm, cat.pin_length_mm, ceil_start,
+                )
+                if body_top <= split_z:
+                    continue
+                angle = math.atan2(comp.y_mm - bcy, comp.x_mm - bcx)
+                top_btn_angles.append(angle)
+            top_btn_angles.sort()
+
+            from shapely.geometry import LineString as _SLine
+
+            # Max radius: distance from center to farthest outline vertex
+            max_r = max(
+                math.hypot(px - bcx, py - bcy)
+                for px, py in flat_pts
+            ) + 5.0
+
+            wall_polys = []
+            for i in range(len(top_btn_angles)):
+                a1 = top_btn_angles[i]
+                a2 = top_btn_angles[(i + 1) % len(top_btn_angles)]
+                # Bisector angle
+                diff = a2 - a1
+                if diff < 0:
+                    diff += 2 * math.pi
+                bisect = a1 + diff / 2
+                ex = bcx + max_r * math.cos(bisect)
+                ey = bcy + max_r * math.sin(bisect)
+                wall_line = _SLine([(bcx, bcy), (ex, ey)])
+                wall_poly = wall_line.buffer(_WALL_HALF_W, cap_style="flat")
+                if wall_poly.is_valid and not wall_poly.is_empty:
+                    wall_polys.append(wall_poly)
+
+            if wall_polys:
+                wall_zone = _sunion(wall_polys)
+                # Clip to cavity area so walls don't extend outside
+                wall_zone = wall_zone.intersection(cavity_poly.buffer(0))
+                if not wall_zone.is_empty:
+                    cavity_poly = cavity_poly.difference(wall_zone)
+
+                # For components that overlap a wall, add a cutout from the
+                # cavity bottom (split_z) up to the component's body top.
+                # This removes the wall below and at the component, keeping
+                # only the wall portion above.  The resolver's own body
+                # cutout already covers the body Z-range, so the extra
+                # cutout only extends the clearance downward.
+                # Clearance must exceed wall half-width so the inflated
+                # footprint fully encompasses the wall cross-section.
+                _CLR = _WALL_HALF_W + 0.5
+                for comp in placement.components:
+                    cat = cat_index.get(comp.catalog_id)
+                    if cat is None:
+                        continue
+                    body = cat.body
+                    bw = body.width_mm or 0.0
+                    bl = body.length_mm or bw
+                    if bw < 0.1:
+                        continue
+                    style = comp.mounting_style or cat.mounting.style
+                    _, body_top = component_z_range(
+                        style, body.height_mm, cat.pin_length_mm, ceil_start,
+                    )
+                    if body_top <= split_z:
+                        continue  # component not in top half
+                    # Build rotated footprint rectangle with clearance
+                    hw = bw / 2 + _CLR
+                    hl = bl / 2 + _CLR
+                    corners = [(-hw, -hl), (hw, -hl), (hw, hl), (-hw, hl)]
+                    rot = math.radians(comp.rotation_deg or 0)
+                    if abs(rot) > 1e-6:
+                        cos_r, sin_r = math.cos(rot), math.sin(rot)
+                        corners = [
+                            (x * cos_r - y * sin_r, x * sin_r + y * cos_r)
+                            for x, y in corners
+                        ]
+                    cx, cy = comp.x_mm, comp.y_mm
+                    fp = _SPoly([(cx + x, cy + y) for x, y in corners])
+                    if not fp.is_valid or fp.is_empty:
+                        continue
+                    # Intersect footprint with wall zone — only cut where
+                    # the wall actually exists.  Buffer slightly so rounded
+                    # wall edges don't leave thin slivers of solid.
+                    overlap = fp.intersection(wall_zone).buffer(0.15)
+                    if overlap.is_empty:
+                        continue
+                    # Emit cutout from cavity bottom to body_top
+                    cut_depth = body_top - top_interior_bottom
+                    if cut_depth < 0.1:
+                        continue
+                    olap_geoms = (
+                        [overlap] if overlap.geom_type == "Polygon"
+                        else [g for g in overlap.geoms
+                              if g.geom_type == "Polygon"]
+                    )
+                    for opoly in olap_geoms:
+                        pts = [[round(x, 3), round(y, 3)]
+                               for x, y in opoly.exterior.coords[:-1]]
+                        if len(pts) >= 3:
+                            top_frags.append(ScadFragment(
+                                type="cutout",
+                                geometry=PolygonGeometry(points=pts),
+                                z_base=top_interior_bottom,
+                                depth=round(cut_depth, 3),
+                                label="wall clearance below component",
+                            ))
+
+        if not cavity_poly.is_empty:
+            # Convert to PolygonGeometry fragments — the emit merger handles holes
+            if cavity_poly.geom_type == 'Polygon':
+                _cavity_geoms = [cavity_poly]
+            else:
+                _cavity_geoms = [g for g in cavity_poly.geoms if g.geom_type == 'Polygon']
+            for cpoly in _cavity_geoms:
+                pts = [[round(x, 3), round(y, 3)]
+                       for x, y in cpoly.exterior.coords[:-1]]
+                # Preserve interior holes (component footprints)
+                poly_holes = []
+                for interior in cpoly.interiors:
+                    hpts = [[round(x, 3), round(y, 3)]
+                            for x, y in interior.coords[:-1]]
+                    if len(hpts) >= 3:
+                        poly_holes.append(hpts)
+                if len(pts) >= 3:
+                    top_frags.append(ScadFragment(
+                        type="cutout",
+                        geometry=PolygonGeometry(
+                            points=pts,
+                            holes=poly_holes if poly_holes else None,
+                        ),
+                        z_base=top_interior_bottom,
+                        depth=top_cavity_depth,
+                        label="top interior cavity",
+                    ))
 
     log.info("Top fragments: %d total", len(top_frags))
 
