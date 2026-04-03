@@ -226,40 +226,46 @@ def _emit_progress(
     if on_progress is None:
         return
 
-    routed = len(solution.routes)
-    total_nets = len(net_ids)
-    failed = sorted(solution.expected_nets - set(solution.routes))
-    trace_lengths = solution.trace_lengths_mm()
-    total_length = round(sum(trace_lengths.values()), 2)
+    try:
+        routed = len(solution.routes)
+        total_nets = len(net_ids)
+        failed = sorted(solution.expected_nets - set(solution.routes))
+        trace_lengths = solution.trace_lengths_mm()
+        total_length = round(sum(trace_lengths.values()), 2)
 
-    if phase == "initial":
-        msg = f"Initial pass — {routed}/{total_nets} nets, {total_length}mm"
-    elif phase == "improved":
-        msg = (f"Iter {iteration}/{config.max_improve_iterations}"
-               f" — {routed}/{total_nets} nets, {total_length}mm — improved ★")
-    else:
-        msg = (f"Iter {iteration}/{config.max_improve_iterations}"
-               f" — {routed}/{total_nets} nets, {total_length}mm"
-               f" — stall {stall}/{config.stall_limit}")
+        lines: list[str] = []
 
-    partial_result = solution.to_result(include_debug=False)
+        if phase == "initial":
+            lines.append(f"Initial pass — {routed}/{total_nets} nets, {total_length} mm")
+        elif phase == "improved":
+            lines.append(
+                f"Iter {iteration}/{config.max_improve_iterations}"
+                f" — {routed}/{total_nets} nets, {total_length} mm  ★ improved"
+            )
+        else:
+            lines.append(
+                f"Iter {iteration}/{config.max_improve_iterations}"
+                f" — {routed}/{total_nets} nets, {total_length} mm"
+                f"  stall {stall}/{config.stall_limit}"
+            )
 
-    on_progress({
-        "iteration": iteration,
-        "max_iterations": config.max_improve_iterations,
-        "phase": phase,
-        "routed": routed,
-        "total_nets": total_nets,
-        "failed_nets": failed,
-        "best_score": best_score,
-        "prev_score": prev_score,
-        "stall": stall,
-        "stall_limit": config.stall_limit,
-        "trace_lengths": trace_lengths,
-        "total_length_mm": total_length,
-        "message": msg,
-        "partial_result": partial_result,
-    })
+        if failed:
+            lines.append(f"Failed: {', '.join(failed)}")
+
+        sorted_nets = sorted(trace_lengths.items(), key=lambda x: -x[1])
+        for net_id, length in sorted_nets:
+            lines.append(f"  {net_id}: {length} mm")
+
+        msg = "\n".join(lines)
+
+        partial_result = solution.to_result(include_debug=False)
+
+        on_progress({
+            "message": msg,
+            "partial_result": partial_result,
+        })
+    except Exception:
+        log.debug("Progress callback failed", exc_info=True)
 
 
 # ── Net reference parsing ──────────────────────────────────────────
