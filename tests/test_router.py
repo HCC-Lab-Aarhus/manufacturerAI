@@ -280,12 +280,7 @@ class TestFlashlightRouting(unittest.TestCase):
         from src.pipeline.router.models import RouterConfig
         cfg = RouterConfig()
         res = cfg.grid_resolution_mm
-        clearance_cells = max(
-            1,
-            int(math.ceil(
-                (cfg.trace_width_mm / 2 + cfg.trace_clearance_mm) / res
-            )),
-        )
+        min_dist_mm = cfg.trace_width_mm / 2 + cfg.trace_clearance_mm
 
         outline_poly = Polygon(self.placement.outline.vertices)
         xmin, ymin, _, _ = outline_poly.bounds
@@ -314,18 +309,23 @@ class TestFlashlightRouting(unittest.TestCase):
                         cell_owner[w2g(x1, y)] = net
                         y += step
 
+        search_cells = int(math.ceil(min_dist_mm / res))
+
         violations: list[str] = []
         for (gx, gy), net in cell_owner.items():
-            for dy in range(-clearance_cells, clearance_cells + 1):
-                for dx in range(-clearance_cells, clearance_cells + 1):
+            for dy in range(-search_cells, search_cells + 1):
+                for dx in range(-search_cells, search_cells + 1):
                     if dx == 0 and dy == 0:
+                        continue
+                    dist_mm = math.hypot(dx * res, dy * res)
+                    if dist_mm > min_dist_mm:
                         continue
                     neighbour = (gx + dx, gy + dy)
                     other = cell_owner.get(neighbour)
                     if other is not None and other != net:
                         violations.append(
                             f"{net} at {(gx, gy)} too close to {other} "
-                            f"at {neighbour} (need {clearance_cells}-cell wall)"
+                            f"at {neighbour} ({dist_mm:.2f}mm < {min_dist_mm:.2f}mm)"
                         )
 
         self.assertEqual(

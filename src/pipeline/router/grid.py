@@ -24,6 +24,63 @@ BLOCKED = 1
 PERMANENTLY_BLOCKED = 2
 TRACE_PATH = 3     # Occupied by an actual trace (not just clearance)
 
+_SQRT2_HALF = math.sqrt(2.0) / 2.0
+
+
+def _point_seg_dist(
+    px: float, py: float,
+    ax: float, ay: float,
+    bx: float, by: float,
+) -> float:
+    """Minimum distance from point (px,py) to segment (ax,ay)-(bx,by)."""
+    dx = bx - ax
+    dy = by - ay
+    len_sq = dx * dx + dy * dy
+    if len_sq < 1e-18:
+        return math.hypot(px - ax, py - ay)
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / len_sq))
+    proj_x = ax + t * dx
+    proj_y = ay + t * dy
+    return math.hypot(px - proj_x, py - proj_y)
+
+
+def _segment_clearance_flats(
+    gx0: int, gy0: int, gx1: int, gy1: int,
+    radius_mm: float,
+    resolution: float,
+    W: int, H: int,
+) -> set[int]:
+    """Return flat indices of all cells whose area intersects the stadium
+    around a single grid-coordinate segment with the given radius in mm.
+
+    A cell intersects if the distance from its centre to the segment is
+    ≤ radius_mm + cell_half_diagonal (Minkowski inflation).
+    """
+    ax = (gx0 + 0.5) * resolution
+    ay = (gy0 + 0.5) * resolution
+    bx = (gx1 + 0.5) * resolution
+    by = (gy1 + 0.5) * resolution
+
+    cell_half_diag = resolution * _SQRT2_HALF
+    threshold = radius_mm + cell_half_diag
+
+    margin_cells = int(math.ceil(threshold / resolution))
+
+    x_lo = max(0, min(gx0, gx1) - margin_cells)
+    x_hi = min(W - 1, max(gx0, gx1) + margin_cells)
+    y_lo = max(0, min(gy0, gy1) - margin_cells)
+    y_hi = min(H - 1, max(gy0, gy1) + margin_cells)
+
+    flats: set[int] = set()
+    for gy in range(y_lo, y_hi + 1):
+        cy = (gy + 0.5) * resolution
+        row = gy * W
+        for gx in range(x_lo, x_hi + 1):
+            cx = (gx + 0.5) * resolution
+            if _point_seg_dist(cx, cy, ax, ay, bx, by) <= threshold:
+                flats.add(row + gx)
+    return flats
+
 
 class RoutingGrid:
     """A 2-D grid for Manhattan routing inside a polygonal outline.
@@ -63,7 +120,6 @@ class RoutingGrid:
         # them so nearby pads stay reachable.
         self._protected: set[tuple[int, int]] = set()
         self._protected_flats: set[int] | None = None
-        self._clearance_offsets: list[int] | None = None
 
         # Trace ownership: flat index → net_id that placed the trace
         self._trace_owner: dict[int, str] = {}
@@ -264,21 +320,20 @@ class RoutingGrid:
         *,
         net_id: str,
     ) -> None:
-        """Block cells along a trace path, including clearance radius."""
-        if clearance_cells is None:
-            clearance_cells = max(
-                1,
-                int(math.ceil(
-                    (self.trace_width_mm / 2 + self.trace_clearance_mm) / self.resolution
-                ))
-            )
+        """Block cells along a trace path, including clearance radius.
+
+        Uses point-to-segment distance (stadium geometry with semicircular
+        endcaps) so that clearance is rotationally consistent — the same
+        physical gap is maintained whether the trace runs horizontal,
+        vertical, or diagonal.
+        """
         W = self.width
         H = self.height
-        N = W * H
         cells = self._cells
         trace_owner = self._trace_owner
         clearance_owner = self._clearance_owner
-        cl = clearance_cells
+        res = self.resolution
+        radius_mm = self.trace_width_mm / 2 + self.trace_clearance_mm
 
         # Mark path cells as TRACE_PATH
         path_flats: set[int] = set()
@@ -291,43 +346,25 @@ class RoutingGrid:
                     cells[flat] = TRACE_PATH
                 trace_owner[flat] = net_id
 
-        # Use cached clearance offsets and protected flats
-        if self._clearance_offsets is None or len(self._clearance_offsets) != (2*cl+1)**2 - 1:
-            offsets = []
-            for dy in range(-cl, cl + 1):
-                for dx in range(-cl, cl + 1):
-                    if dx == 0 and dy == 0:
-                        continue
-                    offsets.append(dy * W + dx)
-            self._clearance_offsets = offsets
-        flat_offsets = self._clearance_offsets
-
         if self._protected_flats is None:
             self._protected_flats = {gy * W + gx for gx, gy in self._protected}
         protected_flats = self._protected_flats
 
-        # Collect all unique clearance flat indices
-        # Interior path cells (far from border) skip bounds checks
+        # Collect clearance flats using segment distance
         clearance_flats: set[int] = set()
-        W_cl = W - cl
-        H_cl = H - cl
-        for gx, gy in path:
-            base = gy * W + gx
-            if cl <= gx < W_cl and cl <= gy < H_cl:
-                for off in flat_offsets:
-                    clearance_flats.add(base + off)
-            else:
-                for dy in range(-cl, cl + 1):
-                    ny = gy + dy
-                    if not (0 <= ny < H):
-                        continue
-                    row = ny * W
-                    for dx in range(-cl, cl + 1):
-                        if dx == 0 and dy == 0:
-                            continue
-                        nx = gx + dx
-                        if 0 <= nx < W:
-                            clearance_flats.add(row + nx)
+        for i in range(len(path) - 1):
+            clearance_flats |= _segment_clearance_flats(
+                path[i][0], path[i][1],
+                path[i + 1][0], path[i + 1][1],
+                radius_mm, res, W, H,
+            )
+        # Single-point path: treat as zero-length segment
+        if len(path) == 1:
+            gx, gy = path[0]
+            clearance_flats |= _segment_clearance_flats(
+                gx, gy, gx, gy,
+                radius_mm, res, W, H,
+            )
 
         # Exclude path and protected cells
         clearance_flats -= path_flats
@@ -351,19 +388,13 @@ class RoutingGrid:
         net_id: str,
     ) -> None:
         """Free cells belonging to *net_id* along a trace path."""
-        if clearance_cells is None:
-            clearance_cells = max(
-                1,
-                int(math.ceil(
-                    (self.trace_width_mm / 2 + self.trace_clearance_mm) / self.resolution
-                ))
-            )
         W = self.width
         H = self.height
         cells = self._cells
         trace_owner = self._trace_owner
         clearance_owner = self._clearance_owner
-        cl = clearance_cells
+        res = self.resolution
+        radius_mm = self.trace_width_mm / 2 + self.trace_clearance_mm
 
         # Free path cells
         path_flats: set[int] = set()
@@ -375,38 +406,20 @@ class RoutingGrid:
                 if cells[flat] == TRACE_PATH:
                     cells[flat] = FREE
 
-        # Use cached clearance offsets
-        if self._clearance_offsets is None or len(self._clearance_offsets) != (2*cl+1)**2 - 1:
-            offsets = []
-            for dy in range(-cl, cl + 1):
-                for dx in range(-cl, cl + 1):
-                    if dx == 0 and dy == 0:
-                        continue
-                    offsets.append(dy * W + dx)
-            self._clearance_offsets = offsets
-        flat_offsets = self._clearance_offsets
-
-        # Collect unique clearance flat indices
+        # Collect clearance flats using segment distance
         clearance_flats: set[int] = set()
-        W_cl = W - cl
-        H_cl = H - cl
-        for gx, gy in path:
-            base = gy * W + gx
-            if cl <= gx < W_cl and cl <= gy < H_cl:
-                for off in flat_offsets:
-                    clearance_flats.add(base + off)
-            else:
-                for dy in range(-cl, cl + 1):
-                    ny = gy + dy
-                    if not (0 <= ny < H):
-                        continue
-                    row = ny * W
-                    for dx in range(-cl, cl + 1):
-                        if dx == 0 and dy == 0:
-                            continue
-                        nx = gx + dx
-                        if 0 <= nx < W:
-                            clearance_flats.add(row + nx)
+        for i in range(len(path) - 1):
+            clearance_flats |= _segment_clearance_flats(
+                path[i][0], path[i][1],
+                path[i + 1][0], path[i + 1][1],
+                radius_mm, res, W, H,
+            )
+        if len(path) == 1:
+            gx, gy = path[0]
+            clearance_flats |= _segment_clearance_flats(
+                gx, gy, gx, gy,
+                radius_mm, res, W, H,
+            )
 
         clearance_flats -= path_flats
 
