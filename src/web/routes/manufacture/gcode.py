@@ -42,6 +42,7 @@ async def start_gcode(
         from src.pipeline.gcode.pause_points import ComponentPauseInfo
         from src.catalog.loader import load_catalog
         try:
+            s.clear_stage_artifacts("gcode")
             shell_height = None
             design_data = s.read_artifact("design.json")
             if design_data:

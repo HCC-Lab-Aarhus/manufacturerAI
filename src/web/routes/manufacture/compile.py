@@ -45,6 +45,8 @@ async def start_compile(sid: str, force: bool = Query(False)):
 
     def _do_compile():
         from src.pipeline.scad.compiler import compile_scad
+        for stl_name in ("enclosure.stl", "enclosure_bottom.stl", "enclosure_top.stl", "extras.stl"):
+            s.delete_artifact(stl_name)
         if two_part:
             # Compile both halves
             bottom_scad = s.artifact_path("enclosure_bottom.scad")

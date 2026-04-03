@@ -29,6 +29,7 @@ async def run_scad(sid: str, two_part: str | None = None):
             if task.cancel_event.is_set():
                 return
 
+            s.clear_stage_artifacts("scad")
             scad_path = run_scad_step(s, enclosure_style_override=enclosure_style)
             s.clear_step_error("scad")
             set_pipeline_task(sid, "scad", PipelineTask(status="done"))

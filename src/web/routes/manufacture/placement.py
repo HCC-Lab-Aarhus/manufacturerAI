@@ -35,6 +35,7 @@ async def run_placement(sid: str):
             if task.cancel_event.is_set():
                 return
 
+            s.clear_stage_artifacts("placement")
             cat = get_catalog()
             physical = parse_physical_design(require_design(s))
             circuit = parse_circuit(require_circuit(s))

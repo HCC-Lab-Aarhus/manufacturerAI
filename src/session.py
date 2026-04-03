@@ -143,8 +143,8 @@ class Session:
         "scad": ["enclosure.scad", "enclosure.stl", "extras.scad", "extras.stl",
                 "enclosure_bottom.scad", "enclosure_bottom.stl",
                 "enclosure_top.scad", "enclosure_top.stl"],
-        "gcode": ["enclosure.gcode"],
-        "firmware": ["firmware.ino"],
+        "gcode": ["enclosure.gcode", "print_job.json"],
+        "firmware": ["firmware.ino", "sim_config.json"],
         "setup": ["firmware.ino", "setup_conversation.json"],
     }
 
@@ -173,6 +173,11 @@ class Session:
         "print_job.json": "gcode",
         "sim_config.json": "firmware",
     }
+
+    def clear_stage_artifacts(self, stage: str) -> None:
+        """Delete all artifacts for a pipeline stage before rerunning it."""
+        for artifact in self._STAGE_ARTIFACTS.get(stage, []):
+            self.delete_artifact(artifact)
 
     def invalidate_downstream(self, current_step: str) -> list[str]:
         """Delete artifacts and pipeline_state for all stages after *current_step*."""

@@ -74,6 +74,7 @@ async def run_bitmap(sid: str):
             if task.cancel_event.is_set():
                 return
 
+            s.clear_stage_artifacts("bitmap")
             require_placement(s)
             require_routing(s)
             _generate_and_save_bitmap(s)

@@ -31,6 +31,7 @@ async def run_routing(sid: str):
 
     def _do():
         try:
+            s.clear_stage_artifacts("routing")
             cat = get_catalog()
             physical = parse_physical_design(require_design(s))
             circuit = parse_circuit(require_circuit(s))
