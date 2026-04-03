@@ -22,7 +22,7 @@ from src.pipeline.scad.fragment import (
     ScadFragment, RectGeometry, CylinderGeometry,
     PolygonGeometry, SegmentGeometry, CapsuleGeometry,
 )
-from src.pipeline.scad.traces import TRACE_WIDTH as SCAD_TRACE_WIDTH
+from src.pipeline.config import TRACE_RULES
 
 from ._common import DEBUG_CONFIG, load_slicer_params, run_debug_pipeline
 
@@ -398,7 +398,7 @@ async def generate_components(
             all_frags.append(ScadFragment(
                 type="cutout",
                 geometry=SegmentGeometry(
-                    ly.plate_x, pin_y, pin_x, pin_y, SCAD_TRACE_WIDTH,
+                    ly.plate_x, pin_y, pin_x, pin_y, TRACE_RULES.trace_width_mm,
                 ),
                 z_base=FLOOR_MM,
                 depth=TRACE_HEIGHT_MM,

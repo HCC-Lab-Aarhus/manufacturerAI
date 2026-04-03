@@ -25,6 +25,9 @@ log = logging.getLogger(__name__)
 
 PIXEL_SIZE_MM: float = 0.1371
 
+FDM_NOZZLE_D: float = 0.4
+FDM_EXTRUSION_W: float = FDM_NOZZLE_D * 1.125  # 0.45 mm
+TWO_WALLS_MM: float = 2 * FDM_EXTRUSION_W       # 0.9 mm
 
 
 @dataclass(frozen=True)
@@ -37,12 +40,13 @@ class TraceRules:
     trace_width_mm: float = 1.0
     """Width of a single conductive-ink trace."""
 
-    trace_clearance_mm: float = 1.0
+    trace_clearance_mm: float = TWO_WALLS_MM
     """Minimum edge-to-edge gap between two traces (or a trace and
-    another net's clearance zone)."""
+    another net's clearance zone).  Equals two FDM perimeter walls."""
 
-    pin_clearance_mm: float = 1.5
-    """Minimum gap from a trace edge to a foreign pin centre."""
+    pin_clearance_mm: float = TWO_WALLS_MM
+    """Minimum gap from a trace edge to a foreign pin centre.
+    Equals two FDM perimeter walls."""
 
     edge_clearance_mm: float = 1.5
     """Minimum distance from a trace to the outline edge."""

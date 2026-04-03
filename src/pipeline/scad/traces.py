@@ -9,12 +9,10 @@ from __future__ import annotations
 
 import math
 
-from src.pipeline.config import FLOOR_MM, TRACE_HEIGHT_MM
+from src.pipeline.config import FLOOR_MM, TRACE_HEIGHT_MM, TRACE_RULES
 from src.pipeline.router.models import RoutingResult
 
 from .fragment import ScadFragment, SegmentGeometry
-
-TRACE_WIDTH: float = 1.2
 
 
 def build_trace_fragments(
@@ -41,7 +39,8 @@ def build_trace_fragments(
             if seg_len < 1e-6:
                 continue
 
-            overshoot = TRACE_WIDTH / 2
+            trace_w = TRACE_RULES.trace_width_mm
+            overshoot = trace_w / 2
             ux, uy = (x2 - x1) / seg_len, (y2 - y1) / seg_len
             ex1 = x1 - ux * overshoot
             ey1 = y1 - uy * overshoot
@@ -50,7 +49,7 @@ def build_trace_fragments(
 
             frags.append(ScadFragment(
                 type="cutout",
-                geometry=SegmentGeometry(ex1, ey1, ex2, ey2, TRACE_WIDTH),
+                geometry=SegmentGeometry(ex1, ey1, ex2, ey2, trace_w),
                 z_base=FLOOR_MM,
                 depth=channel_depth,
                 label=f"trace {trace.net_id}",
