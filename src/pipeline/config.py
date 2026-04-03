@@ -149,6 +149,18 @@ CEILING_MM: float = 2.0
 PIN_FLOOR_PENETRATION: float = 0.6
 
 
+# ── Two-part enclosure: snap-fit constants (mm) ───────────────────
+
+SPLIT_OVERLAP_MM: float = 2.0       # Lap joint overlap between top and bottom
+SNAP_POST_WIDTH: float = 3.0        # Snap tab width along wall
+SNAP_POST_HEIGHT: float = 4.0       # Snap tab protrusion above split plane
+SNAP_POST_THICKNESS: float = 1.2    # Snap tab depth (wall-normal direction)
+SNAP_BARB_MM: float = 0.3           # Barb overhang for click engagement
+SNAP_CLEARANCE_MM: float = 0.3      # Clearance in female slot (per side)
+SNAP_SPACING_MM: float = 25.0       # Max perimeter distance between snap posts
+MIN_SNAP_POSTS: int = 4             # Minimum number of snap posts
+
+
 def component_z_range(
     mounting_style: str,
     body_height_mm: float,

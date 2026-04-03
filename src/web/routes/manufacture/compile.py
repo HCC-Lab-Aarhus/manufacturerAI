@@ -75,13 +75,44 @@ async def poll_compile(sid: str):
 @router.get("/sessions/{sid}/manufacture/stl")
 async def download_stl(sid: str):
     s = load_session_or_404(sid)
+    # Two-part mode: prefer bottom STL, fallback to solid
     stl_path = s.artifact_path("enclosure.stl")
     if not stl_path.exists():
-        raise HTTPException(404, "No enclosure.stl yet — compile first")
+        stl_path = s.artifact_path("enclosure_bottom.stl")
+    if not stl_path.exists():
+        raise HTTPException(404, "No enclosure.stl yet \u2014 compile first")
     return FileResponse(
         stl_path,
         media_type="application/octet-stream",
-        filename="enclosure.stl",
+        filename=stl_path.name,
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"},
+    )
+
+
+@router.get("/sessions/{sid}/manufacture/stl-bottom")
+async def download_stl_bottom(sid: str):
+    s = load_session_or_404(sid)
+    stl_path = s.artifact_path("enclosure_bottom.stl")
+    if not stl_path.exists():
+        raise HTTPException(404, "No enclosure_bottom.stl \u2014 compile with two-part mode first")
+    return FileResponse(
+        stl_path,
+        media_type="application/octet-stream",
+        filename="enclosure_bottom.stl",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"},
+    )
+
+
+@router.get("/sessions/{sid}/manufacture/stl-top")
+async def download_stl_top(sid: str):
+    s = load_session_or_404(sid)
+    stl_path = s.artifact_path("enclosure_top.stl")
+    if not stl_path.exists():
+        raise HTTPException(404, "No enclosure_top.stl \u2014 compile with two-part mode first")
+    return FileResponse(
+        stl_path,
+        media_type="application/octet-stream",
+        filename="enclosure_top.stl",
         headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"},
     )
 

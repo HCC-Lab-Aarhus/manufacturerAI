@@ -37,6 +37,7 @@ class ResolverContext:
     cavity_depth: float
     blended_height_fn: Callable[..., float]
     pause_z: float | None = None  # per-component insertion pause Z (caps pin grooves)
+    part: str = "full"            # "full" | "bottom" | "top" — two-part filtering
 
 
 class ComponentResolver:
@@ -62,6 +63,12 @@ class ComponentResolver:
         self.cid = placed.instance_id
 
     def resolve(self) -> list[ScadFragment]:
+        part = self.ctx.part
+
+        if part == "top":
+            # Top part only gets ceiling cutouts (cap/LED holes)
+            return self._top_only_ceiling_cutouts()
+
         style = self.placed.mounting_style or self.catalog.mounting.style
         if style == "top":
             frags = self._top_mount()
@@ -75,6 +82,12 @@ class ComponentResolver:
         frags.extend(self._pin_bridge_fragments())
         frags.extend(self._pinhole_fragments())
         frags.extend(self._scad_feature_fragments())
+
+        if part == "bottom":
+            # Bottom part: remove ceiling cutouts, add support platforms
+            frags = [f for f in frags if f.z_base < self.ctx.ceil_start - 0.01]
+            frags.extend(self._support_platform_fragments())
+
         return frags
 
     # ── Mounting-style handlers ────────────────────────────────────
@@ -584,6 +597,114 @@ class ComponentResolver:
             pts = rotated_polygon(pts, self.rot, cx, cy)
             return PolygonGeometry(pts)
         return RectGeometry(cx, cy, w, h)
+
+    # ── Two-part helpers ──────────────────────────────────────────────
+
+    def _support_platform_fragments(self) -> list[ScadFragment]:
+        """Solid platforms under components for two-part bottom tray.
+
+        These are *additions* that fill the space from CAVITY_START_MM
+        up to the component's body floor, so the component has something
+        to rest on when the top shell is removed.
+        """
+        body = self.catalog.body
+        style = self.placed.mounting_style or self.catalog.mounting.style
+
+        if style in ("bottom",):
+            # Bottom-mounted components already sit at CAVITY_START_MM
+            return []
+
+        body_floor, _ = self._z_range()
+        platform_height = body_floor - CAVITY_START_MM
+        if platform_height < 0.2:
+            return []
+
+        if body.shape == "circle":
+            geom = CylinderGeometry(self.cx, self.cy, body.diameter_mm / 2)
+        else:
+            geom = self._rect_geom(body.width_mm, body.length_mm)
+
+        return [ScadFragment(
+            type="addition",
+            geometry=geom,
+            z_base=CAVITY_START_MM,
+            depth=platform_height,
+            label=f"support platform — {self.cid}",
+        )]
+
+    def _top_only_ceiling_cutouts(self) -> list[ScadFragment]:
+        """For the top part: only emit ceiling hole cutouts (buttons, LEDs).
+
+        Skips body pockets, pin holes, bridges, and everything below
+        the ceiling zone.
+        """
+        style = self.placed.mounting_style or self.catalog.mounting.style
+        if style != "top":
+            # Only top-mounted components punch through the ceiling
+            return []
+
+        frags: list[ScadFragment] = []
+        body = self.catalog.body
+        mounting = self.catalog.mounting
+        s_depth = max(self._surface_depth(), 1.0)
+
+        # Ceiling hole (same logic as _top_mount, just the ceiling cutout part)
+        if self.placed.button_outline is not None and mounting.cap is not None and mounting.cap.actuator is not None:
+            from .buttons import _offset_polygon, BUTTON_CLEARANCE_MM
+            hole = _offset_polygon(self.placed.button_outline, BUTTON_CLEARANCE_MM)
+            world_pts = [[p[0] + self.cx, p[1] + self.cy] for p in hole]
+            frags.append(ScadFragment(
+                type="cutout",
+                geometry=PolygonGeometry(world_pts),
+                z_base=self.ctx.ceil_start,
+                depth=s_depth,
+                label=f"button hole — {self.cid}",
+            ))
+        elif mounting.cap is not None:
+            cap = mounting.cap
+            cap_r = (cap.diameter_mm + 2 * cap.hole_clearance_mm) / 2
+            if cap.actuator is not None:
+                from .buttons import _offset_polygon, BUTTON_CLEARANCE_MM
+                cap_r = cap.diameter_mm / 2 + BUTTON_CLEARANCE_MM
+                frags.append(ScadFragment(
+                    type="cutout",
+                    geometry=CylinderGeometry(self.cx, self.cy, cap_r),
+                    z_base=self.ctx.ceil_start,
+                    depth=s_depth,
+                    label=f"button hole — {self.cid}",
+                ))
+            else:
+                frags.append(ScadFragment(
+                    type="cutout",
+                    geometry=CylinderGeometry(self.cx, self.cy, cap_r),
+                    z_base=self.ctx.ceil_start,
+                    depth=s_depth,
+                    label=f"cap hole — {self.cid}",
+                ))
+        elif body.shape == "circle":
+            frags.append(ScadFragment(
+                type="cutout",
+                geometry=CylinderGeometry(self.cx, self.cy, body.diameter_mm / 2),
+                z_base=self.ctx.ceil_start,
+                depth=s_depth,
+                label=f"top surface hole — {self.cid}",
+            ))
+        else:
+            frags.append(ScadFragment(
+                type="cutout",
+                geometry=self._rect_geom(body.width_mm, body.length_mm),
+                z_base=self.ctx.ceil_start,
+                depth=s_depth,
+                label=f"top surface hole — {self.cid}",
+            ))
+
+        # Also emit scad_features that punch through the ceiling
+        for feat in self.catalog.scad_features:
+            if feat.through_surface:
+                frags.extend(self._scad_feature_fragments())
+                break
+
+        return frags
 
 
 def resolve_component(

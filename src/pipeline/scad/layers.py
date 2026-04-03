@@ -320,6 +320,9 @@ def _build_rings(
     top_zs: list[float],
     enclosure: Enclosure,
     bottom_zs: list[float] | None = None,
+    *,
+    skip_edge_top: bool = False,
+    skip_edge_bottom: bool = False,
 ) -> list[list[list[float]]]:
     """Build an ordered list of vertex rings from bottom to top.
 
@@ -353,8 +356,8 @@ def _build_rings(
     bot_type = (edge_bot.type    if edge_bot else "none") or "none"
     bot_size = (edge_bot.size_mm if edge_bot else 0.0)    or 0.0
 
-    has_top = top_size > 0 and top_type in ("chamfer", "fillet")
-    has_bot = bot_size > 0 and bot_type in ("chamfer", "fillet")
+    has_top = top_size > 0 and top_type in ("chamfer", "fillet") and not skip_edge_top
+    has_bot = bot_size > 0 and bot_type in ("chamfer", "fillet") and not skip_edge_bottom
 
     area = _polygon_signed_area(flat_pts)
     rings: list[list[list[float]]] = []
@@ -420,6 +423,11 @@ def _polyhedron_shell(
     hole_pts_list: list[list[list[float]]] | None = None,
     hole_top_zs_list: list[list[float]] | None = None,
     hole_bot_zs_list: list[list[float]] | None = None,
+    *,
+    skip_edge_top: bool = False,
+    skip_edge_bottom: bool = False,
+    open_top: bool = False,
+    open_bottom: bool = False,
 ) -> list[str]:
     """Emit an OpenSCAD ``polyhedron()`` for the shell body.
 
@@ -444,7 +452,10 @@ def _polyhedron_shell(
     N_total = N + sum(hole_sizes)
 
     # ── Build outer rings ──────────────────────────────────────────────────────
-    outer_rings = _build_rings(flat_pts, top_zs, enclosure, bottom_zs=bottom_zs)
+    outer_rings = _build_rings(
+        flat_pts, top_zs, enclosure, bottom_zs=bottom_zs,
+        skip_edge_top=skip_edge_top, skip_edge_bottom=skip_edge_bottom,
+    )
     R = len(outer_rings)
 
     # ── Build hole rings ───────────────────────────────────────────────────────
@@ -487,13 +498,15 @@ def _polyhedron_shell(
         return ri * N_total + vi
 
     # ── Bottom cap ─────────────────────────────────────────────────────────────
-    for a, b, c in cap_tris:
-        faces.append([a, b, c])
+    if not open_bottom:
+        for a, b, c in cap_tris:
+            faces.append([a, b, c])
 
-    # ── Top cap ────────────────────────────────────────────────────────────────
-    top_base = (R - 1) * N_total
-    for a, b, c in cap_tris:
-        faces.append([top_base + a, top_base + c, top_base + b])
+    # ── Top cap ──────────────────────────────────────────────────────────────────────
+    if not open_top:
+        top_base = (R - 1) * N_total
+        for a, b, c in cap_tris:
+            faces.append([top_base + a, top_base + c, top_base + b])
 
     # ── Outer side faces ───────────────────────────────────────────────────────
     for ri in range(R - 1):
@@ -567,11 +580,23 @@ def shell_body_lines(
     flat_pts:  list[list[float]],
     top_zs:    list[float] | None = None,
     bottom_zs: list[float] | None = None,
+    *,
+    skip_edge_top: bool = False,
+    skip_edge_bottom: bool = False,
+    open_top: bool = False,
+    open_bottom: bool = False,
 ) -> list[str]:
     """Return OpenSCAD lines for the shell body as a single ``polyhedron()``.
 
     If the outline contains holes, they are tessellated and built directly
     into the polyhedron as inner wall surfaces with triangulated caps.
+
+    Two-part enclosure parameters
+    -----------------------------
+    skip_edge_top    : suppress top edge profile (bottom part has flat cut)
+    skip_edge_bottom : suppress bottom edge profile (top part has flat cut)
+    open_top         : omit the top cap face (bottom part is open)
+    open_bottom      : omit the bottom cap face (top part is open)
     """
     N = len(flat_pts)
 
@@ -601,4 +626,8 @@ def shell_body_lines(
         hole_pts_list=hole_pts_list,
         hole_top_zs_list=hole_top_zs_list,
         hole_bot_zs_list=hole_bot_zs_list,
+        skip_edge_top=skip_edge_top,
+        skip_edge_bottom=skip_edge_bottom,
+        open_top=open_top,
+        open_bottom=open_bottom,
     )
