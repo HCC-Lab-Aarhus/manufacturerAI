@@ -38,7 +38,29 @@ async def run_routing(sid: str):
                 placement_data, physical.outline, circuit.nets, physical.enclosure,
             )
 
-            result = route_traces(full_placement, cat)
+            def _on_progress(info: dict) -> None:
+                partial = info.get("partial_result")
+                if partial is not None:
+                    s.write_artifact("routing.json", routing_to_dict(partial))
+                msg = info.get("message", "")
+                detail = {
+                    "iteration": info.get("iteration"),
+                    "max_iterations": info.get("max_iterations"),
+                    "phase": info.get("phase"),
+                    "routed": info.get("routed"),
+                    "total_nets": info.get("total_nets"),
+                    "failed_nets": info.get("failed_nets"),
+                    "total_length_mm": info.get("total_length_mm"),
+                    "trace_lengths": info.get("trace_lengths"),
+                    "stall": info.get("stall"),
+                    "stall_limit": info.get("stall_limit"),
+                    "best_score": info.get("best_score"),
+                }
+                set_pipeline_task(sid, "routing", PipelineTask(
+                    status="running", message=msg, detail=detail,
+                ))
+
+            result = route_traces(full_placement, cat, on_progress=_on_progress)
 
             if not result.ok:
                 total = len({t.net_id for t in result.traces} | set(result.failed_nets))

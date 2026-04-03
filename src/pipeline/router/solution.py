@@ -105,6 +105,15 @@ class Solution:
     def is_perfect(self) -> bool:
         return self.score()[0] == 0
 
+    def trace_lengths_mm(self) -> dict[str, float]:
+        """Per-net trace length in mm, computed from grid paths."""
+        res = self.grid.resolution
+        lengths: dict[str, float] = {}
+        for net_id, route in self.routes.items():
+            cells = sum(max(0, len(p) - 1) for p in route.paths)
+            lengths[net_id] = round(cells * res, 2)
+        return lengths
+
     # ── Snapshot / Restore ─────────────────────────────────────
 
     def snapshot(self) -> Snapshot:
@@ -227,16 +236,17 @@ class Solution:
 
     # ── Output ─────────────────────────────────────────────────
 
-    def to_result(self) -> RoutingResult:
-        from .debug import build_debug_grids
-
+    def to_result(self, *, include_debug: bool = True) -> RoutingResult:
         routed_paths = {nid: r.paths for nid, r in self.routes.items()}
         routed_pads = {nid: r.pads for nid, r in self.routes.items()}
 
-        debug_grids = build_debug_grids(
-            self.placement, self.catalog, routed_paths, routed_pads,
-            config=self.config, grid=self.grid,
-        )
+        debug_grids: list[dict] = []
+        if include_debug:
+            from .debug import build_debug_grids
+            debug_grids = build_debug_grids(
+                self.placement, self.catalog, routed_paths, routed_pads,
+                config=self.config, grid=self.grid,
+            )
 
         traces = self._grid_paths_to_traces(routed_paths)
         failed_nets = sorted(self.expected_nets - set(self.routes)) if self.expected_nets else []

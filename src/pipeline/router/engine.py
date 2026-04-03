@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import math
 import random
+from typing import Any, Callable
 
 from shapely.geometry import Polygon
 
@@ -34,6 +35,8 @@ from .solution import Solution, NetPad, _PinRef
 
 log = logging.getLogger(__name__)
 
+ProgressCallback = Callable[[dict[str, Any]], None]
+
 
 # ── Main entry point ───────────────────────────────────────────────
 
@@ -43,6 +46,7 @@ def route_traces(
     catalog: CatalogResult,
     *,
     config: RouterConfig | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> RoutingResult:
     """Route all nets using iterative improvement."""
     if config is None:
@@ -110,6 +114,10 @@ def route_traces(
     solution.route_nets(ordering, pads_map)
     log.info("Initial solution: score=%s", solution.score())
 
+    _emit_progress(on_progress, solution, net_ids, config,
+                   iteration=0, phase="initial", stall=0,
+                   best_score=solution.score())
+
     if solution.is_perfect():
         log.info("Router: all %d nets routed", len(net_ids))
         return solution.to_result()
@@ -162,6 +170,9 @@ def route_traces(
             best_pin_pools = _copy_pin_pools(pin_pools)
             stall = 0
             log.info("Iter %d: improved %s → %s", iteration + 1, before, after)
+            _emit_progress(on_progress, solution, net_ids, config,
+                           iteration=iteration + 1, phase="improved", stall=0,
+                           best_score=best_score, prev_score=before)
             if solution.is_perfect():
                 break
         else:
@@ -170,6 +181,11 @@ def route_traces(
             pin_assignments.update(best_pin_assignments)
             _restore_pin_pools(pin_pools, best_pin_pools)
             stall += 1
+            log.info("Iter %d: no improvement %s (stall %d/%d)",
+                     iteration + 1, before, stall, config.stall_limit)
+            _emit_progress(on_progress, solution, net_ids, config,
+                           iteration=iteration + 1, phase="no_improvement",
+                           stall=stall, best_score=best_score)
             if all_routed and stall >= config.stall_limit:
                 log.info(
                     "Stalled for %d iterations at iteration %d, stopping",
@@ -191,6 +207,59 @@ def route_traces(
         log.info("Router: all %d nets routed", len(net_ids))
 
     return solution.to_result()
+
+
+# ── Progress reporting ─────────────────────────────────────────────
+
+def _emit_progress(
+    on_progress: ProgressCallback | None,
+    solution: Solution,
+    net_ids: list[str],
+    config: RouterConfig,
+    *,
+    iteration: int,
+    phase: str,
+    stall: int,
+    best_score: tuple[int, int],
+    prev_score: tuple[int, int] | None = None,
+) -> None:
+    if on_progress is None:
+        return
+
+    routed = len(solution.routes)
+    total_nets = len(net_ids)
+    failed = sorted(solution.expected_nets - set(solution.routes))
+    trace_lengths = solution.trace_lengths_mm()
+    total_length = round(sum(trace_lengths.values()), 2)
+
+    if phase == "initial":
+        msg = f"Initial pass — {routed}/{total_nets} nets, {total_length}mm"
+    elif phase == "improved":
+        msg = (f"Iter {iteration}/{config.max_improve_iterations}"
+               f" — {routed}/{total_nets} nets, {total_length}mm — improved ★")
+    else:
+        msg = (f"Iter {iteration}/{config.max_improve_iterations}"
+               f" — {routed}/{total_nets} nets, {total_length}mm"
+               f" — stall {stall}/{config.stall_limit}")
+
+    partial_result = solution.to_result(include_debug=False)
+
+    on_progress({
+        "iteration": iteration,
+        "max_iterations": config.max_improve_iterations,
+        "phase": phase,
+        "routed": routed,
+        "total_nets": total_nets,
+        "failed_nets": failed,
+        "best_score": best_score,
+        "prev_score": prev_score,
+        "stall": stall,
+        "stall_limit": config.stall_limit,
+        "trace_lengths": trace_lengths,
+        "total_length_mm": total_length,
+        "message": msg,
+        "partial_result": partial_result,
+    })
 
 
 # ── Net reference parsing ──────────────────────────────────────────
