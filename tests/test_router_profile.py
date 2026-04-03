@@ -33,6 +33,7 @@ from src.pipeline.router.engine import (
     _parse_net_refs, _resolve_all_pads, _priority_order,
 )
 from src.pipeline.router.solution import Solution, _PinRef
+from src.pipeline.router.pins import build_pin_pools
 from src.pipeline.router import route_traces
 from tests.flashlight_fixture import make_flashlight_design
 
@@ -154,8 +155,9 @@ class TestRouterProfile(unittest.TestCase):
         # Phase 4a: Pad resolution
         with timed_phase("4a_pad_resolution", phases):
             pads_map, pin_assignments = _resolve_all_pads(
-                net_ids, net_pad_map, placement, catalog, grid,
-            )
+            net_ids, net_pad_map, placement, catalog, grid,
+            build_pin_pools(placement, catalog),
+        )
 
         # Phase 4b: Priority ordering
         with timed_phase("4b_priority_ordering", phases):
@@ -307,6 +309,7 @@ class TestRouterProfile(unittest.TestCase):
         ]
         pads_map, pin_assignments = _resolve_all_pads(
             net_ids, net_pad_map, placement, catalog, grid,
+            build_pin_pools(placement, catalog),
         )
 
         solution = Solution(
@@ -376,6 +379,7 @@ class TestRouterProfile(unittest.TestCase):
         ]
         pads_map, pin_assignments = _resolve_all_pads(
             net_ids, net_pad_map, placement, catalog, grid,
+            build_pin_pools(placement, catalog),
         )
         ordering = _priority_order(
             net_ids, net_pad_map, pads_map, grid, config, pin_voronoi,
@@ -512,8 +516,9 @@ class TestLargeDesignProfile(unittest.TestCase):
 
         with timed_phase("4a_pad_resolution", phases):
             pads_map, pin_assignments = _resolve_all_pads(
-                net_ids, net_pad_map, placement, catalog, grid,
-            )
+            net_ids, net_pad_map, placement, catalog, grid,
+            build_pin_pools(placement, catalog),
+        )
 
         with timed_phase("4b_priority_ordering", phases):
             ordering = _priority_order(
@@ -661,6 +666,7 @@ class TestLargeDesignProfile(unittest.TestCase):
         ]
         pads_map, pin_assignments = _resolve_all_pads(
             net_ids, net_pad_map, placement, catalog, grid,
+            build_pin_pools(placement, catalog),
         )
         ordering = _priority_order(
             net_ids, net_pad_map, pads_map,
@@ -966,6 +972,7 @@ class TestLargeDesignProfile(unittest.TestCase):
         ]
         pads_map, pin_assignments = _resolve_all_pads(
             net_ids, net_pad_map, placement, catalog, grid,
+            build_pin_pools(placement, catalog),
         )
         ordering = _priority_order(
             net_ids, net_pad_map, pads_map,
@@ -1096,6 +1103,7 @@ class TestAStarInternals(unittest.TestCase):
         ]
         pads_map, pin_assignments = _resolve_all_pads(
             net_ids, net_pad_map, placement, catalog, grid,
+            build_pin_pools(placement, catalog),
         )
         ordering = _priority_order(
             net_ids, net_pad_map, pads_map, grid, config, pin_voronoi,

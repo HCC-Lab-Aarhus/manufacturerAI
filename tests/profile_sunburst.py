@@ -252,7 +252,7 @@ def run_profiled_route():
     from src.pipeline.router.solution import Solution
     from src.pipeline.router import pathfinder as pf_mod
     from src.pipeline.router.pathfinder import (
-        _try_l_route, _manhattan_dt, DIRS,
+        _try_l_route, _octile_dt, DIRS,
         FREE, BLOCKED, TRACE_PATH, PERMANENTLY_BLOCKED,
     )
     from heapq import heappush as _heappush, heappop as _heappop
@@ -327,7 +327,7 @@ def run_profiled_route():
                     tree_mask[ty * W + tx] = 1
 
             with ht.section("manhattan_dt"):
-                h_map = _manhattan_dt(W, H, tree_list)
+                h_map = _octile_dt(W, H, tree_list)
 
             with ht.section("astar"):
                 INF = 0x7FFFFFFF
@@ -545,10 +545,19 @@ def run_profiled_route():
                     best_pin_pools = _copy_pin_pools(pin_pools)
                     stall = 0
                     iteration = 0
+                    profiler_max_iterations = 200
+                    t_loop_start = time.perf_counter()
+                    profiler_time_limit = 60.0
 
                     while True:
                         all_routed = best_score[0] == 0
                         if all_routed and iteration >= config.max_improve_iterations:
+                            break
+                        if iteration >= profiler_max_iterations:
+                            print(f"  Profiler cap reached ({profiler_max_iterations} iters)")
+                            break
+                        if time.perf_counter() - t_loop_start > profiler_time_limit:
+                            print(f"  Profiler time limit reached ({profiler_time_limit}s)")
                             break
 
                         targets = solution.worst_nets(k=3)
