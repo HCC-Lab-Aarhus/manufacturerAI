@@ -52,6 +52,7 @@ async def start_gcode(
 
             # Build component pause info from placement + catalog
             comp_infos: list[ComponentPauseInfo] | None = None
+            cat_idx: dict = {}
             placement_data = s.read_artifact("placement.json")
             if placement_data:
                 cat = load_catalog()
@@ -79,6 +80,7 @@ async def start_gcode(
                 silverink_only=silverink_only,
                 component_infos=comp_infos,
                 placement_result=placement_data,
+                catalog_index=cat_idx or None,
             )
             if result.success:
                 s.pipeline_state["gcode"] = "complete"

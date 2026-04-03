@@ -30,6 +30,10 @@ import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.pipeline.gcode.ink_traces import PinHoleRect
 
 log = logging.getLogger(__name__)
 
@@ -530,6 +534,7 @@ def postprocess_gcode(
     trace_segments: list[tuple[float, float, float, float]] | None = None,
     pad_centers: list[tuple[float, float]] | None = None,
     silverink_only: bool = False,
+    pin_holes: list[PinHoleRect] | None = None,
 ) -> PostProcessResult:
     """Read slicer G-code, inject pauses and ink, write result.
 
@@ -580,6 +585,7 @@ def postprocess_gcode(
     trace_roof_z = ink_z + TRACE_HEIGHT_MM
     custom_ironing_lines = generate_trace_ironing_gcode(
         trace_segs, pads, ink_z=ink_z, pad_z_drop=PIN_FLOOR_PENETRATION,
+        pin_holes=pin_holes,
     ) if trace_segs else []
     pad_z = ink_z - PIN_FLOOR_PENETRATION
     custom_pad_ironing_lines = generate_pad_ironing_gcode(pads) if pads else []

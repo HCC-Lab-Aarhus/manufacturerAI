@@ -20,7 +20,7 @@ from pathlib import Path
 from src.pipeline.config import get_printer
 from src.pipeline.gcode.slicer import slice_stl
 from src.pipeline.gcode.pause_points import compute_pause_points, PausePoints, ComponentPauseInfo
-from src.pipeline.gcode.ink_traces import extract_trace_segments, extract_pad_centers
+from src.pipeline.gcode.ink_traces import extract_trace_segments, extract_pad_centers, extract_pin_holes, PinHoleRect
 from src.pipeline.gcode.postprocessor import postprocess_gcode, PostProcessResult, compute_bed_offset
 from src.pipeline.gcode.filaments import get_filament, write_filament_overrides
 
@@ -53,6 +53,7 @@ def run_gcode_pipeline(
     component_infos: list[ComponentPauseInfo] | None = None,
     placement_result: dict | None = None,
     extra_overrides: list[Path] | None = None,
+    catalog_index: dict[str, object] | None = None,
 ) -> GcodePipelineResult:
     """Run the full G-code pipeline: slice → inject pauses → output.
 
@@ -150,6 +151,10 @@ def run_gcode_pipeline(
     pad_centers = extract_pad_centers(
         placement_result=placement_result,
     )
+    pin_holes = extract_pin_holes(
+        placement_result=placement_result,
+        catalog_index=catalog_index,
+    )
     if trace_segs:
         stages.append(f"Trace segments: {len(trace_segs)} segments, {len(pad_centers)} pads")
 
@@ -171,6 +176,11 @@ def run_gcode_pipeline(
         trace_segs = [(x1 + dx, -y1 + dy, x2 + dx, -y2 + dy) for x1, y1, x2, y2 in trace_segs]
     if pad_centers:
         pad_centers = [(x + dx, -y + dy) for x, y in pad_centers]
+    if pin_holes:
+        pin_holes = [
+            PinHoleRect(h.cx + dx, -h.cy + dy, h.half_w, h.half_h)
+            for h in pin_holes
+        ]
 
     # ── 4. Post-process ───────────────────────────────────────────
     final_gcode = output_dir / "enclosure.gcode"
@@ -186,6 +196,7 @@ def run_gcode_pipeline(
         trace_segments=trace_segs,
         pad_centers=pad_centers,
         silverink_only=silverink_only,
+        pin_holes=pin_holes if pin_holes else None,
     )
     stages.extend(pp_result.stages)
     stages.append(f"G-code written: {final_gcode}")
