@@ -93,8 +93,9 @@ def route_traces(
         if len(net_pad_map.get(n.id, [])) >= 2
     ]
 
+    pin_pools = build_pin_pools(placement, catalog)
     pads_map, pin_assignments = _resolve_all_pads(
-        net_ids, net_pad_map, placement, catalog, grid,
+        net_ids, net_pad_map, placement, catalog, grid, pin_pools,
     )
     ordering = _priority_order(net_ids, net_pad_map, pads_map)
 
@@ -116,6 +117,9 @@ def route_traces(
     # 6. Iterative improvement
     best = solution.snapshot()
     best_score = solution.score()
+    best_pads_map = dict(pads_map)
+    best_pin_assignments = dict(pin_assignments)
+    best_pin_pools = _copy_pin_pools(pin_pools)
     stall = 0
     iteration = 0
 
@@ -134,17 +138,37 @@ def route_traces(
         solution.rip_up(neighborhood)
         new_order = _perturb(neighborhood, targets, iteration)
         solution.route_nets(new_order, pads_map)
+
+        unrouted = [nid for nid in net_ids
+                    if nid not in solution.routes and nid in pads_map]
+        if unrouted:
+            solution.route_nets(unrouted, pads_map)
+
+        unrouted_still = [nid for nid in net_ids
+                         if nid not in solution.routes]
+        if unrouted_still:
+            _re_resolve_and_route(
+                unrouted_still, net_pad_map, placement, catalog,
+                grid, pin_pools, pin_assignments, pads_map, solution,
+            )
+
         after = solution.score()
 
         if after < before:
             best = solution.snapshot()
             best_score = after
+            best_pads_map = dict(pads_map)
+            best_pin_assignments = dict(pin_assignments)
+            best_pin_pools = _copy_pin_pools(pin_pools)
             stall = 0
             log.info("Iter %d: improved %s → %s", iteration + 1, before, after)
             if solution.is_perfect():
                 break
         else:
             solution.restore(best)
+            pads_map.update(best_pads_map)
+            pin_assignments.update(best_pin_assignments)
+            _restore_pin_pools(pin_pools, best_pin_pools)
             stall += 1
             if all_routed and stall >= config.stall_limit:
                 log.info(
@@ -156,7 +180,8 @@ def route_traces(
         iteration += 1
 
     solution.restore(best)
-
+    pin_assignments.update(best_pin_assignments)
+    solution.pin_assignments = pin_assignments
     routed = len(solution.routes)
     missing = len(net_ids) - routed
     if missing > 0:
@@ -219,8 +244,8 @@ def _resolve_all_pads(
     placement: FullPlacement,
     catalog: CatalogResult,
     grid: RoutingGrid,
+    pin_pools: dict[str, PinPool],
 ) -> tuple[dict[str, list[NetPad]], dict[str, str]]:
-    pin_pools = build_pin_pools(placement, catalog)
     pin_assignments: dict[str, str] = {}
     pads_map: dict[str, list[NetPad]] = {}
 
@@ -330,6 +355,72 @@ def _resolve_pads(
 
     result = [p for p in pads if p is not None]
     return result if len(result) == len(refs) else None
+
+
+# ── Pin pool snapshot helpers ──────────────────────────────────────
+
+
+def _copy_pin_pools(pools: dict[str, PinPool]) -> dict[str, list[tuple[str, list[str]]]]:
+    return {
+        iid: [(gid, list(pins)) for gid, pins in pool.pools.items()]
+        for iid, pool in pools.items()
+    }
+
+
+def _restore_pin_pools(
+    pools: dict[str, PinPool],
+    saved: dict[str, list[tuple[str, list[str]]]],
+) -> None:
+    for iid, groups in saved.items():
+        pool = pools.get(iid)
+        if pool is None:
+            continue
+        pool.pools = {gid: list(pins) for gid, pins in groups}
+
+
+# ── Re-resolve failed nets with fresh pin assignments ──────────────
+
+
+def _re_resolve_and_route(
+    unrouted: list[str],
+    net_pad_map: dict[str, list[_PinRef]],
+    placement: FullPlacement,
+    catalog: CatalogResult,
+    grid: RoutingGrid,
+    pin_pools: dict[str, PinPool],
+    pin_assignments: dict[str, str],
+    pads_map: dict[str, list[NetPad]],
+    solution: Solution,
+) -> None:
+    """Release group-pin assignments for unrouted nets and re-resolve them.
+
+    This lets the router try different physical pins (e.g. a different
+    MCU GPIO pin) when the originally-assigned pin was unreachable.
+    """
+    for nid in unrouted:
+        refs = net_pad_map.get(nid, [])
+        has_group = any(r.is_group for r in refs)
+        if not has_group:
+            continue
+
+        for r in refs:
+            if not r.is_group:
+                continue
+            key = f"{nid}|{r.raw}"
+            prev = pin_assignments.pop(key, None)
+            if prev is not None:
+                inst, pin = prev.split(":", 1)
+                pool = pin_pools.get(inst)
+                if pool and r.pin_or_group in pool.pools:
+                    if pin not in pool.pools[r.pin_or_group]:
+                        pool.pools[r.pin_or_group].append(pin)
+
+        new_pads = _resolve_pads(
+            refs, nid, placement, catalog, pin_pools, grid, pin_assignments,
+        )
+        if new_pads is not None and len(new_pads) >= 2:
+            pads_map[nid] = new_pads
+            solution.route_net(nid, new_pads)
 
 
 # ── Priority ordering ──────────────────────────────────────────────

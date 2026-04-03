@@ -245,8 +245,10 @@ def run_profiled_route():
         _block_components, _build_all_pin_cells, _build_pin_voronoi,
         _compute_pad_radius, _compute_pin_clearance_cells,
         _parse_net_refs, _resolve_all_pads, _priority_order,
-        _perturb,
+        _perturb, _re_resolve_and_route,
+        _copy_pin_pools, _restore_pin_pools,
     )
+    from src.pipeline.router.pins import build_pin_pools
     from src.pipeline.router.solution import Solution
     from src.pipeline.router import pathfinder as pf_mod
     from src.pipeline.router.pathfinder import (
@@ -504,9 +506,11 @@ def run_profiled_route():
                         n.id for n in placement.nets
                         if len(net_pad_map.get(n.id, [])) >= 2
                     ]
+                with ht.section("build_pin_pools"):
+                    pin_pools = build_pin_pools(placement, catalog)
                 with ht.section("resolve_pads"):
                     pads_map, pin_assignments = _resolve_all_pads(
-                        net_ids, net_pad_map, placement, catalog, grid,
+                        net_ids, net_pad_map, placement, catalog, grid, pin_pools,
                     )
                 with ht.section("priority_order"):
                     ordering = _priority_order(
@@ -536,9 +540,17 @@ def run_profiled_route():
                 with ht.section("improvement_loop"):
                     best = solution.snapshot()
                     best_score = solution.score()
+                    best_pads_map = dict(pads_map)
+                    best_pin_assignments = dict(pin_assignments)
+                    best_pin_pools = _copy_pin_pools(pin_pools)
                     stall = 0
+                    iteration = 0
 
-                    for iteration in range(config.max_improve_iterations):
+                    while True:
+                        all_routed = best_score[0] == 0
+                        if all_routed and iteration >= config.max_improve_iterations:
+                            break
+
                         targets = solution.worst_nets(k=3)
                         if not targets:
                             break
@@ -552,11 +564,29 @@ def run_profiled_route():
                         with ht.section("re_route"):
                             solution.route_nets(new_order, pads_map)
 
+                        with ht.section("retry_unrouted"):
+                            unrouted = [nid for nid in net_ids
+                                        if nid not in solution.routes and nid in pads_map]
+                            if unrouted:
+                                solution.route_nets(unrouted, pads_map)
+
+                        with ht.section("re_resolve_unrouted"):
+                            unrouted_still = [nid for nid in net_ids
+                                             if nid not in solution.routes]
+                            if unrouted_still:
+                                _re_resolve_and_route(
+                                    unrouted_still, net_pad_map, placement, catalog,
+                                    grid, pin_pools, pin_assignments, pads_map, solution,
+                                )
+
                         after = solution.score()
 
                         if after < before:
                             best = solution.snapshot()
                             best_score = after
+                            best_pads_map = dict(pads_map)
+                            best_pin_assignments = dict(pin_assignments)
+                            best_pin_pools = _copy_pin_pools(pin_pools)
                             stall = 0
                             print(f"  Iter {iteration+1}: improved {before} -> {after}")
                             if solution.is_perfect():
@@ -564,14 +594,21 @@ def run_profiled_route():
                                 break
                         else:
                             solution.restore(best)
+                            pads_map.update(best_pads_map)
+                            pin_assignments.update(best_pin_assignments)
+                            _restore_pin_pools(pin_pools, best_pin_pools)
                             stall += 1
                             print(f"  Iter {iteration+1}: no improvement (stall {stall})")
 
-                            if stall >= config.stall_limit:
+                            if all_routed and stall >= config.stall_limit:
                                 print(f"  Stalled for {stall} iterations, stopping")
                                 break
 
+                        iteration += 1
+
                     solution.restore(best)
+                    pin_assignments.update(best_pin_assignments)
+                    solution.pin_assignments = pin_assignments
                     final_score = solution.score()
                     print(f"Final score: {final_score}")
 
