@@ -11,11 +11,10 @@ from fastapi import APIRouter, Query
 from src.catalog.loader import load_catalog, get_component
 from src.catalog.models import Component
 from src.pipeline.config import (
-    get_printer, PrinterDef, SweepGrid, sweep_grid,
+    get_printer, PrinterDef, BedBitmap, bed_bitmap,
     component_z_range, FLOOR_MM, CAVITY_START_MM, CEILING_MM, TRACE_HEIGHT_MM,
 )
 from src.pipeline.gcode.filaments import get_filament
-from src.pipeline.manifest import generate_manifest
 from src.pipeline.placer.models import PlacedComponent
 from src.pipeline.design.models import Outline, Enclosure, OutlineVertex
 from src.pipeline.scad.resolver import (
@@ -420,13 +419,13 @@ def _build_components_scad(
 
 
 def component_ink_cells(
-    grid: SweepGrid,
+    grid: BedBitmap,
     layouts: list[CompLayout],
 ) -> set[tuple[int, int]]:
     """Ink cells for component trace lines (used pins only)."""
     px = grid.pixel_size_mm
-    cols = grid.data_cols
-    rows = grid.data_rows
+    cols = grid.cols
+    rows = grid.rows
     trace_width_nozzles = max(1, int(round(SCAD_TRACE_WIDTH / px)))
     half_trace = trace_width_nozzles // 2
 
@@ -436,12 +435,12 @@ def component_ink_cells(
         for pin_x, pin_y, _hr, pin_id in ly.pins:
             if pin_id not in ly.used_pin_ids:
                 continue
-            bx0, by = grid.bed_to_bitmap(ly.plate_x, pin_y)
-            bx1, _ = grid.bed_to_bitmap(pin_x, pin_y)
+            pix_x0, pix_y = grid.bed_to_pixel(ly.plate_x, pin_y)
+            pix_x1, _ = grid.bed_to_pixel(pin_x, pin_y)
 
-            c0 = max(0, int(math.floor(bx0 / px)))
-            c1 = min(cols - 1, int(math.floor(bx1 / px)))
-            r_center = int(round(by / px))
+            c0 = max(0, int(math.floor(pix_x0)))
+            c1 = min(cols - 1, int(math.floor(pix_x1)))
+            r_center = int(round(pix_y))
 
             for dc in range(-half_trace, half_trace + 1):
                 r = r_center + dc
@@ -454,11 +453,11 @@ def component_ink_cells(
 
 def _pinhole_bitmap(
     pdef: PrinterDef,
-    grid: SweepGrid,
+    grid: BedBitmap,
     layouts: list[CompLayout],
 ) -> str:
     """Generate bitmap with traces for all component pins."""
-    return render_bitmap(grid.data_rows, grid.data_cols, component_ink_cells(grid, layouts))
+    return render_bitmap(grid.rows, grid.cols, component_ink_cells(grid, layouts))
 
 
 @router.post("/components")
@@ -474,7 +473,7 @@ async def generate_components(
     """
     pdef = get_printer(printer)
     fdef = get_filament(filament)
-    grid = sweep_grid(pdef)
+    grid = bed_bitmap(pdef)
     sp = load_slicer_params(printer)
 
     layouts = compute_component_layout(pdef, DEBUG_CONFIG.padding, sp.layer_height)
@@ -552,19 +551,7 @@ async def generate_components(
 
         gcode = final_gcode.read_text(encoding="utf-8")
 
-    manifest = generate_manifest(
-        grid=grid,
-        part_origin_x_mm=bb_x,
-        part_origin_y_mm=bb_y,
-        part_width_mm=bb_x2 - bb_x,
-        part_depth_mm=bb_y2 - bb_y,
-        gcode_file="components.gcode",
-        bitmap_file="components.txt",
-        printer=pdef,
-    )
-
     return {
         "gcode": gcode,
         "bitmap": bitmap,
-        "contract": manifest.to_dict(),
     }

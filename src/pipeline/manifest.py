@@ -19,11 +19,10 @@ from typing import Any
 
 from src.pipeline.config import (
     PrinterDef,
-    PrintheadConfig,
-    PRINTHEAD,
+    PIXEL_SIZE_MM,
     FLOOR_MM,
     TRACE_HEIGHT_MM,
-    SweepGrid,
+    BedBitmap,
     get_printer,
 )
 
@@ -38,23 +37,17 @@ class PrintJobManifest:
     nominal_bed_width_mm: float
     nominal_bed_depth_mm: float
 
-    # Inkjet offset
-    inkjet_offset_x_mm: float
-    inkjet_offset_y_mm: float
+    # Keepout margins
+    keepout_left_mm: float
+    keepout_right_mm: float
+    keepout_front_mm: float
+    keepout_back_mm: float
 
     # Part bounding box on the bed (absolute bed coordinates)
     part_origin_x_mm: float
     part_origin_y_mm: float
     part_width_mm: float
     part_depth_mm: float
-
-    # Printhead geometry
-    printhead_name: str
-    nozzle_count: int
-    nozzle_pitch_mm: float
-    printhead_width_mm: float
-    lane_step_nozzles: int
-    lane_width_mm: float
 
     # Bitmap
     bitmap_file: str
@@ -77,7 +70,7 @@ class PrintJobManifest:
 
 def generate_manifest(
     *,
-    grid: SweepGrid,
+    grid: BedBitmap,
     part_origin_x_mm: float,
     part_origin_y_mm: float,
     part_width_mm: float,
@@ -85,34 +78,28 @@ def generate_manifest(
     gcode_file: str = "enclosure_staged.gcode",
     bitmap_file: str = "trace_bitmap.txt",
     printer: PrinterDef | None = None,
-    printhead: PrintheadConfig = PRINTHEAD,
 ) -> PrintJobManifest:
     """Build a manifest from design geometry and hardware config."""
     pdef = printer or get_printer()
-    px = printhead.pixel_size_mm
 
     return PrintJobManifest(
         bed_width_mm=pdef.bed_width,
         bed_depth_mm=pdef.bed_depth,
         nominal_bed_width_mm=pdef.nominal_bed_width,
         nominal_bed_depth_mm=pdef.nominal_bed_depth,
-        inkjet_offset_x_mm=pdef.inkjet_offset_x,
-        inkjet_offset_y_mm=pdef.inkjet_offset_y,
+        keepout_left_mm=pdef.keepout_left,
+        keepout_right_mm=pdef.keepout_right,
+        keepout_front_mm=pdef.keepout_front,
+        keepout_back_mm=pdef.keepout_back,
         part_origin_x_mm=round(part_origin_x_mm, 4),
         part_origin_y_mm=round(part_origin_y_mm, 4),
         part_width_mm=round(part_width_mm, 4),
         part_depth_mm=round(part_depth_mm, 4),
-        printhead_name="xaar128",
-        nozzle_count=printhead.nozzle_count,
-        nozzle_pitch_mm=printhead.nozzle_pitch_mm,
-        printhead_width_mm=round(printhead.printhead_width_mm, 4),
-        lane_step_nozzles=printhead.lane_step_nozzles,
-        lane_width_mm=round(printhead.lane_width_mm, 4),
         bitmap_file=bitmap_file,
-        bitmap_cols=grid.data_cols,
-        bitmap_rows=grid.data_rows,
-        pixel_size_x_mm=px,
-        pixel_size_y_mm=px,
+        bitmap_cols=grid.cols,
+        bitmap_rows=grid.rows,
+        pixel_size_x_mm=PIXEL_SIZE_MM,
+        pixel_size_y_mm=PIXEL_SIZE_MM,
         ink_z_mm=FLOOR_MM,
         trace_height_mm=TRACE_HEIGHT_MM,
         gcode_file=gcode_file,

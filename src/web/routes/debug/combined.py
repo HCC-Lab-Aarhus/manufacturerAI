@@ -7,11 +7,10 @@ from typing import Any
 from fastapi import APIRouter, Query
 
 from src.pipeline.config import (
-    get_printer, SweepGrid, sweep_grid,
+    get_printer, BedBitmap, bed_bitmap,
     FLOOR_MM,
 )
 from src.pipeline.gcode.filaments import get_filament
-from src.pipeline.manifest import generate_manifest
 from src.pipeline.scad.compiler import compile_scad
 from src.pipeline.gcode.slicer import slice_stl
 from src.pipeline.gcode.postprocessor import postprocess_gcode
@@ -32,7 +31,7 @@ _COMB_SPLIT: int = _COMB_MAX // 2
 
 
 def _combined_bitmap(
-    grid: SweepGrid,
+    grid: BedBitmap,
     boxes: list[tuple[str, tuple[float, float, float, float], dict]],
 ) -> str:
     """Render ink bitmap for all combined boxes."""
@@ -44,7 +43,7 @@ def _combined_bitmap(
         else:
             ink_cells |= width_all_ink_cells(grid, bx, by, bw, bh, **kw)
 
-    return render_bitmap(grid.data_rows, grid.data_cols, ink_cells)
+    return render_bitmap(grid.rows, grid.cols, ink_cells)
 
 
 def _build_combined_scad(
@@ -75,7 +74,7 @@ async def generate_combined(
     """Generate combined trace width + trace clearance test on one plate."""
     pdef = get_printer(printer)
     fdef = get_filament(filament)
-    grid = sweep_grid(pdef)
+    grid = bed_bitmap(pdef)
     sp = load_slicer_params(printer)
 
     plate_z = sp.layer_height * 20
@@ -88,7 +87,7 @@ async def generate_combined(
     sp_full = spacing_plate_width_px(min_gap=1, max_gap=_COMB_MAX) * px_mm
 
     x_origin = pad
-    y_cursor = abs(pdef.inkjet_offset_y) + pad
+    y_cursor = pdef.keepout_front + pad
 
     box_defs: list[tuple[str, tuple[float, float, float, float], dict]] = []
 
@@ -160,19 +159,7 @@ async def generate_combined(
             final_gcode.read_text(encoding="utf-8")
         )
 
-    manifest = generate_manifest(
-        grid=grid,
-        part_origin_x_mm=bb_x,
-        part_origin_y_mm=bb_y,
-        part_width_mm=bb_x2 - bb_x,
-        part_depth_mm=bb_y2 - bb_y,
-        gcode_file="combined.gcode",
-        bitmap_file="combined.txt",
-        printer=pdef,
-    )
-
     return {
         "gcode": gcode,
         "bitmap": bitmap,
-        "contract": manifest.to_dict(),
     }

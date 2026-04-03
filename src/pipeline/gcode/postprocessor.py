@@ -102,28 +102,34 @@ def _stl_bbox_center(stl_path: Path) -> tuple[float, float]:
 def compute_bed_offset(
     stl_path: Path,
     bed_size: tuple[float, float],
+    *,
+    center: tuple[float, float] | None = None,
 ) -> tuple[float, float]:
     """Compute offset from model-local coords to bed coords.
 
-    PrusaSlicer auto-centres the STL on the build plate.  The centre
-    of the model's bounding box lands on the centre of the bed:
-
-        offset = bed_centre − stl_bbox_centre
+    When *center* is given it must match the ``--center`` argument
+    passed to PrusaSlicer.  Otherwise the nominal bed centre is used
+    (PrusaSlicer's default auto-centre behaviour).
 
     Parameters
     ----------
     stl_path : Path
-        The STL file that PrusaSlicer is slicing (``enclosure.stl``
-        or ``print_plate.stl``).
+        The STL file that PrusaSlicer is slicing.
     bed_size : tuple
-        ``(width, height)`` of the bed in mm.
+        ``(width, depth)`` of the nominal bed in mm.
+    center : tuple, optional
+        Explicit ``(x, y)`` centre passed to PrusaSlicer via
+        ``--center``.
 
     Returns ``(offset_x, offset_y)`` in mm.
     """
     model_cx, model_cy = _stl_bbox_center(stl_path)
 
-    bed_cx = bed_size[0] / 2.0
-    bed_cy = bed_size[1] / 2.0
+    if center is not None:
+        bed_cx, bed_cy = center
+    else:
+        bed_cx = bed_size[0] / 2.0
+        bed_cy = bed_size[1] / 2.0
 
     offset_x = bed_cx - model_cx
     offset_y = bed_cy - model_cy

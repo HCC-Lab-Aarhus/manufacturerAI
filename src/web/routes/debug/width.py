@@ -5,10 +5,8 @@ from typing import Any
 
 from fastapi import APIRouter, Query
 
-from src.pipeline.config import get_printer, SweepGrid, sweep_grid
+from src.pipeline.config import get_printer, BedBitmap, bed_bitmap
 from src.pipeline.gcode.filaments import get_filament
-from src.pipeline.manifest import generate_manifest
-
 from ._common import DEBUG_CONFIG, load_slicer_params, render_bitmap, slice_debug_boxes
 
 router = APIRouter()
@@ -19,7 +17,7 @@ WIDTH_EDGE_PAD_PX: int = 5
 
 
 def width_box_ink_cells(
-    grid: SweepGrid,
+    grid: BedBitmap,
     bed_x: float,
     bed_y: float,
     box_w: float,
@@ -27,27 +25,25 @@ def width_box_ink_cells(
     trace_w_px: int,
 ) -> set[tuple[int, int]]:
     """Ink cells for a single centered vertical trace in one rectangle."""
-    px = grid.pixel_size_mm
+    px0, py0 = grid.bed_to_pixel(bed_x, bed_y)
+    px1, py1 = grid.bed_to_pixel(bed_x + box_w, bed_y + box_h)
 
-    bx0_bm, by0_bm = grid.bed_to_bitmap(bed_x, bed_y)
-    bx1_bm, by1_bm = grid.bed_to_bitmap(bed_x + box_w, bed_y + box_h)
-
-    r0 = max(0, int(math.floor(by0_bm / px)))
-    r1 = min(grid.data_rows - 1, int(math.floor(by1_bm / px)))
-    c_center = int(math.floor((bx0_bm + bx1_bm) / (2 * px)))
+    r0 = max(0, int(math.floor(py0)))
+    r1 = min(grid.rows - 1, int(math.floor(py1)))
+    c_center = int(math.floor((px0 + px1) / 2))
     half_w = trace_w_px // 2
 
     cells: set[tuple[int, int]] = set()
     for dc in range(-half_w, half_w + trace_w_px % 2):
         c = c_center + dc
-        if 0 <= c < grid.data_cols:
+        if 0 <= c < grid.cols:
             for r in range(r0, r1 + 1):
                 cells.add((r, c))
     return cells
 
 
 def width_all_ink_cells(
-    grid: SweepGrid,
+    grid: BedBitmap,
     bed_x: float,
     bed_y: float,
     box_w: float,
@@ -58,21 +54,20 @@ def width_all_ink_cells(
     """Ink cells for all width traces drawn left-to-right in one rectangle."""
     if widths is None:
         widths = WIDTH_WIDTHS
-    px = grid.pixel_size_mm
 
-    bx0_bm, by0_bm = grid.bed_to_bitmap(bed_x, bed_y)
-    _, by1_bm = grid.bed_to_bitmap(bed_x, bed_y + box_h)
+    px0, py0 = grid.bed_to_pixel(bed_x, bed_y)
+    _, py1 = grid.bed_to_pixel(bed_x, bed_y + box_h)
 
-    r0 = max(0, int(math.floor(by0_bm / px)))
-    r1 = min(grid.data_rows - 1, int(math.floor(by1_bm / px)))
-    c_start = max(0, int(math.floor(bx0_bm / px))) + WIDTH_EDGE_PAD_PX
+    r0 = max(0, int(math.floor(py0)))
+    r1 = min(grid.rows - 1, int(math.floor(py1)))
+    c_start = max(0, int(math.floor(px0))) + WIDTH_EDGE_PAD_PX
 
     cells: set[tuple[int, int]] = set()
     c_pos = c_start
     for w in widths:
         for dc in range(w):
             c = c_pos + dc
-            if 0 <= c < grid.data_cols:
+            if 0 <= c < grid.cols:
                 for r in range(r0, r1 + 1):
                     cells.add((r, c))
         c_pos += w + gap_px
@@ -95,7 +90,7 @@ async def generate_width(
 ) -> dict[str, Any]:
     pdef = get_printer(printer)
     fdef = get_filament(filament)
-    grid = sweep_grid(pdef)
+    grid = bed_bitmap(pdef)
     sp = load_slicer_params(printer)
 
     px = grid.pixel_size_mm
@@ -105,28 +100,16 @@ async def generate_width(
 
     nom_w = pdef.nominal_bed_width
     x_left = (nom_w - plate_w_mm) / 2
-    y_bottom = abs(pdef.inkjet_offset_y) + DEBUG_CONFIG.padding
+    y_bottom = pdef.keepout_front + DEBUG_CONFIG.padding
 
     boxes = [(x_left, y_bottom, plate_w_mm, plate_h_mm, z_height)]
     gcode = slice_debug_boxes(pdef, fdef, boxes, printer_id=printer)
     bitmap = render_bitmap(
-        grid.data_rows, grid.data_cols,
+        grid.rows, grid.cols,
         width_all_ink_cells(grid, x_left, y_bottom, plate_w_mm, plate_h_mm),
-    )
-
-    manifest = generate_manifest(
-        grid=grid,
-        part_origin_x_mm=x_left,
-        part_origin_y_mm=y_bottom,
-        part_width_mm=plate_w_mm,
-        part_depth_mm=plate_h_mm,
-        gcode_file="width.gcode",
-        bitmap_file="width.txt",
-        printer=pdef,
     )
 
     return {
         "gcode": gcode,
         "bitmap": bitmap,
-        "contract": manifest.to_dict(),
     }
