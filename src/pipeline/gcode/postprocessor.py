@@ -587,7 +587,8 @@ def postprocess_gcode(
         trace_segs, pads, ink_z=ink_z, pad_z_drop=PIN_FLOOR_PENETRATION,
         pin_holes=pin_holes,
     ) if trace_segs else []
-    pad_z = ink_z - PIN_FLOOR_PENETRATION
+    from src.pipeline.gcode.ink_traces import IRONING_Z_LIFT
+    pad_z = ink_z - PIN_FLOOR_PENETRATION + IRONING_Z_LIFT
     custom_pad_ironing_lines = generate_pad_ironing_gcode(pads) if pads else []
     pad_ironing_injected = False
 
@@ -669,7 +670,7 @@ def postprocess_gcode(
                     and custom_pad_ironing_lines
                     and z_val > pad_z + 0.01):
                 pad_ironing_injected = True
-                out.append(f"G0 Z{pad_z:.3f} F720 ; lower to pad ironing Z")
+                out.append(f"G0 Z{pad_z:.3f} F720 ; lower to pad ironing Z (lifted)")
                 out.extend(custom_pad_ironing_lines)
                 out.append(f"G0 Z{z_val:.3f} F720 ; return to layer Z")
                 stages.append(f"Pad ironing at Z={pad_z:.2f}")

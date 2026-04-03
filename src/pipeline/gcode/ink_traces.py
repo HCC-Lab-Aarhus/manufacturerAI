@@ -244,6 +244,7 @@ def extract_pin_holes(
 
 IRONING_SPEED = 1200       # mm/min
 IRONING_FLOW_PCT = 0.15    # fraction of normal flow
+IRONING_Z_LIFT = 0.1       # mm — lift ironing above nominal surface
 PAD_RADIUS = 1.0           # mm — half-size of pad area
 PAD_LINE_SPACING = 0.4     # mm — spacing between pad ironing lines
 IRONING_LINE_SPACING = FDM_EXTRUSION_W  # spacing between parallel passes
@@ -363,7 +364,7 @@ def generate_trace_ironing_gcode(
     lines: list[str] = [
         ";TYPE:Ironing",
         "; custom trace-following ironing",
-        f"G0 Z{ink_z:.3f} F720 ; ensure trace ironing Z",
+        f"G0 Z{ink_z + IRONING_Z_LIFT:.3f} F720 ; ensure trace ironing Z",
     ]
     cumulative_e = 0.0
 
