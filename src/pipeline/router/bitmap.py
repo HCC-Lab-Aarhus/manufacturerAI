@@ -27,6 +27,87 @@ from .models import RoutingResult
 log = logging.getLogger(__name__)
 
 
+def _segment_cells(
+    x0: float, y0: float, x1: float, y1: float,
+    half_w: float,
+    pixel_size: float,
+    cols: int,
+    rows: int,
+) -> set[tuple[int, int]]:
+    """Rasterize one line segment with thickness into bitmap cells.
+
+    For axis-aligned segments the fast rectangular fill is used.
+    For diagonal segments the line is walked at sub-pixel steps and
+    all pixels within ``half_w`` of the centreline are marked.
+    """
+    cells: set[tuple[int, int]] = set()
+    dx = x1 - x0
+    dy = y1 - y0
+
+    if abs(dx) < 1e-9:
+        col_min = max(0, int(math.floor((x0 - half_w) / pixel_size)))
+        col_max = min(cols - 1, int(math.floor((x0 + half_w) / pixel_size)))
+        y_lo, y_hi = (min(y0, y1), max(y0, y1))
+        row_min = max(0, int(math.floor(y_lo / pixel_size)))
+        row_max = min(rows - 1, int(math.floor(y_hi / pixel_size)))
+        for r in range(row_min, row_max + 1):
+            for c in range(col_min, col_max + 1):
+                cells.add((r, c))
+        return cells
+
+    if abs(dy) < 1e-9:
+        row_min = max(0, int(math.floor((y0 - half_w) / pixel_size)))
+        row_max = min(rows - 1, int(math.floor((y0 + half_w) / pixel_size)))
+        x_lo, x_hi = (min(x0, x1), max(x0, x1))
+        col_min = max(0, int(math.floor(x_lo / pixel_size)))
+        col_max = min(cols - 1, int(math.floor(x_hi / pixel_size)))
+        for r in range(row_min, row_max + 1):
+            for c in range(col_min, col_max + 1):
+                cells.add((r, c))
+        return cells
+
+    seg_len = math.hypot(dx, dy)
+    step = pixel_size * 0.5
+    n_steps = max(1, int(math.ceil(seg_len / step)))
+    hw_px = int(math.ceil(half_w / pixel_size))
+
+    for s in range(n_steps + 1):
+        t = s / n_steps
+        cx = x0 + dx * t
+        cy = y0 + dy * t
+        cc = int(math.floor(cx / pixel_size))
+        cr = int(math.floor(cy / pixel_size))
+        for dr in range(-hw_px, hw_px + 1):
+            for dc in range(-hw_px, hw_px + 1):
+                r = cr + dr
+                c = cc + dc
+                if 0 <= r < rows and 0 <= c < cols:
+                    px = (c + 0.5) * pixel_size
+                    py = (r + 0.5) * pixel_size
+                    dist = _point_seg_dist(px, py, x0, y0, x1, y1)
+                    if dist <= half_w:
+                        cells.add((r, c))
+
+    return cells
+
+
+def _point_seg_dist(
+    px: float, py: float,
+    ax: float, ay: float,
+    bx: float, by: float,
+) -> float:
+    """Minimum distance from point (px,py) to segment (ax,ay)-(bx,by)."""
+    dx = bx - ax
+    dy = by - ay
+    len_sq = dx * dx + dy * dy
+    if len_sq < 1e-18:
+        return math.hypot(px - ax, py - ay)
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / len_sq))
+    proj_x = ax + t * dx
+    proj_y = ay + t * dy
+    return math.hypot(px - proj_x, py - proj_y)
+
+
 def _trace_cells(
     path: list[tuple[float, float]],
     trace_width_mm: float,
@@ -34,44 +115,13 @@ def _trace_cells(
     cols: int,
     rows: int,
 ) -> set[tuple[int, int]]:
-    """Rasterize a Manhattan trace path into bitmap cell coordinates.
-
-    Coordinates are in pixel-space (already transformed via
-    ``BedBitmap.bed_to_pixel``).  Each cell is ``pixel_size`` mm square.
-    """
+    """Rasterize a trace path (any angle) into bitmap cell coordinates."""
     half_w = trace_width_mm / 2.0
-
     cells: set[tuple[int, int]] = set()
-
     for i in range(len(path) - 1):
         x0, y0 = path[i]
         x1, y1 = path[i + 1]
-
-        if abs(x1 - x0) < 1e-9:
-            col_center = x0
-            col_min = max(0, int(math.floor((col_center - half_w) / pixel_size)))
-            col_max = min(cols - 1, int(math.floor((col_center + half_w) / pixel_size)))
-
-            y_lo, y_hi = (min(y0, y1), max(y0, y1))
-            row_min = max(0, int(math.floor(y_lo / pixel_size)))
-            row_max = min(rows - 1, int(math.floor(y_hi / pixel_size)))
-
-            for r in range(row_min, row_max + 1):
-                for c in range(col_min, col_max + 1):
-                    cells.add((r, c))
-        else:
-            row_center = y0
-            row_min = max(0, int(math.floor((row_center - half_w) / pixel_size)))
-            row_max = min(rows - 1, int(math.floor((row_center + half_w) / pixel_size)))
-
-            x_lo, x_hi = (min(x0, x1), max(x0, x1))
-            col_min = max(0, int(math.floor(x_lo / pixel_size)))
-            col_max = min(cols - 1, int(math.floor(x_hi / pixel_size)))
-
-            for r in range(row_min, row_max + 1):
-                for c in range(col_min, col_max + 1):
-                    cells.add((r, c))
-
+        cells |= _segment_cells(x0, y0, x1, y1, half_w, pixel_size, cols, rows)
     return cells
 
 

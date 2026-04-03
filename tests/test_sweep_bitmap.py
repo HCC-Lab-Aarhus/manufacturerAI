@@ -212,6 +212,22 @@ class TestGenerateTraceBitmap(unittest.TestCase):
         expected_rows = max(1, round(trace_w / self.grid.pixel_size_mm))
         self.assertAlmostEqual(len(inked_rows), expected_rows, delta=2)
 
+    def test_diagonal_trace_continuous(self):
+        trace = Trace(
+            net_id="diag",
+            path=[(5.0, 5.0), (15.0, 15.0)],
+        )
+        result = RoutingResult(traces=[trace], pin_assignments={}, failed_nets=[])
+        model_to_bed = (100.0, 100.0)
+        lines = generate_trace_bitmap(result, 0.5, grid=self.grid, model_to_bed=model_to_bed)
+
+        inked_rows = [i for i, line in enumerate(lines) if '1' in line]
+        self.assertGreater(len(inked_rows), 0)
+        row_min, row_max = min(inked_rows), max(inked_rows)
+        for r in range(row_min, row_max + 1):
+            self.assertIn('1', lines[r],
+                          f"Gap at row {r} — diagonal trace is fragmented")
+
 
 # ── Y-mirror consistency: gcode vs bitmap ─────────────────────────
 
