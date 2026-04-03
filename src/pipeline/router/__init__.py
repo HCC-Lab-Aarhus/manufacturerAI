@@ -7,7 +7,7 @@ Submodules:
   pins          Pin resolution and dynamic pin allocation.
   engine        Main routing algorithm (greedy with retry).
   serialization JSON conversion (routing_to_dict, parse_routing).
-  bitmap        Trace bitmap generation (sweep-grid-aligned txt file).
+  bitmap        Trace bitmap generation (full-bed bitmap at nozzle pitch).
 """
 
 from .models import Trace, RoutingResult, RouterConfig

@@ -1,15 +1,16 @@
-"""Bitmap generation — renders routed traces to a nozzle-native resolution bitmap.
+"""Bitmap generation — renders routed traces to a full-bed bitmap.
 
-The bitmap covers the full sweep grid of the silver3dprinter so that
-the sliding-window slicing in ``rasp_main.py`` produces combined
-slices aligned 1:1 with the physical sweep lanes.
+The bitmap covers the entire nominal build plate at nozzle-pitch
+resolution, with each pixel being one nozzle pitch wide/tall.
+Column 0 = bed X = 0, row 0 = bed Y = 0.
 
-Pixel size is exactly the nozzle pitch (square pixels).  One character
-in the text file = one nozzle position on the X axis; one text line =
-one firing position along the Y sweep.
+No offset calculations happen here.  The printer applies its own
+calibrated FDM-to-inkjet offset when interpreting the bitmap during
+sweeps.
 
-  - text rows  → Y positions (sweep direction, high→low in file)
-  - text cols  → X positions (nozzle direction, low→high)
+  - text rows  → Y positions (low→high, so row 0 in the file
+    corresponds to bed Y = 0)
+  - text cols  → X positions (low→high)
 
 A '1' means "deposit conductive ink here", a '0' means "no ink".
 """
@@ -20,7 +21,7 @@ import logging
 import math
 from pathlib import Path
 
-from src.pipeline.config import SweepGrid
+from src.pipeline.config import BedBitmap
 from .models import RoutingResult
 
 log = logging.getLogger(__name__)
@@ -35,8 +36,8 @@ def _trace_cells(
 ) -> set[tuple[int, int]]:
     """Rasterize a Manhattan trace path into bitmap cell coordinates.
 
-    Coordinates are in bitmap-local mm (already transformed via
-    ``SweepGrid.bed_to_bitmap``).  Each cell is ``pixel_size`` mm square.
+    Coordinates are in pixel-space (already transformed via
+    ``BedBitmap.bed_to_pixel``).  Each cell is ``pixel_size`` mm square.
     """
     half_w = trace_width_mm / 2.0
 
@@ -78,10 +79,10 @@ def generate_trace_bitmap(
     result: RoutingResult,
     trace_width_mm: float,
     *,
-    grid: SweepGrid,
+    grid: BedBitmap,
     model_to_bed: tuple[float, float] = (0.0, 0.0),
 ) -> list[str]:
-    """Render all traces into a sweep-grid-aligned bitmap.
+    """Render all traces into a full-bed bitmap.
 
     Parameters
     ----------
@@ -89,8 +90,8 @@ def generate_trace_bitmap(
         Completed routing result with trace paths in model-local mm.
     trace_width_mm : float
         Physical width of a conductive-ink trace.
-    grid : SweepGrid
-        Sweep-grid geometry (from ``sweep_grid(printer_def)``).
+    grid : BedBitmap
+        Bed bitmap geometry (from ``bed_bitmap(printer_def)``).
     model_to_bed : (float, float)
         Translation from model-local coordinates to absolute bed
         coordinates: ``bed_pos = model_pos + model_to_bed``.
@@ -98,34 +99,32 @@ def generate_trace_bitmap(
     Returns
     -------
     list[str]
-        Each text line corresponds to one Y position (sweep direction),
-        emitted from highest Y to lowest Y.  rasp_main.py reverses on
-        load so row 0 = lowest Y = start of increasing-Y sweep.
+        Each text line corresponds to one Y position,
+        emitted from lowest Y (row 0) to highest Y.
     """
     pixel_size = grid.pixel_size_mm
-    cols = grid.data_cols
-    rows = grid.data_rows
+    cols = grid.cols
+    rows = grid.rows
     dx, dy = model_to_bed
 
     ink_cells: set[tuple[int, int]] = set()
 
     for trace in result.traces:
         bed_path = [(x + dx, y + dy) for x, y in trace.path]
-        bitmap_path = [grid.bed_to_bitmap(bx, by) for bx, by in bed_path]
 
         new_cells = _trace_cells(
-            bitmap_path, trace_width_mm,
+            bed_path, trace_width_mm,
             pixel_size, cols, rows,
         )
         if not new_cells and bed_path:
             log.warning(
-                "Trace net=%s clipped to zero pixels — may be outside sweep grid",
+                "Trace net=%s clipped to zero pixels — may be outside bed",
                 trace.net_id,
             )
         ink_cells |= new_cells
 
     lines: list[str] = []
-    for r in range(rows - 1, -1, -1):
+    for r in range(rows):
         line_chars = []
         for c in range(cols):
             line_chars.append('1' if (r, c) in ink_cells else '0')
@@ -139,7 +138,7 @@ def write_trace_bitmap(
     trace_width_mm: float,
     output_path: Path | str,
     *,
-    grid: SweepGrid,
+    grid: BedBitmap,
     model_to_bed: tuple[float, float] = (0.0, 0.0),
 ) -> Path:
     """Generate the trace bitmap and write it to a text file."""

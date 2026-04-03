@@ -8,9 +8,8 @@ from typing import Any
 
 from fastapi import APIRouter, Query
 
-from src.pipeline.config import get_printer, SweepGrid, sweep_grid
+from src.pipeline.config import get_printer, BedBitmap, bed_bitmap
 from src.pipeline.gcode.filaments import get_filament
-from src.pipeline.manifest import generate_manifest
 from src.pipeline.scad.compiler import compile_scad
 from src.pipeline.gcode.slicer import slice_stl
 
@@ -113,50 +112,47 @@ def _inject_via_silverink_markers(gcode: str, base_z: float) -> str:
 
 
 def _trace_cells(
-    grid: SweepGrid,
+    grid: BedBitmap,
     x_start: float,
     x_end: float,
     y_center: float,
     width_px: int,
 ) -> set[tuple[int, int]]:
-    px = grid.pixel_size_mm
-    bx0, by0 = grid.bed_to_bitmap(x_start, y_center)
-    bx1, _ = grid.bed_to_bitmap(x_end, y_center)
+    px0, py0 = grid.bed_to_pixel(x_start, y_center)
+    px1, _ = grid.bed_to_pixel(x_end, y_center)
 
-    c0 = max(0, int(math.floor(min(bx0, bx1) / px)))
-    c1 = min(grid.data_cols - 1, int(math.floor(max(bx0, bx1) / px)))
-    r_center = int(math.floor(by0 / px))
+    c0 = max(0, int(math.floor(min(px0, px1))))
+    c1 = min(grid.cols - 1, int(math.floor(max(px0, px1))))
+    r_center = int(math.floor(py0))
     half = width_px // 2
 
     cells: set[tuple[int, int]] = set()
     for c in range(c0, c1 + 1):
         for dr in range(-half, half + width_px % 2):
             r = r_center + dr
-            if 0 <= r < grid.data_rows:
+            if 0 <= r < grid.rows:
                 cells.add((r, c))
     return cells
 
 
 def _hole_cells(
-    grid: SweepGrid,
+    grid: BedBitmap,
     bed_cx: float,
     bed_cy: float,
     diameter_mm: float,
 ) -> set[tuple[int, int]]:
     px = grid.pixel_size_mm
-    bx, by = grid.bed_to_bitmap(bed_cx, bed_cy)
-    c_center = bx / px
-    r_center = by / px
+    pix_x, pix_y = grid.bed_to_pixel(bed_cx, bed_cy)
     radius_px = diameter_mm / (2 * px)
 
     cells: set[tuple[int, int]] = set()
-    r_lo = max(0, int(math.floor(r_center - radius_px)))
-    r_hi = min(grid.data_rows - 1, int(math.ceil(r_center + radius_px)))
-    c_lo = max(0, int(math.floor(c_center - radius_px)))
-    c_hi = min(grid.data_cols - 1, int(math.ceil(c_center + radius_px)))
+    r_lo = max(0, int(math.floor(pix_y - radius_px)))
+    r_hi = min(grid.rows - 1, int(math.ceil(pix_y + radius_px)))
+    c_lo = max(0, int(math.floor(pix_x - radius_px)))
+    c_hi = min(grid.cols - 1, int(math.ceil(pix_x + radius_px)))
     for r in range(r_lo, r_hi + 1):
         for c in range(c_lo, c_hi + 1):
-            if (r - r_center) ** 2 + (c - c_center) ** 2 <= radius_px ** 2:
+            if (r - pix_y) ** 2 + (c - pix_x) ** 2 <= radius_px ** 2:
                 cells.add((r, c))
     return cells
 
@@ -185,7 +181,7 @@ async def generate_via(
     """
     pdef = get_printer(printer)
     fdef = get_filament(filament)
-    grid = sweep_grid(pdef)
+    grid = bed_bitmap(pdef)
     sp = load_slicer_params(printer)
 
     layer_h = sp.layer_height
@@ -271,25 +267,13 @@ async def generate_via(
 
         bitmap3_cells |= _hole_cells(grid, box_cx, box_cy, HOLE_DIAMETER_MM)
 
-    bitmap1 = render_bitmap(grid.data_rows, grid.data_cols, bitmap1_cells)
-    bitmap2 = render_bitmap(grid.data_rows, grid.data_cols, bitmap2_cells)
-    bitmap3 = render_bitmap(grid.data_rows, grid.data_cols, bitmap3_cells)
-
-    manifest = generate_manifest(
-        grid=grid,
-        part_origin_x_mm=group_bed_x,
-        part_origin_y_mm=group_bed_y,
-        part_width_mm=total_w,
-        part_depth_mm=total_d,
-        gcode_file="via.gcode",
-        bitmap_file="via_1.txt",
-        printer=pdef,
-    )
+    bitmap1 = render_bitmap(grid.rows, grid.cols, bitmap1_cells)
+    bitmap2 = render_bitmap(grid.rows, grid.cols, bitmap2_cells)
+    bitmap3 = render_bitmap(grid.rows, grid.cols, bitmap3_cells)
 
     return {
         "gcode": gcode,
         "bitmap1": bitmap1,
         "bitmap2": bitmap2,
         "bitmap3": bitmap3,
-        "contract": manifest.to_dict(),
     }

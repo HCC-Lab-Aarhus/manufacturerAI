@@ -38,7 +38,7 @@ async def catalog_component(component_id: str):
 async def list_printers():
     return {
         "printers": [
-            {"id": p.id, "label": p.label, "bed_width": p.bed_width, "bed_depth": p.bed_depth, "nominal_bed_width": p.nominal_bed_width, "nominal_bed_depth": p.nominal_bed_depth, "inkjet_offset_x": p.inkjet_offset_x, "inkjet_offset_y": p.inkjet_offset_y, "max_z_mm": p.max_z_mm}
+            {"id": p.id, "label": p.label, "bed_width": p.bed_width, "bed_depth": p.bed_depth, "nominal_bed_width": p.nominal_bed_width, "nominal_bed_depth": p.nominal_bed_depth, "keepout_left": p.keepout_left, "keepout_right": p.keepout_right, "keepout_front": p.keepout_front, "keepout_back": p.keepout_back, "max_z_mm": p.max_z_mm}
             for p in PRINTERS.values()
         ]
     }

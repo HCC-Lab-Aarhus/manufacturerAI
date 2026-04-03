@@ -9,7 +9,6 @@ Follows the exact same coordinate conventions as the real pipeline:
 - Bitmap spans the full sweep grid in absolute bed coordinates.
 - Bitmap transposition matches bitmap.py: lines = X sweep (high→low),
   chars = Y nozzle (low→high).
-- Manifest records part_origin in absolute nominal-bed coordinates.
 """
 
 from __future__ import annotations

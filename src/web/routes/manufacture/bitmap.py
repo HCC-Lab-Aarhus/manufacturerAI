@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 
 from src.pipeline.design import parse_physical_design
 from src.pipeline.router import generate_trace_bitmap, parse_routing
-from src.pipeline.config import TRACE_RULES, sweep_grid, get_printer
+from src.pipeline.config import TRACE_RULES, bed_bitmap, get_printer
 from src.web.routes._deps import (
     get_catalog, load_session_or_404,
     require_design, require_placement, require_routing,
@@ -19,11 +19,14 @@ router = APIRouter()
 
 
 def _bed_center_offset(outline_verts: list, pdef) -> tuple[float, float]:
+    """Center the design within the usable area (nominal bed minus keepout)."""
     xs = [v[0] for v in outline_verts]
     ys = [v[1] for v in outline_verts]
     cx = (min(xs) + max(xs)) / 2
     cy = (min(ys) + max(ys)) / 2
-    return pdef.nominal_bed_width / 2 - cx, pdef.nominal_bed_depth / 2 - cy
+    usable_center_x = pdef.keepout_left + pdef.usable_width / 2
+    usable_center_y = pdef.keepout_front + pdef.usable_depth / 2
+    return usable_center_x - cx, usable_center_y - cy
 
 
 def _generate_and_save_bitmap(session) -> None:
@@ -32,7 +35,7 @@ def _generate_and_save_bitmap(session) -> None:
     physical = parse_physical_design(require_design(session))
     result = parse_routing(routing_data)
     pdef = get_printer(session.printer_id)
-    grid = sweep_grid(pdef)
+    grid = bed_bitmap(pdef)
     model_to_bed = _bed_center_offset(physical.outline.vertices, pdef)
     lines = generate_trace_bitmap(result, TRACE_RULES.trace_width_mm,
                                   grid=grid, model_to_bed=model_to_bed)
@@ -137,8 +140,10 @@ async def get_bitmap(sid: str):
         "bed_depth": pdef.bed_depth,
         "nominal_bed_width": pdef.nominal_bed_width,
         "nominal_bed_depth": pdef.nominal_bed_depth,
-        "inkjet_offset_x": pdef.inkjet_offset_x,
-        "inkjet_offset_y": pdef.inkjet_offset_y,
+        "keepout_left": pdef.keepout_left,
+        "keepout_right": pdef.keepout_right,
+        "keepout_front": pdef.keepout_front,
+        "keepout_back": pdef.keepout_back,
         "bed_offset_x": bed_offset_x,
         "bed_offset_y": bed_offset_y,
         "outline": outline_full,

@@ -17,41 +17,13 @@ from dataclasses import dataclass
 log = logging.getLogger(__name__)
 
 
-# ── Printhead hardware definition ──────────────────────────────────
+# ── Pixel resolution ───────────────────────────────────────────────
+#
+# The bitmap pixel size equals the Xaar 128 nozzle pitch.  This is the
+# only printhead parameter manufacturerAI needs — everything else
+# (nozzle count, firing, lanes, timing) is handled by the printer.
 
-@dataclass(frozen=True)
-class PrintheadConfig:
-    """Physical parameters of the inkjet printhead (Xaar 128).
-
-    Only geometry is stored here — timing / speed / serial protocol
-    are execution concerns handled entirely by silver3dprinter.
-    """
-
-    nozzle_count: int = 128
-    """Number of nozzles in the linear array."""
-
-    nozzle_pitch_mm: float = 0.1371
-    """Centre-to-centre distance between adjacent nozzles (137.1 µm, ~185 DPI)."""
-
-    lane_step_nozzles: int = 32
-    """How many nozzles the head advances between sweep lanes.
-    The overlap is (nozzle_count - lane_step_nozzles) nozzles."""
-
-    @property
-    def printhead_width_mm(self) -> float:
-        return self.nozzle_count * self.nozzle_pitch_mm
-
-    @property
-    def lane_width_mm(self) -> float:
-        return self.lane_step_nozzles * self.nozzle_pitch_mm
-
-    @property
-    def pixel_size_mm(self) -> float:
-        """Square pixel size — equal to nozzle pitch for 1:1 mapping."""
-        return self.nozzle_pitch_mm
-
-
-PRINTHEAD = PrintheadConfig()
+PIXEL_SIZE_MM: float = 0.1371
 
 
 
@@ -116,80 +88,40 @@ class TraceRules:
 TRACE_RULES = TraceRules()
 
 
-# ── Sweep grid ────────────────────────────────────────────────────
+# ── Bed bitmap ────────────────────────────────────────────────────
 #
-# rasp_main.py adds 3 × 32-pixel padding strips before the bitmap
-# data in its sliding-window slicing.  Bitmap column 0 maps to
-# physical X = X_START + 3 × lane_width, NOT X_START.
-
-_PADDING_STRIPS: int = 3
+# The bitmap covers the entire nominal build plate with pixels at
+# nozzle-pitch resolution.  No offset calculations happen here — the
+# printer is responsible for applying its own calibrated FDM-to-inkjet
+# offset when interpreting the bitmap during sweeps.
 
 
 @dataclass(frozen=True)
-class SweepGrid:
-    """Derived sweep-grid geometry for a specific printer + printhead.
+class BedBitmap:
+    """Full-bed bitmap geometry for a specific printer + printhead.
 
-    Consumers use ``data_cols``, ``data_rows``, ``pixel_size_mm``,
-    and ``bed_to_bitmap()`` to produce bitmaps.  Internal sweep
-    parameters (lane count, offsets, etc.) are baked into the
-    coordinate transform and don't need to be accessed directly.
+    Each pixel is one nozzle pitch wide/tall.  Column 0 = bed X = 0,
+    row 0 = bed Y = 0.  The bitmap is a direct 1:1 projection of the
+    build plate — no offsets, padding, or sweep alignment are applied.
     """
 
-    data_cols: int
-    data_rows: int
+    cols: int
+    rows: int
     pixel_size_mm: float
 
-    _data_x_start_mm: float
-    _y_start_mm: float
-    _inkjet_offset_x: float
-    _inkjet_offset_y: float
-    _calibration_offset_x: float
-    _calibration_offset_y: float
-
-    def bed_to_bitmap(self, bed_x: float, bed_y: float) -> tuple[float, float]:
-        """Convert absolute bed coordinates to bitmap-local coordinates (mm)."""
-        bx = (bed_x
-              - self._data_x_start_mm
-              - self._inkjet_offset_x
-              + self._calibration_offset_x)
-        by = (bed_y
-              - self._y_start_mm
-              - self._inkjet_offset_y
-              + self._calibration_offset_y)
-        return bx, by
+    def bed_to_pixel(self, bed_x: float, bed_y: float) -> tuple[float, float]:
+        """Convert absolute bed coordinates (mm) to pixel coordinates."""
+        return bed_x / self.pixel_size_mm, bed_y / self.pixel_size_mm
 
 
-def sweep_grid(pdef: PrinterDef, printhead: PrintheadConfig = PRINTHEAD) -> SweepGrid:
-    """Compute the sweep grid for a printer + printhead combination.
+def bed_bitmap(pdef: "PrinterDef") -> BedBitmap:
+    """Compute the bed bitmap geometry for a printer.
 
-    X_START = abs(inkjet_offset_x)  — first lane where nozzle 0 reaches bed X=0
-    Y_START = abs(inkjet_offset_y)  — Y position where the nozzle array starts
-    X_END   = nominal_bed_width     — last reachable X position
-    Y_END   = nominal_bed_depth     — last reachable Y position
+    Dimensions cover the full nominal bed at nozzle-pitch resolution.
     """
-    x_start = abs(pdef.inkjet_offset_x)
-    y_start = abs(pdef.inkjet_offset_y)
-    x_end = pdef.nominal_bed_width
-    increment = printhead.lane_width_mm
-    pixel = printhead.pixel_size_mm
-    step = printhead.lane_step_nozzles
-
-    num_lanes = 1 + int((x_end - x_start + 1e-9) / increment)
-    data_cols = (num_lanes - _PADDING_STRIPS) * step
-    data_rows = math.ceil((pdef.nominal_bed_depth - y_start) / pixel)
-    data_x_start = x_start + _PADDING_STRIPS * step * pixel
-
-    return SweepGrid(
-        data_cols=data_cols,
-        data_rows=data_rows,
-        pixel_size_mm=pixel,
-        _data_x_start_mm=data_x_start,
-        _y_start_mm=y_start,
-        _inkjet_offset_x=pdef.inkjet_offset_x,
-        _inkjet_offset_y=pdef.inkjet_offset_y,
-        _calibration_offset_x=pdef.calibration_offset_x,
-        _calibration_offset_y=pdef.calibration_offset_y,
-    )
+    cols = math.ceil(pdef.nominal_bed_width / PIXEL_SIZE_MM)
+    rows = math.ceil(pdef.nominal_bed_depth / PIXEL_SIZE_MM)
+    return BedBitmap(cols=cols, rows=rows, pixel_size_mm=PIXEL_SIZE_MM)
 
 
 
@@ -277,19 +209,25 @@ class PrinterDef:
     """Static definition of a supported 3D printer.
 
     ``nominal_bed_width/depth`` are the physical bed dimensions matching
-    PrusaSlicer's ``bed_shape``.  ``inkjet_offset_x/y`` describe the
-    mechanical offset from the PLA nozzle to the inkjet nozzle array
-    centre.  The usable area (``bed_width/depth``) is derived —
-    existing code continues to work unchanged.
+    PrusaSlicer's ``bed_shape``.
+
+    ``keepout_*`` margins define the area the inkjet cannot reach.
+    These are derived from the printer's calibrated FDM-to-inkjet offset
+    and communicated by the printer.  The usable area for placing parts
+    is the nominal bed minus these margins.
+
+    The bitmap is a direct projection of the full nominal bed — no
+    offset calculations are applied here.  The printer applies its own
+    calibrated offset when interpreting the bitmap during sweeps.
     """
     id: str
     label: str
     nominal_bed_width: float   # mm — full bed (matches PrusaSlicer bed_shape)
     nominal_bed_depth: float   # mm
-    inkjet_offset_x: float     # mm — PLA nozzle → inkjet array centre, +X = right
-    inkjet_offset_y: float     # mm — PLA nozzle → inkjet array centre, +Y = back
-    calibration_offset_x: float = 0.0  # mm — residual X correction from calibration prints
-    calibration_offset_y: float = 0.0  # mm — residual Y correction from calibration prints
+    keepout_left: float = 0.0    # mm — inkjet cannot reach this far from left edge
+    keepout_right: float = 50.0  # mm — inkjet cannot reach this far from right edge
+    keepout_front: float = 0.0   # mm — inkjet cannot reach this far from front edge
+    keepout_back: float = 35.0   # mm — inkjet cannot reach this far from back edge
     max_z_mm: float = 210.0    # mm — maximum build height
     profile_filename: str = ""
     native_printer: str | None = None
@@ -298,14 +236,32 @@ class PrinterDef:
     thumbnails: str | None = None
 
     @property
+    def usable_width(self) -> float:
+        """Usable print area width (nominal minus keepout margins)."""
+        return self.nominal_bed_width - self.keepout_left - self.keepout_right
+
+    @property
+    def usable_depth(self) -> float:
+        """Usable print area depth (nominal minus keepout margins)."""
+        return self.nominal_bed_depth - self.keepout_front - self.keepout_back
+
+    @property
     def bed_width(self) -> float:
-        """Usable print area width (nominal minus inkjet X offset)."""
-        return self.nominal_bed_width - abs(self.inkjet_offset_x)
+        """Usable print area width (alias for backward compatibility)."""
+        return self.usable_width
 
     @property
     def bed_depth(self) -> float:
-        """Usable print area depth (nominal minus inkjet Y offset)."""
-        return self.nominal_bed_depth - abs(self.inkjet_offset_y)
+        """Usable print area depth (alias for backward compatibility)."""
+        return self.usable_depth
+
+    @property
+    def usable_center(self) -> tuple[float, float]:
+        """Absolute bed coordinate of the usable-area centre."""
+        return (
+            self.keepout_left + self.usable_width / 2,
+            self.keepout_front + self.usable_depth / 2,
+        )
 
 
 PRINTERS: dict[str, PrinterDef] = {
@@ -314,10 +270,10 @@ PRINTERS: dict[str, PrinterDef] = {
         label="Prusa MK3S",
         nominal_bed_width=250.0,
         nominal_bed_depth=210.0,
-        inkjet_offset_x=-64.6,
-        inkjet_offset_y=-32.0,
-        calibration_offset_x=20.7,
-        calibration_offset_y=1.7,
+        keepout_left=14.0,
+        keepout_right=32.0,
+        keepout_front=0.0,
+        keepout_back=32.0,
         max_z_mm=210.0,
         profile_filename="slicer_profile_mk3s.ini",
     ),
@@ -326,10 +282,10 @@ PRINTERS: dict[str, PrinterDef] = {
         label="Prusa i3 MK3S+",
         nominal_bed_width=250.0,
         nominal_bed_depth=210.0,
-        inkjet_offset_x=-64.6,
-        inkjet_offset_y=-32.0,
-        calibration_offset_x=20.7,
-        calibration_offset_y=1.7,
+        keepout_left=14.0,
+        keepout_right=32.0,
+        keepout_front=0.0,
+        keepout_back=32.0,
         max_z_mm=210.0,
         profile_filename="slicer_profile_mk3s_plus.ini",
     ),
@@ -338,10 +294,10 @@ PRINTERS: dict[str, PrinterDef] = {
         label="Prusa Core One+",
         nominal_bed_width=250.0,
         nominal_bed_depth=250.0,
-        inkjet_offset_x=-64.6,
-        inkjet_offset_y=-32.0,
-        calibration_offset_x=20.7,
-        calibration_offset_y=1.7,
+        keepout_left=14.0,
+        keepout_right=32.0,
+        keepout_front=0.0,
+        keepout_back=32.0,
         max_z_mm=220.0,
         profile_filename="slicer_profile_coreone.ini",
         native_printer="Prusa CORE One HF0.4 nozzle",

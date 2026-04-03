@@ -6,11 +6,9 @@ from typing import Any
 from fastapi import APIRouter, Query
 
 from src.pipeline.config import (
-    get_printer, SweepGrid, sweep_grid,
+    get_printer, BedBitmap, bed_bitmap,
 )
 from src.pipeline.gcode.filaments import get_filament
-from src.pipeline.manifest import generate_manifest
-
 from ._common import DEBUG_CONFIG, load_slicer_params, render_bitmap, slice_debug_boxes
 
 router = APIRouter()
@@ -21,7 +19,7 @@ SPACING_EDGE_PAD_PX: int = 5
 
 
 def spacing_box_ink_cells(
-    grid: SweepGrid,
+    grid: BedBitmap,
     bed_x: float,
     bed_y: float,
     box_w: float,
@@ -35,28 +33,26 @@ def spacing_box_ink_cells(
     Draws: line, min_gap px gap, line, (min_gap+1) px gap, ... up to max_gap px,
     then a final closing line.
     """
-    px = grid.pixel_size_mm
+    px0, py0 = grid.bed_to_pixel(bed_x, bed_y)
+    px1, py1 = grid.bed_to_pixel(bed_x + box_w, bed_y + box_h)
 
-    bx0_bm, by0_bm = grid.bed_to_bitmap(bed_x, bed_y)
-    bx1_bm, by1_bm = grid.bed_to_bitmap(bed_x + box_w, bed_y + box_h)
-
-    r0 = max(0, int(math.floor(by0_bm / px)))
-    r1 = min(grid.data_rows - 1, int(math.floor(by1_bm / px)))
-    c_start = max(0, int(math.floor(bx0_bm / px))) + SPACING_EDGE_PAD_PX
+    r0 = max(0, int(math.floor(py0)))
+    r1 = min(grid.rows - 1, int(math.floor(py1)))
+    c_start = max(0, int(math.floor(px0))) + SPACING_EDGE_PAD_PX
 
     cells: set[tuple[int, int]] = set()
     c_pos = c_start
     for gap_size in range(min_gap, max_gap + 1):
         for dc in range(trace_w_px):
             c = c_pos + dc
-            if 0 <= c < grid.data_cols:
+            if 0 <= c < grid.cols:
                 for r in range(r0, r1 + 1):
                     cells.add((r, c))
         c_pos += trace_w_px + gap_size
 
     for dc in range(trace_w_px):
         c = c_pos + dc
-        if 0 <= c < grid.data_cols:
+        if 0 <= c < grid.cols:
             for r in range(r0, r1 + 1):
                 cells.add((r, c))
 
@@ -81,7 +77,7 @@ async def generate_spacing(
     """Generate G-code + bitmap for the spacing test."""
     pdef = get_printer(printer)
     fdef = get_filament(filament)
-    grid = sweep_grid(pdef)
+    grid = bed_bitmap(pdef)
     sp = load_slicer_params(printer)
 
     px = grid.pixel_size_mm
@@ -91,28 +87,16 @@ async def generate_spacing(
 
     nom_w = pdef.nominal_bed_width
     x_base = (nom_w - plate_w_mm) / 2
-    y_bottom = abs(pdef.inkjet_offset_y) + DEBUG_CONFIG.padding
+    y_bottom = pdef.keepout_front + DEBUG_CONFIG.padding
 
     boxes = [(x_base, y_bottom, plate_w_mm, plate_h_mm, z_height)]
     gcode = slice_debug_boxes(pdef, fdef, boxes, printer_id=printer)
     bitmap = render_bitmap(
-        grid.data_rows, grid.data_cols,
+        grid.rows, grid.cols,
         spacing_box_ink_cells(grid, x_base, y_bottom, plate_w_mm, plate_h_mm),
-    )
-
-    manifest = generate_manifest(
-        grid=grid,
-        part_origin_x_mm=x_base,
-        part_origin_y_mm=y_bottom,
-        part_width_mm=plate_w_mm,
-        part_depth_mm=plate_h_mm,
-        gcode_file="spacing.gcode",
-        bitmap_file="spacing.txt",
-        printer=pdef,
     )
 
     return {
         "gcode": gcode,
         "bitmap": bitmap,
-        "contract": manifest.to_dict(),
     }
