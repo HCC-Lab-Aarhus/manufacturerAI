@@ -117,8 +117,13 @@ def route_traces(
     best = solution.snapshot()
     best_score = solution.score()
     stall = 0
+    iteration = 0
 
-    for iteration in range(config.max_improve_iterations):
+    while True:
+        all_routed = best_score[0] == 0
+        if all_routed and iteration >= config.max_improve_iterations:
+            break
+
         targets = solution.worst_nets(k=3)
         if not targets:
             break
@@ -141,12 +146,14 @@ def route_traces(
         else:
             solution.restore(best)
             stall += 1
-            if stall >= config.stall_limit:
+            if all_routed and stall >= config.stall_limit:
                 log.info(
-                    "Stalled for %d iterations (iteration %d of %d), stopping",
-                    stall, iteration + 1, config.max_improve_iterations,
+                    "Stalled for %d iterations at iteration %d, stopping",
+                    stall, iteration + 1,
                 )
                 break
+
+        iteration += 1
 
     solution.restore(best)
 
