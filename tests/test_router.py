@@ -99,16 +99,17 @@ class TestPathfinder(unittest.TestCase):
         self.assertEqual(len(ys), 1)
 
     def test_l_shaped_path(self):
-        """Path between offset points uses Manhattan routing."""
+        """Path between offset points uses valid 8-directional routing."""
         src = self.grid.world_to_grid(5.0, 5.0)
         snk = self.grid.world_to_grid(25.0, 25.0)
         path = find_path(self.grid, src, snk)
         self.assertIsNotNone(path)
-        # Verify Manhattan: each step is exactly 1 cell in one axis
         for i in range(1, len(path)):
             dx = abs(path[i][0] - path[i - 1][0])
             dy = abs(path[i][1] - path[i - 1][1])
-            self.assertEqual(dx + dy, 1, f"Non-Manhattan step at {i}")
+            self.assertLessEqual(dx, 1, f"Jump >1 in x at step {i}")
+            self.assertLessEqual(dy, 1, f"Jump >1 in y at step {i}")
+            self.assertGreater(dx + dy, 0, f"Zero-length step at {i}")
 
     def test_path_around_obstacle(self):
         """Path routes around a blocked rectangle."""
@@ -173,16 +174,19 @@ class TestFlashlightRouting(unittest.TestCase):
         self.assertEqual(routed_nets, expected)
 
     def test_traces_are_manhattan(self):
-        """All trace segments should be horizontal or vertical."""
+        """All trace segments should be horizontal, vertical, or 45-degree diagonal."""
         for trace in self.result.traces:
             for i in range(1, len(trace.path)):
                 x1, y1 = trace.path[i - 1]
                 x2, y2 = trace.path[i]
-                is_horizontal = abs(y1 - y2) < 0.01
-                is_vertical = abs(x1 - x2) < 0.01
+                dx = abs(x2 - x1)
+                dy = abs(y2 - y1)
+                is_horizontal = dy < 0.01
+                is_vertical = dx < 0.01
+                is_diagonal = abs(dx - dy) < 0.01
                 self.assertTrue(
-                    is_horizontal or is_vertical,
-                    f"Non-Manhattan segment in {trace.net_id}: "
+                    is_horizontal or is_vertical or is_diagonal,
+                    f"Invalid segment in {trace.net_id}: "
                     f"({x1:.1f},{y1:.1f}) -> ({x2:.1f},{y2:.1f})",
                 )
 

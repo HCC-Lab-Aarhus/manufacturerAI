@@ -18,8 +18,45 @@ from .grid import RoutingGrid, FREE, BLOCKED, TRACE_PATH, PERMANENTLY_BLOCKED
 from .models import TURN_PENALTY
 
 
-# Manhattan directions: (dx, dy)
-DIRS = ((1, 0), (-1, 0), (0, 1), (0, -1))
+# Manhattan and diagonal directions: (dx, dy)
+DIRS = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
+
+_SQRT2 = 1.4142135623730951
+_SQRT2_M1 = _SQRT2 - 1.0  # ≈ 0.4142
+
+
+def _build_angle_table():
+    n = len(DIRS)
+    tbl = [0] * (n * n)
+    for i, (dx1, dy1) in enumerate(DIRS):
+        for j, (dx2, dy2) in enumerate(DIRS):
+            if i == j:
+                continue
+            dot = dx1 * dx2 + dy1 * dy2
+            msq = (dx1 * dx1 + dy1 * dy1) * (dx2 * dx2 + dy2 * dy2)
+            if msq == 1:
+                tbl[i * n + j] = 2 if dot == 0 else (4 if dot < 0 else 0)
+            elif msq == 4:
+                tbl[i * n + j] = 2 if dot == 0 else (4 if dot < 0 else 0)
+            else:
+                tbl[i * n + j] = 1 if dot > 0 else 3
+    return tuple(tbl)
+
+
+_ANGLE_TABLE = _build_angle_table()
+_TURN_FRAC = (0.0, 0.25, 1.0, 2.0, 3.0)
+
+
+def _turn_cost(direction: int, d: int, turn_penalty: float) -> float:
+    if direction == -1 or direction == d:
+        return 0.0
+    return turn_penalty * _TURN_FRAC[_ANGLE_TABLE[direction * 8 + d]]
+
+
+def _octile_h(dx: int, dy: int) -> float:
+    adx = abs(dx)
+    ady = abs(dy)
+    return max(adx, ady) + _SQRT2_M1 * min(adx, ady)
 
 
 def find_path(
@@ -55,13 +92,8 @@ def find_path(
     if source == sink:
         return [source]
 
-    if cost_map is None:
-        l_path = _try_l_route(grid, source, sink)
-        if l_path is not None:
-            return l_path
-
     N = W * H
-    INF = 0x7FFFFFFF
+    INF = float('inf')
     start_key = sy * W + sx
     sink_key = ty * W + tx
 
@@ -70,9 +102,9 @@ def find_path(
     parent = [-1] * N
     closed = bytearray(N)
 
-    h0 = abs(sx - tx) + abs(sy - ty)
+    h0 = _octile_h(sx - tx, sy - ty)
     counter = 0
-    heap: list[tuple[int, int, int, int, int]] = [(h0, counter, sx, sy, -1)]
+    heap: list[tuple[float, int, int, int, int]] = [(h0, counter, sx, sy, -1)]
 
     while heap:
         f, _cnt, cx, cy, direction = _heappop(heap)
@@ -117,8 +149,9 @@ def find_path(
                     if (nx, ny) != sink and (nx, ny) != source:
                         continue
 
-            is_turn = direction != -1 and direction != d
-            cost = 1 + (turn_penalty if is_turn else 0) + cross_extra
+            move_cost = 1.0 if d < 4 else _SQRT2
+            tc = _turn_cost(direction, d, turn_penalty)
+            cost = move_cost + tc + cross_extra
             if cost_map is not None:
                 cost += cost_map.get(nkey, 0)
             tentative_g = cur_g + cost
@@ -126,7 +159,7 @@ def find_path(
             if tentative_g < g[nkey]:
                 g[nkey] = tentative_g
                 parent[nkey] = key
-                h = abs(nx - tx) + abs(ny - ty)
+                h = _octile_h(nx - tx, ny - ty)
                 counter += 1
                 _heappush(heap, (tentative_g + h, counter, nx, ny, d))
 
@@ -155,7 +188,7 @@ def find_path_to_tree(
     H = grid.height
     N = W * H
     cells = grid._cells
-    INF = 0x7FFFFFFF
+    INF = float('inf')
 
     # ── Normalise source to a set ──────────────────────────────
     if isinstance(source, set):
@@ -176,7 +209,7 @@ def find_path_to_tree(
         tree_mask[ty * W + tx] = 1
 
     # Precomputed distance transform: O(1) heuristic lookup
-    h_map = _manhattan_dt(W, H, tree_list)
+    h_map = _octile_dt(W, H, tree_list)
 
     # ── Pre-allocated containers ───────────────────────────────
     g = [INF] * N
@@ -185,7 +218,7 @@ def find_path_to_tree(
 
     # ── Seed heap with all valid source cells ──────────────────
     counter = 0
-    heap: list[tuple[int, int, int, int, int]] = []
+    heap: list[tuple[float, int, int, int, int]] = []
 
     for sx, sy in sources:
         if not (0 <= sx < W and 0 <= sy < H):
@@ -242,8 +275,9 @@ def find_path_to_tree(
                 else:
                     continue
 
-            is_turn = direction != -1 and direction != d
-            cost = 1 + (turn_penalty if is_turn else 0) + cross_extra
+            move_cost = 1.0 if d < 4 else _SQRT2
+            tc = _turn_cost(direction, d, turn_penalty)
+            cost = move_cost + tc + cross_extra
             if cost_map is not None:
                 cost += cost_map.get(nkey, 0)
             tentative_g = cur_g + cost
@@ -257,13 +291,13 @@ def find_path_to_tree(
     return None
 
 
-# ── Manhattan distance transform ──────────────────────────────────
+# ── Octile distance transform ─────────────────────────────────────
 
-def _manhattan_dt(W: int, H: int, tree_cells: list[tuple[int, int]]) -> _array_mod.array:
-    """Return flat array of Manhattan distances to nearest tree cell.
+def _octile_dt(W: int, H: int, tree_cells: list[tuple[int, int]]) -> _array_mod.array:
+    """Return flat array of octile distances to nearest tree cell.
 
-    Uses scipy's C-implemented chamfer distance transform with taxicab
-    metric — single call, much faster than Python loops.
+    Combines Manhattan and Chebyshev distance transforms to produce an
+    admissible octile heuristic for 8-directional movement.
     """
     mask = np.ones((H, W), dtype=bool)
     n = len(tree_cells)
@@ -273,8 +307,10 @@ def _manhattan_dt(W: int, H: int, tree_cells: list[tuple[int, int]]) -> _array_m
     else:
         for tx, ty in tree_cells:
             mask[ty, tx] = False
-    dist = distance_transform_cdt(mask, metric='taxicab').astype(np.int32)
-    return _array_mod.array('i', dist.tobytes())
+    manhattan = distance_transform_cdt(mask, metric='taxicab').astype(np.float32)
+    chebyshev = distance_transform_cdt(mask, metric='chessboard').astype(np.float32)
+    octile = chebyshev + _SQRT2_M1 * (manhattan - chebyshev)
+    return _array_mod.array('f', octile.tobytes())
 
 
 # ── Fast L-shaped route ────────────────────────────────────────────
