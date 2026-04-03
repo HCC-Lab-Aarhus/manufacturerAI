@@ -74,6 +74,9 @@ def remove_agent_task(sid: str, agent: str) -> None:
         _agent_tasks.pop((sid, agent), None)
 
 
+_pipeline_subscribers: dict[str, list[asyncio.Event]] = {}  # sid -> [event, ...]
+
+
 def get_pipeline_task(sid: str, step: str) -> PipelineTask | None:
     with _lock:
         return _pipeline_tasks.get((sid, step))
@@ -82,8 +85,33 @@ def get_pipeline_task(sid: str, step: str) -> PipelineTask | None:
 def set_pipeline_task(sid: str, step: str, task: PipelineTask) -> None:
     with _lock:
         _pipeline_tasks[(sid, step)] = task
+        for ev in _pipeline_subscribers.get(sid, []):
+            ev.set()
 
 
 def remove_pipeline_task(sid: str, step: str) -> None:
     with _lock:
         _pipeline_tasks.pop((sid, step), None)
+
+
+def subscribe_pipeline(sid: str, event: asyncio.Event) -> None:
+    with _lock:
+        _pipeline_subscribers.setdefault(sid, []).append(event)
+
+
+def unsubscribe_pipeline(sid: str, event: asyncio.Event) -> None:
+    with _lock:
+        subs = _pipeline_subscribers.get(sid, [])
+        if event in subs:
+            subs.remove(event)
+        if not subs:
+            _pipeline_subscribers.pop(sid, None)
+
+
+def get_all_pipeline_tasks(sid: str) -> dict[str, PipelineTask]:
+    with _lock:
+        return {
+            step: task
+            for (s, step), task in _pipeline_tasks.items()
+            if s == sid
+        }
