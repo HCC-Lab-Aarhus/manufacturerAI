@@ -16,7 +16,7 @@ from src.pipeline.scad.compiler import compile_scad
 from src.pipeline.gcode.slicer import slice_stl
 from src.pipeline.gcode.postprocessor import postprocess_gcode, compute_bed_offset
 
-from ._common import load_slicer_params, DEBUG_OVERRIDE, _wrap_mirror
+from ._common import load_slicer_params, DEBUG_OVERRIDE
 
 router = APIRouter()
 
@@ -43,12 +43,15 @@ def _grid_offsets() -> list[tuple[float, float]]:
 
 
 def _build_via_scad(base_z: float, tunnel_h: float, layer_h: float) -> str:
+    """Return full OpenSCAD source with module defs at top level and geometry
+    in a mirror([0,1,0]) block."""
     half_x = BOX_SIZE_MM / 2
     center_y = BOX_SIZE_MM / 2
     total_z = base_z + tunnel_h + layer_h
     tunnel_y_offset = center_y - TUNNEL_WIDTH_MM / 2
 
-    single = (
+    preamble = (
+        "$fn = 32;\n"
         "module via_box() {\n"
         "  difference() {\n"
         f"    cube([{BOX_SIZE_MM:.3f}, {BOX_SIZE_MM:.3f}, {total_z:.3f}]);\n"
@@ -60,10 +63,12 @@ def _build_via_scad(base_z: float, tunnel_h: float, layer_h: float) -> str:
         "}\n"
     )
 
-    lines = ["$fn = 32;\n", single]
+    geometry_lines = []
     for ox, oy in _grid_offsets():
-        lines.append(f"translate([{ox:.3f}, {oy:.3f}, 0]) via_box();\n")
-    return "".join(lines)
+        geometry_lines.append(f"translate([{ox:.3f}, {oy:.3f}, 0]) via_box();\n")
+    geometry = "".join(geometry_lines)
+
+    return preamble + "mirror([0, 1, 0]) {\n" + geometry + "}\n"
 
 
 def _silverink_block(n: int) -> list[str]:
@@ -160,12 +165,11 @@ async def generate_via(
     model_center = (total_w / 2, total_d / 2)
 
     scad_src = _build_via_scad(base_z, TUNNEL_HEIGHT_MM, layer_h)
-    mirrored_scad = _wrap_mirror(scad_src)
 
     with tempfile.TemporaryDirectory(prefix="debug_via_") as tmpdir:
         tmp = Path(tmpdir)
         scad_path = tmp / "via.scad"
-        scad_path.write_text(mirrored_scad, encoding="utf-8")
+        scad_path.write_text(scad_src, encoding="utf-8")
 
         ok, msg, stl_path = compile_scad(scad_path)
         if not ok or stl_path is None:
@@ -211,7 +215,7 @@ async def generate_via(
         )
 
     ucx, ucy = pdef.usable_center
-    model_to_bed = (ucx - model_center[0], ucy - model_center[1])
+    model_to_bed = (ucx - model_center[0], ucy + model_center[1])
 
     paths1, paths2 = _via_trace_paths(offsets)
 

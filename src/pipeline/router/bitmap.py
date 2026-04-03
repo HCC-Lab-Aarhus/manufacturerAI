@@ -110,7 +110,7 @@ def generate_trace_bitmap(
     ink_cells: set[tuple[int, int]] = set()
 
     for trace in result.traces:
-        bed_path = [(x + dx, y + dy) for x, y in trace.path]
+        bed_path = [(x + dx, -y + dy) for x, y in trace.path]
 
         new_cells = _trace_cells(
             bed_path, trace_width_mm,

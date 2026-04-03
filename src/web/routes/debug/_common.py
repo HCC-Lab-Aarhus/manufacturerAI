@@ -283,7 +283,7 @@ def run_debug_pipeline(
         gcode = gcode_result.gcode_path.read_text(encoding="utf-8")
 
         ucx, ucy = pdef.usable_center
-        model_to_bed = (ucx - model_center[0], ucy - model_center[1])
+        model_to_bed = (ucx - model_center[0], ucy + model_center[1])
 
         bitmap_lines = generate_trace_bitmap(
             routing_result,

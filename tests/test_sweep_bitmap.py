@@ -213,5 +213,57 @@ class TestGenerateTraceBitmap(unittest.TestCase):
         self.assertAlmostEqual(len(inked_rows), expected_rows, delta=2)
 
 
+# ── Y-mirror consistency: gcode vs bitmap ─────────────────────────
+
+class TestYMirrorConsistency(unittest.TestCase):
+    """The SCAD emitter wraps models in mirror([0,1,0]), negating all Y
+    in the STL.  The gcode pipeline reads the mirrored STL's bbox
+    centre and applies ``-y + dy``.  The bitmap pipeline must produce
+    the same bed-Y for the same model-local trace point.
+
+    Both paths now use ``-y + dy`` where ``dy = ucy + model_cy``
+    (i.e. ``ucy - (-model_cy)``), so they agree everywhere.
+    """
+
+    def setUp(self):
+        self.pdef = PRINTERS["mk3s"]
+        self.grid = bed_bitmap(self.pdef)
+        self.model_w = 20.0
+        self.model_h = 10.0
+        self.unmirored_cy = self.model_h / 2   # 5
+        self.mirrored_cy = -self.unmirored_cy   # −5
+        self.ucx, self.ucy = self.pdef.usable_center
+
+    def _gcode_bed_y(self, model_y: float) -> float:
+        """Gcode transform: compute_bed_offset from mirrored STL, then -y + dy."""
+        dy = self.ucy - self.mirrored_cy
+        return -model_y + dy
+
+    def _bitmap_bed_y(self, model_y: float) -> float:
+        """Bitmap transform: model_to_bed with mirrored dy, then -y + dy."""
+        dy = self.ucy + self.unmirored_cy        # ucy - (-model_cy) = ucy + model_cy
+        return -model_y + dy
+
+    def test_center_point_agrees(self):
+        g = self._gcode_bed_y(self.unmirored_cy)
+        b = self._bitmap_bed_y(self.unmirored_cy)
+        self.assertAlmostEqual(g, self.ucy)
+        self.assertAlmostEqual(b, self.ucy)
+
+    def test_off_center_point_agrees(self):
+        for y in (0.0, 1.0, 5.0, 9.0, 10.0):
+            with self.subTest(y=y):
+                g = self._gcode_bed_y(y)
+                b = self._bitmap_bed_y(y)
+                self.assertAlmostEqual(g, b)
+
+    def test_bitmap_pixel_row_matches(self):
+        y = 1.0
+        g_bed_y = self._gcode_bed_y(y)
+        b_bed_y = self._bitmap_bed_y(y)
+        px = self.grid.pixel_size_mm
+        self.assertEqual(int(g_bed_y / px), int(b_bed_y / px))
+
+
 if __name__ == "__main__":
     unittest.main()

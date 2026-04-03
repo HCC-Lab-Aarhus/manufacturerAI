@@ -19,14 +19,19 @@ router = APIRouter()
 
 
 def _bed_center_offset(outline_verts: list, pdef) -> tuple[float, float]:
-    """Center the design within the usable area (nominal bed minus keepout)."""
+    """Offset from model-local coords to bed coords, accounting for Y-mirror.
+
+    The SCAD emitter wraps the model in ``mirror([0,1,0])`` which negates all
+    Y in the STL.  Callers apply ``bed = (-y + dy)`` so *dy* must be computed
+    from the mirrored model centre: ``dy = usable_center_y - (-model_cy)``.
+    """
     xs = [v[0] for v in outline_verts]
     ys = [v[1] for v in outline_verts]
     cx = (min(xs) + max(xs)) / 2
     cy = (min(ys) + max(ys)) / 2
     usable_center_x = pdef.keepout_left + pdef.usable_width / 2
     usable_center_y = pdef.keepout_front + pdef.usable_depth / 2
-    return usable_center_x - cx, usable_center_y - cy
+    return usable_center_x - cx, usable_center_y + cy
 
 
 def _generate_and_save_bitmap(session) -> None:
