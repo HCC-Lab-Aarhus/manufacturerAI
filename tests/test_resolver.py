@@ -23,7 +23,6 @@ from src.pipeline.scad.fragment import (
     CylinderGeometry,
     PolygonGeometry,
     RectGeometry,
-    SegmentGeometry,
 )
 from src.pipeline.scad.resolver import ComponentResolver, ResolverContext
 
@@ -186,14 +185,9 @@ class TestButtonResolver(unittest.TestCase):
         funnels = [f for f in self.frags if "pin funnel" in f.label]
         self.assertEqual(len(funnels), 4)
 
-    def test_pin_bridges_for_offset_pins(self):
+    def test_no_pin_bridges(self):
         bridges = [f for f in self.frags if "pin bridge" in f.label]
-        self.assertGreater(len(bridges), 0)
-
-    def test_pin_bridge_geometry_is_segment(self):
-        bridges = [f for f in self.frags if "pin bridge" in f.label]
-        for b in bridges:
-            self.assertIsInstance(b.geometry, SegmentGeometry)
+        self.assertEqual(len(bridges), 0)
 
     def test_no_hatch_fragments(self):
         labels = _labels(self.frags)
@@ -273,9 +267,9 @@ class TestBatteryResolver(unittest.TestCase):
         labels = _labels(self.frags)
         self.assertFalse(any("cap" in l or "button" in l for l in labels))
 
-    def test_pin_bridges_for_offset_pins(self):
+    def test_no_pin_bridges(self):
         bridges = [f for f in self.frags if "pin bridge" in f.label]
-        self.assertGreater(len(bridges), 0)
+        self.assertEqual(len(bridges), 0)
 
 
 # ── Cross-component sanity ──────────────────────────────────────────
