@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 
 from fastapi import APIRouter, HTTPException
@@ -14,6 +15,8 @@ from src.web.routes._deps import (
     build_routing_response,
 )
 from src.web.tasks import PipelineTask, get_pipeline_task, set_pipeline_task
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -124,3 +127,6 @@ async def get_routing(sid: str):
     if s.read_artifact("routing.json") is None:
         raise HTTPException(404, "No routing yet")
     return build_routing_response(s, get_catalog())
+
+
+

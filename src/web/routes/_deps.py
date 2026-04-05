@@ -304,11 +304,14 @@ def build_placement_response(session: Session, cat) -> dict:
 
 
 def build_routing_response(session: Session, cat) -> dict:
-    """Assemble a full routing response from design + placement + routing artifacts."""
+    """Assemble a full routing response from design + placement + routing + inflation artifacts."""
     design = require_design(session)
     placement = require_placement(session)
     routing = require_routing(session)
     outline_data = _read_outline(session)
+
+    inflation_data = session.read_artifact("inflation.json")
+    inflated_traces = inflation_data.get("inflated_traces", []) if inflation_data else []
 
     from src.pipeline.config import TRACE_RULES
     response = {
@@ -316,6 +319,7 @@ def build_routing_response(session: Session, cat) -> dict:
         "enclosure": design.get("enclosure", {}),
         "components": placement["components"],
         "traces": routing.get("traces", []),
+        "inflated_traces": inflated_traces,
         "pin_assignments": routing.get("pin_assignments", {}),
         "failed_nets": routing.get("failed_nets", []),
         "jumpers": routing.get("jumpers", []),

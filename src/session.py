@@ -125,6 +125,7 @@ class Session:
             "circuit_pending": self.has_artifact("circuit_pending.json"),
             "placement": self.has_artifact("placement.json"),
             "routing": self.has_artifact("routing.json"),
+            "inflation": self.has_artifact("inflation.json"),
             "bitmap": self.has_artifact("trace_bitmap.txt"),
             "scad": self.has_artifact("enclosure.scad") or self.has_artifact("enclosure_bottom.scad"),
             "compile": self.has_artifact("enclosure.stl") or self.has_artifact("enclosure_bottom.stl"),
@@ -133,12 +134,13 @@ class Session:
             "setup": self.pipeline_state.get("setup") in ("complete", "compile_failed"),
         }
 
-    _PIPELINE_ORDER: ClassVar[list[str]] = ["design", "circuit", "placement", "routing", "bitmap", "scad", "gcode", "firmware", "setup"]
+    _PIPELINE_ORDER: ClassVar[list[str]] = ["design", "circuit", "placement", "routing", "inflation", "bitmap", "scad", "gcode", "firmware", "setup"]
     _STAGE_ARTIFACTS: ClassVar[dict[str, list[str]]] = {
         "design": ["design.json", "outline.json", "design_conversation.json"],
         "circuit": ["circuit.json", "circuit_conversation.json"],
         "placement": ["placement.json"],
         "routing": ["routing.json", "routing_debug.json"],
+        "inflation": ["inflation.json"],
         "bitmap": ["trace_bitmap.txt"],
         "scad": ["enclosure.scad", "enclosure.stl", "extras.scad", "extras.stl",
                 "enclosure_bottom.scad", "enclosure_bottom.stl",
@@ -158,6 +160,7 @@ class Session:
         "placement.json": "placement",
         "routing.json": "routing",
         "routing_debug.json": "routing",
+        "inflation.json": "inflation",
         "trace_bitmap.txt": "bitmap",
         "enclosure.scad": "scad",
         "enclosure.stl": "scad",

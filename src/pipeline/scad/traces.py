@@ -1,15 +1,17 @@
 """Trace channel fragment builders.
 
-Produces ScadFragment objects for trace channels using the same
-stadium geometry (Shapely LineString.buffer) as the bitmap and
-routing grid so that all pipeline stages agree on the exact trace shape.
+Produces ScadFragment cutouts from inflated trace polygons.  Each
+InflatedTrace carries the exact Shapely Polygon footprint computed by
+the Voronoi inflation step; this module simply converts those polygons
+into SCAD fragments at the correct Z-layer.
 """
 
 from __future__ import annotations
 
-from src.pipeline.config import FLOOR_MM, TRACE_HEIGHT_MM, TRACE_RULES
+from shapely.geometry import MultiPolygon
+
+from src.pipeline.config import FLOOR_MM, TRACE_HEIGHT_MM
 from src.pipeline.router.models import RoutingResult
-from src.pipeline.trace_geometry import trace_path_polygon
 
 from .fragment import ScadFragment, PolygonGeometry
 
@@ -18,26 +20,16 @@ def build_trace_fragments(
     routing: RoutingResult,
     ceil_start: float,
 ) -> list[ScadFragment]:
-    """Build trace channel fragments for every routed trace.
-
-    Each trace path is buffered into a stadium-shaped polygon (rectangle
-    with semicircular endcaps at every waypoint) using the shared
-    ``trace_path_polygon`` function, then emitted as a single cutout
-    fragment per net.
-    """
+    """Build trace channel fragments from inflated trace polygons."""
     channel_depth = TRACE_HEIGHT_MM
-    trace_w = TRACE_RULES.trace_width_mm
     frags: list[ScadFragment] = []
 
-    for trace in routing.traces:
-        path = [(float(x), float(y)) for x, y in trace.path]
-        poly = trace_path_polygon(path, trace_w)
-        if poly is None:
+    for it in routing.inflated_traces:
+        poly = it.polygon
+        if poly is None or poly.is_empty:
             continue
 
-        from shapely.geometry import MultiPolygon
         geoms = list(poly.geoms) if isinstance(poly, MultiPolygon) else [poly]
-
         for geom in geoms:
             coords = list(geom.exterior.coords)[:-1]
             pts = [[x, y] for x, y in coords]
@@ -47,13 +39,12 @@ def build_trace_fragments(
                     [[x, y] for x, y in ring.coords[:-1]]
                     for ring in geom.interiors
                 ]
-
             frags.append(ScadFragment(
                 type="cutout",
                 geometry=PolygonGeometry(pts, holes),
                 z_base=FLOOR_MM,
                 depth=channel_depth,
-                label=f"trace {trace.net_id}",
+                label=f"trace {it.net_id}",
             ))
 
     return frags

@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 
 from src.pipeline.design import parse_physical_design
 from src.pipeline.router import generate_trace_bitmap, parse_routing
+from src.pipeline.inflation import parse_inflation
 from src.pipeline.config import TRACE_RULES, bed_bitmap, get_printer
 from src.web.routes._deps import (
     get_catalog, load_session_or_404,
@@ -39,6 +40,11 @@ def _generate_and_save_bitmap(session) -> None:
     routing_data = require_routing(session)
     physical = parse_physical_design(require_design(session))
     result = parse_routing(routing_data)
+
+    inflation_data = session.read_artifact("inflation.json")
+    if inflation_data is not None:
+        result.inflated_traces = parse_inflation(inflation_data)
+
     pdef = get_printer(session.printer_id)
     grid = bed_bitmap(pdef)
     model_to_bed = _bed_center_offset(physical.outline.vertices, pdef)

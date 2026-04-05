@@ -16,7 +16,7 @@ from src.web.tasks import (
 
 router = APIRouter()
 
-PIPELINE_STEPS = ("placement", "routing", "bitmap", "scad", "compile", "gcode")
+PIPELINE_STEPS = ("placement", "routing", "inflation", "bitmap", "scad", "compile", "gcode")
 
 
 def _build_snapshot(sid: str) -> dict[str, dict[str, Any]]:

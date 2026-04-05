@@ -11,7 +11,7 @@ from src.pipeline.config import (
     get_printer, bed_bitmap, FLOOR_MM, TRACE_RULES,
 )
 from src.pipeline.router.models import RoutingResult, Trace
-from src.pipeline.router.bitmap import generate_trace_bitmap
+from src.pipeline.router.bitmap import generate_fixed_width_bitmap
 from src.pipeline.scad.compiler import compile_scad
 from src.pipeline.gcode.slicer import slice_stl
 from src.pipeline.gcode.postprocessor import postprocess_gcode, compute_bed_offset
@@ -228,10 +228,10 @@ async def generate_via(
         pin_assignments={}, failed_nets=[],
     )
 
-    bitmap1 = "\n".join(generate_trace_bitmap(
+    bitmap1 = "\n".join(generate_fixed_width_bitmap(
         result1, TRACE_WIDTH_MM, grid=grid, model_to_bed=model_to_bed,
     ))
-    bitmap2 = "\n".join(generate_trace_bitmap(
+    bitmap2 = "\n".join(generate_fixed_width_bitmap(
         result2, TRACE_WIDTH_MM, grid=grid, model_to_bed=model_to_bed,
     ))
 
@@ -253,7 +253,7 @@ async def generate_via(
         traces=[Trace(net_id=f"via3_{i}", path=p) for i, p in enumerate(hole_paths)],
         pin_assignments={}, failed_nets=[],
     )
-    bitmap3 = "\n".join(generate_trace_bitmap(
+    bitmap3 = "\n".join(generate_fixed_width_bitmap(
         result3, TRACE_WIDTH_MM, grid=grid, model_to_bed=model_to_bed,
     ))
 

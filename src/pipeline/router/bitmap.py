@@ -21,6 +21,10 @@ import logging
 import math
 from pathlib import Path
 
+from shapely.affinity import translate, scale
+from shapely.geometry import Polygon
+from shapely.prepared import prep
+
 from src.pipeline.config import BedBitmap
 from src.pipeline.trace_geometry import point_seg_dist as _point_seg_dist
 from .models import RoutingResult
@@ -101,6 +105,46 @@ def _trace_cells(
     return cells
 
 
+def _transform_polygon_to_bed(
+    poly: Polygon,
+    dx: float,
+    dy: float,
+) -> Polygon:
+    """Apply the model-to-bed transform (x+dx, -y+dy) to a polygon."""
+    mirrored = scale(poly, xfact=1, yfact=-1, origin=(0, 0))
+    return translate(mirrored, xoff=dx, yoff=dy)
+
+
+def _polygon_cells(
+    poly: Polygon,
+    pixel_size: float,
+    cols: int,
+    rows: int,
+) -> set[tuple[int, int]]:
+    """Rasterize a Shapely Polygon into bitmap cells via scanline containment."""
+    cells: set[tuple[int, int]] = set()
+    if poly.is_empty:
+        return cells
+
+    minx, miny, maxx, maxy = poly.bounds
+    col_min = max(0, int(math.floor(minx / pixel_size)))
+    col_max = min(cols - 1, int(math.floor(maxx / pixel_size)))
+    row_min = max(0, int(math.floor(miny / pixel_size)))
+    row_max = min(rows - 1, int(math.floor(maxy / pixel_size)))
+
+    prepared = prep(poly)
+
+    for r in range(row_min, row_max + 1):
+        py = (r + 0.5) * pixel_size
+        for c in range(col_min, col_max + 1):
+            px = (c + 0.5) * pixel_size
+            from shapely.geometry import Point
+            if prepared.contains(Point(px, py)):
+                cells.add((r, c))
+
+    return cells
+
+
 def generate_trace_bitmap(
     result: RoutingResult,
     trace_width_mm: float,
@@ -108,14 +152,18 @@ def generate_trace_bitmap(
     grid: BedBitmap,
     model_to_bed: tuple[float, float] = (0.0, 0.0),
 ) -> list[str]:
-    """Render all traces into a full-bed bitmap.
+    """Render inflated trace polygons into a full-bed bitmap.
+
+    Each inflated trace carries the exact Shapely Polygon computed by
+    the Voronoi inflation step.  This function rasterizes those polygons
+    at nozzle-pitch resolution.
 
     Parameters
     ----------
     result : RoutingResult
-        Completed routing result with trace paths in model-local mm.
+        Completed routing result with inflated trace polygons.
     trace_width_mm : float
-        Physical width of a conductive-ink trace.
+        Unused (kept for API compatibility with debug callers).
     grid : BedBitmap
         Bed bitmap geometry (from ``bed_bitmap(printer_def)``).
     model_to_bed : (float, float)
@@ -135,17 +183,13 @@ def generate_trace_bitmap(
 
     ink_cells: set[tuple[int, int]] = set()
 
-    for trace in result.traces:
-        bed_path = [(x + dx, -y + dy) for x, y in trace.path]
-
-        new_cells = _trace_cells(
-            bed_path, trace_width_mm,
-            pixel_size, cols, rows,
-        )
-        if not new_cells and bed_path:
+    for it in result.inflated_traces:
+        bed_poly = _transform_polygon_to_bed(it.polygon, dx, dy)
+        new_cells = _polygon_cells(bed_poly, pixel_size, cols, rows)
+        if not new_cells:
             log.warning(
                 "Trace net=%s clipped to zero pixels — may be outside bed",
-                trace.net_id,
+                it.net_id,
             )
         ink_cells |= new_cells
 
@@ -176,3 +220,34 @@ def write_trace_bitmap(
     )
     output_path.write_text('\n'.join(lines), encoding='utf-8')
     return output_path
+
+
+def generate_fixed_width_bitmap(
+    result: RoutingResult,
+    trace_width_mm: float,
+    *,
+    grid: BedBitmap,
+    model_to_bed: tuple[float, float] = (0.0, 0.0),
+) -> list[str]:
+    """Render traces at a fixed width — used by debug/test routes only.
+
+    This bypasses inflated polygons and rasterizes the raw centreline
+    paths at a uniform ``trace_width_mm``.
+    """
+    pixel_size = grid.pixel_size_mm
+    cols = grid.cols
+    rows = grid.rows
+    dx, dy = model_to_bed
+
+    ink_cells: set[tuple[int, int]] = set()
+    for trace in result.traces:
+        bed_path = [(x + dx, -y + dy) for x, y in trace.path]
+        ink_cells |= _trace_cells(bed_path, trace_width_mm, pixel_size, cols, rows)
+
+    lines: list[str] = []
+    for r in range(rows):
+        line_chars = []
+        for c in range(cols):
+            line_chars.append('1' if (r, c) in ink_cells else '0')
+        lines.append(''.join(line_chars))
+    return lines

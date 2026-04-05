@@ -10,18 +10,18 @@ Submodules:
   bitmap        Trace bitmap generation (full-bed bitmap at nozzle pitch).
 """
 
-from .models import Trace, RoutingResult, RouterConfig
+from .models import Trace, InflatedTrace, RoutingResult, RouterConfig
 from .engine import route_traces
 from .serialization import routing_to_dict, parse_routing
-from .bitmap import generate_trace_bitmap, write_trace_bitmap
+from .bitmap import generate_trace_bitmap, generate_fixed_width_bitmap, write_trace_bitmap
 
 __all__ = [
     # Models
-    "Trace", "RoutingResult", "RouterConfig",
+    "Trace", "InflatedTrace", "RoutingResult", "RouterConfig",
     # Engine
     "route_traces",
     # Serialization
     "routing_to_dict", "parse_routing",
     # Bitmap
-    "generate_trace_bitmap", "write_trace_bitmap",
+    "generate_trace_bitmap", "generate_fixed_width_bitmap", "write_trace_bitmap",
 ]

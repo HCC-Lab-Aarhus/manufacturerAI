@@ -55,6 +55,9 @@ class TraceRules:
     """Routing-grid cell size (mm).  Independent of the bitmap resolution;
     the bitmap is rendered from world-mm trace coordinates after routing."""
 
+    max_trace_width_mm: float = 10.0
+    """Maximum width a trace can expand to during Voronoi inflation."""
+
     # ── Derived helpers ────────────────────────────────────────────
 
     @property

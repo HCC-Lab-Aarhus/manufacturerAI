@@ -22,8 +22,20 @@ from src.pipeline.config import (
     get_printer,
     DEFAULT_PRINTER,
 )
-from src.pipeline.router.models import Trace, RoutingResult
+from shapely.geometry import LineString
+
+from src.pipeline.router.models import Trace, InflatedTrace, RoutingResult
 from src.pipeline.router.bitmap import generate_trace_bitmap
+
+
+def _inflated_from_trace(trace: Trace, width: float) -> InflatedTrace:
+    """Buffer a trace centreline into an InflatedTrace for testing."""
+    line = LineString(trace.path)
+    return InflatedTrace(
+        net_id=trace.net_id,
+        centreline=list(trace.path),
+        polygon=line.buffer(width / 2, cap_style="flat"),
+    )
 
 
 # ── Pixel resolution constant ──────────────────────────────────────
@@ -170,7 +182,8 @@ class TestGenerateTraceBitmap(unittest.TestCase):
             net_id="test",
             path=[(5.0, 5.0), (15.0, 5.0)],
         )
-        result = RoutingResult(traces=[trace], pin_assignments={}, failed_nets=[])
+        it = _inflated_from_trace(trace, 0.5)
+        result = RoutingResult(traces=[trace], pin_assignments={}, failed_nets=[], inflated_traces=[it])
         model_to_bed = (80.0, 80.0)
         lines = generate_trace_bitmap(result, 0.5, grid=self.grid, model_to_bed=model_to_bed)
         all_chars = set(c for line in lines for c in line)
@@ -181,7 +194,8 @@ class TestGenerateTraceBitmap(unittest.TestCase):
             net_id="signal",
             path=[(0.0, 5.0), (20.0, 5.0)],
         )
-        result = RoutingResult(traces=[trace], pin_assignments={}, failed_nets=[])
+        it = _inflated_from_trace(trace, 0.5)
+        result = RoutingResult(traces=[trace], pin_assignments={}, failed_nets=[], inflated_traces=[it])
         model_to_bed = (100.0, 100.0)
         lines = generate_trace_bitmap(result, 0.5, grid=self.grid, model_to_bed=model_to_bed)
         total_ink = sum(line.count('1') for line in lines)
@@ -192,7 +206,8 @@ class TestGenerateTraceBitmap(unittest.TestCase):
             net_id="offscreen",
             path=[(-1000.0, -1000.0), (-900.0, -1000.0)],
         )
-        result = RoutingResult(traces=[trace], pin_assignments={}, failed_nets=[])
+        it = _inflated_from_trace(trace, 0.5)
+        result = RoutingResult(traces=[trace], pin_assignments={}, failed_nets=[], inflated_traces=[it])
         lines = generate_trace_bitmap(result, 0.5, grid=self.grid)
         total_ink = sum(line.count('1') for line in lines)
         self.assertEqual(total_ink, 0)
@@ -203,7 +218,8 @@ class TestGenerateTraceBitmap(unittest.TestCase):
             net_id="hline",
             path=[(5.0, 10.0), (15.0, 10.0)],
         )
-        result = RoutingResult(traces=[trace], pin_assignments={}, failed_nets=[])
+        it = _inflated_from_trace(trace, trace_w)
+        result = RoutingResult(traces=[trace], pin_assignments={}, failed_nets=[], inflated_traces=[it])
         model_to_bed = (100.0, 100.0)
         lines = generate_trace_bitmap(result, trace_w, grid=self.grid, model_to_bed=model_to_bed)
 
@@ -217,7 +233,8 @@ class TestGenerateTraceBitmap(unittest.TestCase):
             net_id="diag",
             path=[(5.0, 5.0), (15.0, 15.0)],
         )
-        result = RoutingResult(traces=[trace], pin_assignments={}, failed_nets=[])
+        it = _inflated_from_trace(trace, 0.5)
+        result = RoutingResult(traces=[trace], pin_assignments={}, failed_nets=[], inflated_traces=[it])
         model_to_bed = (100.0, 100.0)
         lines = generate_trace_bitmap(result, 0.5, grid=self.grid, model_to_bed=model_to_bed)
 

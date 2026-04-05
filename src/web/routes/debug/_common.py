@@ -10,7 +10,7 @@ from src.pipeline.config import (
     TRACE_RULES, FLOOR_MM,
 )
 from src.pipeline.router.models import RoutingResult, Trace
-from src.pipeline.router.bitmap import generate_trace_bitmap
+from src.pipeline.router.bitmap import generate_fixed_width_bitmap
 from src.pipeline.scad.compiler import compile_scad
 from src.pipeline.gcode.pipeline import run_gcode_pipeline
 
@@ -285,7 +285,7 @@ def run_debug_pipeline(
         ucx, ucy = pdef.usable_center
         model_to_bed = (ucx - model_center[0], ucy + model_center[1])
 
-        bitmap_lines = generate_trace_bitmap(
+        bitmap_lines = generate_fixed_width_bitmap(
             routing_result,
             TRACE_RULES.trace_width_mm,
             grid=grid,

@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+from shapely.geometry import Polygon
+
 from src.pipeline.design.models import Net
 
-from .models import Trace, RoutingResult
+from .models import Trace, InflatedTrace, RoutingResult
 
 
 def routing_to_dict(result: RoutingResult) -> dict:
     """Serialize a RoutingResult to a JSON-safe dict."""
-    d = {
+    return {
         "traces": [
             {
                 "net_id": t.net_id,
@@ -20,7 +22,6 @@ def routing_to_dict(result: RoutingResult) -> dict:
         "pin_assignments": dict(result.pin_assignments),
         "failed_nets": list(result.failed_nets),
     }
-    return d
 
 
 def parse_routing(data: dict) -> RoutingResult:

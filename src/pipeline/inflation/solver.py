@@ -1,0 +1,121 @@
+"""Polygon inflation solver — grows polygons using Shapely buffer operations.
+
+Each iteration uniformly buffers every polygon, then clips to:
+  - the board outline (minus edge clearance, applied by caller)
+  - obstacle keepout zones
+  - foreign pin clearance circles
+  - foreign polygon clearance zones
+  - a maximum expansion cap from the initial shape
+
+All constraints produce clean geometric boundaries because they use
+Shapely boolean operations rather than per-vertex manipulation.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+
+from shapely.geometry import MultiPolygon, Point, Polygon
+from shapely.ops import unary_union
+
+log = logging.getLogger(__name__)
+
+
+@dataclass
+class NetPolygon:
+    net_id: str
+    polygon: Polygon
+    inside_pins: set[str] = field(default_factory=set)
+    outside_pins: set[str] = field(default_factory=set)
+
+
+MAX_ITERATIONS = 200
+STEP_MM = 0.3
+MIN_GROWTH_MM2 = 0.1
+
+
+def inflate(
+    net_polygons: list[NetPolygon],
+    outline: Polygon,
+    obstacle_union: Polygon,
+    *,
+    pin_positions: dict[str, tuple[float, float]],
+    trace_clearance: float,
+    pin_clearance: float,
+    max_half: float,
+    min_half: float,
+) -> None:
+    if not net_polygons:
+        return
+
+    max_expand = max_half - min_half
+
+    frozen_inside: list[set[str]] = [set(np_.inside_pins) for np_ in net_polygons]
+    frozen_outside: list[set[str]] = [set(np_.outside_pins) for np_ in net_polygons]
+
+    available: list[Polygon | MultiPolygon] = []
+    for i, np_ in enumerate(net_polygons):
+        zone = np_.polygon.buffer(max_expand).intersection(outline)
+        if not obstacle_union.is_empty:
+            zone = zone.difference(obstacle_union)
+        circles = [
+            Point(pin_positions[pid]).buffer(pin_clearance, quad_segs=8)
+            for pid in frozen_outside[i]
+            if pid in pin_positions
+        ]
+        if circles:
+            zone = zone.difference(unary_union(circles))
+        available.append(zone)
+
+    for _it in range(MAX_ITERATIONS):
+        total_growth = 0.0
+        buffered_clear = [np_.polygon.buffer(trace_clearance) for np_ in net_polygons]
+
+        for i, np_ in enumerate(net_polygons):
+            grown = np_.polygon.buffer(STEP_MM, quad_segs=4)
+            clipped = grown.intersection(available[i])
+
+            foreign = [b for j, b in enumerate(buffered_clear) if j != i]
+            if foreign:
+                clipped = clipped.difference(unary_union(foreign))
+
+            if isinstance(clipped, MultiPolygon):
+                clipped = max(clipped.geoms, key=lambda g: g.area)
+            if not isinstance(clipped, Polygon) or clipped.is_empty:
+                continue
+
+            if _pin_invariant_violated(clipped, pin_positions,
+                                       frozen_inside[i], frozen_outside[i]):
+                continue
+
+            growth = clipped.area - np_.polygon.area
+            if growth > 0:
+                total_growth += growth
+                np_.polygon = clipped
+
+        if total_growth < MIN_GROWTH_MM2:
+            log.info("Inflation converged at iteration %d", _it)
+            break
+
+
+def _pin_invariant_violated(
+    poly: Polygon,
+    pin_positions: dict[str, tuple[float, float]],
+    frozen_inside: set[str],
+    frozen_outside: set[str],
+) -> bool:
+    for pid in frozen_inside:
+        pos = pin_positions.get(pid)
+        if pos is None:
+            continue
+        pt = Point(pos)
+        if not poly.contains(pt) and poly.boundary.distance(pt) > 0.2:
+            return True
+    for pid in frozen_outside:
+        pos = pin_positions.get(pid)
+        if pos is None:
+            continue
+        if poly.contains(Point(pos)):
+            return True
+    return False
