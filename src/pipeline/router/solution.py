@@ -291,7 +291,7 @@ class Solution:
                 config=self.config, grid=self.grid,
             )
 
-        traces = self._grid_paths_to_traces(routed_paths)
+        traces = self._grid_paths_to_traces(routed_paths, routed_pads)
         failed_nets = sorted(self.expected_nets - set(self.routes)) if self.expected_nets else []
 
         return RoutingResult(
@@ -532,15 +532,36 @@ class Solution:
     # ── Internal: output conversion ────────────────────────────
 
     def _grid_paths_to_traces(
-        self, routed_paths: dict[str, list[list[tuple[int, int]]]],
+        self,
+        routed_paths: dict[str, list[list[tuple[int, int]]]],
+        routed_pads: dict[str, list[NetPad]],
     ) -> list[Trace]:
         outline = self.grid.outline_poly
         traces: list[Trace] = []
         for net_id, paths in routed_paths.items():
+            pads = routed_pads.get(net_id, [])
+            pad_by_grid: dict[tuple[int, int], NetPad] = {
+                (p.gx, p.gy): p for p in pads
+            }
             for grid_path in paths:
                 if len(grid_path) < 2:
                     continue
                 world_path = _simplify_path(grid_path, self.grid)
+
+                start_pad = pad_by_grid.get(grid_path[0])
+                if start_pad is not None:
+                    sx, sy = start_pad.world_x, start_pad.world_y
+                    gx0, gy0 = world_path[0]
+                    if (sx, sy) != (gx0, gy0):
+                        world_path[0:1] = [(sx, sy), (sx, gy0), (gx0, gy0)]
+
+                end_pad = pad_by_grid.get(grid_path[-1])
+                if end_pad is not None:
+                    ex, ey = end_pad.world_x, end_pad.world_y
+                    gxn, gyn = world_path[-1]
+                    if (ex, ey) != (gxn, gyn):
+                        world_path[-1:] = [(gxn, gyn), (ex, gyn), (ex, ey)]
+
                 clamped: list[tuple[float, float]] = []
                 for wx, wy in world_path:
                     pt = Point(wx, wy)
