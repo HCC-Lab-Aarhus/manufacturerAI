@@ -523,6 +523,7 @@ def postprocess_gcode(
     pad_centers: list[tuple[float, float]] | None = None,
     silverink_only: bool = False,
     pin_holes: list[PinHoleRect] | None = None,
+    inflated_polygons: list | None = None,
 ) -> PostProcessResult:
     """Read slicer G-code, inject pauses and ink, write result.
 
@@ -574,7 +575,8 @@ def postprocess_gcode(
     custom_ironing_lines = generate_trace_ironing_gcode(
         trace_segs, pads, ink_z=ink_z, pad_z_drop=PIN_FLOOR_PENETRATION,
         pin_holes=pin_holes,
-    ) if trace_segs else []
+        inflated_polygons=inflated_polygons,
+    ) if trace_segs or inflated_polygons else []
     from src.pipeline.gcode.ink_traces import IRONING_Z_LIFT
     pad_z = ink_z - PIN_FLOOR_PENETRATION + IRONING_Z_LIFT
     custom_pad_ironing_lines = generate_pad_ironing_gcode(pads) if pads else []

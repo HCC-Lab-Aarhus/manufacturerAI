@@ -16,6 +16,8 @@ import math
 from dataclasses import dataclass
 from typing import Sequence
 
+from shapely.geometry import LineString, MultiLineString, Polygon
+
 from src.pipeline.config import FDM_EXTRUSION_W, TRACE_RULES
 from src.pipeline.scad.resolver import PINHOLE_CLEARANCE
 
@@ -329,28 +331,29 @@ def generate_trace_ironing_gcode(
     trace_width: float = TRACE_RULES.trace_width_mm,
     line_spacing: float = IRONING_LINE_SPACING,
     pin_holes: list[PinHoleRect] | None = None,
+    inflated_polygons: list[Polygon] | None = None,
 ) -> list[str]:
-    """Generate ironing G-code that follows trace paths with pads at pins.
+    """Generate ironing G-code that covers the full inflated trace area.
 
-    Produces multiple parallel passes per trace segment so that the
-    ironed area covers the full trace width.  Segments are clipped
-    against actual pin hole rectangles so the nozzle does not cross
-    over pin holes.
+    When *inflated_polygons* are provided, ironing fills the entire
+    inflated polygon footprint with serpentine scanlines.  Falls back
+    to the old parallel-offset-along-centreline approach when no
+    inflated polygons are available.
 
     Parameters
     ----------
     trace_segs : list
-        ``(x1, y1, x2, y2)`` trace segments in bed coords.
+        ``(x1, y1, x2, y2)`` trace segments in bed coords (fallback).
     pad_centers : list
         ``(x, y)`` positions of pin pads in bed coords.
     ink_z : float
         Z height of the trace ironing surface (mm).
-    pad_z_drop : float
-        How far below *ink_z* the pad ironing should be (mm).
     pin_holes : list of PinHoleRect, optional
-        Actual pin hole exclusion rectangles.  When provided, ironing
-        passes are clipped to stop at pin hole edges.  Falls back to
-        square exclusion zones from *pad_centers* + *pad_radius*.
+        Pin hole exclusion rectangles.
+    inflated_polygons : list of Polygon, optional
+        Shapely polygons representing the full inflated trace
+        footprints in bed coords.  When provided, ironing fills
+        these areas instead of following trace centrelines.
     """
     if pin_holes is None:
         pin_holes = [
@@ -368,44 +371,133 @@ def generate_trace_ironing_gcode(
     ]
     cumulative_e = 0.0
 
-    num_passes = max(1, round(trace_width / line_spacing))
-    offsets = [
-        (i - (num_passes - 1) / 2) * line_spacing
-        for i in range(num_passes)
-    ]
+    if inflated_polygons:
+        cumulative_e = _ironing_fill_polygons(
+            inflated_polygons, pin_holes, line_spacing,
+            e_per_mm, ironing_speed, lines, cumulative_e,
+        )
+        log.info("Generated inflated-polygon ironing: %d polygons, %d lines",
+                 len(inflated_polygons), len(lines))
+    else:
+        num_passes = max(1, round(trace_width / line_spacing))
+        offsets = [
+            (i - (num_passes - 1) / 2) * line_spacing
+            for i in range(num_passes)
+        ]
 
-    for x1, y1, x2, y2 in trace_segs:
-        dx = x2 - x1
-        dy = y2 - y1
-        length = math.hypot(dx, dy)
-        if length < 0.01:
+        for x1, y1, x2, y2 in trace_segs:
+            dx = x2 - x1
+            dy = y2 - y1
+            length = math.hypot(dx, dy)
+            if length < 0.01:
+                continue
+
+            nx = -dy / length
+            ny = dx / length
+
+            for offset in offsets:
+                ox1 = x1 + nx * offset
+                oy1 = y1 + ny * offset
+                ox2 = x2 + nx * offset
+                oy2 = y2 + ny * offset
+
+                clipped = _clip_segment_around_pads(
+                    ox1, oy1, ox2, oy2, pin_holes,
+                )
+                if clipped is None:
+                    continue
+                cx1, cy1, cx2, cy2 = clipped
+
+                seg_len = math.hypot(cx2 - cx1, cy2 - cy1)
+                de = e_per_mm * seg_len
+                lines.append(f"G0 X{cx1:.3f} Y{cy1:.3f} F21000")
+                cumulative_e += de
+                lines.append(f"G1 X{cx2:.3f} Y{cy2:.3f} E{cumulative_e:.5f} F{ironing_speed:.0f}")
+
+        log.info("Generated trace ironing: %d trace segments × %d passes, %d lines",
+                 len(trace_segs), num_passes, len(lines))
+    return lines
+
+
+def _ironing_fill_polygons(
+    polygons: list[Polygon],
+    pin_holes: list[PinHoleRect],
+    line_spacing: float,
+    e_per_mm: float,
+    ironing_speed: float,
+    lines: list[str],
+    cumulative_e: float,
+) -> float:
+    """Fill inflated polygons with serpentine scanlines, clipping around pin holes."""
+    from shapely.geometry import box as shapely_box
+    from shapely.ops import unary_union
+
+    hole_polys = [
+        shapely_box(
+            h.cx - h.half_w, h.cy - h.half_h,
+            h.cx + h.half_w, h.cy + h.half_h,
+        )
+        for h in pin_holes
+    ]
+    hole_union = unary_union(hole_polys) if hole_polys else Polygon()
+
+    for poly in polygons:
+        if poly.is_empty or not poly.is_valid:
             continue
 
-        nx = -dy / length
-        ny = dx / length
+        clipped = poly.difference(hole_union) if not hole_union.is_empty else poly
+        if clipped.is_empty:
+            continue
 
-        for offset in offsets:
-            ox1 = x1 + nx * offset
-            oy1 = y1 + ny * offset
-            ox2 = x2 + nx * offset
-            oy2 = y2 + ny * offset
+        min_x, min_y, max_x, max_y = clipped.bounds
+        y = min_y + line_spacing / 2
+        forward = True
 
-            clipped = _clip_segment_around_pads(
-                ox1, oy1, ox2, oy2, pin_holes,
-            )
-            if clipped is None:
+        while y <= max_y:
+            scanline = LineString([(min_x - 1, y), (max_x + 1, y)])
+            intersection = clipped.intersection(scanline)
+
+            segments: list[tuple[float, float, float, float]] = []
+            if intersection.is_empty:
+                y += line_spacing
                 continue
-            cx1, cy1, cx2, cy2 = clipped
+            elif isinstance(intersection, LineString):
+                coords = list(intersection.coords)
+                if len(coords) >= 2:
+                    segments.append((coords[0][0], coords[0][1],
+                                     coords[-1][0], coords[-1][1]))
+            elif isinstance(intersection, MultiLineString):
+                for ls in intersection.geoms:
+                    coords = list(ls.coords)
+                    if len(coords) >= 2:
+                        segments.append((coords[0][0], coords[0][1],
+                                         coords[-1][0], coords[-1][1]))
+            else:
+                for geom in getattr(intersection, 'geoms', []):
+                    if isinstance(geom, LineString):
+                        coords = list(geom.coords)
+                        if len(coords) >= 2:
+                            segments.append((coords[0][0], coords[0][1],
+                                             coords[-1][0], coords[-1][1]))
 
-            seg_len = math.hypot(cx2 - cx1, cy2 - cy1)
-            de = e_per_mm * seg_len
-            lines.append(f"G0 X{cx1:.3f} Y{cy1:.3f} F21000")
-            cumulative_e += de
-            lines.append(f"G1 X{cx2:.3f} Y{cy2:.3f} E{cumulative_e:.5f} F{ironing_speed:.0f}")
+            segments.sort(key=lambda s: s[0])
+            if not forward:
+                segments.reverse()
+                segments = [(x2, y2, x1, y1) for x1, y1, x2, y2 in segments]
 
-    log.info("Generated trace ironing: %d trace segments × %d passes, %d lines",
-             len(trace_segs), num_passes, len(lines))
-    return lines
+            for sx1, sy1, sx2, sy2 in segments:
+                seg_len = math.hypot(sx2 - sx1, sy2 - sy1)
+                if seg_len < 0.01:
+                    continue
+                de = e_per_mm * seg_len
+                lines.append(f"G0 X{sx1:.3f} Y{sy1:.3f} F21000")
+                cumulative_e += de
+                lines.append(f"G1 X{sx2:.3f} Y{sy2:.3f} E{cumulative_e:.5f} F{ironing_speed:.0f}")
+
+            forward = not forward
+            y += line_spacing
+
+    return cumulative_e
 
 
 def generate_pad_ironing_gcode(

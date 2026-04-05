@@ -20,6 +20,9 @@ from pathlib import Path
 from src.pipeline.config import get_printer
 from src.pipeline.gcode.slicer import slice_stl
 from src.pipeline.gcode.pause_points import compute_pause_points, PausePoints, ComponentPauseInfo
+from shapely.geometry import Polygon
+from shapely import affinity
+
 from src.pipeline.gcode.ink_traces import extract_trace_segments, extract_pad_centers, extract_pin_holes, PinHoleRect
 from src.pipeline.gcode.postprocessor import postprocess_gcode, PostProcessResult, compute_bed_offset
 from src.pipeline.gcode.filaments import get_filament, write_filament_overrides
@@ -54,6 +57,7 @@ def run_gcode_pipeline(
     placement_result: dict | None = None,
     extra_overrides: list[Path] | None = None,
     catalog_index: dict[str, object] | None = None,
+    inflated_polygons: list[Polygon] | None = None,
 ) -> GcodePipelineResult:
     """Run the full G-code pipeline: slice → inject pauses → output.
 
@@ -182,6 +186,16 @@ def run_gcode_pipeline(
             for h in pin_holes
         ]
 
+    # ── 3e. Transform inflated polygons to bed-space ──
+    bed_inflated: list[Polygon] | None = None
+    if inflated_polygons:
+        bed_inflated = []
+        for poly in inflated_polygons:
+            mirrored = affinity.scale(poly, xfact=1, yfact=-1, origin=(0, 0))
+            shifted = affinity.translate(mirrored, xoff=dx, yoff=dy)
+            if not shifted.is_empty:
+                bed_inflated.append(shifted)
+
     # ── 4. Post-process ───────────────────────────────────────────
     final_gcode = output_dir / "enclosure.gcode"
     log.info("Post-processing G-code...")
@@ -197,6 +211,7 @@ def run_gcode_pipeline(
         pad_centers=pad_centers,
         silverink_only=silverink_only,
         pin_holes=pin_holes if pin_holes else None,
+        inflated_polygons=bed_inflated,
     )
     stages.extend(pp_result.stages)
     stages.append(f"G-code written: {final_gcode}")
