@@ -159,7 +159,14 @@ def enrich_components(components: list, cat) -> None:
         comp["pins"] = [
             {
                 "id": p.id,
+                "label": p.label,
                 "position_mm": list(p.position_mm),
+                "direction": p.direction,
+                "hole_diameter_mm": p.hole_diameter_mm,
+                "description": p.description,
+                "voltage_v": p.voltage_v,
+                "current_max_ma": p.current_max_ma,
+                **({"shape": {"type": p.shape.type, "width_mm": p.shape.width_mm, "length_mm": p.shape.length_mm}} if p.shape else {}),
                 **({"world_mm": list(pp[p.id])} if p.id in pp else {}),
             }
             for p in c.pins

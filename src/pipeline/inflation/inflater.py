@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 
+from shapely import affinity
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 from shapely.ops import unary_union
 
@@ -14,6 +15,40 @@ from src.pipeline.router.models import InflatedTrace, RoutingResult
 from .solver import NetPolygon, inflate
 
 log = logging.getLogger(__name__)
+
+
+def pin_pad_poly(
+    hole_diameter_mm: float,
+    world_x: float,
+    world_y: float,
+    rotation_deg: float = 0,
+    shape: object | None = None,
+) -> Polygon:
+    """Create a Shapely polygon for a pin pad at its world position."""
+    stype = getattr(shape, "type", "circle") if shape else "circle"
+    sw = getattr(shape, "width_mm", None) if shape else None
+    sl = getattr(shape, "length_mm", None) if shape else None
+
+    if stype == "rect" and sw and sl:
+        hw, hl = sw / 2, sl / 2
+        box = Polygon([(-hw, -hl), (hw, -hl), (hw, hl), (-hw, hl)])
+        if rotation_deg:
+            box = affinity.rotate(box, rotation_deg, origin=(0, 0))
+        return affinity.translate(box, world_x, world_y)
+
+    if stype == "slot" and sw and sl:
+        half_major = max(sw, sl) / 2
+        half_minor = min(sw, sl) / 2
+        line = LineString([
+            (-half_major + half_minor, 0),
+            (half_major - half_minor, 0),
+        ])
+        slot = line.buffer(half_minor, quad_segs=8)
+        if rotation_deg:
+            slot = affinity.rotate(slot, rotation_deg, origin=(0, 0))
+        return affinity.translate(slot, world_x, world_y)
+
+    return Point(world_x, world_y).buffer(hole_diameter_mm / 2, quad_segs=8)
 
 
 def _build_net_polygons(
@@ -117,6 +152,7 @@ def inflate_traces(
     min_wall_gap_mm: float = TRACE_RULES.trace_clearance_mm,
     pin_clearance_mm: float = TRACE_RULES.pin_clearance_mm,
     pin_positions: dict[str, tuple[float, float]] | None = None,
+    pin_pads: dict[str, Polygon] | None = None,
     net_pin_ids: dict[str, set[str]] | None = None,
 ) -> list[InflatedTrace]:
     if not result.traces:
@@ -145,6 +181,7 @@ def inflate_traces(
         inset_outline,
         obstacle_union,
         pin_positions=pin_positions,
+        pin_pads=pin_pads or {},
         trace_clearance=min_wall_gap_mm,
         pin_clearance=pin_clearance_mm,
         max_half=max_half,

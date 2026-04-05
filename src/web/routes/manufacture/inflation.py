@@ -9,7 +9,7 @@ from shapely.geometry import Polygon as ShapelyPolygon
 from src.pipeline.design import parse_physical_design, parse_circuit
 from src.pipeline.placer import assemble_full_placement
 from src.pipeline.router import parse_routing
-from src.pipeline.inflation import inflate_traces, build_obstacle_polygons, inflation_to_dict
+from src.pipeline.inflation import inflate_traces, build_obstacle_polygons, inflation_to_dict, pin_pad_poly
 from src.web.routes._deps import (
     get_catalog, load_session_or_404,
     require_design, require_circuit, require_placement, require_routing,
@@ -52,9 +52,19 @@ async def run_inflation(sid: str):
             obstacles = build_obstacle_polygons(full_placement.components, catalog_map)
 
             pin_positions: dict[str, tuple[float, float]] = {}
+            pin_pads = {}
             for comp in full_placement.components:
+                cat_comp = catalog_map.get(comp.catalog_id)
                 for pid, pos in comp.pin_positions.items():
-                    pin_positions[f"{comp.instance_id}:{pid}"] = pos
+                    key = f"{comp.instance_id}:{pid}"
+                    pin_positions[key] = pos
+                    if cat_comp is not None:
+                        pin = next((p for p in cat_comp.pins if p.id == pid), None)
+                        if pin is not None:
+                            pin_pads[key] = pin_pad_poly(
+                                pin.hole_diameter_mm, pos[0], pos[1],
+                                comp.rotation_deg, pin.shape,
+                            )
 
             net_pin_ids: dict[str, set[str]] = {}
             for net in full_placement.nets:
@@ -71,6 +81,7 @@ async def run_inflation(sid: str):
             inflated = inflate_traces(
                 result, outline_poly, obstacles,
                 pin_positions=pin_positions,
+                pin_pads=pin_pads,
                 net_pin_ids=net_pin_ids,
             )
 

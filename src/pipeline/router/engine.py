@@ -734,6 +734,8 @@ def _block_components(
     catalog_map: dict,
     pad_radius: int,
 ) -> None:
+    res = grid.resolution
+
     for pc in placement.components:
         cat = catalog_map.get(pc.catalog_id)
         if cat is None or not cat.mounting.blocks_routing:
@@ -755,8 +757,9 @@ def _block_components(
                 pin.position_mm, pc.x_mm, pc.y_mm, pc.rotation_deg,
             )
             gx, gy = grid.world_to_grid(wx, wy)
-            for dx in range(-pad_radius, pad_radius + 1):
-                for dy in range(-pad_radius, pad_radius + 1):
+            rx, ry = _pin_grid_halfdims(pin, pc.rotation_deg, res, pad_radius)
+            for dx in range(-rx, rx + 1):
+                for dy in range(-ry, ry + 1):
                     grid.force_free_cell(gx + dx, gy + dy)
                     grid.protect_cell(gx + dx, gy + dy)
 
@@ -795,6 +798,23 @@ def _compute_pin_clearance_cells(cfg: RouterConfig) -> int:
     return max(1, math.ceil(
         (cfg.trace_width_mm / 2 + cfg.pin_clearance_mm) / cfg.grid_resolution_mm
     ))
+
+
+def _pin_grid_halfdims(pin, rotation_deg: float, res: float, default_r: int) -> tuple[int, int]:
+    shape = pin.shape
+    if shape and shape.type == "rect" and shape.width_mm and shape.length_mm:
+        hw, hl = shape.width_mm / 2, shape.length_mm / 2
+    elif shape and shape.type == "slot" and shape.width_mm and shape.length_mm:
+        hw, hl = shape.width_mm / 2, shape.length_mm / 2
+    elif pin.hole_diameter_mm > res:
+        r = pin.hole_diameter_mm / 2
+        return max(default_r, math.ceil(r / res)), max(default_r, math.ceil(r / res))
+    else:
+        return default_r, default_r
+    rot = rotation_deg % 360
+    if rot in (90, 270):
+        hw, hl = hl, hw
+    return max(default_r, math.ceil(hw / res)), max(default_r, math.ceil(hl / res))
 
 
 def _build_pin_voronoi(

@@ -41,6 +41,7 @@ def inflate(
     obstacle_union: Polygon,
     *,
     pin_positions: dict[str, tuple[float, float]],
+    pin_pads: dict[str, Polygon],
     trace_clearance: float,
     pin_clearance: float,
     max_half: float,
@@ -59,13 +60,16 @@ def inflate(
         zone = np_.polygon.buffer(max_expand).intersection(outline)
         if not obstacle_union.is_empty:
             zone = zone.difference(obstacle_union)
-        circles = [
-            Point(pin_positions[pid]).buffer(pin_clearance, quad_segs=8)
-            for pid in frozen_outside[i]
-            if pid in pin_positions
-        ]
-        if circles:
-            zone = zone.difference(unary_union(circles))
+        keepouts = []
+        for pid in frozen_outside[i]:
+            if pid in pin_pads:
+                keepouts.append(pin_pads[pid].buffer(pin_clearance, quad_segs=8))
+            elif pid in pin_positions:
+                keepouts.append(
+                    Point(pin_positions[pid]).buffer(pin_clearance, quad_segs=8)
+                )
+        if keepouts:
+            zone = zone.difference(unary_union(keepouts))
         available.append(zone)
 
     for _it in range(MAX_ITERATIONS):
