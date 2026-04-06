@@ -9,7 +9,7 @@ from shapely.geometry import Polygon as ShapelyPolygon
 from src.pipeline.design import parse_physical_design, parse_circuit
 from src.pipeline.placer import assemble_full_placement
 from src.pipeline.router import parse_routing
-from src.pipeline.inflation import inflate_traces, build_obstacle_polygons, inflation_to_dict, pin_pad_poly
+from src.pipeline.inflation import inflate_traces, build_obstacle_polygons, inflation_to_dict, pin_shaft_poly
 from src.web.routes._deps import (
     get_catalog, load_session_or_404,
     require_design, require_circuit, require_placement, require_routing,
@@ -61,9 +61,9 @@ async def run_inflation(sid: str):
                     if cat_comp is not None:
                         pin = next((p for p in cat_comp.pins if p.id == pid), None)
                         if pin is not None:
-                            pin_pads[key] = pin_pad_poly(
-                                pin.hole_diameter_mm, pos[0], pos[1],
-                                comp.rotation_deg, pin.shape,
+                            pin_pads[key] = pin_shaft_poly(
+                                pin, pos[0], pos[1],
+                                comp.rotation_deg,
                             )
 
             net_pin_ids: dict[str, set[str]] = {}

@@ -166,4 +166,5 @@ async def get_bitmap(sid: str):
         "components": components,
         "traces": traces,
         "trace_width_mm": TRACE_RULES.trace_width_mm,
+        "pin_clearance_mm": TRACE_RULES.pin_clearance_mm,
     }

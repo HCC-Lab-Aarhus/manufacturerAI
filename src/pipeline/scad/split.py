@@ -5,18 +5,13 @@ from __future__ import annotations
 import logging
 
 from src.catalog.models import Component
-from src.pipeline.config import CAVITY_START_MM, CEILING_MM, FLOOR_MM
+from src.pipeline.config import CAVITY_START_MM, CEILING_MM, FLOOR_MM, TRACE_RULES
 from src.pipeline.design.models import Enclosure
 from src.pipeline.placer.models import PlacedComponent
 
 log = logging.getLogger(__name__)
 
-# Default split height for two-part mode.
-# Must be high enough that the full pin funnel taper (1.5 mm) plus
-# a short shaft section fit inside the bottom half, so components
-# can be guided into place with tapered funnels.
-_FUNNEL_TAPER_DEPTH: float = 1.5   # keep in sync with resolver.PINHOLE_TAPER_DEPTH
-_DEFAULT_SPLIT_Z: float = CAVITY_START_MM + _FUNNEL_TAPER_DEPTH + 0.5  # 4.2 mm
+_DEFAULT_SPLIT_Z: float = CAVITY_START_MM + TRACE_RULES.pinhole_taper_depth_mm + 0.5
 
 
 def compute_split_z(

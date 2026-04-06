@@ -16,17 +16,16 @@ from src.pipeline.config import (
 from src.pipeline.placer.models import PlacedComponent
 from src.pipeline.design.models import Outline, Enclosure, OutlineVertex
 from src.pipeline.scad.resolver import (
-    PINHOLE_CLEARANCE, ResolverContext, resolve_component,
+    ResolverContext, resolve_component,
 )
 from src.pipeline.scad.fragment import (
     ScadFragment, RectGeometry, CylinderGeometry,
     PolygonGeometry, SegmentGeometry, CapsuleGeometry,
 )
 from src.pipeline.config import TRACE_RULES
+from src.pipeline.pin_geometry import pin_shaft_dimensions
 
 from ._common import DEBUG_CONFIG, load_slicer_params, run_debug_pipeline
-
-PINHOLE_TAPER_D: float = 3.5
 
 router = APIRouter()
 
@@ -186,7 +185,8 @@ def compute_component_layout(
             px = cx + px_rel
             py = cy + py_rel
             pin_positions[pin.id] = (px, py)
-            hole_r = (pin.hole_diameter_mm + PINHOLE_CLEARANCE) / 2
+            shaft_w, shaft_h = pin_shaft_dimensions(pin)
+            hole_r = max(shaft_w, shaft_h) / 2
             pins.append((px, py, hole_r, pin.id))
 
         used_pin_ids = _select_used_pins(comp, pin_positions, plate_x)
