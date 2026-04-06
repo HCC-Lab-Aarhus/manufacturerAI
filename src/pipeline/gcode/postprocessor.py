@@ -30,10 +30,6 @@ import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from src.pipeline.gcode.ink_traces import PinHoleRect
 
 log = logging.getLogger(__name__)
 
@@ -45,10 +41,6 @@ _MOVE_RE = re.compile(
     r"(?:.*?X(?P<x>[\d.]+))?"
     r"(?:.*?Y(?P<y>[\d.]+))?",
 )
-
-# ── Trace constants ───────────────────────────────────────────────────────
-
-TRACE_BUFFER = 0.6         # mm — half-width exclusion around each trace segment
 
 
 @dataclass
@@ -177,111 +169,6 @@ def _ironing_block(z: float) -> list[str]:
         "",
     ]
 
-
-# ── Geometry helpers — point-to-segment distance ─────────────────
-
-from src.pipeline.trace_geometry import point_seg_dist as _point_to_segment_dist
-
-
-def _segment_near_traces(
-    x1: float, y1: float,
-    x2: float, y2: float,
-    trace_segs: list[tuple[float, float, float, float]],
-    buffer: float = TRACE_BUFFER,
-) -> bool:
-    """Return True if the move (x1,y1)→(x2,y2) passes near any trace.
-
-    We sample points along the move and check distance to every trace
-    segment.  A move is "near" if any sample point is within *buffer*
-    mm of any trace segment.
-    """
-    if not trace_segs:
-        return False
-    length = math.hypot(x2 - x1, y2 - y1)
-    steps = max(2, int(length / (buffer * 0.5)))
-    for i in range(steps + 1):
-        t = i / steps
-        px = x1 + t * (x2 - x1)
-        py = y1 + t * (y2 - y1)
-        for seg in trace_segs:
-            if _point_to_segment_dist(px, py, *seg) < buffer:
-                return True
-    return False
-
-
-# ── Ironing filter — remove ironing moves over traces ────────────
-
-def _filter_ironing_at_ink_layer(
-    lines: list[str],
-    start: int,
-    trace_segs: list[tuple[float, float, float, float]],
-    iron_z: float = 3.0,
-) -> tuple[list[str], int, int]:
-    """Process a ``; TYPE:Ironing`` section, removing moves over traces.
-
-    Instead of deleting moves and inserting complex reposition
-    sequences (which corrupt E-counter continuity and confuse the
-    G-code viewer), we simply convert ironing *extrusion* moves that
-    cross trace channels into *travel* moves (G0).  The nozzle follows
-    the same path but doesn't extrude, leaving the trace channels
-    un-ironed while keeping the layer structure clean.
-
-    Parameters
-    ----------
-    lines : list[str]
-        Full G-code lines list.
-    start : int
-        Index of the ``;TYPE:Ironing`` line.
-    trace_segs : list
-        Trace segments in mm.
-    iron_z : float
-        The Z-height of the ironing layer.
-
-    Returns
-    -------
-    (filtered_lines, end_index, removed_count)
-    """
-    filtered: list[str] = []
-    removed = 0
-    cur_x, cur_y = 0.0, 0.0
-    i = start
-
-    while i < len(lines):
-        line = lines[i]
-
-        # End of ironing section: another ;TYPE: or ;LAYER_CHANGE
-        if i > start and (line.startswith(";TYPE:") or line.startswith(";LAYER_CHANGE")):
-            break
-
-        m = _MOVE_RE.match(line)
-        if m and (m.group("x") or m.group("y")):
-            nx = float(m.group("x")) if m.group("x") else cur_x
-            ny = float(m.group("y")) if m.group("y") else cur_y
-
-            if _segment_near_traces(cur_x, cur_y, nx, ny, trace_segs):
-                # Convert extrusion move to travel — nozzle follows
-                # the same path without extruding.
-                coords = ""
-                if m.group("x"):
-                    coords += f" X{m.group('x')}"
-                if m.group("y"):
-                    coords += f" Y{m.group('y')}"
-                filtered.append(f"G0{coords} ; ironing suppressed over trace")
-                removed += 1
-            else:
-                filtered.append(line)
-
-            cur_x, cur_y = nx, ny
-        else:
-            filtered.append(line)
-            if m and m.group("x"):
-                cur_x = float(m.group("x"))
-            if m and m.group("y"):
-                cur_y = float(m.group("y"))
-
-        i += 1
-
-    return filtered, i, removed
 
 
 
@@ -519,13 +406,12 @@ def postprocess_gcode(
     output_path: Path | None,
     ink_z: float,
     component_pauses: list[tuple[float, str, list[str]]] | None = None,
-    trace_segments: list[tuple[float, float, float, float]] | None = None,
-    pad_centers: list[tuple[float, float]] | None = None,
     silverink_only: bool = False,
-    pin_holes: list[PinHoleRect] | None = None,
-    inflated_polygons: list | None = None,
 ) -> PostProcessResult:
     """Read slicer G-code, inject pauses and ink, write result.
+
+    PrusaSlicer ironing is kept on the ink layer (traces / pin holes)
+    and stripped from all other layers.
 
     Parameters
     ----------
@@ -541,12 +427,6 @@ def postprocess_gcode(
         the pause Z-height, a human-readable label, and a list of
         instance_ids to insert.  Falls back to a single pause at the
         highest Z if *None*.
-    trace_segments : list or None
-        Trace path segments as ``(x1, y1, x2, y2)`` in bed-space mm.
-        Used to generate custom trace-following ironing.
-    pad_centers : list or None
-        ``(x, y)`` positions of pin pads in bed-space mm.  A small
-        ironing pad is generated at each position.
 
     Returns
     -------
@@ -557,9 +437,6 @@ def postprocess_gcode(
             gcode_path.stem + "_staged" + gcode_path.suffix
         )
 
-    trace_segs = trace_segments or []
-    pads = pad_centers or []
-
     # Normalise component pauses into a sorted list of (z, label, ids)
     pending_comp_pauses: list[tuple[float, str, list[str]]] = sorted(
         component_pauses or [],
@@ -568,19 +445,9 @@ def postprocess_gcode(
 
     raw_lines = gcode_path.read_text(encoding="utf-8").splitlines()
 
-    # ── Pre-generate custom trace ironing ─────────────────────────
-    from src.pipeline.gcode.ink_traces import generate_trace_ironing_gcode, generate_pad_ironing_gcode
-    from src.pipeline.config import PIN_FLOOR_PENETRATION, TRACE_HEIGHT_MM
+    from src.pipeline.config import TRACE_HEIGHT_MM, PIN_FLOOR_PENETRATION
     trace_roof_z = ink_z + TRACE_HEIGHT_MM
-    custom_ironing_lines = generate_trace_ironing_gcode(
-        trace_segs, pads, ink_z=ink_z, pad_z_drop=PIN_FLOOR_PENETRATION,
-        pin_holes=pin_holes,
-        inflated_polygons=inflated_polygons,
-    ) if trace_segs or inflated_polygons else []
-    from src.pipeline.gcode.ink_traces import IRONING_Z_LIFT
-    pad_z = ink_z - PIN_FLOOR_PENETRATION + IRONING_Z_LIFT
-    custom_pad_ironing_lines = generate_pad_ironing_gcode(pads) if pads else []
-    pad_ironing_injected = False
+    pin_floor_z = ink_z - PIN_FLOOR_PENETRATION
 
     out: list[str] = []
     total_layers = 0
@@ -589,15 +456,9 @@ def postprocess_gcode(
     comp_pause_idx = 0           # index into pending_comp_pauses
     ink_layer_num = -1
     comp_layer_nums: list[int] = []
-    ironing_moves_removed = 0
     ironing_layers_stripped = 0
     ironing_lines_stripped = 0
-    current_z = 0.0                  # track Z for ironing filtering
-
-
-    # Track whether we're inside the ink layer (between ink_z and the
-    # next layer change) so we can filter ironing in that range.
-    in_ink_layer = False
+    current_z = 0.0
 
     # silverink_only: skip all layers before the ink layer, keeping
     # only the startup preamble (before the first ;LAYER_CHANGE) and
@@ -646,39 +507,14 @@ def postprocess_gcode(
 
             current_z = z_val
 
-            # Leaving the ink layer
-            if in_ink_layer and z_val > ink_z + 0.01:
-                in_ink_layer = False
-
-            # ── Pad ironing on the pad Z layer ───────────────
-            # Inject pad ironing when we pass the pad_z layer.
-            # This happens before the ink layer so pads are ironed
-            # on an earlier (lower) layer than traces.
-            # The pad ironing G-code includes its own Z moves to
-            # descend to pad_z and return to current_z.
-            if (not pad_ironing_injected
-                    and custom_pad_ironing_lines
-                    and z_val > pad_z + 0.01):
-                pad_ironing_injected = True
-                out.append(f"G0 Z{pad_z:.3f} F720 ; lower to pad ironing Z (lifted)")
-                out.extend(custom_pad_ironing_lines)
-                out.append(f"G0 Z{z_val:.3f} F720 ; return to layer Z")
-                stages.append(f"Pad ironing at Z={pad_z:.2f}")
-
             # ── Ironing at floor level ────────────────────────
             # Trigger one layer ABOVE ink_z so the floor layer
             # (including ironing) prints first.
             if not ironing_injected and z_val > ink_z + 0.01:
                 ironing_injected = True
                 ink_layer_num = total_layers
-                in_ink_layer = True
 
                 out.extend(_ironing_block(ink_z))
-
-                if ironing_moves_removed:
-                    stages.append(
-                        f"Removed {ironing_moves_removed} ironing moves over trace channels"
-                    )
                 stages.append(f"Ironing at Z={ink_z:.2f}")
 
             # ── Ink layer pause at trace roof ────────────────
@@ -763,27 +599,10 @@ def postprocess_gcode(
                 stages.append(f"Component pause '{cp_label}' at Z={cp_z:.2f}")
                 comp_pause_idx += 1
 
-        # ── Ink-layer ironing: replace with trace-following ironing ──
-        # Instead of the slicer's full-surface ironing, we inject a
-        # single-pass 1 mm wide ironing along the actual trace paths,
-        # plus small pads at each used pin endpoint.
-
-        # ── Strip ironing from all layers ─────────────────
-        # Non-ink layers: unnecessary, wastes time.
-        # Ink layer: replaced by custom trace-following ironing.
-        #
-        # PrusaSlicer emits a travel preamble before each ironing
-        # section (retract → G92 E0 → lift → travel → lower →
-        # unretract → ;TYPE:Ironing) and a retract postamble after
-        # it.  When we strip the ironing moves, we must also:
-        #  a) remove the preamble (already in `out`)
-        #  b) if another print section follows, keep the travel from
-        #     the ironing postamble to the next section — but replace
-        #     the ironing retract (whose E value is invalid after
-        #     stripping) with a clean retract.
-        # ── Strip infill in silverink_only debug mode ────────
-        # In debug mode we only care about perimeters and ink
-        # pauses — infill wastes time and filament.
+        # ── Strip ironing from non-ink layers ─────────────────
+        # PrusaSlicer irons all top surfaces; we only want ironing
+        # on the ink layer (traces) and the pin hole floor layer.
+        # All other layers are stripped to save time.
         stripped_line = line.strip()
         strip_infill = (
             silverink_only
@@ -876,25 +695,14 @@ def postprocess_gcode(
             )
             continue  # don't append the ;TYPE:…infill line itself
 
-        is_ink_layer_ironing = (
-            stripped_line == ';TYPE:Ironing'
-            and abs(current_z - ink_z) <= 0.05
-            and custom_ironing_lines
+        keep_ironing = (
+            abs(current_z - ink_z) <= 0.05
+            or abs(current_z - pin_floor_z) <= 0.05
         )
         strip_ironing = (
             stripped_line == ';TYPE:Ironing'
-            and (abs(current_z - ink_z) > 0.05 or silverink_only or is_ink_layer_ironing)
+            and not keep_ironing
         )
-        if is_ink_layer_ironing:
-            i += 1
-            while i < len(raw_lines):
-                nxt = raw_lines[i].strip()
-                if nxt.startswith(';TYPE:') or nxt.startswith(';LAYER_CHANGE'):
-                    break
-                i += 1
-            out.extend(custom_ironing_lines)
-            stages.append("Replaced ink-layer ironing with trace-following ironing")
-            continue
         if strip_ironing:
             # Collect all lines in the ironing section
             section: list[str] = []
@@ -1026,8 +834,6 @@ def postprocess_gcode(
         "Post-processed G-code: %d layers, ink@L%d (Z=%.2f), %d component pauses → %s",
         total_layers, ink_layer_num, ink_z, len(comp_layer_nums), output_path,
     )
-    if ironing_moves_removed:
-        log.info("  Removed %d ironing moves over trace channels", ironing_moves_removed)
     if ironing_layers_stripped:
         log.info(
             "  Stripped ironing from %d non-ink layers (%d lines removed)",
