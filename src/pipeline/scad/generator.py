@@ -20,7 +20,7 @@ from src.catalog.loader import load_catalog
 from src.catalog.models import Component
 from src.pipeline.config import (
     CAVITY_START_MM, CEILING_MM, FLOOR_MM, PIN_FLOOR_PENETRATION,
-    SPLIT_OVERLAP_MM, TRACE_HEIGHT_MM,
+    SPLIT_OVERLAP_MM, TRACE_HEIGHT_MM, TRACE_RULES,
     component_z_range,
 )
 from src.pipeline.design.parsing import parse_physical_design, parse_circuit, build_design_spec
@@ -443,12 +443,10 @@ def _generate_two_part(
     # Add funnel tapers at the TOP of the bottom tray for every pin
     # so components can be guided into the narrow pin shafts below.
     # Funnels widen from pin-shaft diameter at the bottom up to
-    # (shaft + PINHOLE_TAPER_EXTRA) at split_z.
+    # (shaft + taper_extra) at split_z.
     from .fragment import rotate_point as _rot_pt
-    _TAPER_DEPTH = 1.5    # same as resolver PINHOLE_TAPER_DEPTH
-    _TAPER_EXTRA = 1.0    # same as resolver PINHOLE_TAPER_EXTRA
-    _PIN_CLR = 1.0        # same as resolver PINHOLE_CLEARANCE
-    funnel_z_base = max(split_z - _TAPER_DEPTH, FLOOR_MM)
+    from src.pipeline.pin_geometry import pin_shaft_dimensions
+    funnel_z_base = max(split_z - TRACE_RULES.pinhole_taper_depth_mm, FLOOR_MM)
     funnel_depth = split_z - funnel_z_base
     if funnel_depth > 0.1:
         for comp in placement.components:
@@ -468,16 +466,11 @@ def _generate_two_part(
                     px = comp.x_mm + px_rel
                     py = comp.y_mm + py_rel
 
-                pin_d = pin.hole_diameter_mm + _PIN_CLR
-                if pin.shape and pin.shape.type in ("rect", "slot"):
-                    shaft_w = (pin.shape.width_mm or pin_d) + _PIN_CLR
-                    shaft_h_dim = (pin.shape.length_mm or pin_d) + _PIN_CLR
-                else:
-                    shaft_w = pin_d
-                    shaft_h_dim = pin_d
+                shaft_w, shaft_h_dim = pin_shaft_dimensions(pin)
 
-                scale_x = (shaft_w + _TAPER_EXTRA) / shaft_w
-                scale_y = (shaft_h_dim + _TAPER_EXTRA) / shaft_h_dim
+                extra = TRACE_RULES.pinhole_taper_extra_mm
+                scale_x = (shaft_w + extra) / shaft_w
+                scale_y = (shaft_h_dim + extra) / shaft_h_dim
                 taper = max(scale_x, scale_y)
                 bottom_frags.append(ScadFragment(
                     type="cutout",

@@ -71,14 +71,6 @@ async def start_gcode(
                 if infos:
                     comp_infos = infos
 
-            # Load inflated trace polygons for ironing
-            from src.pipeline.inflation.serialization import parse_inflation
-            inflated_polys = None
-            inflation_data = s.read_artifact("inflation.json")
-            if inflation_data:
-                inflated_traces = parse_inflation(inflation_data)
-                inflated_polys = [it.polygon for it in inflated_traces]
-
             result = run_gcode_pipeline(
                 stl_path=stl_path,
                 output_dir=s.artifact_path("enclosure.gcode").parent,
@@ -88,9 +80,6 @@ async def start_gcode(
                 filament=s.filament_id,
                 silverink_only=silverink_only,
                 component_infos=comp_infos,
-                placement_result=placement_data,
-                catalog_index=cat_idx or None,
-                inflated_polygons=inflated_polys,
             )
             if result.success:
                 s.pipeline_state["gcode"] = "complete"

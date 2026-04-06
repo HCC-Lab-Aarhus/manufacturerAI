@@ -16,7 +16,7 @@ class ModelDef:
 MODELS: dict[str, ModelDef] = {
     "low": ModelDef(id="low", label="Low", api_model="claude-haiku-4-5", supports_thinking=False),
     "medium": ModelDef(id="medium", label="Medium", api_model="claude-sonnet-4-6", supports_thinking=True),
-    "high": ModelDef(id="high", label="High", api_model="claude-sonnet-4-6", supports_thinking=True),
+    "high": ModelDef(id="high", label="High", api_model="claude-opus-4-6", supports_thinking=True),
 }
 
 DEFAULT_MODEL = "medium"

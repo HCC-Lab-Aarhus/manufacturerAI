@@ -331,6 +331,7 @@ def build_routing_response(session: Session, cat) -> dict:
         "failed_nets": routing.get("failed_nets", []),
         "jumpers": routing.get("jumpers", []),
         "trace_width_mm": TRACE_RULES.trace_width_mm,
+        "pin_clearance_mm": TRACE_RULES.pin_clearance_mm,
     }
     enrich_components(response["components"], cat)
     _add_shape_fields(response, outline_data, response["enclosure"])

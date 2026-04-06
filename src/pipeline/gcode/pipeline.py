@@ -20,11 +20,8 @@ from pathlib import Path
 from src.pipeline.config import get_printer
 from src.pipeline.gcode.slicer import slice_stl
 from src.pipeline.gcode.pause_points import compute_pause_points, PausePoints, ComponentPauseInfo
-from shapely.geometry import Polygon
-from shapely import affinity
 
-from src.pipeline.gcode.ink_traces import extract_trace_segments, extract_pad_centers, extract_pin_holes, PinHoleRect
-from src.pipeline.gcode.postprocessor import postprocess_gcode, PostProcessResult, compute_bed_offset
+from src.pipeline.gcode.postprocessor import postprocess_gcode, PostProcessResult
 from src.pipeline.gcode.filaments import get_filament, write_filament_overrides
 
 log = logging.getLogger(__name__)
@@ -54,10 +51,7 @@ def run_gcode_pipeline(
     filament: str = "",
     silverink_only: bool = False,
     component_infos: list[ComponentPauseInfo] | None = None,
-    placement_result: dict | None = None,
     extra_overrides: list[Path] | None = None,
-    catalog_index: dict[str, object] | None = None,
-    inflated_polygons: list[Polygon] | None = None,
 ) -> GcodePipelineResult:
     """Run the full G-code pipeline: slice → inject pauses → output.
 
@@ -148,55 +142,7 @@ def run_gcode_pipeline(
         )
     stages.append(f"Slicing succeeded: {slicer_gcode_path}")
 
-    # ── 3. Extract trace segments and pad centres for ironing ──
-    trace_segs = extract_trace_segments(
-        routing_result=routing_result,
-    )
-    pad_centers = extract_pad_centers(
-        placement_result=placement_result,
-    )
-    pin_holes = extract_pin_holes(
-        placement_result=placement_result,
-        catalog_index=catalog_index,
-    )
-    if trace_segs:
-        stages.append(f"Trace segments: {len(trace_segs)} segments, {len(pad_centers)} pads")
-
-    # ── 3c. Compute bed offset (model centred on usable area) ──
-    bed_offset = compute_bed_offset(
-        stl_path,
-        bed_size=(pdef.nominal_bed_width, pdef.nominal_bed_depth),
-        center=pdef.usable_center,
-    )
-    stages.append(f"Bed offset: ({bed_offset[0]:.1f}, {bed_offset[1]:.1f}) mm")
-
-    # ── 3d. Transform trace/pad coords from model-space to bed-space ──
-    # The SCAD emitter wraps the model in mirror([0,1,0]) which
-    # negates all Y in the STL.  Trace/pad coordinates come from the
-    # router in unmirored model-space, so we apply the same Y-negate
-    # then shift by the bed offset to match the slicer G-code.
-    dx, dy = bed_offset
-    if trace_segs:
-        trace_segs = [(x1 + dx, -y1 + dy, x2 + dx, -y2 + dy) for x1, y1, x2, y2 in trace_segs]
-    if pad_centers:
-        pad_centers = [(x + dx, -y + dy) for x, y in pad_centers]
-    if pin_holes:
-        pin_holes = [
-            PinHoleRect(h.cx + dx, -h.cy + dy, h.half_w, h.half_h)
-            for h in pin_holes
-        ]
-
-    # ── 3e. Transform inflated polygons to bed-space ──
-    bed_inflated: list[Polygon] | None = None
-    if inflated_polygons:
-        bed_inflated = []
-        for poly in inflated_polygons:
-            mirrored = affinity.scale(poly, xfact=1, yfact=-1, origin=(0, 0))
-            shifted = affinity.translate(mirrored, xoff=dx, yoff=dy)
-            if not shifted.is_empty:
-                bed_inflated.append(shifted)
-
-    # ── 4. Post-process ───────────────────────────────────────────
+    # ── 3. Post-process ───────────────────────────────────────────
     final_gcode = output_dir / "enclosure.gcode"
     log.info("Post-processing G-code...")
 
@@ -207,11 +153,7 @@ def run_gcode_pipeline(
         component_pauses=[
             (p.z, p.label, p.components) for p in pauses.pauses if p.label != "ink"
         ],
-        trace_segments=trace_segs,
-        pad_centers=pad_centers,
         silverink_only=silverink_only,
-        pin_holes=pin_holes if pin_holes else None,
-        inflated_polygons=bed_inflated,
     )
     stages.extend(pp_result.stages)
     stages.append(f"G-code written: {final_gcode}")

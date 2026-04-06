@@ -58,6 +58,20 @@ class TraceRules:
     max_trace_width_mm: float = 10.0
     """Maximum width a trace can expand to during Voronoi inflation."""
 
+    pinhole_clearance_mm: float = 1.0
+    """Extra mm added to each pin dimension for the physical 3D cutout
+    (shaft hole in plastic).  Accounts for FDM print tolerance."""
+
+    pinhole_taper_extra_mm: float = 1.0
+    """Extra width on each side of the funnel mouth above the pin shaft."""
+
+    pinhole_taper_depth_mm: float = 1.5
+    """Height of the graduated funnel zone above the pin shaft."""
+
+    max_common_hole_diameter_mm: float = 1.2
+    """Largest common pin hole diameter across the catalog, used to
+    derive minimum pin-to-pin centre distance."""
+
     # ── Derived helpers ────────────────────────────────────────────
 
     @property
@@ -77,9 +91,8 @@ class TraceRules:
 
         Ensures a trace (with its clearance envelope) can pass between
         two pins without violating pin_clearance on either side.
-        Equals the largest common hole diameter (1.2 mm) + 2× pin_clearance.
         """
-        return 1.2 + 2 * self.pin_clearance_mm
+        return self.max_common_hole_diameter_mm + 2 * self.pin_clearance_mm
 
     @property
     def min_edge_clearance_mm(self) -> float:
@@ -149,7 +162,7 @@ def bed_bitmap(pdef: "PrinterDef") -> BedBitmap:
 #   └── total_height
 
 FLOOR_MM: float = 1.6
-TRACE_HEIGHT_MM: float = 0.3
+TRACE_HEIGHT_MM: float = 1.0
 COMPONENT_OFFSET_MM: float = 0.6
 CAVITY_START_MM: float = FLOOR_MM + COMPONENT_OFFSET_MM
 CEILING_MM: float = 2.0
