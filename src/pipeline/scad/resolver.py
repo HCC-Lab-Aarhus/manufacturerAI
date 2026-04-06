@@ -17,14 +17,13 @@ from src.pipeline.placer.models import PlacedComponent
 
 from .fragment import (
     ScadFragment, RectGeometry, CylinderGeometry,
-    PolygonGeometry, SegmentGeometry, rotated_polygon, rotate_point,
+    PolygonGeometry, rotated_polygon, rotate_point,
 )
 
 SURFACE_OVERSHOOT: float = 1.0
 PINHOLE_CLEARANCE: float = 1.0
 PINHOLE_TAPER_EXTRA: float = 1.0   # extra width on each side for the funnel mouth
 PINHOLE_TAPER_DEPTH: float = 1.5   # total height of the graduated funnel zone (mm)
-PIN_BRIDGE_WIDTH: float = 1.6
 
 
 @dataclass
@@ -76,7 +75,6 @@ class ComponentResolver:
         else:
             frags = self._internal_mount()
 
-        frags.extend(self._pin_bridge_fragments())
         frags.extend(self._pinhole_fragments())
         frags.extend(self._scad_feature_fragments())
 
@@ -418,77 +416,6 @@ class ComponentResolver:
                     taper_scale=taper,
                     label=f"pin funnel {self.cid}:{pin.id}",
                 ))
-
-        return frags
-
-    # ── Pin bridges ──────────────────────────────────────────────────
-
-    def _pin_bridge_fragments(self) -> list[ScadFragment]:
-        """Bridge channels for pins that fall outside the body pocket."""
-        frags: list[ScadFragment] = []
-        body = self.catalog.body
-        body_floor, body_top = self._z_range()
-        channel_depth = body_top - body_floor
-
-        for pin in self.catalog.pins:
-            pos = self.placed.pin_positions.get(pin.id)
-            if pos is not None:
-                pin_wx, pin_wy = pos[0], pos[1]
-                rx, ry = pin_wx - self.cx, pin_wy - self.cy
-                if self.rot:
-                    px_rel, py_rel = rotate_point(rx, ry, -self.rot)
-                else:
-                    px_rel, py_rel = rx, ry
-            else:
-                px_rel = float(pin.position_mm[0])
-                py_rel = float(pin.position_mm[1])
-                if self.rot:
-                    rx, ry = rotate_point(px_rel, py_rel, self.rot)
-                else:
-                    rx, ry = px_rel, py_rel
-                pin_wx = self.cx + rx
-                pin_wy = self.cy + ry
-
-            if body.shape == "circle":
-                r = body.diameter_mm / 2
-                dist = math.hypot(px_rel, py_rel)
-                if dist <= r:
-                    continue
-            else:
-                hw = body.width_mm / 2
-                hh = body.length_mm / 2
-                if abs(px_rel) <= hw and abs(py_rel) <= hh:
-                    continue
-
-            if body.shape == "circle":
-                face_x = px_rel * r / dist
-                face_y = py_rel * r / dist
-            else:
-                outside_x = abs(px_rel) - hw
-                outside_y = abs(py_rel) - hh
-                if outside_x >= outside_y:
-                    face_x = math.copysign(hw, px_rel)
-                    face_y = py_rel
-                else:
-                    face_x = px_rel
-                    face_y = math.copysign(hh, py_rel)
-
-            if self.rot:
-                frx, fry = rotate_point(face_x, face_y, self.rot)
-            else:
-                frx, fry = face_x, face_y
-            face_wx = self.cx + frx
-            face_wy = self.cy + fry
-
-            frags.append(ScadFragment(
-                type="cutout",
-                geometry=SegmentGeometry(
-                    pin_wx, pin_wy, face_wx, face_wy, PIN_BRIDGE_WIDTH,
-                ),
-                z_base=body_floor,
-                depth=channel_depth,
-                label=f"pin bridge {self.cid}:{pin.id}",
-            ))
 
         return frags
 

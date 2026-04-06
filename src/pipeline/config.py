@@ -25,6 +25,9 @@ log = logging.getLogger(__name__)
 
 PIXEL_SIZE_MM: float = 0.1371
 
+FDM_NOZZLE_D: float = 0.4
+FDM_EXTRUSION_W: float = FDM_NOZZLE_D * 1.125  # 0.45 mm
+TWO_WALLS_MM: float = 2 * FDM_EXTRUSION_W       # 0.9 mm
 
 
 @dataclass(frozen=True)
@@ -37,12 +40,13 @@ class TraceRules:
     trace_width_mm: float = 1.0
     """Width of a single conductive-ink trace."""
 
-    trace_clearance_mm: float = 1.0
+    trace_clearance_mm: float = TWO_WALLS_MM
     """Minimum edge-to-edge gap between two traces (or a trace and
-    another net's clearance zone)."""
+    another net's clearance zone).  Equals two FDM perimeter walls."""
 
-    pin_clearance_mm: float = 1.5
-    """Minimum gap from a trace edge to a foreign pin centre."""
+    pin_clearance_mm: float = TWO_WALLS_MM
+    """Minimum gap from a trace edge to a foreign pin centre.
+    Equals two FDM perimeter walls."""
 
     edge_clearance_mm: float = 1.5
     """Minimum distance from a trace to the outline edge."""
@@ -50,6 +54,9 @@ class TraceRules:
     grid_resolution_mm: float = 0.5
     """Routing-grid cell size (mm).  Independent of the bitmap resolution;
     the bitmap is rendered from world-mm trace coordinates after routing."""
+
+    max_trace_width_mm: float = 10.0
+    """Maximum width a trace can expand to during Voronoi inflation."""
 
     # ── Derived helpers ────────────────────────────────────────────
 
@@ -270,10 +277,10 @@ PRINTERS: dict[str, PrinterDef] = {
         label="Prusa MK3S",
         nominal_bed_width=250.0,
         nominal_bed_depth=210.0,
-        keepout_left=14.0,
-        keepout_right=32.0,
+        keepout_left=0.0,
+        keepout_right=64.67,
         keepout_front=0.0,
-        keepout_back=32.0,
+        keepout_back=34.84,
         max_z_mm=210.0,
         profile_filename="slicer_profile_mk3s.ini",
     ),
@@ -282,10 +289,10 @@ PRINTERS: dict[str, PrinterDef] = {
         label="Prusa i3 MK3S+",
         nominal_bed_width=250.0,
         nominal_bed_depth=210.0,
-        keepout_left=14.0,
-        keepout_right=32.0,
+        keepout_left=0.0,
+        keepout_right=64.67,
         keepout_front=0.0,
-        keepout_back=32.0,
+        keepout_back=34.84,
         max_z_mm=210.0,
         profile_filename="slicer_profile_mk3s_plus.ini",
     ),

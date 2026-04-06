@@ -30,6 +30,10 @@ import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.pipeline.gcode.ink_traces import PinHoleRect
 
 log = logging.getLogger(__name__)
 
@@ -176,19 +180,7 @@ def _ironing_block(z: float) -> list[str]:
 
 # ── Geometry helpers — point-to-segment distance ─────────────────
 
-def _point_to_segment_dist(
-    px: float, py: float,
-    ax: float, ay: float,
-    bx: float, by: float,
-) -> float:
-    """Minimum distance from point (px, py) to segment (ax, ay)→(bx, by)."""
-    dx, dy = bx - ax, by - ay
-    if dx == 0 and dy == 0:
-        return math.hypot(px - ax, py - ay)
-    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
-    proj_x = ax + t * dx
-    proj_y = ay + t * dy
-    return math.hypot(px - proj_x, py - proj_y)
+from src.pipeline.trace_geometry import point_seg_dist as _point_to_segment_dist
 
 
 def _segment_near_traces(
@@ -530,6 +522,8 @@ def postprocess_gcode(
     trace_segments: list[tuple[float, float, float, float]] | None = None,
     pad_centers: list[tuple[float, float]] | None = None,
     silverink_only: bool = False,
+    pin_holes: list[PinHoleRect] | None = None,
+    inflated_polygons: list | None = None,
 ) -> PostProcessResult:
     """Read slicer G-code, inject pauses and ink, write result.
 
@@ -576,16 +570,21 @@ def postprocess_gcode(
 
     # ── Pre-generate custom trace ironing ─────────────────────────
     from src.pipeline.gcode.ink_traces import generate_trace_ironing_gcode, generate_pad_ironing_gcode
-    from src.pipeline.config import PIN_FLOOR_PENETRATION
+    from src.pipeline.config import PIN_FLOOR_PENETRATION, TRACE_HEIGHT_MM
+    trace_roof_z = ink_z + TRACE_HEIGHT_MM
     custom_ironing_lines = generate_trace_ironing_gcode(
         trace_segs, pads, ink_z=ink_z, pad_z_drop=PIN_FLOOR_PENETRATION,
-    ) if trace_segs else []
-    pad_z = ink_z - PIN_FLOOR_PENETRATION
+        pin_holes=pin_holes,
+        inflated_polygons=inflated_polygons,
+    ) if trace_segs or inflated_polygons else []
+    from src.pipeline.gcode.ink_traces import IRONING_Z_LIFT
+    pad_z = ink_z - PIN_FLOOR_PENETRATION + IRONING_Z_LIFT
     custom_pad_ironing_lines = generate_pad_ironing_gcode(pads) if pads else []
     pad_ironing_injected = False
 
     out: list[str] = []
     total_layers = 0
+    ironing_injected = False
     ink_injected = False
     comp_pause_idx = 0           # index into pending_comp_pauses
     ink_layer_num = -1
@@ -661,46 +660,51 @@ def postprocess_gcode(
                     and custom_pad_ironing_lines
                     and z_val > pad_z + 0.01):
                 pad_ironing_injected = True
-                out.append(f"G0 Z{pad_z:.3f} F720 ; lower to pad ironing Z")
+                out.append(f"G0 Z{pad_z:.3f} F720 ; lower to pad ironing Z (lifted)")
                 out.extend(custom_pad_ironing_lines)
                 out.append(f"G0 Z{z_val:.3f} F720 ; return to layer Z")
                 stages.append(f"Pad ironing at Z={pad_z:.2f}")
 
-            # ── Ink layer pause ──────────────────────────────
+            # ── Ironing at floor level ────────────────────────
             # Trigger one layer ABOVE ink_z so the floor layer
-            # (including ironing) prints first, then we pause to
-            # deposit ink into the smooth ironed channels.
-            if not ink_injected and z_val > ink_z + 0.01:
-                ink_injected = True
+            # (including ironing) prints first.
+            if not ironing_injected and z_val > ink_z + 0.01:
+                ironing_injected = True
                 ink_layer_num = total_layers
                 in_ink_layer = True
 
-                # Insert ironing marker
                 out.extend(_ironing_block(ink_z))
 
                 if ironing_moves_removed:
                     stages.append(
                         f"Removed {ironing_moves_removed} ironing moves over trace channels"
                     )
+                stages.append(f"Ironing at Z={ink_z:.2f}")
 
-                # Insert ink pause
+            # ── Ink layer pause at trace roof ────────────────
+            # Trigger after trace channel walls are printed so
+            # that ink is deposited into the open channels right
+            # before they are closed off.
+            if not ink_injected and z_val > trace_roof_z + 0.01:
+                ink_injected = True
+
                 out.extend(_ink_pause_block(
                     "DEPOSIT CONDUCTIVE INK",
-                    ink_z,
+                    trace_roof_z,
                     [
-                        "The floor surface has been ironed.",
-                        "Deposit conductive ink along the trace channels.",
+                        "Trace channels have been printed.",
+                        "Deposit conductive ink into the channels.",
                         "Press the knob when done to resume printing.",
                     ],
                     display_msg="connect silver ink",
                 ))
 
-                stages.append(f"Ink pause at Z={ink_z:.2f}")
+                stages.append(f"Ink pause at Z={trace_roof_z:.2f}")
                 stages.append(f"Ink layer: {ink_layer_num}")
 
                 if silverink_only:
                     stages.append("Silver ink debug mode — stopping after ink pause")
-                    z_offset = ink_z - 0.2
+                    z_offset = trace_roof_z - 0.2
                     _Z_PARAM = re.compile(r'(?<=Z)([\d.]+)')
                     shifted_out = []
                     for ol in out:

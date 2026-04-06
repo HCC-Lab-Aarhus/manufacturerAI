@@ -29,6 +29,7 @@ from src.pipeline.design.models import Outline
 from src.pipeline.placer.serialization import assemble_full_placement
 from src.pipeline.router.models import RoutingResult
 from src.pipeline.router.serialization import parse_routing
+from src.pipeline.inflation import parse_inflation
 from src.pipeline.gcode.pause_points import (
     ComponentPauseInfo, pause_z_for_component,
 )
@@ -98,6 +99,11 @@ def run_scad_step(
             "routing.json not found — generating enclosure without trace channels."
         )
         routing = RoutingResult(traces=[], pin_assignments={}, failed_nets=[])
+
+    inflation_raw = session.read_artifact("inflation.json")
+    if inflation_raw is not None:
+        routing.inflated_traces = parse_inflation(inflation_raw)
+
     catalog = load_catalog()
 
     if not catalog.ok:

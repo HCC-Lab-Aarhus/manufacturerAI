@@ -1,66 +1,56 @@
 from __future__ import annotations
 
-import math
 from typing import Any
 
 from fastapi import APIRouter, Query
 
-from src.pipeline.config import get_printer, PrinterDef, BedBitmap, bed_bitmap
-from src.pipeline.gcode.filaments import get_filament
-from ._common import DEBUG_CONFIG, load_slicer_params, slice_debug_boxes
+from src.pipeline.config import FLOOR_MM
+from ._common import DEBUG_CONFIG, load_slicer_params, run_debug_pipeline
 
 router = APIRouter()
 
 
-def _calibration_bitmap(
-    pdef: PrinterDef,
-    grid: BedBitmap,
+def _calibration_scad_and_traces(
     box: float,
     pad: float,
     sq: float,
-) -> str:
-    """Generate a full-bed bitmap with three filled squares.
+    z_height: float,
+) -> tuple[str, list[list[tuple[float, float]]], tuple[float, float]]:
+    """Build SCAD + trace paths for the calibration pattern.
 
-    Top-right corner is omitted for orientation.
-
-    The bitmap covers the entire nominal bed.  Square positions
-    are in absolute bed coordinates, converted directly to pixel
-    coordinates (column = bed_x / pixel_size, row = bed_y / pixel_size).
+    Three squares in corners of a ``box``-sized area (top-right
+    intentionally omitted for orientation).  Everything is in
+    model-local coordinates with origin at (0, 0).
     """
-    px = grid.pixel_size_mm
-    cols = grid.cols
-    rows = grid.rows
-
-    nom_w = pdef.nominal_bed_width
-    nom_d = pdef.nominal_bed_depth
-    cx, cy = nom_w / 2, nom_d / 2
-    half = box / 2
-
-    corners_bed = [
-        (cx - half + pad, cy - half + pad),
-        (cx + half - pad - sq, cy - half + pad),
-        (cx - half + pad, cy + half - pad - sq),
+    corners = [
+        (pad, pad),
+        (box - pad - sq, pad),
+        (pad, box - pad - sq),
     ]
 
-    ink_cells: set[tuple[int, int]] = set()
-    for bed_x, bed_y in corners_bed:
-        px0, py0 = grid.bed_to_pixel(bed_x, bed_y)
-        c0 = max(0, int(math.floor(px0)))
-        c1 = min(cols - 1, int(math.floor(px0 + sq / px)))
-        r0 = max(0, int(math.floor(py0)))
-        r1 = min(rows - 1, int(math.floor(py0 + sq / px)))
-        for c in range(c0, c1 + 1):
-            for r in range(r0, r1 + 1):
-                ink_cells.add((r, c))
+    lines = [
+        "$fn = 32;",
+        "union() {",
+    ]
+    for cx, cy in corners:
+        lines.append(f"  translate([{cx:.3f}, {cy:.3f}, 0])")
+        lines.append(f"    cube([{sq:.3f}, {sq:.3f}, {z_height:.3f}]);")
+    lines.append("}")
+    scad_src = "\n".join(lines)
 
-    lines: list[str] = []
-    for r in range(rows - 1, -1, -1):
-        line_chars = []
-        for c in range(cols):
-            line_chars.append('1' if (r, c) in ink_cells else '0')
-        lines.append(''.join(line_chars))
+    trace_paths: list[list[tuple[float, float]]] = []
+    for cx, cy in corners:
+        mid_x = cx + sq / 2
+        mid_y = cy + sq / 2
+        trace_paths.append([
+            (cx, mid_y), (cx + sq, mid_y),
+        ])
+        trace_paths.append([
+            (mid_x, cy), (mid_x, cy + sq),
+        ])
 
-    return "\n".join(lines)
+    model_center = (box / 2, box / 2)
+    return scad_src, trace_paths, model_center
 
 
 @router.post("/calibrate")
@@ -68,31 +58,16 @@ async def generate_calibration(
     printer: str = Query("coreone"),
     filament: str = Query("prusament_pla"),
 ) -> dict[str, Any]:
-    """Generate alignment G-code + bitmap for inkjet offset calibration."""
     cfg = DEBUG_CONFIG
-    pdef = get_printer(printer)
-    fdef = get_filament(filament)
-    grid = bed_bitmap(pdef)
-
     sp = load_slicer_params(printer)
-    cx, cy = pdef.nominal_bed_width / 2, pdef.nominal_bed_depth / 2
-    half = cfg.cal_box_size / 2
-    z_height = sp.first_layer_height
+    z_height = max(sp.layer_height * cfg.layers, FLOOR_MM + sp.layer_height)
 
-    corners = [
-        (cx - half + cfg.padding, cy - half + cfg.padding),
-        (cx + half - cfg.padding - cfg.cal_square_size, cy - half + cfg.padding),
-        (cx - half + cfg.padding, cy + half - cfg.padding - cfg.cal_square_size),
-    ]
-    boxes = [(x, y, cfg.cal_square_size, cfg.cal_square_size, z_height) for x, y in corners]
-    gcode = slice_debug_boxes(pdef, fdef, boxes, printer_id=printer)
+    scad_src, trace_paths, model_center = _calibration_scad_and_traces(
+        cfg.cal_box_size, cfg.padding, cfg.cal_square_size, z_height,
+    )
 
-    bitmap = _calibration_bitmap(pdef, grid, cfg.cal_box_size, cfg.padding, cfg.cal_square_size)
-
-    part_origin_x = cx - half
-    part_origin_y = cy - half
-
-    return {
-        "gcode": gcode,
-        "bitmap": bitmap,
-    }
+    return run_debug_pipeline(
+        scad_src, trace_paths, model_center,
+        printer, filament,
+        shell_height=z_height,
+    )

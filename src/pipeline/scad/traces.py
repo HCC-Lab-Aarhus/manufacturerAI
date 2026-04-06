@@ -1,59 +1,50 @@
 """Trace channel fragment builders.
 
-Extracted from the old cutouts.py — these produce ScadFragment objects
-for trace channels (one per routed segment) and are independent of
-any particular component resolver.
+Produces ScadFragment cutouts from inflated trace polygons.  Each
+InflatedTrace carries the exact Shapely Polygon footprint computed by
+the Voronoi inflation step; this module simply converts those polygons
+into SCAD fragments at the correct Z-layer.
 """
 
 from __future__ import annotations
 
-import math
+from shapely.geometry import MultiPolygon
 
 from src.pipeline.config import FLOOR_MM, TRACE_HEIGHT_MM
 from src.pipeline.router.models import RoutingResult
 
-from .fragment import ScadFragment, SegmentGeometry
-
-TRACE_WIDTH: float = 1.2
+from .fragment import ScadFragment, PolygonGeometry
 
 
 def build_trace_fragments(
     routing: RoutingResult,
     ceil_start: float,
 ) -> list[ScadFragment]:
-    """Build trace channel fragments for every segment in every routed trace.
-
-    Channels span the trace zone (FLOOR_MM → FLOOR_MM + TRACE_HEIGHT_MM).
-    """
+    """Build trace channel fragments from inflated trace polygons."""
     channel_depth = TRACE_HEIGHT_MM
     frags: list[ScadFragment] = []
 
-    for trace in routing.traces:
-        path = trace.path
-        if len(path) < 2:
+    for it in routing.inflated_traces:
+        poly = it.polygon
+        if poly is None or poly.is_empty:
             continue
 
-        for i in range(len(path) - 1):
-            x1, y1 = float(path[i][0]), float(path[i][1])
-            x2, y2 = float(path[i + 1][0]), float(path[i + 1][1])
-
-            seg_len = math.hypot(x2 - x1, y2 - y1)
-            if seg_len < 1e-6:
-                continue
-
-            overshoot = TRACE_WIDTH / 2
-            ux, uy = (x2 - x1) / seg_len, (y2 - y1) / seg_len
-            ex1 = x1 - ux * overshoot
-            ey1 = y1 - uy * overshoot
-            ex2 = x2 + ux * overshoot
-            ey2 = y2 + uy * overshoot
-
+        geoms = list(poly.geoms) if isinstance(poly, MultiPolygon) else [poly]
+        for geom in geoms:
+            coords = list(geom.exterior.coords)[:-1]
+            pts = [[x, y] for x, y in coords]
+            holes = None
+            if geom.interiors:
+                holes = [
+                    [[x, y] for x, y in ring.coords[:-1]]
+                    for ring in geom.interiors
+                ]
             frags.append(ScadFragment(
                 type="cutout",
-                geometry=SegmentGeometry(ex1, ey1, ex2, ey2, TRACE_WIDTH),
+                geometry=PolygonGeometry(pts, holes),
                 z_base=FLOOR_MM,
                 depth=channel_depth,
-                label=f"trace {trace.net_id}",
+                label=f"trace {it.net_id}",
             ))
 
     return frags

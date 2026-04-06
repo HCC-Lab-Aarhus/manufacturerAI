@@ -107,6 +107,9 @@ def _block_components(
     catalog_map: dict,
     pad_radius: int,
 ) -> None:
+    from .engine import _pin_grid_halfdims
+    res = grid.resolution
+
     for pc in placement.components:
         cat = catalog_map.get(pc.catalog_id)
         if cat is None or not cat.mounting.blocks_routing:
@@ -128,8 +131,9 @@ def _block_components(
                 pin.position_mm, pc.x_mm, pc.y_mm, pc.rotation_deg,
             )
             gx, gy = grid.world_to_grid(wx, wy)
-            for dx in range(-pad_radius, pad_radius + 1):
-                for dy in range(-pad_radius, pad_radius + 1):
+            rx, ry = _pin_grid_halfdims(pin, pc.rotation_deg, res, pad_radius)
+            for dx in range(-rx, rx + 1):
+                for dy in range(-ry, ry + 1):
                     grid.force_free_cell(gx + dx, gy + dy)
                     grid.protect_cell(gx + dx, gy + dy)
 

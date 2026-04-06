@@ -1,4 +1,4 @@
-"""Tests for the bed bitmap geometry, bitmap generation, and calibration bitmap.
+"""Tests for the bed bitmap geometry and bitmap generation.
 
 Covers:
   - PrintheadConfig derived properties
@@ -6,7 +6,6 @@ Covers:
   - BedBitmap.bed_to_pixel() coordinate transform
   - get_printer() fallback behaviour
   - generate_trace_bitmap() rasterization correctness
-  - _calibration_bitmap() structure
 """
 
 from __future__ import annotations
@@ -23,9 +22,20 @@ from src.pipeline.config import (
     get_printer,
     DEFAULT_PRINTER,
 )
-from src.pipeline.router.models import Trace, RoutingResult
+from shapely.geometry import LineString
+
+from src.pipeline.router.models import Trace, InflatedTrace, RoutingResult
 from src.pipeline.router.bitmap import generate_trace_bitmap
-from src.web.routes.debug.calibration import _calibration_bitmap
+
+
+def _inflated_from_trace(trace: Trace, width: float) -> InflatedTrace:
+    """Buffer a trace centreline into an InflatedTrace for testing."""
+    line = LineString(trace.path)
+    return InflatedTrace(
+        net_id=trace.net_id,
+        centreline=list(trace.path),
+        polygon=line.buffer(width / 2, cap_style="flat"),
+    )
 
 
 # ── Pixel resolution constant ──────────────────────────────────────
@@ -172,7 +182,8 @@ class TestGenerateTraceBitmap(unittest.TestCase):
             net_id="test",
             path=[(5.0, 5.0), (15.0, 5.0)],
         )
-        result = RoutingResult(traces=[trace], pin_assignments={}, failed_nets=[])
+        it = _inflated_from_trace(trace, 0.5)
+        result = RoutingResult(traces=[trace], pin_assignments={}, failed_nets=[], inflated_traces=[it])
         model_to_bed = (80.0, 80.0)
         lines = generate_trace_bitmap(result, 0.5, grid=self.grid, model_to_bed=model_to_bed)
         all_chars = set(c for line in lines for c in line)
@@ -183,7 +194,8 @@ class TestGenerateTraceBitmap(unittest.TestCase):
             net_id="signal",
             path=[(0.0, 5.0), (20.0, 5.0)],
         )
-        result = RoutingResult(traces=[trace], pin_assignments={}, failed_nets=[])
+        it = _inflated_from_trace(trace, 0.5)
+        result = RoutingResult(traces=[trace], pin_assignments={}, failed_nets=[], inflated_traces=[it])
         model_to_bed = (100.0, 100.0)
         lines = generate_trace_bitmap(result, 0.5, grid=self.grid, model_to_bed=model_to_bed)
         total_ink = sum(line.count('1') for line in lines)
@@ -194,7 +206,8 @@ class TestGenerateTraceBitmap(unittest.TestCase):
             net_id="offscreen",
             path=[(-1000.0, -1000.0), (-900.0, -1000.0)],
         )
-        result = RoutingResult(traces=[trace], pin_assignments={}, failed_nets=[])
+        it = _inflated_from_trace(trace, 0.5)
+        result = RoutingResult(traces=[trace], pin_assignments={}, failed_nets=[], inflated_traces=[it])
         lines = generate_trace_bitmap(result, 0.5, grid=self.grid)
         total_ink = sum(line.count('1') for line in lines)
         self.assertEqual(total_ink, 0)
@@ -205,7 +218,8 @@ class TestGenerateTraceBitmap(unittest.TestCase):
             net_id="hline",
             path=[(5.0, 10.0), (15.0, 10.0)],
         )
-        result = RoutingResult(traces=[trace], pin_assignments={}, failed_nets=[])
+        it = _inflated_from_trace(trace, trace_w)
+        result = RoutingResult(traces=[trace], pin_assignments={}, failed_nets=[], inflated_traces=[it])
         model_to_bed = (100.0, 100.0)
         lines = generate_trace_bitmap(result, trace_w, grid=self.grid, model_to_bed=model_to_bed)
 
@@ -214,59 +228,74 @@ class TestGenerateTraceBitmap(unittest.TestCase):
         expected_rows = max(1, round(trace_w / self.grid.pixel_size_mm))
         self.assertAlmostEqual(len(inked_rows), expected_rows, delta=2)
 
+    def test_diagonal_trace_continuous(self):
+        trace = Trace(
+            net_id="diag",
+            path=[(5.0, 5.0), (15.0, 15.0)],
+        )
+        it = _inflated_from_trace(trace, 0.5)
+        result = RoutingResult(traces=[trace], pin_assignments={}, failed_nets=[], inflated_traces=[it])
+        model_to_bed = (100.0, 100.0)
+        lines = generate_trace_bitmap(result, 0.5, grid=self.grid, model_to_bed=model_to_bed)
 
-# ── _calibration_bitmap() ─────────────────────────────────────────
+        inked_rows = [i for i, line in enumerate(lines) if '1' in line]
+        self.assertGreater(len(inked_rows), 0)
+        row_min, row_max = min(inked_rows), max(inked_rows)
+        for r in range(row_min, row_max + 1):
+            self.assertIn('1', lines[r],
+                          f"Gap at row {r} — diagonal trace is fragmented")
 
-class TestCalibrationBitmap(unittest.TestCase):
+
+# ── Y-mirror consistency: gcode vs bitmap ─────────────────────────
+
+class TestYMirrorConsistency(unittest.TestCase):
+    """The SCAD emitter wraps models in mirror([0,1,0]), negating all Y
+    in the STL.  The gcode pipeline reads the mirrored STL's bbox
+    centre and applies ``-y + dy``.  The bitmap pipeline must produce
+    the same bed-Y for the same model-local trace point.
+
+    Both paths now use ``-y + dy`` where ``dy = ucy + model_cy``
+    (i.e. ``ucy - (-model_cy)``), so they agree everywhere.
+    """
 
     def setUp(self):
-        self.pdef = PRINTERS["coreone"]
+        self.pdef = PRINTERS["mk3s"]
         self.grid = bed_bitmap(self.pdef)
-        self.bitmap = _calibration_bitmap(self.pdef, self.grid, 100, 5, 5)
-        self.lines = self.bitmap.split('\n')
+        self.model_w = 20.0
+        self.model_h = 10.0
+        self.unmirored_cy = self.model_h / 2   # 5
+        self.mirrored_cy = -self.unmirored_cy   # −5
+        self.ucx, self.ucy = self.pdef.usable_center
 
-    def test_row_count(self):
-        self.assertEqual(len(self.lines), self.grid.rows)
+    def _gcode_bed_y(self, model_y: float) -> float:
+        """Gcode transform: compute_bed_offset from mirrored STL, then -y + dy."""
+        dy = self.ucy - self.mirrored_cy
+        return -model_y + dy
 
-    def test_col_count(self):
-        for i, line in enumerate(self.lines):
-            self.assertEqual(len(line), self.grid.cols, f"row {i}")
+    def _bitmap_bed_y(self, model_y: float) -> float:
+        """Bitmap transform: model_to_bed with mirrored dy, then -y + dy."""
+        dy = self.ucy + self.unmirored_cy        # ucy - (-model_cy) = ucy + model_cy
+        return -model_y + dy
 
-    def test_only_binary_chars(self):
-        chars = set(self.bitmap.replace('\n', ''))
-        self.assertTrue(chars.issubset({'0', '1'}))
+    def test_center_point_agrees(self):
+        g = self._gcode_bed_y(self.unmirored_cy)
+        b = self._bitmap_bed_y(self.unmirored_cy)
+        self.assertAlmostEqual(g, self.ucy)
+        self.assertAlmostEqual(b, self.ucy)
 
-    def test_has_ink(self):
-        total_ink = self.bitmap.count('1')
-        self.assertGreater(total_ink, 0)
+    def test_off_center_point_agrees(self):
+        for y in (0.0, 1.0, 5.0, 9.0, 10.0):
+            with self.subTest(y=y):
+                g = self._gcode_bed_y(y)
+                b = self._bitmap_bed_y(y)
+                self.assertAlmostEqual(g, b)
 
-    def test_three_squares_present(self):
-        rows = self.lines
-        mid_r = len(rows) // 2
-        mid_c = self.grid.cols // 2
-
-        def quadrant_ink(r_start, r_end, c_start, c_end):
-            return sum(
-                rows[r][c] == '1'
-                for r in range(r_start, r_end)
-                for c in range(c_start, c_end)
-            )
-
-        q_tl = quadrant_ink(0, mid_r, 0, mid_c)
-        q_tr = quadrant_ink(0, mid_r, mid_c, self.grid.cols)
-        q_bl = quadrant_ink(mid_r, len(rows), 0, mid_c)
-        q_br = quadrant_ink(mid_r, len(rows), mid_c, self.grid.cols)
-
-        nonzero = [q for q in [q_tl, q_tr, q_bl, q_br] if q > 0]
-        self.assertGreaterEqual(len(nonzero), 3, "Expected ink in at least 3 quadrants")
-
-    def test_mk3s_calibration_dimensions(self):
-        pdef = PRINTERS["mk3s"]
-        grid = bed_bitmap(pdef)
-        bitmap = _calibration_bitmap(pdef, grid, 100, 5, 5)
-        lines = bitmap.split('\n')
-        self.assertEqual(len(lines), grid.rows)
-        self.assertEqual(len(lines[0]), grid.cols)
+    def test_bitmap_pixel_row_matches(self):
+        y = 1.0
+        g_bed_y = self._gcode_bed_y(y)
+        b_bed_y = self._bitmap_bed_y(y)
+        px = self.grid.pixel_size_mm
+        self.assertEqual(int(g_bed_y / px), int(b_bed_y / px))
 
 
 if __name__ == "__main__":

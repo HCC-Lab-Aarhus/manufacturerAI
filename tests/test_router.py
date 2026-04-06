@@ -99,16 +99,17 @@ class TestPathfinder(unittest.TestCase):
         self.assertEqual(len(ys), 1)
 
     def test_l_shaped_path(self):
-        """Path between offset points uses Manhattan routing."""
+        """Path between offset points uses valid 8-directional routing."""
         src = self.grid.world_to_grid(5.0, 5.0)
         snk = self.grid.world_to_grid(25.0, 25.0)
         path = find_path(self.grid, src, snk)
         self.assertIsNotNone(path)
-        # Verify Manhattan: each step is exactly 1 cell in one axis
         for i in range(1, len(path)):
             dx = abs(path[i][0] - path[i - 1][0])
             dy = abs(path[i][1] - path[i - 1][1])
-            self.assertEqual(dx + dy, 1, f"Non-Manhattan step at {i}")
+            self.assertLessEqual(dx, 1, f"Jump >1 in x at step {i}")
+            self.assertLessEqual(dy, 1, f"Jump >1 in y at step {i}")
+            self.assertGreater(dx + dy, 0, f"Zero-length step at {i}")
 
     def test_path_around_obstacle(self):
         """Path routes around a blocked rectangle."""
@@ -173,16 +174,19 @@ class TestFlashlightRouting(unittest.TestCase):
         self.assertEqual(routed_nets, expected)
 
     def test_traces_are_manhattan(self):
-        """All trace segments should be horizontal or vertical."""
+        """All trace segments should be horizontal, vertical, or 45-degree diagonal."""
         for trace in self.result.traces:
             for i in range(1, len(trace.path)):
                 x1, y1 = trace.path[i - 1]
                 x2, y2 = trace.path[i]
-                is_horizontal = abs(y1 - y2) < 0.01
-                is_vertical = abs(x1 - x2) < 0.01
+                dx = abs(x2 - x1)
+                dy = abs(y2 - y1)
+                is_horizontal = dy < 0.01
+                is_vertical = dx < 0.01
+                is_diagonal = abs(dx - dy) < 0.01
                 self.assertTrue(
-                    is_horizontal or is_vertical,
-                    f"Non-Manhattan segment in {trace.net_id}: "
+                    is_horizontal or is_vertical or is_diagonal,
+                    f"Invalid segment in {trace.net_id}: "
                     f"({x1:.1f},{y1:.1f}) -> ({x2:.1f},{y2:.1f})",
                 )
 
@@ -276,12 +280,7 @@ class TestFlashlightRouting(unittest.TestCase):
         from src.pipeline.router.models import RouterConfig
         cfg = RouterConfig()
         res = cfg.grid_resolution_mm
-        clearance_cells = max(
-            1,
-            int(math.ceil(
-                (cfg.trace_width_mm / 2 + cfg.trace_clearance_mm) / res
-            )),
-        )
+        min_dist_mm = cfg.trace_width_mm / 2 + cfg.trace_clearance_mm
 
         outline_poly = Polygon(self.placement.outline.vertices)
         xmin, ymin, _, _ = outline_poly.bounds
@@ -310,18 +309,23 @@ class TestFlashlightRouting(unittest.TestCase):
                         cell_owner[w2g(x1, y)] = net
                         y += step
 
+        search_cells = int(math.ceil(min_dist_mm / res))
+
         violations: list[str] = []
         for (gx, gy), net in cell_owner.items():
-            for dy in range(-clearance_cells, clearance_cells + 1):
-                for dx in range(-clearance_cells, clearance_cells + 1):
+            for dy in range(-search_cells, search_cells + 1):
+                for dx in range(-search_cells, search_cells + 1):
                     if dx == 0 and dy == 0:
+                        continue
+                    dist_mm = math.hypot(dx * res, dy * res)
+                    if dist_mm > min_dist_mm:
                         continue
                     neighbour = (gx + dx, gy + dy)
                     other = cell_owner.get(neighbour)
                     if other is not None and other != net:
                         violations.append(
                             f"{net} at {(gx, gy)} too close to {other} "
-                            f"at {neighbour} (need {clearance_cells}-cell wall)"
+                            f"at {neighbour} ({dist_mm:.2f}mm < {min_dist_mm:.2f}mm)"
                         )
 
         self.assertEqual(

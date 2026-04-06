@@ -100,7 +100,7 @@ def generate_manifest(
         bitmap_rows=grid.rows,
         pixel_size_x_mm=PIXEL_SIZE_MM,
         pixel_size_y_mm=PIXEL_SIZE_MM,
-        ink_z_mm=FLOOR_MM,
+        ink_z_mm=FLOOR_MM + TRACE_HEIGHT_MM,
         trace_height_mm=TRACE_HEIGHT_MM,
         gcode_file=gcode_file,
         ink_pause_marker=";silverink",

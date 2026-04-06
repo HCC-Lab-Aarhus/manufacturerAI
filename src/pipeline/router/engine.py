@@ -14,6 +14,9 @@ from __future__ import annotations
 import logging
 import math
 import random
+import threading
+from dataclasses import dataclass
+from typing import Any, Callable
 
 from shapely.geometry import Polygon
 
@@ -29,10 +32,12 @@ from .pins import (
     resolve_pin_ref, get_pin_world_pos,
     allocate_best_pin,
 )
-from .solution import Solution, NetPad, _PinRef
+from .solution import Solution, Snapshot, NetPad, _PinRef
 
 
 log = logging.getLogger(__name__)
+
+ProgressCallback = Callable[[dict[str, Any]], None]
 
 
 # ── Main entry point ───────────────────────────────────────────────
@@ -43,6 +48,8 @@ def route_traces(
     catalog: CatalogResult,
     *,
     config: RouterConfig | None = None,
+    on_progress: ProgressCallback | None = None,
+    cancel: threading.Event | None = None,
 ) -> RoutingResult:
     """Route all nets using iterative improvement."""
     if config is None:
@@ -93,8 +100,9 @@ def route_traces(
         if len(net_pad_map.get(n.id, [])) >= 2
     ]
 
+    pin_pools = build_pin_pools(placement, catalog)
     pads_map, pin_assignments = _resolve_all_pads(
-        net_ids, net_pad_map, placement, catalog, grid,
+        net_ids, net_pad_map, placement, catalog, grid, pin_pools,
     )
     ordering = _priority_order(net_ids, net_pad_map, pads_map)
 
@@ -109,47 +117,157 @@ def route_traces(
     solution.route_nets(ordering, pads_map)
     log.info("Initial solution: score=%s", solution.score())
 
-    if solution.is_perfect():
-        log.info("Router: all %d nets routed", len(net_ids))
-        return solution.to_result()
+    _emit_progress(on_progress, solution, net_ids, config,
+                   iteration=0, phase="initial", stall=0,
+                   best_score=solution.score())
 
-    # 6. Iterative improvement
+    # 6. Iterative improvement — GA-inspired loop with elite pool,
+    #    local refinement, and blocker-aware exploration.
     best = solution.snapshot()
     best_score = solution.score()
+    best_pads_map = dict(pads_map)
+    best_pin_assignments = dict(pin_assignments)
+    best_pin_pools = _copy_pin_pools(pin_pools)
     stall = 0
+    iteration = 0
 
-    for iteration in range(config.max_improve_iterations):
-        targets = solution.worst_nets(k=3)
-        if not targets:
+    elites: list[_Elite] = [_Elite(
+        score=best_score,
+        snapshot=solution.snapshot(),
+        pads_map=dict(pads_map),
+        pin_assignments=dict(pin_assignments),
+        pin_pools=_copy_pin_pools(pin_pools),
+    )]
+
+    while True:
+        if cancel and cancel.is_set():
+            break
+        all_routed = best_score[0] == 0
+        if iteration >= config.max_improve_iterations:
             break
 
-        neighborhood = solution.neighborhood(targets)
         before = solution.score()
+        missing = [nid for nid in net_ids if nid not in solution.routes]
+        phase = _pick_phase(iteration, stall, missing, all_routed, len(elites))
 
-        solution.rip_up(neighborhood)
-        new_order = _perturb(neighborhood, targets, iteration)
-        solution.route_nets(new_order, pads_map)
-        after = solution.score()
+        if phase == "refine":
+            improved_any = _refine_pass(solution, pads_map, net_ids)
+            after = solution.score()
+            if not improved_any:
+                stall += 1
+                log.info("Iter %d [refine]: no shorter paths (stall %d/%d)",
+                         iteration + 1, stall, config.stall_limit)
+                _emit_progress(on_progress, solution, net_ids, config,
+                               iteration=iteration + 1, phase="no_improvement",
+                               stall=stall, best_score=best_score)
+                if stall >= config.stall_limit:
+                    break
+                iteration += 1
+                continue
+        elif phase == "restart":
+            all_net_ids = list(solution.routes.keys())
+            solution.rip_up(all_net_ids)
+            rand_order = list(net_ids)
+            random.shuffle(rand_order)
+            solution.route_nets(rand_order, pads_map)
+            unrouted_still = [nid for nid in net_ids
+                             if nid not in solution.routes]
+            if unrouted_still:
+                _re_resolve_and_route(
+                    unrouted_still, net_pad_map, placement, catalog,
+                    grid, pin_pools, pin_assignments, pads_map, solution,
+                )
+            after = solution.score()
+            log.info("Iter %d [restart]: rerouted all → %s", iteration + 1, after)
+        elif phase == "crossover" and len(elites) > 1:
+            donor = _pick_donor(elites, best_score)
+            solution.restore(donor.snapshot)
+            pads_map.update(donor.pads_map)
+            pin_assignments.update(donor.pin_assignments)
+            _restore_pin_pools(pin_pools, donor.pin_pools)
+            log.info("Iter %d [crossover]: restored elite with score %s",
+                     iteration + 1, donor.score)
+            phase = "explore"
+
+        if phase != "refine":
+            if missing:
+                blockers = solution.find_blockers(missing, pads_map)
+                targets = list(blockers) if blockers else solution.worst_nets(k=3)
+            else:
+                targets = (solution.random_nets(k=3) if iteration % 3 == 0
+                           else solution.worst_nets(k=3))
+            if not targets:
+                break
+
+            neighborhood = solution.neighborhood(targets)
+            solution.rip_up(neighborhood)
+            new_order = _perturb(neighborhood, targets, iteration)
+            solution.route_nets(new_order, pads_map)
+
+            unrouted = [nid for nid in net_ids
+                        if nid not in solution.routes and nid in pads_map]
+            if unrouted:
+                solution.route_nets(unrouted, pads_map)
+
+            unrouted_still = [nid for nid in net_ids
+                             if nid not in solution.routes]
+            if unrouted_still:
+                _re_resolve_and_route(
+                    unrouted_still, net_pad_map, placement, catalog,
+                    grid, pin_pools, pin_assignments, pads_map, solution,
+                )
+
+            after = solution.score()
 
         if after < before:
             best = solution.snapshot()
             best_score = after
+            best_pads_map = dict(pads_map)
+            best_pin_assignments = dict(pin_assignments)
+            best_pin_pools = _copy_pin_pools(pin_pools)
+            _update_elites(elites, _Elite(
+                score=after,
+                snapshot=solution.snapshot(),
+                pads_map=dict(pads_map),
+                pin_assignments=dict(pin_assignments),
+                pin_pools=_copy_pin_pools(pin_pools),
+            ), config.elite_pool_size)
             stall = 0
-            log.info("Iter %d: improved %s → %s", iteration + 1, before, after)
-            if solution.is_perfect():
-                break
+            log.info("Iter %d [%s]: improved %s → %s",
+                     iteration + 1, phase, before, after)
+            _emit_progress(on_progress, solution, net_ids, config,
+                           iteration=iteration + 1, phase="improved", stall=0,
+                           best_score=best_score, prev_score=before)
         else:
+            _maybe_add_diverse_elite(
+                elites, solution, pads_map, pin_assignments,
+                pin_pools, config.elite_pool_size,
+            )
             solution.restore(best)
+            pads_map.update(best_pads_map)
+            pin_assignments.update(best_pin_assignments)
+            _restore_pin_pools(pin_pools, best_pin_pools)
             stall += 1
-            if stall >= config.stall_limit:
+            log.info("Iter %d [%s]: no improvement %s (stall %d/%d)",
+                     iteration + 1, phase, before, stall, config.stall_limit)
+            _emit_progress(on_progress, solution, net_ids, config,
+                           iteration=iteration + 1, phase="no_improvement",
+                           stall=stall, best_score=best_score)
+            effective_limit = config.stall_limit
+            if not all_routed:
+                effective_limit *= 3
+            if stall >= effective_limit:
                 log.info(
-                    "Stalled for %d iterations (iteration %d of %d), stopping",
-                    stall, iteration + 1, config.max_improve_iterations,
+                    "Stalled for %d iterations at iteration %d, stopping",
+                    stall, iteration + 1,
                 )
                 break
 
-    solution.restore(best)
+        iteration += 1
 
+    solution.restore(best)
+    pin_assignments.update(best_pin_assignments)
+    solution.pin_assignments = pin_assignments
     routed = len(solution.routes)
     missing = len(net_ids) - routed
     if missing > 0:
@@ -159,6 +277,65 @@ def route_traces(
         log.info("Router: all %d nets routed", len(net_ids))
 
     return solution.to_result()
+
+
+# ── Progress reporting ─────────────────────────────────────────────
+
+def _emit_progress(
+    on_progress: ProgressCallback | None,
+    solution: Solution,
+    net_ids: list[str],
+    config: RouterConfig,
+    *,
+    iteration: int,
+    phase: str,
+    stall: int,
+    best_score: tuple[int, int],
+    prev_score: tuple[int, int] | None = None,
+) -> None:
+    if on_progress is None:
+        return
+
+    try:
+        routed = len(solution.routes)
+        total_nets = len(net_ids)
+        failed = sorted(solution.expected_nets - set(solution.routes))
+        trace_lengths = solution.trace_lengths_mm()
+        total_length = round(sum(trace_lengths.values()), 2)
+
+        lines: list[str] = []
+
+        if phase == "initial":
+            lines.append(f"Initial pass — {routed}/{total_nets} nets, {total_length} mm")
+        elif phase == "improved":
+            lines.append(
+                f"Iter {iteration}/{config.max_improve_iterations}"
+                f" — {routed}/{total_nets} nets, {total_length} mm  ★ improved"
+            )
+        else:
+            lines.append(
+                f"Iter {iteration}/{config.max_improve_iterations}"
+                f" — {routed}/{total_nets} nets, {total_length} mm"
+                f"  stall {stall}/{config.stall_limit}"
+            )
+
+        if failed:
+            lines.append(f"Failed: {', '.join(failed)}")
+
+        sorted_nets = sorted(trace_lengths.items(), key=lambda x: -x[1])
+        for net_id, length in sorted_nets:
+            lines.append(f"  {net_id}: {length} mm")
+
+        msg = "\n".join(lines)
+
+        partial_result = solution.to_result(include_debug=False)
+
+        on_progress({
+            "message": msg,
+            "partial_result": partial_result,
+        })
+    except Exception:
+        log.debug("Progress callback failed", exc_info=True)
 
 
 # ── Net reference parsing ──────────────────────────────────────────
@@ -212,8 +389,8 @@ def _resolve_all_pads(
     placement: FullPlacement,
     catalog: CatalogResult,
     grid: RoutingGrid,
+    pin_pools: dict[str, PinPool],
 ) -> tuple[dict[str, list[NetPad]], dict[str, str]]:
-    pin_pools = build_pin_pools(placement, catalog)
     pin_assignments: dict[str, str] = {}
     pads_map: dict[str, list[NetPad]] = {}
 
@@ -325,6 +502,72 @@ def _resolve_pads(
     return result if len(result) == len(refs) else None
 
 
+# ── Pin pool snapshot helpers ──────────────────────────────────────
+
+
+def _copy_pin_pools(pools: dict[str, PinPool]) -> dict[str, list[tuple[str, list[str]]]]:
+    return {
+        iid: [(gid, list(pins)) for gid, pins in pool.pools.items()]
+        for iid, pool in pools.items()
+    }
+
+
+def _restore_pin_pools(
+    pools: dict[str, PinPool],
+    saved: dict[str, list[tuple[str, list[str]]]],
+) -> None:
+    for iid, groups in saved.items():
+        pool = pools.get(iid)
+        if pool is None:
+            continue
+        pool.pools = {gid: list(pins) for gid, pins in groups}
+
+
+# ── Re-resolve failed nets with fresh pin assignments ──────────────
+
+
+def _re_resolve_and_route(
+    unrouted: list[str],
+    net_pad_map: dict[str, list[_PinRef]],
+    placement: FullPlacement,
+    catalog: CatalogResult,
+    grid: RoutingGrid,
+    pin_pools: dict[str, PinPool],
+    pin_assignments: dict[str, str],
+    pads_map: dict[str, list[NetPad]],
+    solution: Solution,
+) -> None:
+    """Release group-pin assignments for unrouted nets and re-resolve them.
+
+    This lets the router try different physical pins (e.g. a different
+    MCU GPIO pin) when the originally-assigned pin was unreachable.
+    """
+    for nid in unrouted:
+        refs = net_pad_map.get(nid, [])
+        has_group = any(r.is_group for r in refs)
+        if not has_group:
+            continue
+
+        for r in refs:
+            if not r.is_group:
+                continue
+            key = f"{nid}|{r.raw}"
+            prev = pin_assignments.pop(key, None)
+            if prev is not None:
+                inst, pin = prev.split(":", 1)
+                pool = pin_pools.get(inst)
+                if pool and r.pin_or_group in pool.pools:
+                    if pin not in pool.pools[r.pin_or_group]:
+                        pool.pools[r.pin_or_group].append(pin)
+
+        new_pads = _resolve_pads(
+            refs, nid, placement, catalog, pin_pools, grid, pin_assignments,
+        )
+        if new_pads is not None and len(new_pads) >= 2:
+            pads_map[nid] = new_pads
+            solution.route_net(nid, new_pads)
+
+
 # ── Priority ordering ──────────────────────────────────────────────
 
 
@@ -352,6 +595,97 @@ def _priority_order(
              ", ".join(f"{nid}({len(net_pad_map[nid])}p/{hpwl[nid]}hpwl)"
                        for nid in ordered))
     return ordered
+
+
+# ── GA-inspired helpers ────────────────────────────────────────────
+
+
+@dataclass
+class _Elite:
+    score: tuple[int, int]
+    snapshot: Snapshot
+    pads_map: dict[str, list[NetPad]]
+    pin_assignments: dict[str, str]
+    pin_pools: dict[str, list[tuple[str, list[str]]]]
+
+
+def _update_elites(pool: list[_Elite], elite: _Elite, max_size: int) -> None:
+    pool.append(elite)
+    pool.sort(key=lambda e: e.score)
+    while len(pool) > max_size:
+        pool.pop()
+
+
+def _pick_donor(pool: list[_Elite], current_best: tuple[int, int]) -> _Elite:
+    others = [e for e in pool if e.score != current_best]
+    if not others:
+        return random.choice(pool)
+    return random.choice(others)
+
+
+def _pick_phase(
+    iteration: int,
+    stall: int,
+    missing: list[str],
+    all_routed: bool,
+    n_elites: int,
+) -> str:
+    if missing:
+        if stall >= 8 and n_elites > 1:
+            return "crossover"
+        if stall >= 5 and n_elites <= 1:
+            return "restart"
+        return "explore"
+
+    if stall >= 6 and n_elites > 1 and random.random() < 0.4:
+        return "crossover"
+
+    if iteration % 3 == 0 and all_routed:
+        return "refine"
+
+    return "explore"
+
+
+def _refine_pass(
+    solution: Solution,
+    pads_map: dict[str, list[NetPad]],
+    net_ids: list[str],
+) -> bool:
+    candidates = [nid for nid in net_ids
+                  if nid in solution.routes and nid in pads_map]
+    random.shuffle(candidates)
+    improved = False
+    for nid in candidates:
+        if solution.refine_single_net(nid, pads_map[nid]):
+            improved = True
+    return improved
+
+
+def _maybe_add_diverse_elite(
+    pool: list[_Elite],
+    solution: Solution,
+    pads_map: dict[str, list[NetPad]],
+    pin_assignments: dict[str, str],
+    pin_pools: dict[str, PinPool],
+    max_size: int,
+) -> None:
+    """Add a non-improving solution to the elite pool if it routes a
+    different set of nets than any existing elite (diversity)."""
+    current_routed = frozenset(solution.routes.keys())
+    for e in pool:
+        if frozenset(e.snapshot.routes.keys()) == current_routed:
+            return
+    elite = _Elite(
+        score=solution.score(),
+        snapshot=solution.snapshot(),
+        pads_map=dict(pads_map),
+        pin_assignments=dict(pin_assignments),
+        pin_pools=_copy_pin_pools(pin_pools),
+    )
+    pool.append(elite)
+    pool.sort(key=lambda e: e.score)
+    while len(pool) > max_size:
+        pool.pop()
 
 
 # ── Ordering perturbation ──────────────────────────────────────────
@@ -400,6 +734,8 @@ def _block_components(
     catalog_map: dict,
     pad_radius: int,
 ) -> None:
+    res = grid.resolution
+
     for pc in placement.components:
         cat = catalog_map.get(pc.catalog_id)
         if cat is None or not cat.mounting.blocks_routing:
@@ -421,8 +757,9 @@ def _block_components(
                 pin.position_mm, pc.x_mm, pc.y_mm, pc.rotation_deg,
             )
             gx, gy = grid.world_to_grid(wx, wy)
-            for dx in range(-pad_radius, pad_radius + 1):
-                for dy in range(-pad_radius, pad_radius + 1):
+            rx, ry = _pin_grid_halfdims(pin, pc.rotation_deg, res, pad_radius)
+            for dx in range(-rx, rx + 1):
+                for dy in range(-ry, ry + 1):
                     grid.force_free_cell(gx + dx, gy + dy)
                     grid.protect_cell(gx + dx, gy + dy)
 
@@ -461,6 +798,23 @@ def _compute_pin_clearance_cells(cfg: RouterConfig) -> int:
     return max(1, math.ceil(
         (cfg.trace_width_mm / 2 + cfg.pin_clearance_mm) / cfg.grid_resolution_mm
     ))
+
+
+def _pin_grid_halfdims(pin, rotation_deg: float, res: float, default_r: int) -> tuple[int, int]:
+    shape = pin.shape
+    if shape and shape.type == "rect" and shape.width_mm and shape.length_mm:
+        hw, hl = shape.width_mm / 2, shape.length_mm / 2
+    elif shape and shape.type == "slot" and shape.width_mm and shape.length_mm:
+        hw, hl = shape.width_mm / 2, shape.length_mm / 2
+    elif pin.hole_diameter_mm > res:
+        r = pin.hole_diameter_mm / 2
+        return max(default_r, math.ceil(r / res)), max(default_r, math.ceil(r / res))
+    else:
+        return default_r, default_r
+    rot = rotation_deg % 360
+    if rot in (90, 270):
+        hw, hl = hl, hw
+    return max(default_r, math.ceil(hw / res)), max(default_r, math.ceil(hl / res))
 
 
 def _build_pin_voronoi(

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from shapely.geometry import Polygon
+
 from src.pipeline.config import TRACE_RULES
 
 
@@ -19,6 +21,15 @@ class Trace:
 
 
 @dataclass
+class InflatedTrace:
+    """A trace after Voronoi inflation — variable-width 2D footprint."""
+
+    net_id: str
+    centreline: list[tuple[float, float]]
+    polygon: Polygon
+
+
+@dataclass
 class RoutingResult:
     """Complete routing result, ready for the SCAD generator."""
 
@@ -26,6 +37,7 @@ class RoutingResult:
     pin_assignments: dict[str, str]     # "mcu_1:gpio" -> "mcu_1:PD2"
     failed_nets: list[str]
     debug_grids: list[dict] = field(default_factory=list)
+    inflated_traces: list[InflatedTrace] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -58,6 +70,7 @@ class RouterConfig:
     crossing_cost: int = 50              # A* cost penalty for crossing an existing trace
     max_improve_iterations: int = 60     # iterative improvement rounds
     stall_limit: int = 20               # stop after this many rounds with no improvement
+    elite_pool_size: int = 5             # number of top solutions kept for crossover
 
 
 # Module-level defaults (used when no RouterConfig is passed)

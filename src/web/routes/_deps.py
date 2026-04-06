@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+from typing import Any
 
 from fastapi import HTTPException
 
 from src.catalog import load_catalog, CatalogResult
 from src.session import load_session, Session
+from src.web.tasks import _lock as _tasks_lock, _pipeline_subscribers
 
 
 # ── Thread-safe background-task state ──
@@ -17,28 +19,36 @@ from src.session import load_session, Session
 _compile_lock = threading.Lock()
 _gcode_lock = threading.Lock()
 
-_stl_compile: dict[str, dict] = {}
-_gcode_state: dict[str, dict] = {}
+_stl_compile: dict[str, dict[str, Any]] = {}
+_gcode_state: dict[str, dict[str, Any]] = {}
 
 
-def get_compile_state(sid: str) -> dict | None:
+def _notify_subscribers(sid: str) -> None:
+    with _tasks_lock:
+        for ev in _pipeline_subscribers.get(sid, []):
+            ev.set()
+
+
+def get_compile_state(sid: str) -> dict[str, Any] | None:
     with _compile_lock:
         return _stl_compile.get(sid)
 
 
-def set_compile_state(sid: str, state: dict) -> None:
+def set_compile_state(sid: str, state: dict[str, Any]) -> None:
     with _compile_lock:
         _stl_compile[sid] = state
+    _notify_subscribers(sid)
 
 
-def get_gcode_state(sid: str) -> dict | None:
+def get_gcode_state(sid: str) -> dict[str, Any] | None:
     with _gcode_lock:
         return _gcode_state.get(sid)
 
 
-def set_gcode_state(sid: str, state: dict) -> None:
+def set_gcode_state(sid: str, state: dict[str, Any]) -> None:
     with _gcode_lock:
         _gcode_state[sid] = state
+    _notify_subscribers(sid)
 
 
 # ── Catalog (auto-reloads when any catalog/*.json changes on disk) ──
@@ -149,7 +159,14 @@ def enrich_components(components: list, cat) -> None:
         comp["pins"] = [
             {
                 "id": p.id,
+                "label": p.label,
                 "position_mm": list(p.position_mm),
+                "direction": p.direction,
+                "hole_diameter_mm": p.hole_diameter_mm,
+                "description": p.description,
+                "voltage_v": p.voltage_v,
+                "current_max_ma": p.current_max_ma,
+                **({"shape": {"type": p.shape.type, "width_mm": p.shape.width_mm, "length_mm": p.shape.length_mm}} if p.shape else {}),
                 **({"world_mm": list(pp[p.id])} if p.id in pp else {}),
             }
             for p in c.pins
@@ -294,11 +311,14 @@ def build_placement_response(session: Session, cat) -> dict:
 
 
 def build_routing_response(session: Session, cat) -> dict:
-    """Assemble a full routing response from design + placement + routing artifacts."""
+    """Assemble a full routing response from design + placement + routing + inflation artifacts."""
     design = require_design(session)
     placement = require_placement(session)
     routing = require_routing(session)
     outline_data = _read_outline(session)
+
+    inflation_data = session.read_artifact("inflation.json")
+    inflated_traces = inflation_data.get("inflated_traces", []) if inflation_data else []
 
     from src.pipeline.config import TRACE_RULES
     response = {
@@ -306,6 +326,7 @@ def build_routing_response(session: Session, cat) -> dict:
         "enclosure": design.get("enclosure", {}),
         "components": placement["components"],
         "traces": routing.get("traces", []),
+        "inflated_traces": inflated_traces,
         "pin_assignments": routing.get("pin_assignments", {}),
         "failed_nets": routing.get("failed_nets", []),
         "jumpers": routing.get("jumpers", []),

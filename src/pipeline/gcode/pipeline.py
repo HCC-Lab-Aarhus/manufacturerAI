@@ -20,7 +20,10 @@ from pathlib import Path
 from src.pipeline.config import get_printer
 from src.pipeline.gcode.slicer import slice_stl
 from src.pipeline.gcode.pause_points import compute_pause_points, PausePoints, ComponentPauseInfo
-from src.pipeline.gcode.ink_traces import extract_trace_segments, extract_pad_centers
+from shapely.geometry import Polygon
+from shapely import affinity
+
+from src.pipeline.gcode.ink_traces import extract_trace_segments, extract_pad_centers, extract_pin_holes, PinHoleRect
 from src.pipeline.gcode.postprocessor import postprocess_gcode, PostProcessResult, compute_bed_offset
 from src.pipeline.gcode.filaments import get_filament, write_filament_overrides
 
@@ -52,6 +55,9 @@ def run_gcode_pipeline(
     silverink_only: bool = False,
     component_infos: list[ComponentPauseInfo] | None = None,
     placement_result: dict | None = None,
+    extra_overrides: list[Path] | None = None,
+    catalog_index: dict[str, object] | None = None,
+    inflated_polygons: list[Polygon] | None = None,
 ) -> GcodePipelineResult:
     """Run the full G-code pipeline: slice → inject pauses → output.
 
@@ -125,6 +131,7 @@ def run_gcode_pipeline(
         printer=printer,
         filament_override_path=filament_ini,
         center=pdef.usable_center,
+        extra_overrides=extra_overrides,
     )
 
     # Clean up filament override .ini (no longer needed after slicing)
@@ -148,6 +155,10 @@ def run_gcode_pipeline(
     pad_centers = extract_pad_centers(
         placement_result=placement_result,
     )
+    pin_holes = extract_pin_holes(
+        placement_result=placement_result,
+        catalog_index=catalog_index,
+    )
     if trace_segs:
         stages.append(f"Trace segments: {len(trace_segs)} segments, {len(pad_centers)} pads")
 
@@ -169,6 +180,21 @@ def run_gcode_pipeline(
         trace_segs = [(x1 + dx, -y1 + dy, x2 + dx, -y2 + dy) for x1, y1, x2, y2 in trace_segs]
     if pad_centers:
         pad_centers = [(x + dx, -y + dy) for x, y in pad_centers]
+    if pin_holes:
+        pin_holes = [
+            PinHoleRect(h.cx + dx, -h.cy + dy, h.half_w, h.half_h)
+            for h in pin_holes
+        ]
+
+    # ── 3e. Transform inflated polygons to bed-space ──
+    bed_inflated: list[Polygon] | None = None
+    if inflated_polygons:
+        bed_inflated = []
+        for poly in inflated_polygons:
+            mirrored = affinity.scale(poly, xfact=1, yfact=-1, origin=(0, 0))
+            shifted = affinity.translate(mirrored, xoff=dx, yoff=dy)
+            if not shifted.is_empty:
+                bed_inflated.append(shifted)
 
     # ── 4. Post-process ───────────────────────────────────────────
     final_gcode = output_dir / "enclosure.gcode"
@@ -184,6 +210,8 @@ def run_gcode_pipeline(
         trace_segments=trace_segs,
         pad_centers=pad_centers,
         silverink_only=silverink_only,
+        pin_holes=pin_holes if pin_holes else None,
+        inflated_polygons=bed_inflated,
     )
     stages.extend(pp_result.stages)
     stages.append(f"G-code written: {final_gcode}")

@@ -105,6 +105,15 @@ class Solution:
     def is_perfect(self) -> bool:
         return self.score()[0] == 0
 
+    def trace_lengths_mm(self) -> dict[str, float]:
+        """Per-net trace length in mm, computed from grid paths."""
+        res = self.grid.resolution
+        lengths: dict[str, float] = {}
+        for net_id, route in self.routes.items():
+            cells = sum(max(0, len(p) - 1) for p in route.paths)
+            lengths[net_id] = round(cells * res, 2)
+        return lengths
+
     # ── Snapshot / Restore ─────────────────────────────────────
 
     def snapshot(self) -> Snapshot:
@@ -187,6 +196,49 @@ class Solution:
         )
         return [nid for nid, _ in by_length[:k]]
 
+    def random_nets(self, k: int = 3) -> list[str]:
+        """Return k random routed net IDs (for diversified refinement)."""
+        import random as _rnd
+        ids = list(self.routes.keys())
+        if len(ids) <= k:
+            return ids
+        return _rnd.sample(ids, k)
+
+    def find_blockers(
+        self, missing: list[str], pads_map: dict[str, list[NetPad]],
+    ) -> set[str]:
+        """Identify routed nets that would be crossed when routing *missing* nets."""
+        blockers: set[str] = set()
+        for nid in missing:
+            pads = pads_map.get(nid)
+            if not pads or len(pads) < 2:
+                continue
+            paths, ok = self._find_paths(
+                nid, pads, crossing_cost=self.config.crossing_cost,
+            )
+            if ok and paths:
+                blockers.update(self._find_crossed_nets(paths, nid))
+        return blockers
+
+    def refine_single_net(
+        self, net_id: str, pads: list[NetPad],
+    ) -> bool:
+        """Rip up one net and re-route it; keep only if trace is shorter."""
+        route = self.routes.get(net_id)
+        if route is None:
+            return False
+        old_cells = route.trace_cells
+        snap = self.snapshot()
+
+        self.rip_up([net_id])
+        self.route_net(net_id, pads)
+
+        new_route = self.routes.get(net_id)
+        if new_route is None or new_route.trace_cells >= old_cells:
+            self.restore(snap)
+            return False
+        return True
+
     def neighborhood(self, seeds: list[str]) -> list[str]:
         """Given seed net IDs, find all nets that share grid cells with
         them (adjacent or overlapping clearance zones)."""
@@ -227,18 +279,19 @@ class Solution:
 
     # ── Output ─────────────────────────────────────────────────
 
-    def to_result(self) -> RoutingResult:
-        from .debug import build_debug_grids
-
+    def to_result(self, *, include_debug: bool = True) -> RoutingResult:
         routed_paths = {nid: r.paths for nid, r in self.routes.items()}
         routed_pads = {nid: r.pads for nid, r in self.routes.items()}
 
-        debug_grids = build_debug_grids(
-            self.placement, self.catalog, routed_paths, routed_pads,
-            config=self.config, grid=self.grid,
-        )
+        debug_grids: list[dict] = []
+        if include_debug:
+            from .debug import build_debug_grids
+            debug_grids = build_debug_grids(
+                self.placement, self.catalog, routed_paths, routed_pads,
+                config=self.config, grid=self.grid,
+            )
 
-        traces = self._grid_paths_to_traces(routed_paths)
+        traces = self._grid_paths_to_traces(routed_paths, routed_pads)
         failed_nets = sorted(self.expected_nets - set(self.routes)) if self.expected_nets else []
 
         return RoutingResult(
@@ -479,15 +532,36 @@ class Solution:
     # ── Internal: output conversion ────────────────────────────
 
     def _grid_paths_to_traces(
-        self, routed_paths: dict[str, list[list[tuple[int, int]]]],
+        self,
+        routed_paths: dict[str, list[list[tuple[int, int]]]],
+        routed_pads: dict[str, list[NetPad]],
     ) -> list[Trace]:
         outline = self.grid.outline_poly
         traces: list[Trace] = []
         for net_id, paths in routed_paths.items():
+            pads = routed_pads.get(net_id, [])
+            pad_by_grid: dict[tuple[int, int], NetPad] = {
+                (p.gx, p.gy): p for p in pads
+            }
             for grid_path in paths:
                 if len(grid_path) < 2:
                     continue
                 world_path = _simplify_path(grid_path, self.grid)
+
+                start_pad = pad_by_grid.get(grid_path[0])
+                if start_pad is not None:
+                    sx, sy = start_pad.world_x, start_pad.world_y
+                    gx0, gy0 = world_path[0]
+                    if (sx, sy) != (gx0, gy0):
+                        world_path[0:1] = [(sx, sy), (sx, gy0), (gx0, gy0)]
+
+                end_pad = pad_by_grid.get(grid_path[-1])
+                if end_pad is not None:
+                    ex, ey = end_pad.world_x, end_pad.world_y
+                    gxn, gyn = world_path[-1]
+                    if (ex, ey) != (gxn, gyn):
+                        world_path[-1:] = [(gxn, gyn), (ex, gyn), (ex, ey)]
+
                 clamped: list[tuple[float, float]] = []
                 for wx, wy in world_path:
                     pt = Point(wx, wy)
