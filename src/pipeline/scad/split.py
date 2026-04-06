@@ -11,9 +11,12 @@ from src.pipeline.placer.models import PlacedComponent
 
 log = logging.getLogger(__name__)
 
-# Default split height: at CAVITY_START_MM (2.2 mm) so the bottom
-# tray is thick enough for pin holes to seat properly.
-_DEFAULT_SPLIT_Z: float = CAVITY_START_MM
+# Default split height for two-part mode.
+# Must be high enough that the full pin funnel taper (1.5 mm) plus
+# a short shaft section fit inside the bottom half, so components
+# can be guided into place with tapered funnels.
+_FUNNEL_TAPER_DEPTH: float = 1.5   # keep in sync with resolver.PINHOLE_TAPER_DEPTH
+_DEFAULT_SPLIT_Z: float = CAVITY_START_MM + _FUNNEL_TAPER_DEPTH + 0.5  # 4.2 mm
 
 
 def compute_split_z(
@@ -24,9 +27,9 @@ def compute_split_z(
     """Compute the Z height where bottom and top halves meet.
 
     If ``enclosure.split_z_mm`` is explicitly set, use that (clamped).
-    Otherwise the split is at ``CAVITY_START_MM`` (2.2 mm) so the
-    bottom tray is thick enough for pin holes to seat properly while
-    keeping traces exposed via an interior cavity.
+    Otherwise the split is at CAVITY_START_MM + funnel_taper + margin
+    (≈4.2 mm) so the bottom tray is thick enough for pin funnels and
+    trace channels on its top surface.
 
     Returns the split Z in mm from the build plate.
     """

@@ -19,7 +19,8 @@ from pathlib import Path
 from src.catalog.loader import load_catalog
 from src.catalog.models import Component
 from src.pipeline.config import (
-    CAVITY_START_MM, CEILING_MM, FLOOR_MM, SPLIT_OVERLAP_MM, TRACE_HEIGHT_MM,
+    CAVITY_START_MM, CEILING_MM, FLOOR_MM, PIN_FLOOR_PENETRATION,
+    SPLIT_OVERLAP_MM, TRACE_HEIGHT_MM,
     component_z_range,
 )
 from src.pipeline.design.parsing import parse_physical_design, parse_circuit, build_design_spec
@@ -39,7 +40,7 @@ from .emit import generate_scad
 from .compiler import compile_scad
 from .traces import build_trace_fragments
 from .resolver import resolve_component, ResolverContext
-from .fragment import ScadFragment, PolygonGeometry
+from .fragment import ScadFragment, PolygonGeometry, RectGeometry
 from .buttons import build_button_configs, generate_all_buttons_scad
 from .extras import collect_and_generate_extras
 from .split import compute_split_z
@@ -415,26 +416,71 @@ def _generate_two_part(
         split_z=split_z,
     )
 
-    # Add trace channels — shifted into the floor so they appear as
-    # visible grooves when looking down at the bottom tray.
+    # Add trace channels on the top surface of the bottom tray so
+    # they are visible when the top half is removed.  Channels cut
+    # as deep as pin holes (from FLOOR_MM to split_z) so traces and
+    # pins sit at the same depth.
     trace_frags = build_trace_fragments(routing, ceil_start)
+    trace_depth = split_z - FLOOR_MM
     for tf in trace_frags:
-        tf.z_base = FLOOR_MM - TRACE_HEIGHT_MM
+        tf.z_base = FLOOR_MM
+        tf.depth = trace_depth
     bottom_frags.extend(trace_frags)
 
-    # Interior cavity — hollows out the bottom above the floor so traces
-    # are visible from above (tray shape: floor + perimeter walls).
-    _TRAY_WALL_MM = 2.0
-    cavity_depth = split_z - FLOOR_MM
-    if cavity_depth > 0.05:
-        cavity_pts = _safe_inset_polygon_pts(flat_pts, _TRAY_WALL_MM)
-        bottom_frags.append(ScadFragment(
-            type="cutout",
-            geometry=PolygonGeometry(points=cavity_pts),
-            z_base=FLOOR_MM,
-            depth=cavity_depth,
-            label="bottom interior cavity",
-        ))
+    # NO interior cavity — the bottom tray is solid so that:
+    #   • pin shafts drill through real material (better grip)
+    #   • trace channels recess into the top surface
+    #   • funnel tapers widen into the solid at the top
+    # The resolver already generates pin shafts from FLOOR_MM-penetration
+    # upward; those cut narrow holes through the solid bottom.
+
+    # Add funnel tapers at the TOP of the bottom tray for every pin
+    # so components can be guided into the narrow pin shafts below.
+    # Funnels widen from pin-shaft diameter at the bottom up to
+    # (shaft + PINHOLE_TAPER_EXTRA) at split_z.
+    from .fragment import rotate_point as _rot_pt
+    _TAPER_DEPTH = 1.5    # same as resolver PINHOLE_TAPER_DEPTH
+    _TAPER_EXTRA = 1.0    # same as resolver PINHOLE_TAPER_EXTRA
+    _PIN_CLR = 1.0        # same as resolver PINHOLE_CLEARANCE
+    funnel_z_base = max(split_z - _TAPER_DEPTH, FLOOR_MM)
+    funnel_depth = split_z - funnel_z_base
+    if funnel_depth > 0.1:
+        for comp in placement.components:
+            cat = cat_index.get(comp.catalog_id)
+            if cat is None:
+                continue
+            for pin in cat.pins:
+                pos = comp.pin_positions.get(pin.id) if comp.pin_positions else None
+                if pos is not None:
+                    px, py = pos[0], pos[1]
+                else:
+                    px_rel = float(pin.position_mm[0])
+                    py_rel = float(pin.position_mm[1])
+                    rot_deg = comp.rotation_deg or 0
+                    if rot_deg:
+                        px_rel, py_rel = _rot_pt(px_rel, py_rel, rot_deg)
+                    px = comp.x_mm + px_rel
+                    py = comp.y_mm + py_rel
+
+                pin_d = pin.hole_diameter_mm + _PIN_CLR
+                if pin.shape and pin.shape.type in ("rect", "slot"):
+                    shaft_w = (pin.shape.width_mm or pin_d) + _PIN_CLR
+                    shaft_h_dim = (pin.shape.length_mm or pin_d) + _PIN_CLR
+                else:
+                    shaft_w = pin_d
+                    shaft_h_dim = pin_d
+
+                scale_x = (shaft_w + _TAPER_EXTRA) / shaft_w
+                scale_y = (shaft_h_dim + _TAPER_EXTRA) / shaft_h_dim
+                taper = max(scale_x, scale_y)
+                bottom_frags.append(ScadFragment(
+                    type="cutout",
+                    geometry=RectGeometry(px, py, shaft_w, shaft_h_dim),
+                    z_base=funnel_z_base,
+                    depth=funnel_depth,
+                    taper_scale=taper,
+                    label=f"bottom funnel {comp.instance_id}:{pin.id}",
+                ))
 
     log.info("Bottom fragments: %d total", len(bottom_frags))
 
