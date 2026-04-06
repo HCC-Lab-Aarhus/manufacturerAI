@@ -33,6 +33,9 @@ class NetPolygon:
 MAX_ITERATIONS = 200
 STEP_MM = 0.3
 MIN_GROWTH_MM2 = 0.1
+ITER_SIMPLIFY_TOL = 0.05
+SMOOTH_MM = 0.5
+FINAL_SIMPLIFY_TOL = 0.15
 
 
 def inflate(
@@ -77,7 +80,7 @@ def inflate(
         buffered_clear = [np_.polygon.buffer(trace_clearance) for np_ in net_polygons]
 
         for i, np_ in enumerate(net_polygons):
-            grown = np_.polygon.buffer(STEP_MM, quad_segs=4)
+            grown = np_.polygon.buffer(STEP_MM, quad_segs=8)
             clipped = grown.intersection(available[i])
 
             foreign = [b for j, b in enumerate(buffered_clear) if j != i]
@@ -86,6 +89,10 @@ def inflate(
 
             if isinstance(clipped, MultiPolygon):
                 clipped = max(clipped.geoms, key=lambda g: g.area)
+            if not isinstance(clipped, Polygon) or clipped.is_empty:
+                continue
+
+            clipped = clipped.simplify(ITER_SIMPLIFY_TOL, preserve_topology=True)
             if not isinstance(clipped, Polygon) or clipped.is_empty:
                 continue
 
@@ -101,6 +108,40 @@ def inflate(
         if total_growth < MIN_GROWTH_MM2:
             log.info("Inflation converged at iteration %d", _it)
             break
+
+    for np_ in net_polygons:
+        s = np_.polygon.buffer(SMOOTH_MM, quad_segs=16).buffer(-SMOOTH_MM, quad_segs=16)
+        s = s.buffer(-SMOOTH_MM, quad_segs=16).buffer(SMOOTH_MM, quad_segs=16)
+        s = s.simplify(FINAL_SIMPLIFY_TOL, preserve_topology=True)
+        if isinstance(s, MultiPolygon):
+            s = max(s.geoms, key=lambda g: g.area)
+        if isinstance(s, Polygon) and not s.is_empty:
+            idx = net_polygons.index(np_)
+            if not _pin_invariant_violated(
+                s, pin_positions, frozen_inside[idx], frozen_outside[idx],
+            ):
+                np_.polygon = s
+
+    snapshot = [np_.polygon for np_ in net_polygons]
+    for i, np_ in enumerate(net_polygons):
+        foreign = [
+            snapshot[j].buffer(trace_clearance / 2)
+            for j in range(len(net_polygons)) if j != i
+        ]
+        if not foreign:
+            continue
+        trimmed = np_.polygon.difference(unary_union(foreign))
+        if isinstance(trimmed, MultiPolygon):
+            trimmed = max(trimmed.geoms, key=lambda g: g.area)
+        if isinstance(trimmed, Polygon) and not trimmed.is_empty:
+            trimmed = trimmed.simplify(FINAL_SIMPLIFY_TOL, preserve_topology=True)
+            if isinstance(trimmed, MultiPolygon):
+                trimmed = max(trimmed.geoms, key=lambda g: g.area)
+            if isinstance(trimmed, Polygon) and not trimmed.is_empty:
+                if not _pin_invariant_violated(
+                    trimmed, pin_positions, frozen_inside[i], frozen_outside[i],
+                ):
+                    np_.polygon = trimmed
 
 
 def _pin_invariant_violated(
