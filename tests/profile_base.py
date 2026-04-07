@@ -454,3 +454,252 @@ def _collect_leaf_times(node: TimerNode, out: list[tuple[str, float, int]]):
         st = node.self_time
         if st > 0:
             out.append((f"{node.name} (self)", st, max(node.call_count, 1)))
+
+
+def _collect_all_nodes(
+    node: TimerNode,
+    parent_name: str,
+    path: str,
+    out: list[dict],
+):
+    node_path = f"{path}/{node.name}" if path else node.name
+    out.append({
+        "name": node.name,
+        "parent": parent_name,
+        "path": node_path,
+        "elapsed": node.elapsed,
+        "self_time": node.self_time,
+        "calls": max(node.call_count, 1),
+        "is_leaf": len(node.children) == 0,
+    })
+    for c in node.children:
+        _collect_all_nodes(c, node.name, node_path, out)
+
+
+def build_insights_html(root: TimerNode, title: str = "Profile Insights") -> str:
+    import json as _json
+
+    all_nodes: list[dict] = []
+    _collect_all_nodes(root, "", "", all_nodes)
+
+    color_map = _build_name_color_map(root)
+
+    cat_agg: dict[str, dict] = {}
+    for n in all_nodes:
+        name = n["name"]
+        if name == root.name:
+            continue
+        if name not in cat_agg:
+            cat_agg[name] = {"total": 0.0, "self": 0.0, "calls": 0, "callers": {}}
+        cat_agg[name]["total"] += n["elapsed"]
+        cat_agg[name]["self"] += n["self_time"]
+        cat_agg[name]["calls"] += n["calls"]
+        p = n["parent"]
+        if p and p != root.name:
+            if p not in cat_agg[name]["callers"]:
+                cat_agg[name]["callers"][p] = {"total": 0.0, "calls": 0}
+            cat_agg[name]["callers"][p]["total"] += n["elapsed"]
+            cat_agg[name]["callers"][p]["calls"] += n["calls"]
+
+    sorted_cats = sorted(cat_agg.items(), key=lambda x: -x[1]["total"])
+
+    bar_data = []
+    for name, info in sorted_cats[:40]:
+        bar_data.append({
+            "name": name,
+            "total_ms": round(info["total"] * 1000, 1),
+            "self_ms": round(info["self"] * 1000, 1),
+            "calls": info["calls"],
+            "avg_ms": round(info["total"] / max(info["calls"], 1) * 1000, 3),
+            "color": color_map.get(name, "#bab0ac"),
+        })
+
+    scatter_data = []
+    for name, info in cat_agg.items():
+        if info["calls"] == 0:
+            continue
+        scatter_data.append({
+            "name": name,
+            "calls": info["calls"],
+            "avg_ms": round(info["total"] / info["calls"] * 1000, 4),
+            "total_ms": round(info["total"] * 1000, 1),
+            "self_ms": round(info["self"] * 1000, 1),
+            "color": color_map.get(name, "#bab0ac"),
+        })
+
+    caller_data: dict[str, list] = {}
+    for name, info in sorted_cats[:30]:
+        callers = sorted(info["callers"].items(), key=lambda x: -x[1]["total"])[:5]
+        if callers:
+            caller_data[name] = [
+                {"parent": p, "ms": round(v["total"] * 1000, 1), "calls": v["calls"]}
+                for p, v in callers
+            ]
+
+    total_ms = round(root.elapsed * 1000, 1)
+
+    return f'''<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>{title}</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+* {{ box-sizing: border-box; }}
+body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; background: #fafafa; color: #333; }}
+h1 {{ font-size: 22px; text-align: center; margin: 0 0 4px; }}
+.subtitle {{ text-align: center; color: #888; font-size: 14px; margin-bottom: 20px; }}
+.grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 1600px; margin: 0 auto; }}
+.panel {{ background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 16px; }}
+.panel h2 {{ font-size: 15px; margin: 0 0 4px; color: #444; }}
+.panel .desc {{ font-size: 12px; color: #999; margin: 0 0 12px; }}
+.full-width {{ grid-column: 1 / -1; }}
+table {{ border-collapse: collapse; width: 100%; font-size: 13px; }}
+th, td {{ padding: 5px 10px; text-align: left; border-bottom: 1px solid #f0f0f0; }}
+th {{ background: #f8f8f8; font-weight: 600; position: sticky; top: 0; }}
+td:nth-child(n+2), th:nth-child(n+2) {{ text-align: right; }}
+tr:hover {{ background: #f5f8ff; }}
+.swatch {{ display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }}
+.caller-section {{ margin-bottom: 12px; }}
+.caller-section h3 {{ font-size: 13px; margin: 0 0 4px; }}
+.caller-section .bar {{ height: 6px; border-radius: 3px; margin-top: 2px; }}
+.caller-row {{ display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 2px 0; }}
+.caller-row .label {{ min-width: 120px; }}
+.caller-row .value {{ color: #888; white-space: nowrap; }}
+.scroll-box {{ max-height: 600px; overflow-y: auto; }}
+</style>
+</head><body>
+<h1>{title}</h1>
+<p class="subtitle">Total: {total_ms:.1f}ms</p>
+<div class="grid">
+<div class="panel">
+  <h2>Time by Category (aggregated)</h2>
+  <p class="desc">All instances of each operation summed. Self-time = time not in children.</p>
+  <div id="bar-chart"></div>
+</div>
+<div class="panel">
+  <h2>Optimization Quadrant</h2>
+  <p class="desc">X = call count, Y = avg ms/call, bubble size = total time. Top-right = worst offenders.</p>
+  <div id="scatter-chart"></div>
+</div>
+<div class="panel full-width">
+  <h2>Top Callers per Category</h2>
+  <p class="desc">Which parent operations contribute the most time to each category.</p>
+  <div class="scroll-box" id="caller-breakdown"></div>
+</div>
+<div class="panel full-width">
+  <h2>Full Breakdown Table</h2>
+  <p class="desc">All categories sorted by total time. "Self %" = fraction of time not delegated to children.</p>
+  <div class="scroll-box">
+    <table id="full-table">
+      <tr>
+        <th>Category</th><th>Total (ms)</th><th>Self (ms)</th><th>Self %</th>
+        <th>Calls</th><th>Avg (ms)</th><th>% of Total</th>
+      </tr>
+    </table>
+  </div>
+</div>
+</div>
+<script>
+const BAR = {_json.dumps(bar_data)};
+const SCATTER = {_json.dumps(scatter_data)};
+const CALLERS = {_json.dumps(caller_data)};
+const TOTAL_MS = {total_ms};
+
+// --- Bar chart ---
+Plotly.newPlot("bar-chart", [
+  {{
+    type: "bar", orientation: "h",
+    y: BAR.map(d => d.name).reverse(),
+    x: BAR.map(d => d.self_ms).reverse(),
+    name: "Self time",
+    marker: {{ color: BAR.map(d => d.color).reverse(), opacity: 0.9 }},
+    hovertemplate: "<b>%{{y}}</b><br>Self: %{{x:.1f}}ms<extra></extra>",
+  }},
+  {{
+    type: "bar", orientation: "h",
+    y: BAR.map(d => d.name).reverse(),
+    x: BAR.map(d => Math.max(0, d.total_ms - d.self_ms)).reverse(),
+    name: "Child time",
+    marker: {{ color: BAR.map(d => d.color).reverse(), opacity: 0.35 }},
+    hovertemplate: "<b>%{{y}}</b><br>Child: %{{x:.1f}}ms<extra></extra>",
+  }}
+], {{
+  barmode: "stack",
+  margin: {{ l: 140, r: 20, t: 10, b: 40 }},
+  height: Math.max(400, BAR.length * 22),
+  xaxis: {{ title: "ms" }},
+  yaxis: {{ automargin: true, tickfont: {{ size: 12 }} }},
+  legend: {{ orientation: "h", y: -0.08 }},
+  hoverlabel: {{ font: {{ size: 12 }} }},
+}});
+
+// --- Scatter chart ---
+const scFiltered = SCATTER.filter(d => d.total_ms > 0.1);
+Plotly.newPlot("scatter-chart", [{{
+  type: "scatter", mode: "markers+text",
+  x: scFiltered.map(d => d.calls),
+  y: scFiltered.map(d => d.avg_ms),
+  text: scFiltered.map(d => d.name),
+  textposition: "top center",
+  textfont: {{ size: 10 }},
+  marker: {{
+    size: scFiltered.map(d => Math.max(8, Math.min(60, Math.sqrt(d.total_ms) * 2))),
+    color: scFiltered.map(d => d.color),
+    opacity: 0.8,
+    line: {{ width: 1, color: "#fff" }},
+  }},
+  hovertemplate: "<b>%{{text}}</b><br>Calls: %{{x}}<br>Avg: %{{y:.3f}}ms<br>Total: %{{customdata:.1f}}ms<extra></extra>",
+  customdata: scFiltered.map(d => d.total_ms),
+}}], {{
+  margin: {{ l: 60, r: 20, t: 20, b: 50 }},
+  height: 500,
+  xaxis: {{ title: "Call count", type: "log" }},
+  yaxis: {{ title: "Avg time per call (ms)", type: "log" }},
+  hoverlabel: {{ font: {{ size: 12 }} }},
+  showlegend: false,
+}});
+
+// --- Caller breakdown ---
+const callerEl = document.getElementById("caller-breakdown");
+const catNames = Object.keys(CALLERS);
+for (const cat of catNames) {{
+  const entries = CALLERS[cat];
+  const maxMs = entries[0]?.ms || 1;
+  let html = '<div class="caller-section"><h3><span class="swatch" style="background:' +
+    (BAR.find(b => b.name === cat)?.color || "#bab0ac") + '"></span>' + cat + '</h3>';
+  for (const e of entries) {{
+    const pct = (e.ms / TOTAL_MS * 100).toFixed(1);
+    const w = (e.ms / maxMs * 100).toFixed(0);
+    html += '<div class="caller-row">' +
+      '<span class="label">&larr; ' + e.parent + '</span>' +
+      '<span class="value">' + e.ms.toFixed(1) + 'ms (' + pct + '%) [' + e.calls + 'x]</span>' +
+      '</div>' +
+      '<div class="bar" style="width:' + w + '%;background:' +
+      (BAR.find(b => b.name === cat)?.color || "#bab0ac") + ';opacity:0.5"></div>';
+  }}
+  html += '</div>';
+  callerEl.innerHTML += html;
+}}
+
+// --- Full table ---
+const tbl = document.getElementById("full-table");
+const allCats = BAR.slice();
+for (const d of SCATTER) {{
+  if (!allCats.find(b => b.name === d.name)) allCats.push(d);
+}}
+allCats.sort((a, b) => b.total_ms - a.total_ms);
+for (const d of allCats) {{
+  const selfPct = d.total_ms > 0 ? (d.self_ms / d.total_ms * 100).toFixed(0) : "—";
+  const totalPct = (d.total_ms / TOTAL_MS * 100).toFixed(1);
+  const tr = document.createElement("tr");
+  tr.innerHTML = '<td><span class="swatch" style="background:' + d.color + '"></span>' + d.name + '</td>' +
+    '<td>' + d.total_ms.toFixed(1) + '</td>' +
+    '<td>' + d.self_ms.toFixed(1) + '</td>' +
+    '<td>' + selfPct + '%</td>' +
+    '<td>' + d.calls.toLocaleString() + '</td>' +
+    '<td>' + d.avg_ms.toFixed(3) + '</td>' +
+    '<td>' + totalPct + '%</td>';
+  tbl.appendChild(tr);
+}}
+</script>
+</body></html>'''

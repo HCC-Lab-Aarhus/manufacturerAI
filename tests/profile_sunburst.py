@@ -17,7 +17,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tests.profile_base import (
-    HTimer, TimerNode, print_tree, build_sunburst_html, _collect_leaf_times,
+    HTimer, TimerNode, print_tree, build_sunburst_html, build_insights_html,
+    _collect_leaf_times,
 )
 
 
@@ -675,6 +676,11 @@ def main():
     html = build_sunburst_html(root, title="Router Hierarchical Profile")
     out_path.write_text(html, encoding="utf-8")
     print(f"\nInteractive sunburst chart saved to: {out_path}")
+
+    insights_path = out_path.with_name("profile_insights.html")
+    insights_html = build_insights_html(root, title="Router Optimization Insights")
+    insights_path.write_text(insights_html, encoding="utf-8")
+    print(f"Optimization insights saved to: {insights_path}")
 
 
 if __name__ == "__main__":
