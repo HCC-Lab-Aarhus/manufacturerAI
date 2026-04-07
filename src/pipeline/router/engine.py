@@ -768,7 +768,12 @@ def _block_components(
         if cat is None or not cat.mounting.blocks_routing:
             continue
         hw, hh = footprint_halfdims(cat, pc.rotation_deg)
-        grid.block_rect_world(pc.x_mm, pc.y_mm, hw, hh, permanent=True)
+        keepout = cat.mounting.keepout_margin_mm
+        grid.block_rect_world(
+            pc.x_mm, pc.y_mm,
+            hw + keepout, hh + keepout,
+            permanent=True,
+        )
 
     for pc in placement.components:
         cat = catalog_map.get(pc.catalog_id)
