@@ -107,12 +107,7 @@ def _flatten_for_sunburst(
     calls_str = f"  [{node.call_count}x]" if node.call_count > 1 else ""
     texts.append(f"{node.elapsed*1000:.1f}ms{pct}{calls_str}")
 
-    PALETTE = [
-        "#4e79a7", "#f28e2b", "#e15759", "#76b7b2",
-        "#59a14f", "#edc948", "#b07aa1", "#ff9da7",
-        "#9c755f", "#bab0ac",
-    ]
-    colors.append(PALETTE[depth % len(PALETTE)] if parent_id else "#ffffff")
+    colors.append(_name_color_map.get(node.name, "#bab0ac") if parent_id else "#ffffff")
 
     for child in node.children:
         _flatten_for_sunburst(
@@ -166,7 +161,25 @@ def _collect_all_names(node: TimerNode, out: set[str] | None = None) -> set[str]
     return out
 
 
+def _build_name_color_map(root: TimerNode) -> dict[str, str]:
+    names = _collect_all_names(root) - {root.name, "(other)", "(self)"}
+    sorted_names = sorted(names)
+    n = len(sorted_names)
+    color_map = {}
+    for i, name in enumerate(sorted_names):
+        hue = (i / n * 360) if n else 0
+        color_map[name] = f"hsl({hue:.0f}, 65%, 55%)"
+    color_map["(other)"] = "#dddddd"
+    color_map["(self)"] = "#cccccc"
+    return color_map
+
+
+_name_color_map: dict[str, str] = {}
+
+
 def build_sunburst_html(root: TimerNode, title: str = "Profile") -> str:
+    global _name_color_map
+    _name_color_map = _build_name_color_map(root)
     import json as _json
     tree_json = _json.dumps(_tree_to_dict(root))
 
@@ -240,7 +253,21 @@ th:nth-child(2), th:nth-child(3), th:nth-child(4) {{ text-align: right; }}
 </div>
 <script>
 const TREE = {tree_json};
-const PALETTE = ["#4e79a7","#f28e2b","#e15759","#76b7b2","#59a14f","#edc948","#b07aa1","#ff9da7","#9c755f","#bab0ac"];
+function buildColorMap(node, names) {{
+  if (node.name !== "(other)" && node.name !== "(self)") names.add(node.name);
+  for (const c of node.children) buildColorMap(c, names);
+}}
+const _allNames = new Set();
+buildColorMap(TREE, _allNames);
+_allNames.delete(TREE.name);
+const _sortedNames = [..._allNames].sort();
+const NAME_COLOR = {{}};
+for (let i = 0; i < _sortedNames.length; i++) {{
+  const hue = (_sortedNames.length > 0) ? (i / _sortedNames.length * 360) : 0;
+  NAME_COLOR[_sortedNames[i]] = "hsl(" + hue.toFixed(0) + ", 65%, 55%)";
+}}
+NAME_COLOR["(other)"] = "#dddddd";
+NAME_COLOR["(self)"] = "#cccccc";
 
 function collectNodes(node, path, depth, out) {{
   const id = path ? path + "/" + node.name : node.name;
@@ -260,7 +287,7 @@ function flattenNode(node, parentId, depth, ids, labels, parents, values, texts,
   const nodeIdx = ids.length;
   ids.push(nodeId); labels.push(node.name); parents.push(parentId);
   values.push(ms); texts.push(ms.toFixed(1) + "ms" + callStr);
-  colors.push(parentId ? PALETTE[depth % PALETTE.length] : "#ffffff");
+  colors.push(parentId ? (NAME_COLOR[node.name] || "#bab0ac") : "#ffffff");
   let childSum = 0;
   for (const c of node.children) {{
     childSum += flattenNode(c, nodeId, depth + 1, ids, labels, parents, values, texts, colors);
