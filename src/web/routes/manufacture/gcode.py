@@ -97,8 +97,10 @@ async def start_gcode(
             else:
                 set_gcode_state(sid, {"status": "error", "message": result.message, "stages": result.stages})
         except Exception as exc:
+            import traceback
+            tb = traceback.format_exc()
             logging.exception("G-code pipeline error")
-            set_gcode_state(sid, {"status": "error", "message": str(exc), "stages": []})
+            set_gcode_state(sid, {"status": "error", "message": f"{type(exc).__name__}: {exc}", "stages": [tb]})
 
     threading.Thread(target=_do_gcode, daemon=True).start()
     return {"status": "running"}
