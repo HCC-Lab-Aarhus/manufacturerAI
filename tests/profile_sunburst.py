@@ -150,33 +150,29 @@ def _find_node(ids, parents, values, target_id):
     return 1.0
 
 
+def _tree_to_dict(node: TimerNode) -> dict:
+    """Serialize a TimerNode tree to a JSON-friendly dict."""
+    return {
+        "name": node.name,
+        "elapsed": node.elapsed,
+        "call_count": node.call_count,
+        "children": [_tree_to_dict(c) for c in node.children],
+    }
+
+
+def _collect_all_names(node: TimerNode, out: set[str] | None = None) -> set[str]:
+    if out is None:
+        out = set()
+    out.add(node.name)
+    for c in node.children:
+        _collect_all_names(c, out)
+    return out
+
+
 def build_sunburst_html(root: TimerNode, title: str = "Router Profile") -> str:
-    ids, labels, parents, values, texts, colors = _flatten_for_sunburst(root)
+    import json as _json
+    tree_json = _json.dumps(_tree_to_dict(root))
 
-    import plotly.graph_objects as go
-
-    fig = go.Figure(go.Sunburst(
-        ids=ids,
-        labels=labels,
-        parents=parents,
-        values=values,
-        text=texts,
-        branchvalues="total",
-        hovertemplate="<b>%{label}</b><br>%{text}<extra></extra>",
-        textinfo="label+text",
-        insidetextorientation="radial",
-        marker=dict(colors=colors, line=dict(width=1, color="white")),
-        maxdepth=3,
-    ))
-    fig.update_layout(
-        title=dict(text=title, font=dict(size=20)),
-        margin=dict(t=50, l=10, r=10, b=10),
-        width=1000,
-        height=800,
-    )
-    html = fig.to_html(include_plotlyjs="cdn", full_html=True)
-
-    # Build sorted category table
     all_nodes: list[tuple[str, float, int]] = []
     _collect_leaf_times(root, all_nodes)
     merged: dict[str, tuple[float, int]] = {}
@@ -189,20 +185,226 @@ def build_sunburst_html(root: TimerNode, title: str = "Router Profile") -> str:
         f"<td>{t*1000/c:.2f}</td></tr>"
         for name, (t, c) in rows if c > 0
     )
-    table_html = (
-        '<div style="max-width:800px;margin:30px auto;font-family:sans-serif">'
-        '<h2>All categories sorted by total time</h2>'
-        '<table style="border-collapse:collapse;width:100%">'
-        '<tr style="background:#f0f0f0">'
-        '<th style="text-align:left;padding:4px 8px">Category</th>'
-        '<th style="text-align:right;padding:4px 8px">Total (ms)</th>'
-        '<th style="text-align:right;padding:4px 8px">Calls</th>'
-        '<th style="text-align:right;padding:4px 8px">Avg (ms)</th></tr>'
-        + table_rows +
-        '</table></div>'
-    )
-    html = html.replace('</body>', table_html + '</body>')
-    return html
+
+    return f'''<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>{title}</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; background: #fafafa; }}
+.container {{ display: flex; gap: 20px; max-width: 1400px; margin: 0 auto; }}
+.sidebar {{ width: 280px; flex-shrink: 0; }}
+.sidebar h3 {{ margin: 0 0 8px; font-size: 14px; color: #555; }}
+.node-list {{ max-height: 700px; overflow-y: auto; border: 1px solid #ddd; border-radius: 6px; background: #fff; padding: 6px; }}
+.node-item {{ display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 4px; cursor: pointer; font-size: 13px; user-select: none; }}
+.node-item:hover {{ background: #f0f4ff; }}
+.node-item.selected {{ background: #e0e8ff; font-weight: 600; }}
+.node-item .time {{ color: #888; margin-left: auto; font-size: 11px; white-space: nowrap; }}
+.chart {{ flex: 1; min-width: 0; }}
+.controls {{ display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }}
+.controls button {{ padding: 5px 14px; border: 1px solid #ccc; border-radius: 4px; background: #fff; cursor: pointer; font-size: 13px; }}
+.controls button:hover {{ background: #f0f0f0; }}
+.controls .depth-label {{ font-size: 13px; color: #555; }}
+.controls input[type=range] {{ width: 100px; }}
+h1 {{ font-size: 20px; margin: 0 0 16px; text-align: center; }}
+table {{ border-collapse: collapse; width: 100%; }}
+th, td {{ padding: 4px 8px; text-align: left; border-bottom: 1px solid #eee; font-size: 13px; }}
+th {{ background: #f0f0f0; }}
+td:nth-child(2), td:nth-child(3), td:nth-child(4),
+th:nth-child(2), th:nth-child(3), th:nth-child(4) {{ text-align: right; }}
+</style>
+</head><body>
+<h1>{title}</h1>
+<div class="container">
+  <div class="sidebar">
+    <h3>Select root node(s)</h3>
+    <div class="controls">
+      <button id="btn-reset">Reset</button>
+      <button id="btn-all">Select all</button>
+    </div>
+    <div class="node-list" id="node-list"></div>
+  </div>
+  <div class="chart">
+    <div class="controls">
+      <span class="depth-label">Depth:</span>
+      <input type="range" id="depth-slider" min="2" max="10" value="3">
+      <span id="depth-val">3</span>
+    </div>
+    <div id="sunburst"></div>
+  </div>
+</div>
+<div style="max-width:800px;margin:30px auto">
+  <h2 style="font-size:16px">All categories sorted by total time</h2>
+  <table>
+    <tr><th>Category</th><th>Total (ms)</th><th>Calls</th><th>Avg (ms)</th></tr>
+    {table_rows}
+  </table>
+</div>
+<script>
+const TREE = {tree_json};
+const PALETTE = ["#4e79a7","#f28e2b","#e15759","#76b7b2","#59a14f","#edc948","#b07aa1","#ff9da7","#9c755f","#bab0ac"];
+
+function collectNodes(node, path, depth, out) {{
+  const id = path ? path + "/" + node.name : node.name;
+  out.push({{ id, name: node.name, elapsed: node.elapsed, calls: node.call_count, depth, node }});
+  for (const c of node.children) collectNodes(c, id, depth + 1, out);
+}}
+
+function findByName(node, name, results) {{
+  if (node.name === name) results.push(node);
+  for (const c of node.children) findByName(c, name, results);
+}}
+
+function flattenNode(node, parentId, depth, ids, labels, parents, values, texts, colors) {{
+  const nodeId = parentId ? parentId + "/" + node.name : node.name;
+  const ms = Math.round(node.elapsed * 1000 * 10) / 10;
+  const callStr = node.call_count > 1 ? "  [" + node.call_count + "x]" : "";
+  ids.push(nodeId); labels.push(node.name); parents.push(parentId);
+  values.push(ms); texts.push(ms.toFixed(1) + "ms" + callStr);
+  colors.push(parentId ? PALETTE[depth % PALETTE.length] : "#ffffff");
+  let childSum = 0;
+  for (const c of node.children) {{
+    flattenNode(c, nodeId, depth + 1, ids, labels, parents, values, texts, colors);
+    childSum += Math.round(c.elapsed * 1000 * 10) / 10;
+  }}
+  if (node.children.length > 0) {{
+    const remainder = Math.round((ms - childSum) * 10) / 10;
+    if (remainder > 0) {{
+      const uid = nodeId + "/(other)";
+      ids.push(uid); labels.push("(other)"); parents.push(nodeId);
+      values.push(remainder); texts.push(remainder.toFixed(1) + "ms");
+      colors.push("#dddddd");
+    }} else if (remainder < 0) {{
+      const idx = ids.indexOf(nodeId);
+      values[idx] = Math.round(childSum * 10) / 10;
+    }}
+  }}
+}}
+
+function mergeNodes(nodes) {{
+  const merged = {{ name: "selected", elapsed: 0, call_count: 0, children: [] }};
+  const childMap = {{}};
+  for (const n of nodes) {{
+    merged.elapsed += n.elapsed;
+    merged.call_count += n.call_count;
+    for (const c of n.children) {{
+      if (childMap[c.name]) {{
+        childMap[c.name] = mergeTwo(childMap[c.name], c);
+      }} else {{
+        childMap[c.name] = deepCopy(c);
+      }}
+    }}
+    const selfTime = n.elapsed - n.children.reduce((s, c) => s + c.elapsed, 0);
+    if (selfTime > 0.0005 && n.children.length > 0) {{
+      if (childMap["(self)"]) {{
+        childMap["(self)"].elapsed += selfTime;
+        childMap["(self)"].call_count += Math.max(n.call_count, 1);
+      }} else {{
+        childMap["(self)"] = {{ name: "(self)", elapsed: selfTime, call_count: Math.max(n.call_count, 1), children: [] }};
+      }}
+    }}
+  }}
+  merged.children = Object.values(childMap).sort((a, b) => b.elapsed - a.elapsed);
+  return merged;
+}}
+
+function mergeTwo(a, b) {{
+  const merged = {{ name: a.name, elapsed: a.elapsed + b.elapsed, call_count: a.call_count + b.call_count, children: [] }};
+  const childMap = {{}};
+  for (const c of a.children) childMap[c.name] = deepCopy(c);
+  for (const c of b.children) {{
+    if (childMap[c.name]) childMap[c.name] = mergeTwo(childMap[c.name], c);
+    else childMap[c.name] = deepCopy(c);
+  }}
+  merged.children = Object.values(childMap).sort((a, b) => b.elapsed - a.elapsed);
+  return merged;
+}}
+
+function deepCopy(n) {{
+  return {{ name: n.name, elapsed: n.elapsed, call_count: n.call_count, children: n.children.map(deepCopy) }};
+}}
+
+// Build node list (unique names with aggregated time)
+const allFlat = [];
+collectNodes(TREE, "", 0, allFlat);
+const nameMap = {{}};
+for (const n of allFlat) {{
+  if (n.node.children.length === 0) continue;
+  if (!nameMap[n.name]) nameMap[n.name] = {{ elapsed: 0, calls: 0 }};
+  nameMap[n.name].elapsed += n.elapsed;
+  nameMap[n.name].calls += n.calls;
+}}
+const nameList = Object.entries(nameMap).sort((a, b) => b[1].elapsed - a[1].elapsed);
+
+const listEl = document.getElementById("node-list");
+const selected = new Set();
+
+for (const [name, info] of nameList) {{
+  const div = document.createElement("div");
+  div.className = "node-item";
+  div.dataset.name = name;
+  div.innerHTML = '<span>' + name + '</span><span class="time">' + (info.elapsed * 1000).toFixed(1) + 'ms</span>';
+  div.addEventListener("click", () => {{
+    if (selected.has(name)) selected.delete(name); else selected.add(name);
+    div.classList.toggle("selected");
+    rebuild();
+  }});
+  listEl.appendChild(div);
+}}
+
+let maxDepth = 3;
+const depthSlider = document.getElementById("depth-slider");
+const depthVal = document.getElementById("depth-val");
+depthSlider.addEventListener("input", () => {{
+  maxDepth = parseInt(depthSlider.value);
+  depthVal.textContent = maxDepth;
+  rebuild();
+}});
+
+document.getElementById("btn-reset").addEventListener("click", () => {{
+  selected.clear();
+  listEl.querySelectorAll(".node-item").forEach(el => el.classList.remove("selected"));
+  rebuild();
+}});
+document.getElementById("btn-all").addEventListener("click", () => {{
+  listEl.querySelectorAll(".node-item").forEach(el => {{
+    selected.add(el.dataset.name);
+    el.classList.add("selected");
+  }});
+  rebuild();
+}});
+
+function rebuild() {{
+  let root;
+  if (selected.size === 0) {{
+    root = TREE;
+  }} else {{
+    const matches = [];
+    for (const name of selected) {{
+      findByName(TREE, name, matches);
+    }}
+    if (matches.length === 0) {{ root = TREE; }}
+    else if (matches.length === 1) {{ root = deepCopy(matches[0]); }}
+    else {{ root = mergeNodes(matches); }}
+  }}
+  const ids = [], labels = [], parents = [], values = [], texts = [], colors = [];
+  flattenNode(root, "", 0, ids, labels, parents, values, texts, colors);
+  Plotly.react("sunburst", [{{
+    type: "sunburst", ids, labels, parents, values, text: texts,
+    branchvalues: "total",
+    hovertemplate: "<b>%{{label}}</b><br>%{{text}}<extra></extra>",
+    textinfo: "label+text", insidetextorientation: "radial",
+    marker: {{ colors, line: {{ width: 1, color: "white" }} }},
+    maxdepth: maxDepth,
+  }}], {{
+    margin: {{ t: 10, l: 10, r: 10, b: 10 }},
+    width: 900, height: 800,
+  }});
+}}
+rebuild();
+</script>
+</body></html>'''
 
 
 def print_tree(node: TimerNode, indent: int = 0, parent_elapsed: float = 0):
@@ -252,7 +454,7 @@ def run_profiled_route():
     from src.pipeline.router.solution import Solution
     from src.pipeline.router import pathfinder as pf_mod
     from src.pipeline.router.pathfinder import (
-        _try_l_route, _octile_dt, DIRS,
+        _try_l_route, _octile_dt, _octile_h, _turn_cost, _SQRT2, DIRS,
         FREE, BLOCKED, TRACE_PATH, PERMANENTLY_BLOCKED,
     )
     from heapq import heappush as _heappush, heappop as _heappop
@@ -295,14 +497,84 @@ def run_profiled_route():
                 if l_path is not None:
                     return l_path
             with ht.section("astar"):
-                # Pass empty dict to skip L-route retry inside orig
-                effective_cost_map = cost_map if cost_map is not None else {}
-                return orig_find_path(
-                    grid, source, sink,
-                    turn_penalty=turn_penalty,
-                    crossing_cost=crossing_cost,
-                    cost_map=effective_cost_map,
-                )
+                sx, sy = source
+                tx, ty = sink
+                W = grid.width
+                H = grid.height
+                cells = grid._cells
+                if not (0 <= sx < W and 0 <= sy < H and 0 <= tx < W and 0 <= ty < H):
+                    return None
+                if cells[sy * W + sx] == TRACE_PATH or cells[ty * W + tx] == TRACE_PATH:
+                    return None
+                if source == sink:
+                    return [source]
+                N = W * H
+                INF = float('inf')
+                sink_key = ty * W + tx
+                with ht.section("alloc"):
+                    g = [INF] * N
+                    parent = [-1] * N
+                    closed = bytearray(N)
+                    g[sy * W + sx] = 0
+                    counter = 0
+                    heap = [(_octile_h(sx - tx, sy - ty), counter, sx, sy, -1)]
+                with ht.section("search"):
+                    found_key = -1
+                    found_cx = found_cy = 0
+                    while heap:
+                        f, _cnt, cx, cy, direction = _heappop(heap)
+                        key = cy * W + cx
+                        if closed[key]:
+                            continue
+                        closed[key] = 1
+                        if key == sink_key:
+                            found_key = key
+                            found_cx, found_cy = cx, cy
+                            break
+                        cur_g = g[key]
+                        for d, (dx, dy) in enumerate(DIRS):
+                            nx, ny = cx + dx, cy + dy
+                            if not (0 <= nx < W and 0 <= ny < H):
+                                continue
+                            nkey = ny * W + nx
+                            if closed[nkey]:
+                                continue
+                            nval = cells[nkey]
+                            cross_extra = 0
+                            if nval != FREE:
+                                if nval == PERMANENTLY_BLOCKED:
+                                    continue
+                                if crossing_cost > 0 and (nval == TRACE_PATH or nval == BLOCKED):
+                                    cross_extra = crossing_cost
+                                else:
+                                    if nval == TRACE_PATH:
+                                        continue
+                                    if (nx, ny) != sink and (nx, ny) != source:
+                                        continue
+                            move_cost = 1.0 if d < 4 else _SQRT2
+                            tc = _turn_cost(direction, d, turn_penalty)
+                            cost = move_cost + tc + cross_extra
+                            if cost_map is not None:
+                                cost += cost_map.get(nkey, 0)
+                            tentative_g = cur_g + cost
+                            if tentative_g < g[nkey]:
+                                g[nkey] = tentative_g
+                                parent[nkey] = key
+                                counter += 1
+                                _heappush(heap, (tentative_g + _octile_h(nx - tx, ny - ty), counter, nx, ny, d))
+                if found_key < 0:
+                    return None
+                with ht.section("reconstruct"):
+                    path = [(found_cx, found_cy)]
+                    k = found_key
+                    while True:
+                        pk = parent[k]
+                        if pk < 0:
+                            break
+                        path.append((pk % W, pk // W))
+                        k = pk
+                    path.reverse()
+                    return path
 
     def timed_find_path_to_tree(grid, source, tree, *, turn_penalty=_TURN_PENALTY,
                                 crossing_cost=0, cost_map=None):
@@ -331,67 +603,77 @@ def run_profiled_route():
 
             with ht.section("astar"):
                 INF = 0x7FFFFFFF
-                g = [INF] * N
-                parent = [-1] * N
-                closed = bytearray(N)
-                counter = 0
-                heap = []
-                for sx, sy in sources:
-                    if not (0 <= sx < W and 0 <= sy < H):
-                        continue
-                    skey = sy * W + sx
-                    if cells[skey] != FREE and not tree_mask[skey]:
-                        continue
-                    g[skey] = 0
-                    _heappush(heap, (h_map[skey], counter, sx, sy, -1))
-                    counter += 1
-                if not heap:
+                with ht.section("alloc"):
+                    g = [INF] * N
+                    parent = [-1] * N
+                    closed = bytearray(N)
+                with ht.section("seed"):
+                    counter = 0
+                    heap = []
+                    for sx, sy in sources:
+                        if not (0 <= sx < W and 0 <= sy < H):
+                            continue
+                        skey = sy * W + sx
+                        if cells[skey] != FREE and not tree_mask[skey]:
+                            continue
+                        g[skey] = 0
+                        _heappush(heap, (h_map[skey], counter, sx, sy, -1))
+                        counter += 1
+                    if not heap:
+                        return None
+                with ht.section("search"):
+                    found_key = -1
+                    found_cx = found_cy = 0
+                    while heap:
+                        f, _cnt, cx, cy, direction = _heappop(heap)
+                        key = cy * W + cx
+                        if closed[key]:
+                            continue
+                        closed[key] = 1
+                        if tree_mask[key]:
+                            found_key = key
+                            found_cx, found_cy = cx, cy
+                            break
+                        cur_g = g[key]
+                        for d, (dx, dy) in enumerate(DIRS):
+                            nx, ny = cx + dx, cy + dy
+                            if not (0 <= nx < W and 0 <= ny < H):
+                                continue
+                            nkey = ny * W + nx
+                            if closed[nkey]:
+                                continue
+                            nval = cells[nkey]
+                            cross_extra = 0
+                            if nval != FREE and not tree_mask[nkey]:
+                                if nval == PERMANENTLY_BLOCKED:
+                                    continue
+                                if crossing_cost > 0 and (nval == TRACE_PATH or nval == BLOCKED):
+                                    cross_extra = crossing_cost
+                                else:
+                                    continue
+                            is_turn = direction != -1 and direction != d
+                            cost = 1 + (turn_penalty if is_turn else 0) + cross_extra
+                            if cost_map is not None:
+                                cost += cost_map.get(nkey, 0)
+                            tentative_g = cur_g + cost
+                            if tentative_g < g[nkey]:
+                                g[nkey] = tentative_g
+                                parent[nkey] = key
+                                counter += 1
+                                _heappush(heap, (tentative_g + h_map[nkey], counter, nx, ny, d))
+                if found_key < 0:
                     return None
-                while heap:
-                    f, _cnt, cx, cy, direction = _heappop(heap)
-                    key = cy * W + cx
-                    if closed[key]:
-                        continue
-                    closed[key] = 1
-                    if tree_mask[key]:
-                        path = [(cx, cy)]
-                        k = key
-                        while True:
-                            pk = parent[k]
-                            if pk < 0:
-                                break
-                            path.append((pk % W, pk // W))
-                            k = pk
-                        path.reverse()
-                        return path
-                    cur_g = g[key]
-                    for d, (dx, dy) in enumerate(DIRS):
-                        nx, ny = cx + dx, cy + dy
-                        if not (0 <= nx < W and 0 <= ny < H):
-                            continue
-                        nkey = ny * W + nx
-                        if closed[nkey]:
-                            continue
-                        nval = cells[nkey]
-                        cross_extra = 0
-                        if nval != FREE and not tree_mask[nkey]:
-                            if nval == PERMANENTLY_BLOCKED:
-                                continue
-                            if crossing_cost > 0 and (nval == TRACE_PATH or nval == BLOCKED):
-                                cross_extra = crossing_cost
-                            else:
-                                continue
-                        is_turn = direction != -1 and direction != d
-                        cost = 1 + (turn_penalty if is_turn else 0) + cross_extra
-                        if cost_map is not None:
-                            cost += cost_map.get(nkey, 0)
-                        tentative_g = cur_g + cost
-                        if tentative_g < g[nkey]:
-                            g[nkey] = tentative_g
-                            parent[nkey] = key
-                            counter += 1
-                            _heappush(heap, (tentative_g + h_map[nkey], counter, nx, ny, d))
-                return None
+                with ht.section("reconstruct"):
+                    path = [(found_cx, found_cy)]
+                    k = found_key
+                    while True:
+                        pk = parent[k]
+                        if pk < 0:
+                            break
+                        path.append((pk % W, pk // W))
+                        k = pk
+                    path.reverse()
+                    return path
 
     pf_mod.find_path = timed_find_path
     sol_mod.find_path = timed_find_path
@@ -460,6 +742,17 @@ def run_profiled_route():
         with ht.section("rip_up"):
             return orig_rip_up(self, *a, **kw)
 
+    orig_grid_paths_to_traces = Solution._grid_paths_to_traces
+    orig_to_result = Solution.to_result
+
+    def timed_grid_paths_to_traces(self, *a, **kw):
+        with ht.section("grid_paths_to_traces"):
+            return orig_grid_paths_to_traces(self, *a, **kw)
+
+    def timed_to_result(self, *a, **kw):
+        with ht.section("to_result"):
+            return orig_to_result(self, *a, **kw)
+
     Solution._block_voronoi = timed_block_voronoi
     Solution._unblock_voronoi = timed_unblock_voronoi
     Solution._find_crossed_nets = timed_find_crossed
@@ -469,6 +762,8 @@ def run_profiled_route():
     Solution.snapshot = timed_snapshot
     Solution.restore = timed_restore
     Solution.rip_up = timed_rip_up
+    Solution._grid_paths_to_traces = timed_grid_paths_to_traces
+    Solution.to_result = timed_to_result
 
     try:
         with ht.section("total"):
@@ -621,6 +916,10 @@ def run_profiled_route():
                     final_score = solution.score()
                     print(f"Final score: {final_score}")
 
+            # ── Phase 7: Output conversion ──
+            with ht.section("output_conversion"):
+                solution.to_result(include_debug=False)
+
     finally:
         # Restore all originals
         pf_mod.find_path = orig_find_path
@@ -638,6 +937,8 @@ def run_profiled_route():
         Solution.snapshot = orig_snapshot
         Solution.restore = orig_restore
         Solution.rip_up = orig_rip_up
+        Solution._grid_paths_to_traces = orig_grid_paths_to_traces
+        Solution.to_result = orig_to_result
 
     return ht
 
