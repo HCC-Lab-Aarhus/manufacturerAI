@@ -39,8 +39,6 @@ def _segment_clearance_flats(
 
     A cell intersects if the distance from its centre to the segment is
     <= radius_mm + cell_half_diagonal (Minkowski inflation).
-
-    Uses vectorized numpy distance computation.
     """
     ax = (gx0 + 0.5) * resolution
     ay = (gy0 + 0.5) * resolution
@@ -57,11 +55,24 @@ def _segment_clearance_flats(
     y_lo = max(0, min(gy0, gy1) - margin_cells)
     y_hi = min(H - 1, max(gy0, gy1) + margin_cells)
 
-    gxs = np.arange(x_lo, x_hi + 1)
-    gys = np.arange(y_lo, y_hi + 1)
-    if gxs.size == 0 or gys.size == 0:
+    nx = x_hi - x_lo + 1
+    ny = y_hi - y_lo + 1
+    if nx <= 0 or ny <= 0:
         return set()
 
+    if nx * ny < 256:
+        flats: set[int] = set()
+        for gy in range(y_lo, y_hi + 1):
+            cy = (gy + 0.5) * resolution
+            row = gy * W
+            for gx in range(x_lo, x_hi + 1):
+                cx = (gx + 0.5) * resolution
+                if _point_seg_dist(cx, cy, ax, ay, bx, by) <= threshold:
+                    flats.add(row + gx)
+        return flats
+
+    gxs = np.arange(x_lo, x_hi + 1)
+    gys = np.arange(y_lo, y_hi + 1)
     cx = (gxs + 0.5) * resolution
     cy = (gys + 0.5) * resolution
     CX, CY = np.meshgrid(cx, cy)

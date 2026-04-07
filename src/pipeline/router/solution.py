@@ -20,7 +20,7 @@ from src.pipeline.placer.models import FullPlacement
 
 from .grid import RoutingGrid, FREE, BLOCKED, TRACE_PATH, PERMANENTLY_BLOCKED
 from .models import Trace, RoutingResult, RouterConfig
-from .pathfinder import find_path, find_path_to_tree
+from .pathfinder import find_path, find_path_to_tree, _octile_dt, _update_octile_dt
 from .pins import pin_world_xy
 
 log = logging.getLogger(__name__)
@@ -388,6 +388,8 @@ class Solution:
             ra, rb = _find(a), _find(b)
             if ra == rb:
                 comp_trees[ra].update(path_cells)
+                if ra in hmap_cache:
+                    _update_octile_dt(W, H, hmap_cache[ra], path_cells)
                 return
             tree_a = comp_trees.pop(ra)
             tree_b = comp_trees.pop(rb)
@@ -396,22 +398,49 @@ class Solution:
             combined = tree_a | tree_b | set(path_cells)
             comp_trees[new_root] = combined
 
+            hm_a = hmap_cache.pop(ra, None)
+            hm_b = hmap_cache.pop(rb, None)
+            if hm_a is not None and hm_b is None:
+                _update_octile_dt(W, H, hm_a, list(tree_b) + path_cells)
+                hmap_cache[new_root] = hm_a
+            elif hm_b is not None and hm_a is None:
+                _update_octile_dt(W, H, hm_b, list(tree_a) + path_cells)
+                hmap_cache[new_root] = hm_b
+            elif hm_a is not None and hm_b is not None:
+                bigger, smaller_cells = (hm_a, list(tree_b)) if len(tree_a) >= len(tree_b) else (hm_b, list(tree_a))
+                _update_octile_dt(W, H, bigger, smaller_cells + path_cells)
+                hmap_cache[new_root] = bigger
+
+        W = self.grid.width
+        H = self.grid.height
+        hmap_cache: dict = {}
+
         for pa, pb in mst_edges:
             if _find(pa) == _find(pb):
                 continue
 
             tree_a = _get_tree(pa)
             tree_b = _get_tree(pb)
+            ra = _find(pa)
+            rb = _find(pb)
             if len(tree_a) >= len(tree_b):
                 src_tree, target_tree = tree_b, tree_a
+                tgt_root = ra
             else:
                 src_tree, target_tree = tree_a, tree_b
+                tgt_root = rb
+
+            cached_hmap = hmap_cache.get(tgt_root)
+            if cached_hmap is None:
+                cached_hmap = _octile_dt(W, H, list(target_tree))
+                hmap_cache[tgt_root] = cached_hmap
 
             path = find_path_to_tree(
                 self.grid, src_tree, target_tree,
                 turn_penalty=self.config.turn_penalty,
                 crossing_cost=crossing_cost,
                 cost_map=cost_map,
+                h_map=cached_hmap,
             )
 
             if path is not None:
