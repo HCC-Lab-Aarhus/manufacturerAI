@@ -23,9 +23,11 @@ async def start_gcode(
     silverink_only: bool = Query(False),
 ):
     s = load_session_or_404(sid)
-    stl_path = s.artifact_path("enclosure.stl")
+    two_part = s.has_artifact("enclosure_bottom.stl")
+    stl_path = s.artifact_path("enclosure_bottom.stl" if two_part else "enclosure.stl")
     if not stl_path.exists():
-        raise HTTPException(400, "No enclosure.stl — compile SCAD first")
+        name = "enclosure_bottom.stl" if two_part else "enclosure.stl"
+        raise HTTPException(400, f"No {name} — compile SCAD first")
 
     routing_data = require_routing(s)
 
