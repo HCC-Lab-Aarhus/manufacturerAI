@@ -45,7 +45,8 @@ def run_profiled_route():
     from src.pipeline.router.solution import Solution
     from src.pipeline.router import pathfinder as pf_mod
     from src.pipeline.router.pathfinder import (
-        _try_l_route, _octile_dt, _build_neighbors, _turn_cost, _SQRT2,
+        _try_l_route, _octile_dt, _octile_h, _build_neighbors,
+        _build_cost_table, _SQRT2,
         FREE, BLOCKED, TRACE_PATH, PERMANENTLY_BLOCKED,
     )
     from heapq import heappush as _heappush, heappop as _heappop
@@ -105,13 +106,13 @@ def run_profiled_route():
                 sink_key = ty * W + tx
                 with ht.section("alloc"):
                     neighbors = _build_neighbors(W, H)
-                    h_map = _octile_dt(W, H, [(tx, ty)])
+                    cost_tbl = _build_cost_table(turn_penalty)
                     g = [INF] * N
                     parent = [-1] * N
                     closed = bytearray(N)
                     g[start_key] = 0
                     counter = 0
-                    heap = [(h_map[start_key], counter, start_key, -1)]
+                    heap = [(_octile_h(sx - tx, sy - ty), counter, start_key, -1)]
                 with ht.section("search") as search_node:
                     _t_heappop = 0.0; _t_visit = 0.0
                     _t_closed = 0.0; _t_cell = 0.0; _t_cost = 0.0
@@ -137,12 +138,13 @@ def run_profiled_route():
                             break
                         cur_g = g[key]
                         _t_visit += _perf() - _t1
+                        dir_row = (direction + 1) * 8
                         _te0 = _perf()
                         for nkey, d in neighbors[key]:
                             if closed[nkey]:
                                 _n_closed += 1
                                 _te0 = _perf()
-                                _t_closed += _te0 - _te0  # near-zero, but captures iteration
+                                _t_closed += _te0 - _te0
                                 continue
                             _tbc = _perf()
                             _t_closed += _tbc - _te0
@@ -157,22 +159,14 @@ def run_profiled_route():
                                 if crossing_cost > 0 and (nval == TRACE_PATH or nval == BLOCKED):
                                     cross_extra = crossing_cost
                                 else:
-                                    if nval == TRACE_PATH:
-                                        _n_cell += 1
-                                        _te0 = _perf()
-                                        _t_cell += _te0 - _tbc
-                                        continue
-                                    if nkey != sink_key and nkey != start_key:
-                                        _n_cell += 1
-                                        _te0 = _perf()
-                                        _t_cell += _te0 - _tbc
-                                        continue
+                                    _n_cell += 1
+                                    _te0 = _perf()
+                                    _t_cell += _te0 - _tbc
+                                    continue
                             _n_evaluated += 1
                             _tf1 = _perf()
                             _t_cell += _tf1 - _tbc
-                            move_cost = 1.0 if d < 4 else _SQRT2
-                            tc = _turn_cost(direction, d, turn_penalty)
-                            cost = move_cost + tc + cross_extra
+                            cost = cost_tbl[dir_row + d] + cross_extra
                             if cost_map is not None:
                                 cost += cost_map.get(nkey, 0)
                             tentative_g = cur_g + cost
@@ -182,7 +176,7 @@ def run_profiled_route():
                                 _tc1 = _perf()
                                 _t_cost += _tc1 - _tf1
                                 counter += 1
-                                h_val = h_map[nkey]
+                                h_val = _octile_h(nkey % W - tx, nkey // W - ty)
                                 _th1 = _perf()
                                 _t_heuristic += _th1 - _tc1
                                 _heappush(heap, (tentative_g + h_val, counter, nkey, d))
@@ -258,6 +252,7 @@ def run_profiled_route():
                 INF = 0x7FFFFFFF
                 with ht.section("alloc"):
                     neighbors = _build_neighbors(W, H)
+                    cost_tbl = _build_cost_table(turn_penalty)
                     g = [INF] * N
                     parent = [-1] * N
                     closed = bytearray(N)
@@ -300,6 +295,7 @@ def run_profiled_route():
                             break
                         cur_g = g[key]
                         _t_visit += _perf() - _t1
+                        dir_row = (direction + 1) * 8
                         _te0 = _perf()
                         for nkey, d in neighbors[key]:
                             if closed[nkey]:
@@ -327,9 +323,7 @@ def run_profiled_route():
                             _n_evaluated += 1
                             _tf1 = _perf()
                             _t_cell += _tf1 - _tbc
-                            move_cost = 1.0 if d < 4 else _SQRT2
-                            tc = _turn_cost(direction, d, turn_penalty)
-                            cost = move_cost + tc + cross_extra
+                            cost = cost_tbl[dir_row + d] + cross_extra
                             if cost_map is not None:
                                 cost += cost_map.get(nkey, 0)
                             tentative_g = cur_g + cost

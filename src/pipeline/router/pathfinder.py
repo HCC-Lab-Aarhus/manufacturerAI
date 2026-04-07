@@ -25,6 +25,11 @@ DIRS = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
 _SQRT2 = 1.4142135623730951
 _SQRT2_M1 = _SQRT2 - 1.0  # ≈ 0.4142
 
+# Horizontal corner offset for each direction (0 for orthogonal dirs)
+_DIAG_CORNER_H = (0, 0, 0, 0, 1, 1, -1, -1)
+# Vertical corner offset multiplier for each direction (multiply by W)
+_DIAG_CORNER_V = (0, 0, 0, 0, 1, -1, 1, -1)
+
 
 def _build_angle_table():
     n = len(DIRS)
@@ -58,6 +63,22 @@ def _octile_h(dx: int, dy: int) -> float:
     adx = abs(dx)
     ady = abs(dy)
     return max(adx, ady) + _SQRT2_M1 * min(adx, ady)
+
+
+def _build_cost_table(turn_penalty: float) -> tuple:
+    """Precompute move_cost + turn_cost for all (prev_direction, d) pairs.
+
+    Index: (direction + 1) * 8 + d
+    direction -1 (no previous) maps to row 0; directions 0-7 map to rows 1-8.
+    """
+    tbl = [0.0] * (9 * 8)
+    for direction in range(-1, 8):
+        row = (direction + 1) * 8
+        for d in range(8):
+            move = 1.0 if d < 4 else _SQRT2
+            tc = _turn_cost(direction, d, turn_penalty)
+            tbl[row + d] = move + tc
+    return tuple(tbl)
 
 
 @lru_cache(maxsize=4)
@@ -115,7 +136,8 @@ def find_path(
     sink_key = ty * W + tx
 
     neighbors = _build_neighbors(W, H)
-    h_map = _octile_dt(W, H, [(tx, ty)])
+    cost_tbl = _build_cost_table(turn_penalty)
+    dcv = (0, 0, 0, 0, W, -W, W, -W)
 
     g = [INF] * N
     g[start_key] = 0
@@ -123,7 +145,7 @@ def find_path(
     closed = bytearray(N)
 
     counter = 0
-    heap: list[tuple[float, int, int, int]] = [(h_map[start_key], counter, start_key, -1)]
+    heap: list[tuple[float, int, int, int]] = [(_octile_h(sx - tx, sy - ty), counter, start_key, -1)]
 
     while heap:
         f, _cnt, key, direction = _heappop(heap)
@@ -145,10 +167,17 @@ def find_path(
             return path
 
         cur_g = g[key]
+        dir_row = (direction + 1) * 8
 
         for nkey, d in neighbors[key]:
             if closed[nkey]:
                 continue
+
+            if d >= 4:
+                c1 = key + _DIAG_CORNER_H[d]
+                c2 = key + dcv[d]
+                if cells[c1] == TRACE_PATH and cells[c2] == TRACE_PATH:
+                    continue
 
             nval = cells[nkey]
             cross_extra = 0
@@ -163,9 +192,7 @@ def find_path(
                     if nkey != sink_key and nkey != start_key:
                         continue
 
-            move_cost = 1.0 if d < 4 else _SQRT2
-            tc = _turn_cost(direction, d, turn_penalty)
-            cost = move_cost + tc + cross_extra
+            cost = cost_tbl[dir_row + d] + cross_extra
             if cost_map is not None:
                 cost += cost_map.get(nkey, 0)
             tentative_g = cur_g + cost
@@ -174,7 +201,9 @@ def find_path(
                 g[nkey] = tentative_g
                 parent[nkey] = key
                 counter += 1
-                _heappush(heap, (tentative_g + h_map[nkey], counter, nkey, d))
+                nx = nkey % W
+                ny = nkey // W
+                _heappush(heap, (tentative_g + _octile_h(nx - tx, ny - ty), counter, nkey, d))
 
     return None
 
@@ -223,6 +252,8 @@ def find_path_to_tree(
 
     neighbors = _build_neighbors(W, H)
     h_map = _octile_dt(W, H, tree_list)
+    cost_tbl = _build_cost_table(turn_penalty)
+    dcv = (0, 0, 0, 0, W, -W, W, -W)
 
     # ── Pre-allocated containers ───────────────────────────────
     g = [INF] * N
@@ -266,10 +297,18 @@ def find_path_to_tree(
             return path
 
         cur_g = g[key]
+        dir_row = (direction + 1) * 8
 
         for nkey, d in neighbors[key]:
             if closed[nkey]:
                 continue
+
+            if d >= 4:
+                c1 = key + _DIAG_CORNER_H[d]
+                c2 = key + dcv[d]
+                if (cells[c1] == TRACE_PATH and not tree_mask[c1]
+                        and cells[c2] == TRACE_PATH and not tree_mask[c2]):
+                    continue
 
             nval = cells[nkey]
             cross_extra = 0
@@ -281,9 +320,7 @@ def find_path_to_tree(
                 else:
                     continue
 
-            move_cost = 1.0 if d < 4 else _SQRT2
-            tc = _turn_cost(direction, d, turn_penalty)
-            cost = move_cost + tc + cross_extra
+            cost = cost_tbl[dir_row + d] + cross_extra
             if cost_map is not None:
                 cost += cost_map.get(nkey, 0)
             tentative_g = cur_g + cost
