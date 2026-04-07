@@ -257,13 +257,13 @@ function flattenNode(node, parentId, depth, ids, labels, parents, values, texts,
   const nodeId = parentId ? parentId + "/" + node.name : node.name;
   const ms = Math.round(node.elapsed * 1000 * 10) / 10;
   const callStr = node.call_count > 1 ? "  [" + node.call_count + "x]" : "";
+  const nodeIdx = ids.length;
   ids.push(nodeId); labels.push(node.name); parents.push(parentId);
   values.push(ms); texts.push(ms.toFixed(1) + "ms" + callStr);
   colors.push(parentId ? PALETTE[depth % PALETTE.length] : "#ffffff");
   let childSum = 0;
   for (const c of node.children) {{
-    flattenNode(c, nodeId, depth + 1, ids, labels, parents, values, texts, colors);
-    childSum += Math.round(c.elapsed * 1000 * 10) / 10;
+    childSum += flattenNode(c, nodeId, depth + 1, ids, labels, parents, values, texts, colors);
   }}
   if (node.children.length > 0) {{
     const remainder = Math.round((ms - childSum) * 10) / 10;
@@ -272,11 +272,13 @@ function flattenNode(node, parentId, depth, ids, labels, parents, values, texts,
       ids.push(uid); labels.push("(other)"); parents.push(nodeId);
       values.push(remainder); texts.push(remainder.toFixed(1) + "ms");
       colors.push("#dddddd");
+      return ms;
     }} else if (remainder < 0) {{
-      const idx = ids.indexOf(nodeId);
-      values[idx] = Math.round(childSum * 10) / 10;
+      values[nodeIdx] = Math.round(childSum * 10) / 10;
+      return values[nodeIdx];
     }}
   }}
+  return ms;
 }}
 
 function mergeNodes(nodes) {{
