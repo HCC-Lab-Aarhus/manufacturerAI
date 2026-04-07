@@ -38,7 +38,9 @@ def _segment_clearance_flats(
     around a single grid-coordinate segment with the given radius in mm.
 
     A cell intersects if the distance from its centre to the segment is
-    ≤ radius_mm + cell_half_diagonal (Minkowski inflation).
+    <= radius_mm + cell_half_diagonal (Minkowski inflation).
+
+    Uses vectorized numpy distance computation.
     """
     ax = (gx0 + 0.5) * resolution
     ay = (gy0 + 0.5) * resolution
@@ -55,15 +57,32 @@ def _segment_clearance_flats(
     y_lo = max(0, min(gy0, gy1) - margin_cells)
     y_hi = min(H - 1, max(gy0, gy1) + margin_cells)
 
-    flats: set[int] = set()
-    for gy in range(y_lo, y_hi + 1):
-        cy = (gy + 0.5) * resolution
-        row = gy * W
-        for gx in range(x_lo, x_hi + 1):
-            cx = (gx + 0.5) * resolution
-            if _point_seg_dist(cx, cy, ax, ay, bx, by) <= threshold:
-                flats.add(row + gx)
-    return flats
+    gxs = np.arange(x_lo, x_hi + 1)
+    gys = np.arange(y_lo, y_hi + 1)
+    if gxs.size == 0 or gys.size == 0:
+        return set()
+
+    cx = (gxs + 0.5) * resolution
+    cy = (gys + 0.5) * resolution
+    CX, CY = np.meshgrid(cx, cy)
+
+    dx_ab = bx - ax
+    dy_ab = by - ay
+    len_sq = dx_ab * dx_ab + dy_ab * dy_ab
+
+    if len_sq < 1e-18:
+        dist = np.sqrt((CX - ax) ** 2 + (CY - ay) ** 2)
+    else:
+        t = ((CX - ax) * dx_ab + (CY - ay) * dy_ab) / len_sq
+        np.clip(t, 0.0, 1.0, out=t)
+        proj_x = ax + t * dx_ab
+        proj_y = ay + t * dy_ab
+        dist = np.sqrt((CX - proj_x) ** 2 + (CY - proj_y) ** 2)
+
+    mask = dist <= threshold
+    gy_idx, gx_idx = np.nonzero(mask)
+    flat_indices = (gys[gy_idx]) * W + gxs[gx_idx]
+    return set(flat_indices.tolist())
 
 
 class RoutingGrid:
@@ -320,15 +339,19 @@ class RoutingGrid:
         radius_mm = self.trace_width_mm / 2 + self.trace_clearance_mm
 
         # Mark path cells as TRACE_PATH
-        path_flats: set[int] = set()
-        for gx, gy in path:
-            if 0 <= gx < W and 0 <= gy < H:
-                flat = gy * W + gx
-                path_flats.add(flat)
+        if path:
+            pa = np.array(path, dtype=np.intp)
+            valid = (pa[:, 0] >= 0) & (pa[:, 0] < W) & (pa[:, 1] >= 0) & (pa[:, 1] < H)
+            pa = pa[valid]
+            flat_arr = pa[:, 1] * W + pa[:, 0]
+            path_flats: set[int] = set(flat_arr.tolist())
+            for flat in flat_arr:
                 v = cells[flat]
                 if v == FREE or v == BLOCKED:
                     cells[flat] = TRACE_PATH
                 trace_owner[flat] = net_id
+        else:
+            path_flats = set()
 
         if self._protected_flats is None:
             self._protected_flats = {gy * W + gx for gx, gy in self._protected}
@@ -381,14 +404,18 @@ class RoutingGrid:
         radius_mm = self.trace_width_mm / 2 + self.trace_clearance_mm
 
         # Free path cells
-        path_flats: set[int] = set()
-        for gx, gy in path:
-            if 0 <= gx < W and 0 <= gy < H:
-                flat = gy * W + gx
-                path_flats.add(flat)
+        if path:
+            pa = np.array(path, dtype=np.intp)
+            valid = (pa[:, 0] >= 0) & (pa[:, 0] < W) & (pa[:, 1] >= 0) & (pa[:, 1] < H)
+            pa = pa[valid]
+            flat_arr = pa[:, 1] * W + pa[:, 0]
+            path_flats: set[int] = set(flat_arr.tolist())
+            for flat in flat_arr:
                 trace_owner.pop(flat, None)
                 if cells[flat] == TRACE_PATH:
                     cells[flat] = FREE
+        else:
+            path_flats = set()
 
         # Collect clearance flats using segment distance
         clearance_flats: set[int] = set()
