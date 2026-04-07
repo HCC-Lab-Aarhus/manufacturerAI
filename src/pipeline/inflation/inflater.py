@@ -135,6 +135,7 @@ def inflate_traces(
 
     obstacle_union = unary_union(obstacles) if obstacles else Polygon()
     pin_positions = pin_positions or {}
+    pin_pads = pin_pads or {}
     net_pin_ids = dict(net_pin_ids or {})
 
     net_pin_ids = _resolve_routed_pins(result, pin_positions, net_pin_ids)
@@ -165,10 +166,12 @@ def inflate_traces(
             continue
 
         own_pins = net_pin_ids.get(np_.net_id, set())
-        pads = [
-            Point(pin_positions[pid]).buffer(min_half, quad_segs=6)
-            for pid in own_pins if pid in pin_positions
-        ]
+        pads = []
+        for pid in own_pins:
+            if pid in pin_pads:
+                pads.append(pin_pads[pid])
+            elif pid in pin_positions:
+                pads.append(Point(pin_positions[pid]).buffer(min_half, quad_segs=6))
         if pads:
             poly = unary_union([poly] + pads)
             if isinstance(poly, MultiPolygon):
