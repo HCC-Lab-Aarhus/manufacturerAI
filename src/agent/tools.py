@@ -9,12 +9,7 @@ from typing import Any
 
 _LIST_COMPONENTS = {
     "name": "list_components",
-    "description": (
-        "List all available components in the catalog with summary info "
-        "(ID, name, pin count, mounting style, whether it needs "
-        "UI placement). Already shown in your system prompt — use this "
-        "only if you need a refresher."
-    ),
+    "description": "Return a summary table of all catalog components.",
     "input_schema": {
         "type": "object",
         "properties": {},
@@ -23,18 +18,13 @@ _LIST_COMPONENTS = {
 
 _GET_COMPONENT = {
     "name": "get_component",
-    "description": (
-        "Get full details for a specific component: all pins with "
-        "positions/directions/voltage/current, mounting details, "
-        "internal_nets, pin_groups, and configurable fields. "
-        "Always read component details before using it in a design."
-    ),
+    "description": "Return full details for a catalog component.",
     "input_schema": {
         "type": "object",
         "properties": {
             "component_id": {
                 "type": "string",
-                "description": "Component ID from the catalog (e.g. 'led_5mm')",
+                "description": "Catalog component ID",
             },
         },
         "required": ["component_id"],
@@ -49,27 +39,17 @@ DESIGN_TOOLS: list[dict[str, Any]] = [
     _GET_COMPONENT,
     {
         "name": "edit_design",
-        "description": (
-            "Edit the design document by finding and replacing text. "
-            "The current design document is returned in every response. "
-            "Find the exact text you want to change (old_string) and "
-            "provide the replacement (new_string). The result must be "
-            "valid JSON. The design is validated and saved after every edit."
-        ),
+        "description": "Find-and-replace edit on the design document.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "old_string": {
                     "type": "string",
-                    "description": (
-                        "The exact text to find in the design document. "
-                        "Must match exactly one location, including "
-                        "whitespace and indentation."
-                    ),
+                    "description": "Exact text to find (must match one location)",
                 },
                 "new_string": {
                     "type": "string",
-                    "description": "The replacement text.",
+                    "description": "Replacement text",
                 },
             },
             "required": ["old_string", "new_string"],
@@ -85,35 +65,31 @@ CIRCUIT_TOOLS: list[dict[str, Any]] = [
     _GET_COMPONENT,
     {
         "name": "submit_circuit",
-        "description": (
-            "Submit a complete circuit design for validation. Includes all "
-            "components (UI + internal) and the electrical net list. If "
-            "validation fails, you'll receive error details — fix and resubmit."
-        ),
+        "description": "Submit a circuit design for validation.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "components": {
                     "type": "array",
-                    "description": "Component instances to use.",
+                    "description": "Component instances.",
                     "items": {
                         "type": "object",
                         "properties": {
                             "catalog_id": {
                                 "type": "string",
-                                "description": "Component ID from the catalog",
+                                "description": "Catalog component ID",
                             },
                             "instance_id": {
                                 "type": "string",
-                                "description": "Unique instance name (e.g. 'led_1', 'r_1')",
+                                "description": "Unique instance name",
                             },
                             "config": {
                                 "type": "object",
-                                "description": "Config overrides for configurable components",
+                                "description": "Config overrides",
                             },
                             "mounting_style": {
                                 "type": "string",
-                                "description": "Override from allowed_styles",
+                                "description": "Mounting style override",
                             },
                         },
                         "required": ["catalog_id", "instance_id"],
@@ -121,22 +97,18 @@ CIRCUIT_TOOLS: list[dict[str, Any]] = [
                 },
                 "nets": {
                     "type": "array",
-                    "description": "Electrical nets connecting component pins.",
+                    "description": "Electrical nets.",
                     "items": {
                         "type": "object",
                         "properties": {
                             "id": {
                                 "type": "string",
-                                "description": "Net name (e.g. 'VCC', 'GND')",
+                                "description": "Net name",
                             },
                             "pins": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": (
-                                    "Pin references as 'instance_id:pin_id'. "
-                                    "Use 'instance_id:group_id' for MCU dynamic "
-                                    "pin allocation."
-                                ),
+                                "description": "Pin references as 'instance_id:pin_id' or 'instance_id:group_id'",
                             },
                         },
                         "required": ["id", "pins"],
@@ -154,20 +126,13 @@ CIRCUIT_TOOLS: list[dict[str, Any]] = [
 SETUP_TOOLS: list[dict[str, Any]] = [
     {
         "name": "submit_firmware",
-        "description": (
-            "Submit a complete Arduino sketch (.ino) for the device. "
-            "The code will be compiled with arduino-cli. If compilation "
-            "fails, you'll receive the compiler errors — fix and resubmit."
-        ),
+        "description": "Submit an Arduino sketch for compilation.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "string",
-                    "description": (
-                        "The complete Arduino .ino file contents. Must be a "
-                        "single self-contained sketch with setup() and loop()."
-                    ),
+                    "description": "Complete .ino file contents",
                 },
             },
             "required": ["code"],
