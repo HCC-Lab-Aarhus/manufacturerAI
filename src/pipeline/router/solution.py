@@ -11,6 +11,8 @@ import logging
 import math
 from dataclasses import dataclass, field
 
+import numpy as np
+from shapely import contains_xy as _contains_xy
 from shapely.geometry import Point
 
 from src.catalog.models import CatalogResult
@@ -94,6 +96,19 @@ class Solution:
             / config.grid_resolution_mm
         ))
 
+        self._voronoi_by_pin: dict[str, list[tuple[int, int]]] = {}
+        self._voronoi_flat_by_pin: dict[str, np.ndarray] = {}
+        if pin_voronoi is not None:
+            W = grid.width
+            groups: dict[str, list[int]] = {}
+            for flat, pin_key in pin_voronoi.items():
+                groups.setdefault(pin_key, []).append(flat)
+            for pin_key, flats in groups.items():
+                self._voronoi_flat_by_pin[pin_key] = np.array(flats, dtype=np.intp)
+                self._voronoi_by_pin[pin_key] = [
+                    (f % W, f // W) for f in flats
+                ]
+
     # ── Scoring ────────────────────────────────────────────────
 
     def score(self) -> tuple[int, int]:
@@ -138,7 +153,7 @@ class Solution:
             )
             for nid, route in snap.routes.items()
         }
-        self.grid._cells = bytearray(snap.cells)
+        self.grid._cells[:] = snap.cells
         self.grid._trace_owner = dict(snap.trace_owner)
         self.grid._clearance_owner = {k: set(v) for k, v in snap.clearance_owner.items()}
 
@@ -509,25 +524,28 @@ class Solution:
 
     # ── Internal: Voronoi pin blocking ─────────────────────────
 
-    def _block_voronoi(self, net_pads: list[NetPad]) -> list[tuple[int, int]]:
-        if self.pin_voronoi is None:
-            return []
+    def _block_voronoi(self, net_pads: list[NetPad]) -> np.ndarray:
+        if not self._voronoi_flat_by_pin:
+            return np.array([], dtype=np.intp)
         net_pin_keys = {f"{pad.instance_id}:{pad.pin_id}" for pad in net_pads}
-        W = self.grid.width
-        blocked: list[tuple[int, int]] = []
-        for flat, pin_key in self.pin_voronoi.items():
-            if pin_key in net_pin_keys:
-                continue
-            gx = flat % W
-            gy = flat // W
-            if self.grid.is_free(gx, gy):
-                self.grid.block_cell(gx, gy)
-                blocked.append((gx, gy))
-        return blocked
+        foreign_arrays = [
+            arr for key, arr in self._voronoi_flat_by_pin.items()
+            if key not in net_pin_keys
+        ]
+        if not foreign_arrays:
+            return np.array([], dtype=np.intp)
+        all_foreign = np.concatenate(foreign_arrays)
+        cells_np = np.frombuffer(self.grid._cells, dtype=np.uint8)
+        mask = cells_np[all_foreign] == FREE
+        to_block = all_foreign[mask]
+        cells_np[to_block] = BLOCKED
+        return to_block
 
-    def _unblock_voronoi(self, blocked: list[tuple[int, int]]) -> None:
-        for cx, cy in blocked:
-            self.grid.free_cell(cx, cy)
+    def _unblock_voronoi(self, blocked: np.ndarray) -> None:
+        if len(blocked) == 0:
+            return
+        cells_np = np.frombuffer(self.grid._cells, dtype=np.uint8)
+        cells_np[blocked] = FREE
 
     # ── Internal: output conversion ────────────────────────────
 
@@ -562,16 +580,18 @@ class Solution:
                     if (ex, ey) != (gxn, gyn):
                         world_path[-1:] = [(gxn, gyn), (ex, gyn), (ex, ey)]
 
+                xs = np.array([wx for wx, _ in world_path])
+                ys = np.array([wy for _, wy in world_path])
+                inside = _contains_xy(outline, xs, ys)
                 clamped: list[tuple[float, float]] = []
-                for wx, wy in world_path:
-                    pt = Point(wx, wy)
-                    if not outline.contains(pt):
+                for i, (wx, wy) in enumerate(world_path):
+                    if inside[i]:
+                        clamped.append((wx, wy))
+                    else:
                         nearest = outline.exterior.interpolate(
-                            outline.exterior.project(pt),
+                            outline.exterior.project(Point(wx, wy)),
                         )
                         clamped.append((nearest.x, nearest.y))
-                    else:
-                        clamped.append((wx, wy))
                 traces.append(Trace(net_id=net_id, path=clamped))
         return traces
 
