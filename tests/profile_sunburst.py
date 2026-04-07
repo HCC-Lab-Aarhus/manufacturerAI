@@ -230,7 +230,7 @@ def run_profiled_route():
                     return path
 
     def timed_find_path_to_tree(grid, source, tree, *, turn_penalty=_TURN_PENALTY,
-                                crossing_cost=0, cost_map=None, h_map=None):
+                                crossing_cost=0, cost_map=None):
         with ht.section("find_path_to_tree"):
             W, H = grid.width, grid.height
             N = W * H
@@ -252,8 +252,7 @@ def run_profiled_route():
                     tree_mask[ty * W + tx] = 1
 
             with ht.section("manhattan_dt"):
-                if h_map is None:
-                    h_map = _octile_dt(W, H, tree_list)
+                h_map = _octile_dt(W, H, tree_list)
 
             with ht.section("astar"):
                 INF = 0x7FFFFFFF
