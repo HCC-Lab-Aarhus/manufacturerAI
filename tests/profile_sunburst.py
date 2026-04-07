@@ -44,7 +44,7 @@ def run_profiled_route():
     from src.pipeline.router.solution import Solution
     from src.pipeline.router import pathfinder as pf_mod
     from src.pipeline.router.pathfinder import (
-        _try_l_route, _octile_dt, _octile_h, _turn_cost, _SQRT2, DIRS,
+        _try_l_route, _octile_dt, _build_neighbors, _turn_cost, _SQRT2,
         FREE, BLOCKED, TRACE_PATH, PERMANENTLY_BLOCKED,
     )
     from heapq import heappush as _heappush, heappop as _heappop
@@ -100,27 +100,28 @@ def run_profiled_route():
                     return [source]
                 N = W * H
                 INF = float('inf')
+                start_key = sy * W + sx
                 sink_key = ty * W + tx
                 with ht.section("alloc"):
+                    neighbors = _build_neighbors(W, H)
+                    h_map = _octile_dt(W, H, [(tx, ty)])
                     g = [INF] * N
                     parent = [-1] * N
                     closed = bytearray(N)
-                    g[sy * W + sx] = 0
+                    g[start_key] = 0
                     counter = 0
-                    heap = [(_octile_h(sx - tx, sy - ty), counter, sx, sy, -1)]
+                    heap = [(h_map[start_key], counter, start_key, -1)]
                 with ht.section("search") as search_node:
                     _t_heappop = 0.0; _t_visit = 0.0
-                    _t_early = 0.0; _t_cell = 0.0; _t_cost = 0.0
+                    _t_closed = 0.0; _t_cell = 0.0; _t_cost = 0.0
                     _t_heuristic = 0.0; _t_heappush = 0.0
                     _n_expanded = 0; _n_pushed = 0; _n_skipped = 0
-                    _n_bounds = 0; _n_closed = 0; _n_cell = 0; _n_evaluated = 0
+                    _n_closed = 0; _n_cell = 0; _n_evaluated = 0
                     _perf = time.perf_counter
                     found_key = -1
-                    found_cx = found_cy = 0
                     while heap:
                         _t0 = _perf()
-                        f, _cnt, cx, cy, direction = _heappop(heap)
-                        key = cy * W + cx
+                        f, _cnt, key, direction = _heappop(heap)
                         _t1 = _perf()
                         _t_heappop += _t1 - _t0
                         if closed[key]:
@@ -132,22 +133,18 @@ def run_profiled_route():
                         if key == sink_key:
                             _t_visit += _perf() - _t1
                             found_key = key
-                            found_cx, found_cy = cx, cy
                             break
                         cur_g = g[key]
                         _t_visit += _perf() - _t1
                         _te0 = _perf()
-                        for d, (dx, dy) in enumerate(DIRS):
-                            nx, ny = cx + dx, cy + dy
-                            if not (0 <= nx < W and 0 <= ny < H):
-                                _n_bounds += 1
-                                continue
-                            nkey = ny * W + nx
+                        for nkey, d in neighbors[key]:
                             if closed[nkey]:
                                 _n_closed += 1
+                                _te0 = _perf()
+                                _t_closed += _te0 - _te0  # near-zero, but captures iteration
                                 continue
                             _tbc = _perf()
-                            _t_early += _tbc - _te0
+                            _t_closed += _tbc - _te0
                             nval = cells[nkey]
                             cross_extra = 0
                             if nval != FREE:
@@ -164,7 +161,7 @@ def run_profiled_route():
                                         _te0 = _perf()
                                         _t_cell += _te0 - _tbc
                                         continue
-                                    if (nx, ny) != sink and (nx, ny) != source:
+                                    if nkey != sink_key and nkey != start_key:
                                         _n_cell += 1
                                         _te0 = _perf()
                                         _t_cell += _te0 - _tbc
@@ -184,17 +181,17 @@ def run_profiled_route():
                                 _tc1 = _perf()
                                 _t_cost += _tc1 - _tf1
                                 counter += 1
-                                h_val = _octile_h(nx - tx, ny - ty)
+                                h_val = h_map[nkey]
                                 _th1 = _perf()
                                 _t_heuristic += _th1 - _tc1
-                                _heappush(heap, (tentative_g + h_val, counter, nx, ny, d))
+                                _heappush(heap, (tentative_g + h_val, counter, nkey, d))
                                 _n_pushed += 1
                                 _te0 = _perf()
                                 _t_heappush += _te0 - _th1
                                 continue
                             _te0 = _perf()
                             _t_cost += _te0 - _tf1
-                        _t_early += _perf() - _te0
+                        _t_closed += _perf() - _te0
 
                     _pop_total = _t_heappop + _t_visit
                     _pop_node = TimerNode(name="heap_pop", elapsed=_pop_total, call_count=_n_expanded + _n_skipped)
@@ -202,11 +199,11 @@ def run_profiled_route():
                     _pop_node.add_child_node(TimerNode(name="visit_check", elapsed=_t_visit, call_count=_n_expanded + _n_skipped))
                     search_node.add_child_node(_pop_node)
 
-                    _filter_total = _t_early + _t_cell
+                    _filter_total = _t_closed + _t_cell
                     _eval_total = _filter_total + _t_cost
                     _eval_node = TimerNode(name="neighbor_eval", elapsed=_eval_total, call_count=_n_expanded)
-                    _filter_node = TimerNode(name="neighbor_filter", elapsed=_filter_total, call_count=_n_bounds + _n_closed + _n_cell + _n_evaluated)
-                    _filter_node.add_child_node(TimerNode(name="early_filter", elapsed=_t_early, call_count=_n_bounds + _n_closed))
+                    _filter_node = TimerNode(name="neighbor_filter", elapsed=_filter_total, call_count=_n_closed + _n_cell + _n_evaluated)
+                    _filter_node.add_child_node(TimerNode(name="closed_check", elapsed=_t_closed, call_count=_n_closed))
                     _filter_node.add_child_node(TimerNode(name="cell_filter", elapsed=_t_cell, call_count=_n_cell + _n_evaluated))
                     _eval_node.add_child_node(_filter_node)
                     _eval_node.add_child_node(TimerNode(name="cost_compute", elapsed=_t_cost, call_count=_n_evaluated))
@@ -220,7 +217,7 @@ def run_profiled_route():
                 if found_key < 0:
                     return None
                 with ht.section("reconstruct"):
-                    path = [(found_cx, found_cy)]
+                    path = [(found_key % W, found_key // W)]
                     k = found_key
                     while True:
                         pk = parent[k]
@@ -259,6 +256,7 @@ def run_profiled_route():
             with ht.section("astar"):
                 INF = 0x7FFFFFFF
                 with ht.section("alloc"):
+                    neighbors = _build_neighbors(W, H)
                     g = [INF] * N
                     parent = [-1] * N
                     closed = bytearray(N)
@@ -272,23 +270,21 @@ def run_profiled_route():
                         if cells[skey] != FREE and not tree_mask[skey]:
                             continue
                         g[skey] = 0
-                        _heappush(heap, (h_map[skey], counter, sx, sy, -1))
+                        _heappush(heap, (h_map[skey], counter, skey, -1))
                         counter += 1
                     if not heap:
                         return None
                 with ht.section("search") as search_node2:
                     _t_heappop = 0.0; _t_visit = 0.0
-                    _t_early = 0.0; _t_cell = 0.0; _t_cost = 0.0
+                    _t_closed = 0.0; _t_cell = 0.0; _t_cost = 0.0
                     _t_heuristic = 0.0; _t_heappush = 0.0
                     _n_expanded = 0; _n_pushed = 0; _n_skipped = 0
-                    _n_bounds = 0; _n_closed = 0; _n_cell = 0; _n_evaluated = 0
+                    _n_closed = 0; _n_cell = 0; _n_evaluated = 0
                     _perf = time.perf_counter
                     found_key = -1
-                    found_cx = found_cy = 0
                     while heap:
                         _t0 = _perf()
-                        f, _cnt, cx, cy, direction = _heappop(heap)
-                        key = cy * W + cx
+                        f, _cnt, key, direction = _heappop(heap)
                         _t1 = _perf()
                         _t_heappop += _t1 - _t0
                         if closed[key]:
@@ -300,22 +296,18 @@ def run_profiled_route():
                         if tree_mask[key]:
                             _t_visit += _perf() - _t1
                             found_key = key
-                            found_cx, found_cy = cx, cy
                             break
                         cur_g = g[key]
                         _t_visit += _perf() - _t1
                         _te0 = _perf()
-                        for d, (dx, dy) in enumerate(DIRS):
-                            nx, ny = cx + dx, cy + dy
-                            if not (0 <= nx < W and 0 <= ny < H):
-                                _n_bounds += 1
-                                continue
-                            nkey = ny * W + nx
+                        for nkey, d in neighbors[key]:
                             if closed[nkey]:
                                 _n_closed += 1
+                                _te0 = _perf()
+                                _t_closed += _te0 - _te0
                                 continue
                             _tbc = _perf()
-                            _t_early += _tbc - _te0
+                            _t_closed += _tbc - _te0
                             nval = cells[nkey]
                             cross_extra = 0
                             if nval != FREE and not tree_mask[nkey]:
@@ -334,8 +326,9 @@ def run_profiled_route():
                             _n_evaluated += 1
                             _tf1 = _perf()
                             _t_cell += _tf1 - _tbc
-                            is_turn = direction != -1 and direction != d
-                            cost = 1 + (turn_penalty if is_turn else 0) + cross_extra
+                            move_cost = 1.0 if d < 4 else _SQRT2
+                            tc = _turn_cost(direction, d, turn_penalty)
+                            cost = move_cost + tc + cross_extra
                             if cost_map is not None:
                                 cost += cost_map.get(nkey, 0)
                             tentative_g = cur_g + cost
@@ -348,14 +341,14 @@ def run_profiled_route():
                                 h_val = h_map[nkey]
                                 _th1 = _perf()
                                 _t_heuristic += _th1 - _tc1
-                                _heappush(heap, (tentative_g + h_val, counter, nx, ny, d))
+                                _heappush(heap, (tentative_g + h_val, counter, nkey, d))
                                 _n_pushed += 1
                                 _te0 = _perf()
                                 _t_heappush += _te0 - _th1
                                 continue
                             _te0 = _perf()
                             _t_cost += _te0 - _tf1
-                        _t_early += _perf() - _te0
+                        _t_closed += _perf() - _te0
 
                     _pop_total = _t_heappop + _t_visit
                     _pop_node = TimerNode(name="heap_pop", elapsed=_pop_total, call_count=_n_expanded + _n_skipped)
@@ -363,11 +356,11 @@ def run_profiled_route():
                     _pop_node.add_child_node(TimerNode(name="visit_check", elapsed=_t_visit, call_count=_n_expanded + _n_skipped))
                     search_node2.add_child_node(_pop_node)
 
-                    _filter_total = _t_early + _t_cell
+                    _filter_total = _t_closed + _t_cell
                     _eval_total = _filter_total + _t_cost
                     _eval_node = TimerNode(name="neighbor_eval", elapsed=_eval_total, call_count=_n_expanded)
-                    _filter_node = TimerNode(name="neighbor_filter", elapsed=_filter_total, call_count=_n_bounds + _n_closed + _n_cell + _n_evaluated)
-                    _filter_node.add_child_node(TimerNode(name="early_filter", elapsed=_t_early, call_count=_n_bounds + _n_closed))
+                    _filter_node = TimerNode(name="neighbor_filter", elapsed=_filter_total, call_count=_n_closed + _n_cell + _n_evaluated)
+                    _filter_node.add_child_node(TimerNode(name="closed_check", elapsed=_t_closed, call_count=_n_closed))
                     _filter_node.add_child_node(TimerNode(name="cell_filter", elapsed=_t_cell, call_count=_n_cell + _n_evaluated))
                     _eval_node.add_child_node(_filter_node)
                     _eval_node.add_child_node(TimerNode(name="cost_compute", elapsed=_t_cost, call_count=_n_evaluated))
@@ -381,7 +374,7 @@ def run_profiled_route():
                 if found_key < 0:
                     return None
                 with ht.section("reconstruct"):
-                    path = [(found_cx, found_cy)]
+                    path = [(found_key % W, found_key // W)]
                     k = found_key
                     while True:
                         pk = parent[k]

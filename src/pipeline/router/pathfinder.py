@@ -9,6 +9,7 @@ Supports:
 from __future__ import annotations
 
 import array as _array_mod
+from functools import lru_cache
 from heapq import heappush as _heappush, heappop as _heappop
 
 import numpy as np
@@ -59,6 +60,22 @@ def _octile_h(dx: int, dy: int) -> float:
     return max(adx, ady) + _SQRT2_M1 * min(adx, ady)
 
 
+@lru_cache(maxsize=4)
+def _build_neighbors(W: int, H: int) -> tuple:
+    """Precompute valid (neighbor_key, direction) pairs for each cell."""
+    N = W * H
+    neighbors = [None] * N
+    for y in range(H):
+        for x in range(W):
+            nbs = []
+            for d, (dx, dy) in enumerate(DIRS):
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < W and 0 <= ny < H:
+                    nbs.append((ny * W + nx, d))
+            neighbors[y * W + x] = tuple(nbs)
+    return tuple(neighbors)
+
+
 def find_path(
     grid: RoutingGrid,
     source: tuple[int, int],
@@ -97,25 +114,26 @@ def find_path(
     start_key = sy * W + sx
     sink_key = ty * W + tx
 
+    neighbors = _build_neighbors(W, H)
+    h_map = _octile_dt(W, H, [(tx, ty)])
+
     g = [INF] * N
     g[start_key] = 0
     parent = [-1] * N
     closed = bytearray(N)
 
-    h0 = _octile_h(sx - tx, sy - ty)
     counter = 0
-    heap: list[tuple[float, int, int, int, int]] = [(h0, counter, sx, sy, -1)]
+    heap: list[tuple[float, int, int, int]] = [(h_map[start_key], counter, start_key, -1)]
 
     while heap:
-        f, _cnt, cx, cy, direction = _heappop(heap)
-        key = cy * W + cx
+        f, _cnt, key, direction = _heappop(heap)
 
         if closed[key]:
             continue
         closed[key] = 1
 
         if key == sink_key:
-            path = [(cx, cy)]
+            path = [(key % W, key // W)]
             k = key
             while True:
                 pk = parent[k]
@@ -128,11 +146,7 @@ def find_path(
 
         cur_g = g[key]
 
-        for d, (dx, dy) in enumerate(DIRS):
-            nx, ny = cx + dx, cy + dy
-            if not (0 <= nx < W and 0 <= ny < H):
-                continue
-            nkey = ny * W + nx
+        for nkey, d in neighbors[key]:
             if closed[nkey]:
                 continue
 
@@ -146,7 +160,7 @@ def find_path(
                 else:
                     if nval == TRACE_PATH:
                         continue
-                    if (nx, ny) != sink and (nx, ny) != source:
+                    if nkey != sink_key and nkey != start_key:
                         continue
 
             move_cost = 1.0 if d < 4 else _SQRT2
@@ -159,9 +173,8 @@ def find_path(
             if tentative_g < g[nkey]:
                 g[nkey] = tentative_g
                 parent[nkey] = key
-                h = _octile_h(nx - tx, ny - ty)
                 counter += 1
-                _heappush(heap, (tentative_g + h, counter, nx, ny, d))
+                _heappush(heap, (tentative_g + h_map[nkey], counter, nkey, d))
 
     return None
 
@@ -208,7 +221,7 @@ def find_path_to_tree(
     for tx, ty in tree_list:
         tree_mask[ty * W + tx] = 1
 
-    # Precomputed distance transform: O(1) heuristic lookup
+    neighbors = _build_neighbors(W, H)
     h_map = _octile_dt(W, H, tree_list)
 
     # ── Pre-allocated containers ───────────────────────────────
@@ -218,7 +231,7 @@ def find_path_to_tree(
 
     # ── Seed heap with all valid source cells ──────────────────
     counter = 0
-    heap: list[tuple[float, int, int, int, int]] = []
+    heap: list[tuple[float, int, int, int]] = []
 
     for sx, sy in sources:
         if not (0 <= sx < W and 0 <= sy < H):
@@ -227,24 +240,21 @@ def find_path_to_tree(
         if cells[skey] != FREE and not tree_mask[skey]:
             continue
         g[skey] = 0
-        h0 = h_map[skey]
-        _heappush(heap, (h0, counter, sx, sy, -1))
+        _heappush(heap, (h_map[skey], counter, skey, -1))
         counter += 1
 
     if not heap:
         return None
 
     while heap:
-        f, _cnt, cx, cy, direction = _heappop(heap)
-        key = cy * W + cx
+        f, _cnt, key, direction = _heappop(heap)
 
         if closed[key]:
             continue
         closed[key] = 1
 
         if tree_mask[key]:
-            # Reconstruct path
-            path = [(cx, cy)]
+            path = [(key % W, key // W)]
             k = key
             while True:
                 pk = parent[k]
@@ -257,11 +267,7 @@ def find_path_to_tree(
 
         cur_g = g[key]
 
-        for d, (dx, dy) in enumerate(DIRS):
-            nx, ny = cx + dx, cy + dy
-            if not (0 <= nx < W and 0 <= ny < H):
-                continue
-            nkey = ny * W + nx
+        for nkey, d in neighbors[key]:
             if closed[nkey]:
                 continue
 
@@ -286,7 +292,7 @@ def find_path_to_tree(
                 g[nkey] = tentative_g
                 parent[nkey] = key
                 counter += 1
-                _heappush(heap, (tentative_g + h_map[nkey], counter, nx, ny, d))
+                _heappush(heap, (tentative_g + h_map[nkey], counter, nkey, d))
 
     return None
 
