@@ -17,8 +17,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# Reuse HTimer infrastructure from the router profiler
-from tests.profile_sunburst import (
+# Reuse HTimer infrastructure from the base profiler
+from tests.profile_base import (
     HTimer, TimerNode, print_tree, build_sunburst_html,
 )
 
