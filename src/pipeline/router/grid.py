@@ -418,4 +418,118 @@ class RoutingGrid:
                 del clearance_owner[flat]
                 cells[flat] = FREE
 
+    # ── Pad blocking ───────────────────────────────────────────────
+
+    def block_pad(
+        self,
+        cx: int,
+        cy: int,
+        half_w_mm: float,
+        half_h_mm: float,
+        *,
+        net_id: str,
+    ) -> None:
+        """Block a rectangular pad conductor area + clearance zone.
+
+        The conductor area (shaft hole) is marked TRACE_PATH.  A clearance
+        belt of ``trace_clearance_mm + trace_width_mm / 2`` from the shaft
+        edge is marked BLOCKED, matching the inflation keepout.
+        """
+        W = self.width
+        H = self.height
+        cells = self._cells
+        trace_owner = self._trace_owner
+        clearance_owner = self._clearance_owner
+        res = self.resolution
+
+        hw_cells = math.ceil(half_w_mm / res)
+        hh_cells = math.ceil(half_h_mm / res)
+
+        pad_flats: set[int] = set()
+        for gy in range(max(0, cy - hh_cells), min(H, cy + hh_cells + 1)):
+            for gx in range(max(0, cx - hw_cells), min(W, cx + hw_cells + 1)):
+                flat = gy * W + gx
+                pad_flats.add(flat)
+                v = cells[flat]
+                if v == FREE or v == BLOCKED:
+                    cells[flat] = TRACE_PATH
+                trace_owner[flat] = net_id
+
+        if self._protected_flats is None:
+            self._protected_flats = {gy * W + gx for gx, gy in self._protected}
+        protected_flats = self._protected_flats
+
+        cl_mm = self.trace_clearance_mm + self.trace_width_mm / 2
+        ext_cells = math.ceil((max(half_w_mm, half_h_mm) + cl_mm) / res)
+
+        for gy in range(max(0, cy - ext_cells), min(H, cy + ext_cells + 1)):
+            for gx in range(max(0, cx - ext_cells), min(W, cx + ext_cells + 1)):
+                flat = gy * W + gx
+                if flat in pad_flats or flat in protected_flats:
+                    continue
+                dx = max(0.0, abs(gx - cx) * res - half_w_mm)
+                dy = max(0.0, abs(gy - cy) * res - half_h_mm)
+                if math.sqrt(dx * dx + dy * dy) > cl_mm:
+                    continue
+                if cells[flat] == FREE:
+                    cells[flat] = BLOCKED
+                if cells[flat] == BLOCKED:
+                    owners = clearance_owner.get(flat)
+                    if owners is None:
+                        clearance_owner[flat] = {net_id}
+                    else:
+                        owners.add(net_id)
+
+    def free_pad(
+        self,
+        cx: int,
+        cy: int,
+        half_w_mm: float,
+        half_h_mm: float,
+        *,
+        net_id: str,
+    ) -> None:
+        """Free cells belonging to *net_id* in a pad area."""
+        W = self.width
+        H = self.height
+        cells = self._cells
+        trace_owner = self._trace_owner
+        clearance_owner = self._clearance_owner
+        res = self.resolution
+
+        hw_cells = math.ceil(half_w_mm / res)
+        hh_cells = math.ceil(half_h_mm / res)
+
+        pad_flats: set[int] = set()
+        for gy in range(max(0, cy - hh_cells), min(H, cy + hh_cells + 1)):
+            for gx in range(max(0, cx - hw_cells), min(W, cx + hw_cells + 1)):
+                flat = gy * W + gx
+                pad_flats.add(flat)
+                trace_owner.pop(flat, None)
+                if cells[flat] == TRACE_PATH:
+                    cells[flat] = FREE
+
+        cl_mm = self.trace_clearance_mm + self.trace_width_mm / 2
+        ext_cells = math.ceil((max(half_w_mm, half_h_mm) + cl_mm) / res)
+
+        for gy in range(max(0, cy - ext_cells), min(H, cy + ext_cells + 1)):
+            for gx in range(max(0, cx - ext_cells), min(W, cx + ext_cells + 1)):
+                flat = gy * W + gx
+                if flat in pad_flats:
+                    continue
+                if cells[flat] != BLOCKED:
+                    continue
+                dx = max(0.0, abs(gx - cx) * res - half_w_mm)
+                dy = max(0.0, abs(gy - cy) * res - half_h_mm)
+                if math.sqrt(dx * dx + dy * dy) > cl_mm:
+                    continue
+                owners = clearance_owner.get(flat)
+                if owners is None:
+                    cells[flat] = FREE
+                    continue
+                owners.discard(net_id)
+                if not owners:
+                    del clearance_owner[flat]
+                    cells[flat] = FREE
+
 

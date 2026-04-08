@@ -17,6 +17,7 @@ from shapely.geometry import Point
 
 from src.catalog.models import CatalogResult
 from src.pipeline.placer.models import FullPlacement
+from src.pipeline.pin_geometry import pin_shaft_dimensions
 
 from .grid import RoutingGrid, FREE, BLOCKED, TRACE_PATH, PERMANENTLY_BLOCKED
 from .models import Trace, RoutingResult, RouterConfig
@@ -41,6 +42,14 @@ class NetPad:
 
 
 @dataclass
+class PadBlock:
+    cx: int
+    cy: int
+    half_w_mm: float
+    half_h_mm: float
+
+
+@dataclass
 class _PinRef:
     raw: str
     instance_id: str
@@ -52,6 +61,7 @@ class _PinRef:
 class NetRoute:
     paths: list[list[tuple[int, int]]]
     pads: list[NetPad]
+    pad_blocks: list[PadBlock] = field(default_factory=list)
 
     @property
     def trace_cells(self) -> int:
@@ -138,6 +148,7 @@ class Solution:
             routes_copy[nid] = NetRoute(
                 paths=[list(p) for p in route.paths],
                 pads=list(route.pads),
+                pad_blocks=list(route.pad_blocks),
             )
         return Snapshot(
             routes=routes_copy,
@@ -151,6 +162,7 @@ class Solution:
             nid: NetRoute(
                 paths=[list(p) for p in route.paths],
                 pads=list(route.pads),
+                pad_blocks=list(route.pad_blocks),
             )
             for nid, route in snap.routes.items()
         }
@@ -167,6 +179,8 @@ class Solution:
                 continue
             for path in route.paths:
                 self.grid.free_trace(path, net_id=nid)
+            for pb in route.pad_blocks:
+                self.grid.free_pad(pb.cx, pb.cy, pb.half_w_mm, pb.half_h_mm, net_id=nid)
 
     # ── Route nets ─────────────────────────────────────────────
 
@@ -181,8 +195,12 @@ class Solution:
         # 1. Try clean route
         paths, ok = self._find_paths(net_id, pads, cost_map=cost_map)
         if ok and paths and not self._has_foreign_cells(paths, net_id):
-            self._commit(net_id, paths, pads)
-            return
+            pad_conflicts = self._find_pad_conflicts(pads, net_id)
+            if not pad_conflicts:
+                self._commit(net_id, paths, pads)
+                return
+            if self._try_rip_reroute(net_id, paths, pads, pad_conflicts):
+                return
 
         # 2. Try crossing-cost route → surgical rip-up of crossed nets
         paths_cross, ok = self._find_paths(
@@ -191,10 +209,12 @@ class Solution:
         )
         if ok and paths_cross:
             crossed = self._find_crossed_nets(paths_cross, net_id)
-            if not crossed:
+            pad_conflicts = self._find_pad_conflicts(pads, net_id)
+            all_conflicts = crossed | pad_conflicts
+            if not all_conflicts:
                 self._commit(net_id, paths_cross, pads)
                 return
-            if self._try_rip_reroute(net_id, paths_cross, pads, crossed):
+            if self._try_rip_reroute(net_id, paths_cross, pads, all_conflicts):
                 return
 
         log.info("  %-20s FAIL — no route", net_id)
@@ -452,7 +472,52 @@ class Solution:
     ) -> None:
         for path in paths:
             self.grid.block_trace(path, net_id=net_id)
-        self.routes[net_id] = NetRoute(paths=paths, pads=pads)
+        pad_blocks = self._compute_pad_blocks(pads)
+        for pb in pad_blocks:
+            self.grid.block_pad(pb.cx, pb.cy, pb.half_w_mm, pb.half_h_mm, net_id=net_id)
+        self.routes[net_id] = NetRoute(paths=paths, pads=pads, pad_blocks=pad_blocks)
+
+    def _compute_pad_blocks(self, pads: list[NetPad]) -> list[PadBlock]:
+        catalog_map = {c.id: c for c in self.catalog.components}
+        placement_map = {pc.instance_id: pc for pc in self.placement.components}
+        blocks: list[PadBlock] = []
+        for pad in pads:
+            pc = placement_map.get(pad.instance_id)
+            if pc is None:
+                continue
+            cat = catalog_map.get(pc.catalog_id)
+            if cat is None:
+                continue
+            pin_obj = next((p for p in cat.pins if p.id == pad.pin_id), None)
+            if pin_obj is None:
+                continue
+            shaft_w, shaft_h = pin_shaft_dimensions(pin_obj)
+            rot = pc.rotation_deg % 360
+            if rot in (90, 270):
+                shaft_w, shaft_h = shaft_h, shaft_w
+            blocks.append(PadBlock(pad.gx, pad.gy, shaft_w / 2, shaft_h / 2))
+        return blocks
+
+    def _find_pad_conflicts(
+        self, pads: list[NetPad], net_id: str,
+    ) -> set[str]:
+        pad_blocks = self._compute_pad_blocks(pads)
+        if not pad_blocks:
+            return set()
+        conflicts: set[str] = set()
+        W = self.grid.width
+        H = self.grid.height
+        res = self.grid.resolution
+        cl_mm = self.grid.trace_clearance_mm + self.grid.trace_width_mm / 2
+        for pb in pad_blocks:
+            ext = math.ceil((max(pb.half_w_mm, pb.half_h_mm) + cl_mm) / res)
+            for gy in range(max(0, pb.cy - ext), min(H, pb.cy + ext + 1)):
+                for gx in range(max(0, pb.cx - ext), min(W, pb.cx + ext + 1)):
+                    flat = gy * W + gx
+                    owner = self.grid._trace_owner.get(flat)
+                    if owner and owner != net_id:
+                        conflicts.add(owner)
+        return {cn for cn in conflicts if cn in self.routes}
 
     def _find_crossed_nets(
         self,
@@ -492,6 +557,8 @@ class Solution:
             if route:
                 for path in route.paths:
                     self.grid.free_trace(path, net_id=cn)
+                for pb in route.pad_blocks:
+                    self.grid.free_pad(pb.cx, pb.cy, pb.half_w_mm, pb.half_h_mm, net_id=cn)
 
         self._commit(net_id, paths_cross, pads)
 
