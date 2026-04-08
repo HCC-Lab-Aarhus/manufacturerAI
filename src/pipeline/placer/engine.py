@@ -214,7 +214,11 @@ def place_components(
         style = effective_style.get(ci.instance_id, cat.mounting.style)
 
         if style == "side" and up.edge_index is not None:
-            half_depth = (cat.body.length_mm or 1.0) / 2
+            is_reoriented = cat.mounting.style != "side"
+            if is_reoriented:
+                half_depth = (cat.body.height_mm or 1.0) / 2
+            else:
+                half_depth = (cat.body.length_mm or 1.0) / 2
             x, y, rot = _snap_to_edge(up.x_mm, up.y_mm, design.outline, up.edge_index, inward_offset=half_depth)
         else:
             x, y, rot = up.x_mm, up.y_mm, 0
