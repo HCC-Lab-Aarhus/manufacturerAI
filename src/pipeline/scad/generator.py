@@ -301,7 +301,7 @@ def run_scad_step(
             extras_scad.count("\n"),
         )
 
-    session.pipeline_state["scad"] = "done"
+    session.pipeline_state["scad"] = "complete"
     session.save()
 
     # ── 10. Optional: compile to STL ──────────────────────────────
@@ -310,7 +310,7 @@ def run_scad_step(
         ok, msg, out = compile_scad(scad_path, stl_path)
         if ok:
             log.info("STL rendered: %s", stl_path.name)
-            session.pipeline_state["stl"] = "done"
+            session.pipeline_state["stl"] = "complete"
         else:
             log.error("STL render failed: %s", msg)
             session.pipeline_state["stl"] = "error"
@@ -803,7 +803,7 @@ def _generate_two_part(
         extras_path.write_text(extras_scad, encoding="utf-8")
         log.info("Wrote %s (%.1f kB)", extras_path.name, len(extras_scad.encode()) / 1024)
 
-    session.pipeline_state["scad"] = "done"
+    session.pipeline_state["scad"] = "complete"
     session.save()
 
     # ── Optional: compile to STL ──────────────────────────────────
@@ -827,7 +827,7 @@ def _generate_two_part(
             else:
                 log.error("Extras STL render failed: %s", msg_e)
 
-        session.pipeline_state["stl"] = "done"
+        session.pipeline_state["stl"] = "complete"
         session.save()
 
     return bottom_path

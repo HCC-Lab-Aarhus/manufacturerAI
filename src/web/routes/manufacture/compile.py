@@ -67,7 +67,7 @@ async def start_compile(sid: str, force: bool = Query(False)):
                 compile_scad(extras_scad, extras_stl, cancel=cancel, timeout=600)
         set_compile_state(sid, {"status": "done" if ok else "error", "message": msg, "cancel": cancel})
         if ok:
-            s.pipeline_state["scad"] = "done"
+            s.pipeline_state["scad"] = "complete"
             s.save()
 
     threading.Thread(target=_do_compile, daemon=True).start()
