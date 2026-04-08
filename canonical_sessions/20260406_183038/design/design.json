@@ -1,0 +1,180 @@
+{
+  "device_description": "An oval handheld IR remote control. A power button at the top toggles the target device on/off. Below it, volume up and volume down buttons on the left control audio level, while channel up and channel down buttons on the right cycle through channels. An IR LED at the top edge transmits commands to the target device.",
+  "name": "Pebble Remote",
+  "shape": {
+    "op": "difference",
+    "children": [
+      {
+        "op": "union",
+        "children": [
+          {
+            "type": "ellipse",
+            "center": [
+              40,
+              55
+            ],
+            "radius": [
+              40,
+              50
+            ]
+          },
+          {
+            "type": "ellipse",
+            "center": [
+              40,
+              55
+            ],
+            "radius": [
+              40,
+              22
+            ],
+            "end_center": [
+              40,
+              150
+            ],
+            "radius_end": [
+              25,
+              14
+            ]
+          }
+        ]
+      },
+      {
+        "type": "ellipse",
+        "center": [
+          -8,
+          120
+        ],
+        "radius": [
+          15,
+          28
+        ]
+      },
+      {
+        "type": "ellipse",
+        "center": [
+          88,
+          120
+        ],
+        "radius": [
+          15,
+          28
+        ]
+      }
+    ]
+  },
+  "enclosure": {
+    "height_mm": 17,
+    "top_surface": {
+      "type": "dome",
+      "peak_x_mm": 40,
+      "peak_y_mm": 60,
+      "peak_height_mm": 22,
+      "base_height_mm": 17
+    },
+    "edge_top": {
+      "type": "fillet",
+      "size_mm": 3
+    },
+    "edge_bottom": {
+      "type": "fillet",
+      "size_mm": 2
+    }
+  },
+  "ui_placements": [
+    {
+      "instance_id": "btn_power",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 40,
+      "y_mm": 32,
+      "button_shape": {
+        "type": "ellipse",
+        "center": [
+          0,
+          0
+        ],
+        "radius": 8
+      }
+    },
+    {
+      "instance_id": "btn_vol_up",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 24,
+      "y_mm": 58,
+      "button_shape": {
+        "type": "rectangle",
+        "center": [
+          0,
+          0
+        ],
+        "size": [
+          16,
+          14
+        ],
+        "corner_radius": 2
+      }
+    },
+    {
+      "instance_id": "btn_vol_down",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 24,
+      "y_mm": 83,
+      "button_shape": {
+        "type": "rectangle",
+        "center": [
+          0,
+          0
+        ],
+        "size": [
+          16,
+          14
+        ],
+        "corner_radius": 2
+      }
+    },
+    {
+      "instance_id": "btn_ch_up",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 56,
+      "y_mm": 58,
+      "button_shape": {
+        "type": "rectangle",
+        "center": [
+          0,
+          0
+        ],
+        "size": [
+          16,
+          14
+        ],
+        "corner_radius": 2
+      }
+    },
+    {
+      "instance_id": "btn_ch_down",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 56,
+      "y_mm": 83,
+      "button_shape": {
+        "type": "rectangle",
+        "center": [
+          0,
+          0
+        ],
+        "size": [
+          16,
+          14
+        ],
+        "corner_radius": 2
+      }
+    },
+    {
+      "instance_id": "ir_led",
+      "catalog_id": "led_5mm",
+      "x_mm": 40,
+      "y_mm": 5.1,
+      "mounting_style": "side",
+      "edge_index": 13
+    }
+  ]
+}

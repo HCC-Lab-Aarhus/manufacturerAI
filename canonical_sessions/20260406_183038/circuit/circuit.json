@@ -1,0 +1,117 @@
+{
+  "components": [
+    {
+      "catalog_id": "battery_holder_2xAAA",
+      "instance_id": "bat_1"
+    },
+    {
+      "catalog_id": "atmega328p_dip28",
+      "instance_id": "mcu_1"
+    },
+    {
+      "catalog_id": "resistor_axial",
+      "instance_id": "r_ir_led",
+      "config": {
+        "resistance_ohms": 120
+      }
+    },
+    {
+      "catalog_id": "led_5mm",
+      "instance_id": "ir_led",
+      "config": {
+        "color": "ir"
+      }
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_power"
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_vol_up"
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_vol_down"
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_ch_up"
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_ch_down"
+    }
+  ],
+  "nets": [
+    {
+      "id": "VCC",
+      "pins": [
+        "bat_1:V+",
+        "mcu_1:power"
+      ]
+    },
+    {
+      "id": "GND",
+      "pins": [
+        "bat_1:GND",
+        "mcu_1:ground",
+        "ir_led:cathode",
+        "btn_power:B",
+        "btn_vol_up:B",
+        "btn_vol_down:B",
+        "btn_ch_up:B",
+        "btn_ch_down:B"
+      ]
+    },
+    {
+      "id": "IR_PWM_CTRL",
+      "pins": [
+        "mcu_1:pwm",
+        "r_ir_led:1"
+      ]
+    },
+    {
+      "id": "IR_LED_DRIVE",
+      "pins": [
+        "r_ir_led:2",
+        "ir_led:anode"
+      ]
+    },
+    {
+      "id": "BTN_POWER",
+      "pins": [
+        "btn_power:A",
+        "mcu_1:gpio"
+      ]
+    },
+    {
+      "id": "BTN_VOL_UP",
+      "pins": [
+        "btn_vol_up:A",
+        "mcu_1:gpio"
+      ]
+    },
+    {
+      "id": "BTN_VOL_DOWN",
+      "pins": [
+        "btn_vol_down:A",
+        "mcu_1:gpio"
+      ]
+    },
+    {
+      "id": "BTN_CH_UP",
+      "pins": [
+        "btn_ch_up:A",
+        "mcu_1:gpio"
+      ]
+    },
+    {
+      "id": "BTN_CH_DOWN",
+      "pins": [
+        "btn_ch_down:A",
+        "mcu_1:gpio"
+      ]
+    }
+  ]
+}
