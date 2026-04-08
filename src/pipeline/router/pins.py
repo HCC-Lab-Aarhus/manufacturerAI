@@ -236,5 +236,8 @@ def allocate_best_pin(
 
     if best_pin is not None:
         available.remove(best_pin)
+        for other_group, other_pins in pool.pools.items():
+            if other_group != group_id and best_pin in other_pins:
+                other_pins.remove(best_pin)
 
     return best_pin

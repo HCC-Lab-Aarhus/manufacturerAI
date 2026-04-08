@@ -14,6 +14,7 @@ from .models import Trace, InflatedTrace, RoutingResult, RouterConfig
 from .engine import route_traces
 from .serialization import routing_to_dict, parse_routing
 from .bitmap import generate_trace_bitmap, generate_fixed_width_bitmap, write_trace_bitmap
+from .drc import run_drc, DRCReport, Violation
 
 __all__ = [
     # Models
@@ -24,4 +25,6 @@ __all__ = [
     "routing_to_dict", "parse_routing",
     # Bitmap
     "generate_trace_bitmap", "generate_fixed_width_bitmap", "write_trace_bitmap",
+    # DRC
+    "run_drc", "DRCReport", "Violation",
 ]

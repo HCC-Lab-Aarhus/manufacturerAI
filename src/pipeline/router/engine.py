@@ -276,7 +276,94 @@ def route_traces(
     else:
         log.info("Router: all %d nets routed", len(net_ids))
 
-    return solution.to_result()
+    # 7. DRC repair pass — rip up violating nets and reroute with avoidance
+    pin_positions = _collect_pin_positions(placement, catalog)
+    from .drc import run_drc
+
+    pin_to_net: dict[str, str] = {}
+    for net_id_pk, pad_list in pads_map.items():
+        for pad in pad_list:
+            pin_to_net[f"{pad.instance_id}:{pad.pin_id}"] = net_id_pk
+
+    for repair_round in range(5):
+        result = solution.to_result()
+        drc_report = run_drc(result, pin_positions, outline_poly, config)
+        if drc_report.ok:
+            break
+
+        errors_before = len(drc_report.errors)
+        violated_nets: set[str] = set()
+        penalty_pins: dict[str, tuple[float, float]] = {}
+
+        for v in drc_report.errors:
+            if v.rule == "trace_pin_clearance":
+                if v.net_id:
+                    violated_nets.add(v.net_id)
+                if v.details:
+                    pkey = v.details.get("pin")
+                    if pkey and pkey in pin_positions:
+                        penalty_pins[pkey] = pin_positions[pkey]
+                    if pkey and pkey in pin_to_net:
+                        violated_nets.add(pin_to_net[pkey])
+            elif v.rule == "trace_trace_clearance" and v.details:
+                na = v.details.get("net_a")
+                nb = v.details.get("net_b")
+                if na:
+                    violated_nets.add(na)
+                if nb:
+                    violated_nets.add(nb)
+
+        if not violated_nets:
+            break
+
+        cost_map = _build_pin_avoidance_cost(
+            grid, penalty_pins, all_pin_cells, config,
+        )
+
+        to_rip = sorted(violated_nets & set(solution.routes))
+        if not to_rip:
+            break
+
+        neighborhood = solution.neighborhood(to_rip)
+        to_rip_expanded = sorted(set(to_rip) | set(neighborhood))
+
+        score_before = solution.score()
+        snap_before = solution.snapshot()
+        solution.rip_up(to_rip_expanded)
+        for nid in to_rip_expanded:
+            pads = pads_map.get(nid)
+            if pads:
+                solution.route_net(nid, pads, cost_map=cost_map)
+
+        score_after = solution.score()
+        result_after = solution.to_result()
+        drc_after = run_drc(result_after, pin_positions, outline_poly, config)
+        errors_after = len(drc_after.errors)
+
+        if errors_after < errors_before:
+            log.info("DRC repair round %d: %d→%d errors, rerouted %s",
+                     repair_round + 1, errors_before, errors_after, to_rip)
+        elif score_after <= score_before:
+            log.info("DRC repair round %d: score held, rerouted %s",
+                     repair_round + 1, to_rip)
+        else:
+            solution.restore(snap_before)
+            log.info("DRC repair round %d: reverted (score worse, no DRC gain)",
+                     repair_round + 1)
+            break
+
+    result = solution.to_result()
+
+    drc_report = run_drc(result, pin_positions, outline_poly, config)
+    if drc_report.ok:
+        log.info("Router DRC: PASS (0 errors)")
+    else:
+        log.warning("Router DRC: FAIL (%d errors, %d warnings)",
+                    len(drc_report.errors), len(drc_report.warnings))
+        for v in drc_report.errors:
+            log.warning("  DRC %s | %s: %s", v.rule, v.net_id, v.message)
+
+    return result
 
 
 # ── Progress reporting ─────────────────────────────────────────────
@@ -874,3 +961,61 @@ def _build_all_pin_cells(
             gx, gy = grid.world_to_grid(wx, wy)
             result[f"{pc.instance_id}:{pin.id}"] = {(gx, gy)}
     return result
+
+
+def _collect_pin_positions(
+    placement: FullPlacement,
+    catalog: CatalogResult,
+) -> dict[str, tuple[float, float]]:
+    catalog_map = {c.id: c for c in catalog.components}
+    positions: dict[str, tuple[float, float]] = {}
+    for pc in placement.components:
+        cat = catalog_map.get(pc.catalog_id)
+        if cat is None:
+            continue
+        for pin in cat.pins:
+            pos = pc.pin_positions.get(pin.id)
+            if pos is not None:
+                wx, wy = pos
+            else:
+                wx, wy = pin_world_xy(
+                    pin.position_mm, pc.x_mm, pc.y_mm, pc.rotation_deg,
+                )
+            positions[f"{pc.instance_id}:{pin.id}"] = (wx, wy)
+    return positions
+
+
+def _build_pin_avoidance_cost(
+    grid: RoutingGrid,
+    penalty_pins: dict[str, tuple[float, float]],
+    all_pin_cells: dict[str, set[tuple[int, int]]],
+    config: RouterConfig,
+) -> dict[int, float]:
+    if not penalty_pins:
+        return {}
+
+    W = grid.width
+    radius = max(1, math.ceil(
+        (config.trace_width_mm / 2 + config.pin_clearance_mm * 2)
+        / config.grid_resolution_mm
+    ))
+    r2 = radius * radius
+    cost_map: dict[int, float] = {}
+
+    for pin_key, (wx, wy) in penalty_pins.items():
+        cells = all_pin_cells.get(pin_key, set())
+        for gx, gy in cells:
+            for dx in range(-radius, radius + 1):
+                for dy in range(-radius, radius + 1):
+                    d2 = dx * dx + dy * dy
+                    if d2 > r2:
+                        continue
+                    nx, ny = gx + dx, gy + dy
+                    if not (0 <= nx < W and 0 <= ny < grid.height):
+                        continue
+                    flat = ny * W + nx
+                    penalty = 50 * (1 - d2 / r2)
+                    if flat not in cost_map or penalty > cost_map[flat]:
+                        cost_map[flat] = penalty
+
+    return cost_map

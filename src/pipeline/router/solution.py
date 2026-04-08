@@ -22,6 +22,7 @@ from .grid import RoutingGrid, FREE, BLOCKED, TRACE_PATH, PERMANENTLY_BLOCKED
 from .models import Trace, RoutingResult, RouterConfig
 from .pathfinder import find_path, find_path_to_tree
 from .pins import pin_world_xy
+from src.pipeline.trace_geometry import point_seg_dist
 
 log = logging.getLogger(__name__)
 
@@ -169,13 +170,16 @@ class Solution:
 
     # ── Route nets ─────────────────────────────────────────────
 
-    def route_net(self, net_id: str, pads: list[NetPad]) -> None:
+    def route_net(
+        self, net_id: str, pads: list[NetPad],
+        cost_map: dict[int, float] | None = None,
+    ) -> None:
         """Route one net. Tries clean route, then crossing rip-up."""
         if net_id in self.routes:
             self.rip_up([net_id])
 
         # 1. Try clean route
-        paths, ok = self._find_paths(net_id, pads)
+        paths, ok = self._find_paths(net_id, pads, cost_map=cost_map)
         if ok and paths and not self._has_foreign_cells(paths, net_id):
             self._commit(net_id, paths, pads)
             return
@@ -183,6 +187,7 @@ class Solution:
         # 2. Try crossing-cost route → surgical rip-up of crossed nets
         paths_cross, ok = self._find_paths(
             net_id, pads, crossing_cost=self.config.crossing_cost,
+            cost_map=cost_map,
         )
         if ok and paths_cross:
             crossed = self._find_crossed_nets(paths_cross, net_id)
@@ -555,45 +560,99 @@ class Solution:
         routed_pads: dict[str, list[NetPad]],
     ) -> list[Trace]:
         outline = self.grid.outline_poly
+        min_t2t = self.config.trace_clearance_mm + self.config.trace_width_mm
+        min_t2p = self.config.pin_clearance_mm + self.config.trace_width_mm / 2
+
+        all_pin_world = self._collect_all_pin_world()
+
         traces: list[Trace] = []
+        snap_meta: list[_SnapMeta | None] = []
+
         for net_id, paths in routed_paths.items():
             pads = routed_pads.get(net_id, [])
             pad_by_grid: dict[tuple[int, int], NetPad] = {
                 (p.gx, p.gy): p for p in pads
             }
+            own_pins = {
+                "{}:{}".format(p.instance_id, p.pin_id)
+                for p in pads
+            }
+            foreign_pins = [
+                pos for key, pos in all_pin_world.items()
+                if key not in own_pins
+            ]
+
             for grid_path in paths:
                 if len(grid_path) < 2:
                     continue
                 world_path = _simplify_path(grid_path, self.grid)
+
+                start_pin = end_pin = None
+                start_grid = end_grid = None
+                start_grid_next = end_grid_prev = None
 
                 start_pad = pad_by_grid.get(grid_path[0])
                 if start_pad is not None:
                     sx, sy = start_pad.world_x, start_pad.world_y
                     gx0, gy0 = world_path[0]
                     if (sx, sy) != (gx0, gy0):
-                        world_path[0:1] = [(sx, sy), (sx, gy0), (gx0, gy0)]
+                        bend = _best_snap_bend(
+                            sx, sy, gx0, gy0, foreign_pins,
+                        )
+                        world_path[0:1] = bend
+                        start_pin = (sx, sy)
+                        start_grid = (gx0, gy0)
+                        if len(world_path) > 3:
+                            start_grid_next = world_path[3]
 
                 end_pad = pad_by_grid.get(grid_path[-1])
                 if end_pad is not None:
                     ex, ey = end_pad.world_x, end_pad.world_y
                     gxn, gyn = world_path[-1]
                     if (ex, ey) != (gxn, gyn):
-                        world_path[-1:] = [(gxn, gyn), (ex, gyn), (ex, ey)]
-
-                xs = np.array([wx for wx, _ in world_path])
-                ys = np.array([wy for _, wy in world_path])
-                inside = _contains_xy(outline, xs, ys)
-                clamped: list[tuple[float, float]] = []
-                for i, (wx, wy) in enumerate(world_path):
-                    if inside[i]:
-                        clamped.append((wx, wy))
-                    else:
-                        nearest = outline.exterior.interpolate(
-                            outline.exterior.project(Point(wx, wy)),
+                        bend = _best_snap_bend(
+                            ex, ey, gxn, gyn, foreign_pins,
                         )
-                        clamped.append((nearest.x, nearest.y))
+                        world_path[-1:] = list(reversed(bend))
+                        end_pin = (ex, ey)
+                        end_grid = (gxn, gyn)
+                        if len(world_path) > 3:
+                            end_grid_prev = world_path[-4]
+
+                clamped = _clamp_to_outline(world_path, outline)
                 traces.append(Trace(net_id=net_id, path=clamped))
+
+                meta = None
+                if start_pin or end_pin:
+                    meta = _SnapMeta(
+                        start_pin=start_pin, start_grid=start_grid,
+                        start_grid_next=start_grid_next,
+                        end_pin=end_pin, end_grid=end_grid,
+                        end_grid_prev=end_grid_prev,
+                        own_foreign_pins=foreign_pins,
+                    )
+                snap_meta.append(meta)
+
+        _optimize_snaps(traces, snap_meta, all_pin_world, min_t2t, min_t2p, outline)
         return traces
+
+    def _collect_all_pin_world(self) -> dict[str, tuple[float, float]]:
+        catalog_map = {c.id: c for c in self.catalog.components}
+        positions: dict[str, tuple[float, float]] = {}
+        for pc in self.placement.components:
+            cat = catalog_map.get(pc.catalog_id)
+            if cat is None:
+                continue
+            for pin in cat.pins:
+                pos = pc.pin_positions.get(pin.id)
+                if pos is not None:
+                    wx, wy = pos
+                else:
+                    wx, wy = pin_world_xy(
+                        pin.position_mm, pc.x_mm, pc.y_mm, pc.rotation_deg,
+                    )
+                positions["{}:{}".format(pc.instance_id, pin.id)] = (wx, wy)
+        return positions
 
 
 # ── Module-level helpers ───────────────────────────────────────────
@@ -652,3 +711,266 @@ def _simplify_path(
     waypoints.append(grid_path[-1])
 
     return [grid.grid_to_world(gx, gy) for gx, gy in waypoints]
+
+
+def _snap_bend_clearance(
+    segments: list[tuple[float, float]],
+    foreign_pins: list[tuple[float, float]],
+) -> float:
+    best = float("inf")
+    for px, py in foreign_pins:
+        for i in range(len(segments) - 1):
+            ax, ay = segments[i]
+            bx, by = segments[i + 1]
+            d = point_seg_dist(px, py, ax, ay, bx, by)
+            if d < best:
+                best = d
+    return best
+
+
+def _best_snap_bend(
+    px: float, py: float,
+    gx: float, gy: float,
+    foreign_pins: list[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    option_a = [(px, py), (px, gy), (gx, gy)]
+    option_b = [(px, py), (gx, py), (gx, gy)]
+
+    if not foreign_pins:
+        return option_a
+
+    clearance_a = _snap_bend_clearance(option_a, foreign_pins)
+    clearance_b = _snap_bend_clearance(option_b, foreign_pins)
+
+    return option_a if clearance_a >= clearance_b else option_b
+
+
+@dataclass
+class _SnapMeta:
+    start_pin: tuple[float, float] | None
+    start_grid: tuple[float, float] | None
+    start_grid_next: tuple[float, float] | None
+    end_pin: tuple[float, float] | None
+    end_grid: tuple[float, float] | None
+    end_grid_prev: tuple[float, float] | None
+    own_foreign_pins: list[tuple[float, float]]
+
+
+def _clamp_to_outline(
+    world_path: list[tuple[float, float]],
+    outline: Polygon,
+) -> list[tuple[float, float]]:
+    xs = np.array([wx for wx, _ in world_path])
+    ys = np.array([wy for _, wy in world_path])
+    inside = _contains_xy(outline, xs, ys)
+    clamped: list[tuple[float, float]] = []
+    for i, (wx, wy) in enumerate(world_path):
+        if inside[i]:
+            clamped.append((wx, wy))
+        else:
+            nearest = outline.exterior.interpolate(
+                outline.exterior.project(Point(wx, wy)),
+            )
+            clamped.append((nearest.x, nearest.y))
+    return clamped
+
+
+def _trace_pair_min_dist(
+    path_a: list[tuple[float, float]],
+    path_b: list[tuple[float, float]],
+) -> float:
+    best = float("inf")
+    for i in range(len(path_a) - 1):
+        ax1, ay1 = path_a[i]
+        ax2, ay2 = path_a[i + 1]
+        for j in range(len(path_b) - 1):
+            bx1, by1 = path_b[j]
+            bx2, by2 = path_b[j + 1]
+            d = min(
+                point_seg_dist(ax1, ay1, bx1, by1, bx2, by2),
+                point_seg_dist(ax2, ay2, bx1, by1, bx2, by2),
+                point_seg_dist(bx1, by1, ax1, ay1, ax2, ay2),
+                point_seg_dist(bx2, by2, ax1, ay1, ax2, ay2),
+            )
+            if d < best:
+                best = d
+    return best
+
+
+def _trace_pin_min_dist(
+    path: list[tuple[float, float]],
+    pins: list[tuple[float, float]],
+) -> float:
+    best = float("inf")
+    for px, py in pins:
+        for i in range(len(path) - 1):
+            d = point_seg_dist(px, py, path[i][0], path[i][1],
+                               path[i + 1][0], path[i + 1][1])
+            if d < best:
+                best = d
+    return best
+
+
+def _apply_snap(
+    path: list[tuple[float, float]],
+    meta: _SnapMeta,
+    start_variant: int,
+    end_variant: int,
+    outline: Polygon,
+) -> list[tuple[float, float]]:
+    new_path = list(path)
+
+    n_start = 3 if meta.start_pin is not None else 0
+    n_end = 3 if meta.end_pin is not None else 0
+
+    if n_start + n_end > len(new_path):
+        return _clamp_to_outline(new_path, outline)
+
+    if meta.start_pin is not None and meta.start_grid is not None:
+        px, py = meta.start_pin
+        use_next = start_variant >= 2 and meta.start_grid_next is not None
+        gx, gy = meta.start_grid_next if use_next else meta.start_grid
+        direction = start_variant % 2
+        if direction == 0:
+            bend = [(px, py), (px, gy), (gx, gy)]
+        else:
+            bend = [(px, py), (gx, py), (gx, gy)]
+
+        if use_next and len(new_path) >= 4:
+            new_path[0:4] = bend
+        else:
+            new_path[0:3] = bend
+
+    if meta.end_pin is not None and meta.end_grid is not None:
+        ex, ey = meta.end_pin
+        use_prev = end_variant >= 2 and meta.end_grid_prev is not None
+        gxn, gyn = meta.end_grid_prev if use_prev else meta.end_grid
+        direction = end_variant % 2
+        if direction == 0:
+            bend = [(gxn, gyn), (ex, gyn), (ex, ey)]
+        else:
+            bend = [(gxn, gyn), (gxn, ey), (ex, ey)]
+
+        if use_prev and len(new_path) >= 4:
+            new_path[-4:] = bend
+        else:
+            new_path[-3:] = bend
+
+    return _clamp_to_outline(new_path, outline)
+
+
+def _optimize_snaps(
+    traces: list[Trace],
+    snap_meta: list[_SnapMeta | None],
+    all_pin_world: dict[str, tuple[float, float]],
+    min_t2t: float,
+    min_t2p: float,
+    outline: Polygon,
+) -> None:
+    threshold = min(min_t2t, min_t2p)
+    margin = threshold + 1.0
+
+    bboxes = []
+    for t in traces:
+        xs = [p[0] for p in t.path]
+        ys = [p[1] for p in t.path]
+        bboxes.append((min(xs), min(ys), max(xs), max(ys)))
+
+    for _round in range(3):
+        improved = False
+        for idx in range(len(traces)):
+            meta = snap_meta[idx]
+            if meta is None or len(traces[idx].path) < 6:
+                continue
+
+            bi = bboxes[idx]
+            net_id = traces[idx].net_id
+            nearby = []
+            for j in range(len(traces)):
+                if j == idx or traces[j].net_id == net_id:
+                    continue
+                bj = bboxes[j]
+                if bi[0] - margin > bj[2] or bi[2] + margin < bj[0]:
+                    continue
+                if bi[1] - margin > bj[3] or bi[3] + margin < bj[1]:
+                    continue
+                nearby.append(j)
+
+            current_path = traces[idx].path
+            own_pins = meta.own_foreign_pins
+            current_worst = _snap_worst_clearance(
+                current_path, [traces[j].path for j in nearby], own_pins,
+            )
+            if current_worst >= threshold:
+                continue
+
+            best_worst = current_worst
+            best_path = None
+
+            start_variants = [0, 1]
+            if meta.start_pin and meta.start_grid_next:
+                start_variants.extend([2, 3])
+            end_variants = [0, 1]
+            if meta.end_pin and meta.end_grid_prev:
+                end_variants.extend([2, 3])
+
+            for sv in start_variants:
+                for ev in end_variants:
+                    candidate = _apply_snap(
+                        current_path, meta, sv, ev, outline,
+                    )
+                    worst = _snap_worst_clearance(
+                        candidate, [traces[j].path for j in nearby], own_pins,
+                    )
+                    if worst > best_worst:
+                        best_worst = worst
+                        best_path = candidate
+
+            if best_path is not None:
+                traces[idx] = Trace(net_id=net_id, path=best_path)
+                xs = [p[0] for p in best_path]
+                ys = [p[1] for p in best_path]
+                bboxes[idx] = (min(xs), min(ys), max(xs), max(ys))
+                improved = True
+
+        if not improved:
+            break
+
+
+def _snap_worst_clearance(
+    path: list[tuple[float, float]],
+    other_paths: list[list[tuple[float, float]]],
+    foreign_pins: list[tuple[float, float]],
+) -> float:
+    worst = float("inf")
+    n = len(path) - 1
+    snap_segs = []
+    for i in range(min(2, n)):
+        snap_segs.append((path[i], path[i + 1]))
+    for i in range(max(0, n - 2), n):
+        if i >= 2:
+            snap_segs.append((path[i], path[i + 1]))
+
+    for (a1, a2) in snap_segs:
+        for other in other_paths:
+            for j in range(len(other) - 1):
+                d = min(
+                    point_seg_dist(a1[0], a1[1], other[j][0], other[j][1],
+                                   other[j+1][0], other[j+1][1]),
+                    point_seg_dist(a2[0], a2[1], other[j][0], other[j][1],
+                                   other[j+1][0], other[j+1][1]),
+                    point_seg_dist(other[j][0], other[j][1], a1[0], a1[1],
+                                   a2[0], a2[1]),
+                    point_seg_dist(other[j+1][0], other[j+1][1], a1[0], a1[1],
+                                   a2[0], a2[1]),
+                )
+                if d < worst:
+                    worst = d
+
+    for px, py in foreign_pins:
+        for (a1, a2) in snap_segs:
+            d = point_seg_dist(px, py, a1[0], a1[1], a2[0], a2[1])
+            if d < worst:
+                worst = d
+
+    return worst

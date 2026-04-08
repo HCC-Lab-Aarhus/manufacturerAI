@@ -67,7 +67,7 @@ class RouterConfig:
 
     # ── Router-only knobs ──────────────────────────────────────
     turn_penalty: int = 5                # A* cost penalty for changing direction
-    crossing_cost: int = 50              # A* cost penalty for crossing an existing trace
+    crossing_cost: int = 50              # A* cost for traversing foreign trace cells (exploration only)
     max_improve_iterations: int = 60     # iterative improvement rounds
     stall_limit: int = 20               # stop after this many rounds with no improvement
     elite_pool_size: int = 5             # number of top solutions kept for crossover
