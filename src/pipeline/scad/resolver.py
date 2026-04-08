@@ -255,13 +255,16 @@ class ComponentResolver:
                     label=f"side slot — {self.cid}",
                 )]
             else:
-                geom = self._rect_geom(body.width_mm, body.height_mm)
+                geom = RectGeometry(self.cx, self.cy, body.width_mm, body.height_mm)
                 z_ext = min(body.length_mm, self.ctx.cavity_depth)
                 return [ScadFragment(
                     type="cutout",
                     geometry=geom,
                     z_base=CAVITY_START_MM,
                     depth=z_ext,
+                    tilt_deg=90,
+                    tilt_length=body.length_mm,
+                    rotation_deg=self.rot + 90,
                     label=f"side slot — {self.cid}",
                 )]
         else:
@@ -414,8 +417,15 @@ class ComponentResolver:
 
     def _scad_feature_fragments(self) -> list[ScadFragment]:
         style = self.placed.mounting_style or self.catalog.mounting.style
-        if style != self.catalog.mounting.style:
+        is_reoriented_side = (
+            style == "side" and self.catalog.mounting.style != "side"
+        )
+        if style != self.catalog.mounting.style and not is_reoriented_side:
             return []
+
+        if is_reoriented_side:
+            return self._tilted_feature_fragments()
+
         frags: list[ScadFragment] = []
         for feat in self.catalog.scad_features:
             fx, fy = float(feat.position_mm[0]), float(feat.position_mm[1])
@@ -478,6 +488,54 @@ class ComponentResolver:
                     label=f"{feat.label} — {self.cid}",
                     rotate_3d=rotate_3d,
                 ))
+        return frags
+
+    def _tilted_feature_fragments(self) -> list[ScadFragment]:
+        """Emit SCAD features for a non-native side-mount with 90° tilt.
+
+        Each feature's local (fx, fy) offset is transformed through the
+        same rotate([0, 90, rot+90]) that the body uses, producing the
+        correct world position for the tilted frame.
+        """
+        body = self.catalog.body
+        if body.shape == "circle":
+            z_ext = min(body.diameter_mm, self.ctx.cavity_depth)
+        else:
+            z_ext = min(body.length_mm, self.ctx.cavity_depth)
+        body_z_center = CAVITY_START_MM + z_ext / 2
+
+        theta = math.radians(self.rot + 90)
+        cos_t, sin_t = math.cos(theta), math.sin(theta)
+
+        frags: list[ScadFragment] = []
+        for feat in self.catalog.scad_features:
+            if feat.pattern:
+                continue
+            fx, fy = float(feat.position_mm[0]), float(feat.position_mm[1])
+
+            feat_wy = self.cy + fx * sin_t + fy * cos_t
+            feat_wz = body_z_center - (fx * cos_t - fy * sin_t)
+
+            feat_depth = feat.depth_mm or self.ctx.cavity_depth
+            feat_z_base = feat_wz - feat_depth / 2
+
+            if feat.shape == "circle":
+                geom = CylinderGeometry(self.cx, feat_wy, (feat.diameter_mm or 1.0) / 2)
+            else:
+                w = feat.width_mm or 1.0
+                h = feat.length_mm or 1.0
+                geom = RectGeometry(self.cx, feat_wy, w, h)
+
+            frags.append(ScadFragment(
+                type="cutout",
+                geometry=geom,
+                z_base=feat_z_base,
+                depth=feat_depth,
+                tilt_deg=90,
+                tilt_length=feat_depth,
+                rotation_deg=self.rot + 90,
+                label=f"{feat.label} — {self.cid}",
+            ))
         return frags
 
     def _grid_pattern_fragments(

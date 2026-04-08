@@ -47,11 +47,13 @@ def _edge_direction(
 def _edge_rotation(
     p1: tuple[float, float], p2: tuple[float, float],
 ) -> float:
-    """Compute the rotation for a component on an edge.
+    """Return the edge tangent angle in degrees (0–360).
 
-    The component's "forward" direction should point outward through
-    the wall.  For clockwise winding, the outward normal is to the
-    right of the edge direction.
+    This is the direction of the vector from *p1* to *p2*.
+    The component's local +X axis aligns with this direction
+    (along the wall).  For CW-wound outlines the outward
+    normal points to the right of the edge direction, so
+    local −Y faces the enclosure interior.
     """
     dx = p2[0] - p1[0]
     dy = p2[1] - p1[1]
