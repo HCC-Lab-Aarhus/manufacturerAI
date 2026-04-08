@@ -231,9 +231,25 @@ def _add_shape_fields(data: dict, outline_data, enclosure_data) -> None:
                 data[k] = fields[k]
 
 
+def _tessellate_button_shapes(placements: list[dict]) -> None:
+    from src.pipeline.design.shape2d import tessellate_shape
+    for up in placements:
+        shape = up.get("button_shape")
+        if shape is None:
+            continue
+        if up.get("button_outline"):
+            continue
+        try:
+            outline = tessellate_shape(shape)
+            up["button_outline"] = [[round(v.x, 2), round(v.y, 2)] for v in outline.points]
+        except Exception:
+            pass
+
+
 def enrich_design(data: dict, cat, session: Session | None = None) -> None:
     """Enrich a design dict: component bodies/pins + 3D height fields + surface data."""
     enrich_components(data.get("ui_placements", []), cat)
+    _tessellate_button_shapes(data.get("ui_placements", []))
     outline_data = _read_outline(session) if session else data.get("outline", [])
     enclosure_data = data.get("enclosure", {})
     if outline_data:
