@@ -1,12 +1,12 @@
 {
     "id": "lamp_socket",
     "name": "Lamp Socket",
-    "description": "Cylindrical lamp socket for standard bulbs. Four through-hole pins arranged as two pairs on the bottom. Each pin has a thick base (18.5mm long, 5.8mm diameter) topped by a thin pin tip (5.7mm long, 0.84mm diameter). The two pairs are spaced 13mm apart center-to-center.",
+    "description": "Cylindrical lamp socket for standard bulbs. Body is 34.3mm diameter, 12mm tall. Two rectangular blade pins on the bottom, each 7.25mm long × 1.05mm wide × 11mm tall, spaced 25.31mm apart center-to-center. Drops into a 34.3mm circular cutout from above.",
     "ui_placement": true,
     "body": {
         "shape": "circle",
-        "diameter_mm": 39.29,
-        "height_mm": 45.0
+        "diameter_mm": 34.3,
+        "height_mm": 12.0
     },
     "mounting": {
         "style": "top",
@@ -16,86 +16,42 @@
         "blocks_routing": false,
         "keepout_margin_mm": 2.0
     },
-    "pin_length_mm": 24.2,
+    "pin_length_mm": 11.0,
     "pins": [
         {
             "id": "1",
             "label": "Lead 1",
             "position_mm": [
-                -6.5,
-                -3.0
+                -12.655,
+                0
             ],
             "direction": "bidirectional",
             "voltage_v": null,
             "current_max_ma": 500,
-            "hole_diameter_mm": 1.0,
-            "description": "Left pair, pin 1.",
+            "hole_diameter_mm": 1.5,
+            "description": "Left blade pin.",
             "shape": {
-                "type": "circle",
-                "base_diameter_mm": 5.8,
-                "base_length_mm": 18.5,
-                "tip_diameter_mm": 0.84,
-                "tip_length_mm": 5.7
+                "type": "rect",
+                "width_mm": 1.05,
+                "length_mm": 7.25
             }
         },
         {
             "id": "2",
             "label": "Lead 2",
             "position_mm": [
-                -6.5,
-                3.0
+                12.655,
+                0
             ],
             "direction": "bidirectional",
             "voltage_v": null,
             "current_max_ma": 500,
-            "hole_diameter_mm": 1.0,
-            "description": "Left pair, pin 2.",
+            "hole_diameter_mm": 1.5,
+            "description": "Right blade pin.",
             "shape": {
-                "type": "circle",
-                "base_diameter_mm": 5.8,
-                "base_length_mm": 18.5,
-                "tip_diameter_mm": 0.84,
-                "tip_length_mm": 5.7
-            }
-        },
-        {
-            "id": "3",
-            "label": "Lead 3",
-            "position_mm": [
-                6.5,
-                -3.0
-            ],
-            "direction": "bidirectional",
-            "voltage_v": null,
-            "current_max_ma": 500,
-            "hole_diameter_mm": 1.0,
-            "description": "Right pair, pin 1.",
-            "shape": {
-                "type": "circle",
-                "base_diameter_mm": 5.8,
-                "base_length_mm": 18.5,
-                "tip_diameter_mm": 0.84,
-                "tip_length_mm": 5.7
-            }
-        },
-        {
-            "id": "4",
-            "label": "Lead 4",
-            "position_mm": [
-                6.5,
-                3.0
-            ],
-            "direction": "bidirectional",
-            "voltage_v": null,
-            "current_max_ma": 500,
-            "hole_diameter_mm": 1.0,
-            "description": "Right pair, pin 2.",
-            "shape": {
-                "type": "circle",
-                "base_diameter_mm": 5.8,
-                "base_length_mm": 18.5,
-                "tip_diameter_mm": 0.84,
-                "tip_length_mm": 5.7
+                "type": "rect",
+                "width_mm": 1.05,
+                "length_mm": 7.25
             }
         }
     ],
