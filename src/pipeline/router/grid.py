@@ -350,7 +350,6 @@ class RoutingGrid:
                 radius_mm, res, W, H,
             )
 
-        # Exclude path and protected cells
         clearance_flats -= path_flats
         clearance_flats -= protected_flats
 

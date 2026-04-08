@@ -736,6 +736,12 @@ def _block_components(
 ) -> None:
     res = grid.resolution
 
+    def _pin_xy(pc, pin):
+        pos = pc.pin_positions.get(pin.id)
+        if pos is not None:
+            return pos
+        return pin_world_xy(pin.position_mm, pc.x_mm, pc.y_mm, pc.rotation_deg)
+
     for pc in placement.components:
         cat = catalog_map.get(pc.catalog_id)
         if cat is None or not cat.mounting.blocks_routing:
@@ -753,9 +759,7 @@ def _block_components(
         if cat is None:
             continue
         for pin in cat.pins:
-            wx, wy = pin_world_xy(
-                pin.position_mm, pc.x_mm, pc.y_mm, pc.rotation_deg,
-            )
+            wx, wy = _pin_xy(pc, pin)
             gx, gy = grid.world_to_grid(wx, wy)
             rx, ry = _pin_grid_halfdims(pin, pc.rotation_deg, res, pad_radius)
             for dx in range(-rx, rx + 1):
@@ -780,9 +784,7 @@ def _block_components(
         if cat is None or not cat.mounting.blocks_routing:
             continue
         for pin in cat.pins:
-            wx, wy = pin_world_xy(
-                pin.position_mm, pc.x_mm, pc.y_mm, pc.rotation_deg,
-            )
+            wx, wy = _pin_xy(pc, pin)
             gx, gy = grid.world_to_grid(wx, wy)
             for dx in range(-1, 2):
                 for dy in range(-1, 2):
@@ -862,9 +864,13 @@ def _build_all_pin_cells(
         if cat is None:
             continue
         for pin in cat.pins:
-            wx, wy = pin_world_xy(
-                pin.position_mm, pc.x_mm, pc.y_mm, pc.rotation_deg,
-            )
+            pos = pc.pin_positions.get(pin.id)
+            if pos is not None:
+                wx, wy = pos
+            else:
+                wx, wy = pin_world_xy(
+                    pin.position_mm, pc.x_mm, pc.y_mm, pc.rotation_deg,
+                )
             gx, gy = grid.world_to_grid(wx, wy)
             result[f"{pc.instance_id}:{pin.id}"] = {(gx, gy)}
     return result

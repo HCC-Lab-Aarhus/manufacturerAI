@@ -123,9 +123,10 @@ def find_path(
 
     if not (0 <= sx < W and 0 <= sy < H and 0 <= tx < W and 0 <= ty < H):
         return None
-    if cells[sy * W + sx] == TRACE_PATH:
+    protected = grid._protected
+    if cells[sy * W + sx] == TRACE_PATH and (sx, sy) not in protected:
         return None
-    if cells[ty * W + tx] == TRACE_PATH:
+    if cells[ty * W + tx] == TRACE_PATH and (tx, ty) not in protected:
         return None
     if source == sink:
         return [source]
@@ -264,12 +265,14 @@ def find_path_to_tree(
     counter = 0
     heap: list[tuple[float, int, int, int]] = []
 
+    protected = grid._protected
     for sx, sy in sources:
         if not (0 <= sx < W and 0 <= sy < H):
             continue
         skey = sy * W + sx
         if cells[skey] != FREE and not tree_mask[skey]:
-            continue
+            if (sx, sy) not in protected:
+                continue
         g[skey] = 0
         _heappush(heap, (h_map[skey], counter, skey, -1))
         counter += 1
