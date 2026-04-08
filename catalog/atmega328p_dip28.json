@@ -175,7 +175,7 @@
             "voltage_v": 5.0,
             "current_max_ma": 1,
             "hole_diameter_mm": 0.6,
-            "description": "Crystal oscillator pin 1. Leave unconnected if using internal 8MHz RC oscillator.",
+            "description": "Crystal oscillator pin 1. Connect to crystal XTAL1 pin with 20pF cap to GND. Leave unconnected if using internal 8MHz RC oscillator.",
             "shape": {
                 "type": "rect",
                 "width_mm": 0.3,
@@ -193,7 +193,7 @@
             "voltage_v": 5.0,
             "current_max_ma": 1,
             "hole_diameter_mm": 0.6,
-            "description": "Crystal oscillator pin 2. Leave unconnected if using internal 8MHz RC oscillator.",
+            "description": "Crystal oscillator pin 2. Connect to crystal XTAL2 pin with 20pF cap to GND. Leave unconnected if using internal 8MHz RC oscillator.",
             "shape": {
                 "type": "rect",
                 "width_mm": 0.3,
