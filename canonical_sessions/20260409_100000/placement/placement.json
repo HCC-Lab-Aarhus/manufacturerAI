@@ -1,0 +1,40 @@
+{
+  "components": [
+    {
+      "instance_id": "lamp_1",
+      "catalog_id": "lamp_socket",
+      "x_mm": 80.0,
+      "y_mm": 80.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          67.345,
+          80.0
+        ],
+        "2": [
+          92.655,
+          80.0
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "plug_1",
+      "catalog_id": "wall_plug",
+      "x_mm": 80.0,
+      "y_mm": 149.96,
+      "rotation_deg": 0.0,
+      "pin_positions": {
+        "L": [
+          70.5,
+          140.94
+        ],
+        "N": [
+          89.5,
+          140.94
+        ]
+      },
+      "mounting_style": "side"
+    }
+  ]
+}

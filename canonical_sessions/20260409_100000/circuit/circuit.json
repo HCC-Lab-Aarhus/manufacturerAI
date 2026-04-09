@@ -1,0 +1,28 @@
+{
+  "components": [
+    {
+      "instance_id": "lamp_1",
+      "catalog_id": "lamp_socket"
+    },
+    {
+      "instance_id": "plug_1",
+      "catalog_id": "wall_plug"
+    }
+  ],
+  "nets": [
+    {
+      "id": "AC_LIVE",
+      "pins": [
+        "plug_1:L",
+        "lamp_1:1"
+      ]
+    },
+    {
+      "id": "AC_NEUTRAL",
+      "pins": [
+        "plug_1:N",
+        "lamp_1:2"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "device_description": "A flower-shaped wall lamp. A central lamp socket sits in the middle of the flower, with six rounded petals radiating outward. A rectangular stem extends downward where the wall plug mounts through the side, its prongs protruding to plug directly into a wall outlet.",
+  "name": "Flower Lamp",
+  "shape": {
+    "op": "union",
+    "children": [
+      {
+        "type": "ellipse",
+        "center": [80, 80],
+        "radius": 22
+      },
+      {
+        "type": "ellipse",
+        "center": [80, 52],
+        "radius": 16
+      },
+      {
+        "type": "ellipse",
+        "center": [104.24, 66],
+        "radius": 16
+      },
+      {
+        "type": "ellipse",
+        "center": [104.24, 94],
+        "radius": 16
+      },
+      {
+        "type": "ellipse",
+        "center": [80, 108],
+        "radius": 16
+      },
+      {
+        "type": "ellipse",
+        "center": [55.76, 94],
+        "radius": 16
+      },
+      {
+        "type": "ellipse",
+        "center": [55.76, 66],
+        "radius": 16
+      },
+      {
+        "type": "rectangle",
+        "center": [80, 130],
+        "size": [30, 36],
+        "corner_radius": 3
+      }
+    ]
+  },
+  "enclosure": {
+    "height_mm": 20,
+    "top_surface": {
+      "type": "flat"
+    },
+    "edge_bottom": {
+      "type": "fillet",
+      "size_mm": 2
+    }
+  },
+  "ui_placements": [
+    {
+      "instance_id": "lamp_1",
+      "catalog_id": "lamp_socket",
+      "x_mm": 80,
+      "y_mm": 80
+    },
+    {
+      "instance_id": "plug_1",
+      "catalog_id": "wall_plug",
+      "x_mm": 80,
+      "y_mm": 143,
+      "edge_index": 120
+    }
+  ]
+}

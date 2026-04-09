@@ -1,0 +1,20 @@
+{
+  "id": "20260409_100000",
+  "created": "2026-04-09T10:00:00.000000+00:00",
+  "last_modified": "2026-04-09T01:46:46.991348+00:00",
+  "description": "A flower-shaped wall lamp with a central lamp socket and a protrusion for the wall plug.",
+  "name": "Flower Lamp",
+  "printer_id": "mk3s",
+  "filament_id": "pla",
+  "model_id": "medium",
+  "pipeline_state": {
+    "design": "complete",
+    "circuit": "complete",
+    "placement": "complete",
+    "routing": "complete",
+    "inflation": "complete",
+    "scad": "complete",
+    "gcode": "complete"
+  },
+  "pipeline_errors": {}
+}
