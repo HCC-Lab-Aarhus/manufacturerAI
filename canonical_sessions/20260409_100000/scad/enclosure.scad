@@ -1,10 +1,10 @@
 // ============================================================
 // manufacturerAI -- auto-generated enclosure
 // Session  : 20260409_100000
-// Generated: 2026-04-09 03:46
+// Generated: 2026-04-09 11:35
 //   components: 2
 //   traces: 2
-//   fragments: 15
+//   fragments: 16
 //   base_height_mm: 20.0
 //   max_height_mm: 20.0
 //   footprint_verts: 219
@@ -52,6 +52,11 @@ mirror([0, 1, 0]) {
         translate([0, 0, 2.199])
           linear_extrude(height = 5.762)
             polygon(points = [[67.710, 148.000], [68.000, 148.010], [92.290, 148.000]], paths = [[0, 1, 2]]);
+  
+      // z=2.20 d=6.00  1 fragments → 1 polygon(s)  4 verts  [Prong connecting bar]
+        translate([0, 0, 2.199])
+          linear_extrude(height = 6.002)
+            polygon(points = [[66.500, 145.000], [93.500, 145.000], [93.500, 141.000], [66.500, 141.000]], paths = [[0, 1, 2, 3]]);
   
       // z=6.00 d=12.00  1 fragments → 1 polygon(s)  16 verts  [body pocket]
         translate([0, 0, 5.999])

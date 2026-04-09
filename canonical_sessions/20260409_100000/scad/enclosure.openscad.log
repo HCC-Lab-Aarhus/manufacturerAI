@@ -2,16 +2,16 @@ Command: C:\Program Files\OpenSCAD (Nightly)\openscad.exe -o C:\Users\rhave\Desk
 Exit code: 0
 
 --- stderr ---
-Geometries in cache: 29
-Geometry cache size in bytes: 219512
+Geometries in cache: 32
+Geometry cache size in bytes: 221464
 CGAL Polyhedrons in cache: 2
-CGAL cache size in bytes: 1004000
-Total rendering time: 0:00:00.085
+CGAL cache size in bytes: 1024000
+Total rendering time: 0:00:00.084
    Top level object is a 3D object (manifold):
    Status:     NoError
-   Genus:      2
-   Vertices:     2008
-   Facets:       4020
+   Genus:      3
+   Vertices:     2048
+   Facets:       4104
 
 --- stdout ---
 
