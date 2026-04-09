@@ -2,63 +2,36 @@
   "device_description": "An oval handheld IR remote control. A power button at the top toggles the target device on/off. Below it, volume up and volume down buttons on the left control audio level, while channel up and channel down buttons on the right cycle through channels. An IR LED at the top edge transmits commands to the target device.",
   "name": "Pebble Remote",
   "shape": {
-    "op": "difference",
+    "op": "union",
     "children": [
       {
-        "op": "union",
-        "children": [
-          {
-            "type": "ellipse",
-            "center": [
-              40,
-              55
-            ],
-            "radius": [
-              40,
-              50
-            ]
-          },
-          {
-            "type": "ellipse",
-            "center": [
-              40,
-              55
-            ],
-            "radius": [
-              40,
-              22
-            ],
-            "end_center": [
-              40,
-              150
-            ],
-            "radius_end": [
-              25,
-              14
-            ]
-          }
+        "type": "ellipse",
+        "center": [
+          40,
+          55
+        ],
+        "radius": [
+          40,
+          50
         ]
       },
       {
         "type": "ellipse",
         "center": [
-          -8,
-          120
+          40,
+          55
         ],
         "radius": [
-          15,
-          28
-        ]
-      },
-      {
-        "type": "ellipse",
-        "center": [
-          88,
-          120
+          40,
+          22
         ],
-        "radius": [
-          15,
-          28
+        "end_center": [
+          40,
+          150
+        ],
+        "radius_end": [
+          25,
+          14
         ]
       }
     ]
