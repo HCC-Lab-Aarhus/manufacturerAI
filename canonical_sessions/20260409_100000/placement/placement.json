@@ -22,16 +22,16 @@
       "instance_id": "plug_1",
       "catalog_id": "wall_plug",
       "x_mm": 80.0,
-      "y_mm": 149.96,
+      "y_mm": 149.8,
       "rotation_deg": 0.0,
       "pin_positions": {
         "L": [
-          70.5,
-          140.94
+          70.0,
+          138.0
         ],
         "N": [
-          89.5,
-          140.94
+          90.0,
+          138.0
         ]
       },
       "mounting_style": "side"
