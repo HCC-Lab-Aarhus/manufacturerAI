@@ -5,8 +5,8 @@
     "ui_placement": true,
     "body": {
         "shape": "rect",
-        "width_mm": 6,
-        "length_mm": 3,
+        "width_mm": 12,
+        "length_mm": 8,
         "height_mm": 6
     },
     "mounting": {
@@ -81,7 +81,7 @@
                 "label": "Cable pass-through hole",
                 "position_mm": [0, 0],
                 "width_mm": 5,
-                "length_mm": 3,
+                "length_mm": 6,
                 "depth_mm": 6,
                 "z_anchor": "cavity_start",
                 "description": "Rectangular hole through the side wall for the USB cable to pass through."
