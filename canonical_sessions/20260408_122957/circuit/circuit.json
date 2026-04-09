@@ -1,0 +1,178 @@
+{
+  "components": [
+    {
+      "catalog_id": "usb_solder_pads",
+      "instance_id": "usb_1"
+    },
+    {
+      "catalog_id": "atmega328p_dip28",
+      "instance_id": "mcu_1"
+    },
+    {
+      "catalog_id": "resistor_axial",
+      "instance_id": "r_reset",
+      "config": {
+        "resistance_ohms": 10000
+      }
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_0"
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_2"
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_4"
+    },
+    {
+      "catalog_id": "tactile_button_6x6",
+      "instance_id": "btn_6"
+    },
+    {
+      "catalog_id": "crystal_16mhz",
+      "instance_id": "xtal_1"
+    },
+    {
+      "catalog_id": "capacitor_20pf",
+      "instance_id": "c_xtal_1"
+    },
+    {
+      "catalog_id": "capacitor_20pf",
+      "instance_id": "c_xtal_2"
+    },
+    {
+      "catalog_id": "capacitor_100nf",
+      "instance_id": "c_bypass"
+    },
+    {
+      "catalog_id": "resistor_axial",
+      "instance_id": "r_usb_dp",
+      "config": {
+        "resistance_ohms": 68
+      }
+    },
+    {
+      "catalog_id": "resistor_axial",
+      "instance_id": "r_usb_dm",
+      "config": {
+        "resistance_ohms": 68
+      }
+    },
+    {
+      "catalog_id": "resistor_axial",
+      "instance_id": "r_usb_pull",
+      "config": {
+        "resistance_ohms": 1500
+      }
+    }
+  ],
+  "nets": [
+    {
+      "id": "VCC",
+      "pins": [
+        "usb_1:VCC",
+        "mcu_1:power",
+        "r_reset:1",
+        "c_bypass:1",
+        "r_usb_pull:1"
+      ]
+    },
+    {
+      "id": "GND",
+      "pins": [
+        "usb_1:GND",
+        "mcu_1:ground",
+        "btn_0:B",
+        "btn_2:B",
+        "btn_4:B",
+        "btn_6:B",
+        "c_xtal_1:2",
+        "c_xtal_2:2",
+        "c_bypass:2"
+      ]
+    },
+    {
+      "id": "RESET_PULLUP",
+      "pins": [
+        "r_reset:2",
+        "mcu_1:PC6"
+      ]
+    },
+    {
+      "id": "BTN0_SIG",
+      "pins": [
+        "btn_0:A",
+        "mcu_1:gpio"
+      ]
+    },
+    {
+      "id": "BTN2_SIG",
+      "pins": [
+        "btn_2:A",
+        "mcu_1:gpio"
+      ]
+    },
+    {
+      "id": "BTN4_SIG",
+      "pins": [
+        "btn_4:A",
+        "mcu_1:gpio"
+      ]
+    },
+    {
+      "id": "BTN6_SIG",
+      "pins": [
+        "btn_6:A",
+        "mcu_1:gpio"
+      ]
+    },
+    {
+      "id": "XTAL1",
+      "pins": [
+        "mcu_1:PB6",
+        "xtal_1:1",
+        "c_xtal_1:1"
+      ]
+    },
+    {
+      "id": "XTAL2",
+      "pins": [
+        "mcu_1:PB7",
+        "xtal_1:2",
+        "c_xtal_2:1"
+      ]
+    },
+    {
+      "id": "USB_DP",
+      "pins": [
+        "usb_1:D+",
+        "r_usb_dp:1"
+      ]
+    },
+    {
+      "id": "USB_DP_MCU",
+      "pins": [
+        "r_usb_dp:2",
+        "mcu_1:PD2"
+      ]
+    },
+    {
+      "id": "USB_DM",
+      "pins": [
+        "usb_1:D-",
+        "r_usb_dm:1"
+      ]
+    },
+    {
+      "id": "USB_DM_MCU",
+      "pins": [
+        "r_usb_dm:2",
+        "r_usb_pull:2",
+        "mcu_1:PD4"
+      ]
+    }
+  ]
+}

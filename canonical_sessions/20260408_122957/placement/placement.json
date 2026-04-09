@@ -1,0 +1,400 @@
+{
+  "components": [
+    {
+      "instance_id": "btn_0",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 80.0,
+      "y_mm": 45.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          76.5,
+          42.795
+        ],
+        "2": [
+          83.5,
+          42.795
+        ],
+        "3": [
+          76.5,
+          47.205
+        ],
+        "4": [
+          83.5,
+          47.205
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "btn_2",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 115.0,
+      "y_mm": 80.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          111.5,
+          77.795
+        ],
+        "2": [
+          118.5,
+          77.795
+        ],
+        "3": [
+          111.5,
+          82.205
+        ],
+        "4": [
+          118.5,
+          82.205
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "btn_4",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 80.0,
+      "y_mm": 115.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          76.5,
+          112.795
+        ],
+        "2": [
+          83.5,
+          112.795
+        ],
+        "3": [
+          76.5,
+          117.205
+        ],
+        "4": [
+          83.5,
+          117.205
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "btn_6",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 45.0,
+      "y_mm": 80.0,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          41.5,
+          77.795
+        ],
+        "2": [
+          48.5,
+          77.795
+        ],
+        "3": [
+          41.5,
+          82.205
+        ],
+        "4": [
+          48.5,
+          82.205
+        ]
+      },
+      "mounting_style": "top"
+    },
+    {
+      "instance_id": "usb_1",
+      "catalog_id": "usb_solder_pads",
+      "x_mm": 80.0,
+      "y_mm": 148.5,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "VCC": [
+          74.75,
+          148.5
+        ],
+        "D-": [
+          78.25,
+          148.5
+        ],
+        "D+": [
+          81.75,
+          148.5
+        ],
+        "GND": [
+          85.25,
+          148.5
+        ]
+      },
+      "mounting_style": "side"
+    },
+    {
+      "instance_id": "mcu_1",
+      "catalog_id": "atmega328p_dip28",
+      "x_mm": 79.56,
+      "y_mm": 80.91,
+      "rotation_deg": 270,
+      "pin_positions": {
+        "PC6": [
+          63.05,
+          85.51
+        ],
+        "PD0": [
+          65.59,
+          85.51
+        ],
+        "PD1": [
+          68.13,
+          85.51
+        ],
+        "PD2": [
+          70.67,
+          85.51
+        ],
+        "PD3": [
+          73.21,
+          85.51
+        ],
+        "PD4": [
+          75.75,
+          85.51
+        ],
+        "VCC1": [
+          78.29,
+          85.51
+        ],
+        "GND1": [
+          80.83,
+          85.51
+        ],
+        "PB6": [
+          83.37,
+          85.51
+        ],
+        "PB7": [
+          85.91,
+          85.51
+        ],
+        "PD5": [
+          88.45,
+          85.51
+        ],
+        "PD6": [
+          90.99,
+          85.51
+        ],
+        "PD7": [
+          93.53,
+          85.51
+        ],
+        "PB0": [
+          96.07,
+          85.51
+        ],
+        "PB1": [
+          96.07,
+          76.31
+        ],
+        "PB2": [
+          93.53,
+          76.31
+        ],
+        "PB3": [
+          90.99,
+          76.31
+        ],
+        "PB4": [
+          88.45,
+          76.31
+        ],
+        "PB5": [
+          85.91,
+          76.31
+        ],
+        "AVCC": [
+          83.37,
+          76.31
+        ],
+        "AREF": [
+          80.83,
+          76.31
+        ],
+        "GND2": [
+          78.29,
+          76.31
+        ],
+        "PC0": [
+          75.75,
+          76.31
+        ],
+        "PC1": [
+          73.21,
+          76.31
+        ],
+        "PC2": [
+          70.67,
+          76.31
+        ],
+        "PC3": [
+          68.13,
+          76.31
+        ],
+        "PC4": [
+          65.59,
+          76.31
+        ],
+        "PC5": [
+          63.05,
+          76.31
+        ]
+      },
+      "mounting_style": "internal"
+    },
+    {
+      "instance_id": "xtal_1",
+      "catalog_id": "crystal_16mhz",
+      "x_mm": 85.99,
+      "y_mm": 94.19,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          83.24,
+          94.19
+        ],
+        "2": [
+          88.74,
+          94.19
+        ]
+      },
+      "mounting_style": "internal"
+    },
+    {
+      "instance_id": "r_usb_pull",
+      "catalog_id": "resistor_axial",
+      "x_mm": 66.5,
+      "y_mm": 116.6,
+      "rotation_deg": 180,
+      "pin_positions": {
+        "1": [
+          70.75,
+          116.6
+        ],
+        "2": [
+          62.25,
+          116.6
+        ]
+      },
+      "mounting_style": "internal"
+    },
+    {
+      "instance_id": "r_reset",
+      "catalog_id": "resistor_axial",
+      "x_mm": 71.58,
+      "y_mm": 123.27,
+      "rotation_deg": 180,
+      "pin_positions": {
+        "1": [
+          75.83,
+          123.27
+        ],
+        "2": [
+          67.33,
+          123.27
+        ]
+      },
+      "mounting_style": "internal"
+    },
+    {
+      "instance_id": "r_usb_dm",
+      "catalog_id": "resistor_axial",
+      "x_mm": 74.0,
+      "y_mm": 142.5,
+      "rotation_deg": 180,
+      "pin_positions": {
+        "1": [
+          78.25,
+          142.5
+        ],
+        "2": [
+          69.75,
+          142.5
+        ]
+      },
+      "mounting_style": "internal"
+    },
+    {
+      "instance_id": "r_usb_dp",
+      "catalog_id": "resistor_axial",
+      "x_mm": 70.72,
+      "y_mm": 131.83,
+      "rotation_deg": 270,
+      "pin_positions": {
+        "1": [
+          70.72,
+          136.08
+        ],
+        "2": [
+          70.72,
+          127.58
+        ]
+      },
+      "mounting_style": "internal"
+    },
+    {
+      "instance_id": "c_xtal_1",
+      "catalog_id": "capacitor_20pf",
+      "x_mm": 83.22,
+      "y_mm": 100.83,
+      "rotation_deg": 90,
+      "pin_positions": {
+        "1": [
+          83.22,
+          97.83
+        ],
+        "2": [
+          83.22,
+          103.83
+        ]
+      },
+      "mounting_style": "internal"
+    },
+    {
+      "instance_id": "c_xtal_2",
+      "catalog_id": "capacitor_20pf",
+      "x_mm": 88.74,
+      "y_mm": 100.83,
+      "rotation_deg": 90,
+      "pin_positions": {
+        "1": [
+          88.74,
+          97.83
+        ],
+        "2": [
+          88.74,
+          103.83
+        ]
+      },
+      "mounting_style": "internal"
+    },
+    {
+      "instance_id": "c_bypass",
+      "catalog_id": "capacitor_100nf",
+      "x_mm": 79.14,
+      "y_mm": 128.88,
+      "rotation_deg": 0,
+      "pin_positions": {
+        "1": [
+          76.14,
+          128.88
+        ],
+        "2": [
+          82.14,
+          128.88
+        ]
+      },
+      "mounting_style": "internal"
+    }
+  ]
+}

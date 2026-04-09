@@ -1,0 +1,207 @@
+{
+  "device_description": "A circular TV remote control styled like a pizza, with the top surface divided into 4 radial pie-slice buttons (top, right, bottom, left). The device is held flat in the palm and operated with the thumb.",
+  "name": "Pizza Slice Remote",
+  "shape": {
+    "type": "ellipse",
+    "center": [
+      80,
+      80
+    ],
+    "radius": 70
+  },
+  "enclosure": {
+    "height_mm": 17,
+    "top_surface": {
+      "type": "dome",
+      "peak_x_mm": 80,
+      "peak_y_mm": 80,
+      "peak_height_mm": 23,
+      "base_height_mm": 17
+    },
+    "edge_bottom": {
+      "type": "fillet",
+      "size_mm": 3
+    }
+  },
+  "ui_placements": [
+    {
+      "instance_id": "btn_0",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 80,
+      "y_mm": 45,
+      "button_shape": {
+        "op": "intersection",
+        "children": [
+          {
+            "type": "ellipse",
+            "center": [
+              0,
+              35
+            ],
+            "radius": 50
+          },
+          {
+            "type": "rectangle",
+            "center": [
+              -142,
+              -107
+            ],
+            "size": [
+              400,
+              400
+            ],
+            "rotate": 45
+          },
+          {
+            "type": "rectangle",
+            "center": [
+              142,
+              -107
+            ],
+            "size": [
+              400,
+              400
+            ],
+            "rotate": -45
+          }
+        ]
+      }
+    },
+    {
+      "instance_id": "btn_2",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 115,
+      "y_mm": 80,
+      "button_shape": {
+        "op": "intersection",
+        "children": [
+          {
+            "type": "ellipse",
+            "center": [
+              -35,
+              0
+            ],
+            "radius": 50
+          },
+          {
+            "type": "rectangle",
+            "center": [
+              107,
+              -142
+            ],
+            "size": [
+              400,
+              400
+            ],
+            "rotate": -45
+          },
+          {
+            "type": "rectangle",
+            "center": [
+              107,
+              142
+            ],
+            "size": [
+              400,
+              400
+            ],
+            "rotate": 45
+          }
+        ]
+      }
+    },
+    {
+      "instance_id": "btn_4",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 80,
+      "y_mm": 115,
+      "button_shape": {
+        "op": "intersection",
+        "children": [
+          {
+            "type": "ellipse",
+            "center": [
+              0,
+              -35
+            ],
+            "radius": 50
+          },
+          {
+            "type": "rectangle",
+            "center": [
+              142,
+              107
+            ],
+            "size": [
+              400,
+              400
+            ],
+            "rotate": 45
+          },
+          {
+            "type": "rectangle",
+            "center": [
+              -142,
+              107
+            ],
+            "size": [
+              400,
+              400
+            ],
+            "rotate": -45
+          }
+        ]
+      }
+    },
+    {
+      "instance_id": "btn_6",
+      "catalog_id": "tactile_button_6x6",
+      "x_mm": 45,
+      "y_mm": 80,
+      "button_shape": {
+        "op": "intersection",
+        "children": [
+          {
+            "type": "ellipse",
+            "center": [
+              35,
+              0
+            ],
+            "radius": 50
+          },
+          {
+            "type": "rectangle",
+            "center": [
+              -107,
+              -142
+            ],
+            "size": [
+              400,
+              400
+            ],
+            "rotate": 45
+          },
+          {
+            "type": "rectangle",
+            "center": [
+              -107,
+              142
+            ],
+            "size": [
+              400,
+              400
+            ],
+            "rotate": -45
+          }
+        ]
+      }
+    },
+    {
+      "instance_id": "usb_1",
+      "catalog_id": "usb_solder_pads",
+      "x_mm": 80,
+      "y_mm": 150,
+      "edge_index": 48
+    }
+  ]
+}
