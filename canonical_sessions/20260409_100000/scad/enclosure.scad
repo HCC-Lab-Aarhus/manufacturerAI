@@ -1,7 +1,7 @@
 // ============================================================
 // manufacturerAI -- auto-generated enclosure
 // Session  : 20260409_100000
-// Generated: 2026-04-09 16:27
+// Generated: 2026-04-09 19:57
 //   components: 2
 //   traces: 2
 //   fragments: 18
@@ -53,10 +53,10 @@ mirror([0, 1, 0]) {
           linear_extrude(height = 5.402)
             polygon(points = [[67.710, 148.000], [68.000, 148.010], [92.290, 148.000]], paths = [[0, 1, 2]]);
   
-      // z=2.20 d=5.50  3 fragments → 1 polygon(s)  12 verts  [Prong (Live), Prong (Neutral), Prong connecting bar]
+      // z=2.20 d=6.00  3 fragments → 1 polygon(s)  12 verts  [Prong (Live), Prong (Neutral), Prong connecting bar]
         translate([0, 0, 2.199])
-          linear_extrude(height = 5.502)
-            polygon(points = [[93.150, 142.250], [66.850, 142.250], [66.850, 145.750], [67.750, 145.750], [67.750, 148.001], [72.250, 148.010], [72.250, 145.750], [87.750, 145.750], [87.750, 148.010], [92.250, 148.001], [92.250, 145.750], [93.150, 145.750]], paths = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]]);
+          linear_extrude(height = 6.002)
+            polygon(points = [[93.150, 141.750], [66.850, 141.750], [66.850, 146.250], [67.750, 146.250], [67.750, 148.001], [72.250, 148.010], [72.250, 146.250], [87.750, 146.250], [87.750, 148.010], [92.250, 148.001], [92.250, 146.250], [93.150, 146.250]], paths = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]]);
   
       // z=6.00 d=12.00  1 fragments → 1 polygon(s)  16 verts  [body pocket]
         translate([0, 0, 5.999])
