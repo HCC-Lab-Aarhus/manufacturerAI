@@ -62,7 +62,7 @@
                 "position_mm": [-10, 10],
                 "width_mm": 4.5,
                 "length_mm": 32.0,
-                "depth_mm": 5.5,
+                "depth_mm": 6.0,
                 "z_anchor": "cavity_start",
                 "description": "Live prong extending forward from the body front face. 4.5mm diameter, 32mm long, horizontal."
             },
@@ -72,7 +72,7 @@
                 "position_mm": [10, 10],
                 "width_mm": 4.5,
                 "length_mm": 32.0,
-                "depth_mm": 5.5,
+                "depth_mm": 6.0,
                 "z_anchor": "cavity_start",
                 "description": "Neutral prong extending forward from the body front face. 4.5mm diameter, 32mm long, horizontal."
             },
@@ -81,8 +81,8 @@
                 "label": "Prong connecting bar",
                 "position_mm": [0, -5.8],
                 "width_mm": 26.3,
-                "length_mm": 3.5,
-                "depth_mm": 5.5,
+                "length_mm": 4.5,
+                "depth_mm": 6.0,
                 "z_anchor": "cavity_start",
                 "description": "Horizontal crossbar of H-shaped cutout. Connects the two prong lead paths at the back of the body."
             },
