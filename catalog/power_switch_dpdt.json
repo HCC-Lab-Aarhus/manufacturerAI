@@ -129,28 +129,7 @@
         }
     ],
     "internal_nets": [],
-    "pin_groups": [
-        {
-            "id": "pole1",
-            "pin_ids": [
-                "1",
-                "2",
-                "3"
-            ],
-            "allocatable": false,
-            "description": "Pole 1: COM1 (pin 2) switches between NO1 (pin 1) and NC1 (pin 3)."
-        },
-        {
-            "id": "pole2",
-            "pin_ids": [
-                "4",
-                "5",
-                "6"
-            ],
-            "allocatable": false,
-            "description": "Pole 2: COM2 (pin 5) switches between NO2 (pin 4) and NC2 (pin 6)."
-        }
-    ],
+    "pin_groups": [],
     "scad": {
         "features": [
             {
