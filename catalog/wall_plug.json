@@ -58,6 +58,16 @@
         "features": [
             {
                 "shape": "rect",
+                "label": "Prong connecting bar",
+                "position_mm": [0, -6.96],
+                "width_mm": 27.0,
+                "length_mm": 4.0,
+                "depth_mm": 6.0,
+                "z_anchor": "cavity_start",
+                "description": "Rectangular cutout for the horizontal bar connecting the two prongs at the front face of the body."
+            },
+            {
+                "shape": "rect",
                 "label": "L-bend lead channel (Live)",
                 "position_mm": [-9.5, -5.49],
                 "width_mm": 3.77,
