@@ -1,0 +1,17 @@
+Command: C:\Program Files\OpenSCAD (Nightly)\openscad.exe -o C:\Users\rhave\Desktop\code_fix\quickjet\MANUFA~1\outputs\sessions\20D5F1~1\scad\enclosure_top.stl C:\Users\rhave\Desktop\code_fix\quickjet\MANUFA~1\outputs\sessions\20D5F1~1\scad\ENCLOS~2.SCA
+Exit code: 0
+
+--- stderr ---
+Geometries in cache: 268
+Geometry cache size in bytes: 352640
+CGAL Polyhedrons in cache: 3
+CGAL cache size in bytes: 860000
+Total rendering time: 0:00:00.163
+   Top level object is a 3D object (manifold):
+   Status:     NoError
+   Genus:      70
+   Vertices:     1400
+   Facets:       3076
+
+--- stdout ---
+

@@ -108,24 +108,24 @@
       "instance_id": "usb_1",
       "catalog_id": "usb_solder_pads",
       "x_mm": 80.0,
-      "y_mm": 148.5,
+      "y_mm": 147.5,
       "rotation_deg": 0,
       "pin_positions": {
         "VCC": [
           74.75,
-          148.5
+          147.5
         ],
         "D-": [
           78.25,
-          148.5
+          147.5
         ],
         "D+": [
           81.75,
-          148.5
+          147.5
         ],
         "GND": [
           85.25,
-          148.5
+          147.5
         ]
       },
       "mounting_style": "side"

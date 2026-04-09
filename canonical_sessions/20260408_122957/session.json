@@ -1,7 +1,7 @@
 {
   "id": "20260408_122957",
   "created": "2026-04-08T10:29:57.110508+00:00",
-  "last_modified": "2026-04-09T00:05:21.572458+00:00",
+  "last_modified": "2026-04-09T01:16:00.847211+00:00",
   "description": "",
   "name": "Pizza Slice Remote",
   "printer_id": "mk3s",
@@ -10,7 +10,10 @@
   "pipeline_state": {
     "design": "complete",
     "circuit": "complete",
-    "placement": "complete"
+    "placement": "complete",
+    "inflation": "complete",
+    "scad": "complete",
+    "gcode": "complete"
   },
   "pipeline_errors": {
   }
