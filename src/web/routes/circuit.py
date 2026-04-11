@@ -217,6 +217,111 @@ async def get_circuit_conversation(sid: str):
     return data if isinstance(data, list) else []
 
 
+async def _replay_circuit_background(sid: str, task: AgentTask):
+    """Replay a saved circuit conversation as SSE events with realistic delays."""
+    try:
+        sess = load_session_or_404(sid)
+        convo = sess.read_artifact("circuit_conversation.json")
+        if not convo or not isinstance(convo, list):
+            task.finish("error", error="No conversation to replay")
+            return
+
+        cat = get_catalog()
+
+        for msg in convo:
+            if task.cancel_event.is_set():
+                break
+
+            role = msg.get("role", "")
+            content = msg.get("content", [])
+            if isinstance(content, str):
+                content = [{"type": "text", "text": content}]
+
+            for block in content:
+                if task.cancel_event.is_set():
+                    break
+
+                btype = block.get("type", "")
+
+                if role == "user" and btype == "text":
+                    task.append_event("user_message", {"text": block.get("text", "")})
+                    await asyncio.sleep(0.3)
+
+                elif role == "user" and btype == "tool_result":
+                    tool_use_id = block.get("tool_use_id", "")
+                    result_content = block.get("content", "")
+                    task.append_event("tool_result", {
+                        "id": tool_use_id,
+                        "content": result_content,
+                        "name": block.get("name", ""),
+                        "is_error": block.get("is_error", False),
+                    })
+                    if "```json" in result_content:
+                        try:
+                            json_str = result_content.split("```json\n", 1)[1].split("\n```", 1)[0]
+                            circuit_data = json.loads(json_str)
+                            if "components" in circuit_data and "nets" in circuit_data:
+                                enrich_components(circuit_data.get("components", []), cat)
+                                task.append_event("circuit", {"circuit": circuit_data})
+                        except (IndexError, json.JSONDecodeError):
+                            pass
+                    await asyncio.sleep(0.5)
+
+                elif role == "assistant" and btype == "thinking":
+                    text = block.get("thinking", "")
+                    task.append_event("thinking_start", {})
+                    chunk_size = 20
+                    for i in range(0, len(text), chunk_size):
+                        task.append_event("thinking_delta", {"text": text[i:i + chunk_size]})
+                        await asyncio.sleep(0.005)
+                    task.append_event("block_stop", {})
+                    await asyncio.sleep(0.2)
+
+                elif role == "assistant" and btype == "text":
+                    text = block.get("text", "")
+                    task.append_event("message_start", {})
+                    words = text.split(" ")
+                    for i, word in enumerate(words):
+                        chunk = word if i == 0 else " " + word
+                        task.append_event("message_delta", {"text": chunk})
+                        await asyncio.sleep(0.03)
+                    task.append_event("block_stop", {})
+                    await asyncio.sleep(0.2)
+
+                elif role == "assistant" and btype == "tool_use":
+                    task.append_event("tool_call", {
+                        "id": block.get("id", ""),
+                        "name": block.get("name", ""),
+                        "input": block.get("input", {}),
+                    })
+                    await asyncio.sleep(0.3)
+
+            await asyncio.sleep(0.3)
+
+        task.append_event("done", {})
+        task.finish("done")
+    except asyncio.CancelledError:
+        task.finish("done", error="Cancelled")
+    except Exception as e:
+        log.exception("Circuit replay background error")
+        task.append_event("error", {"message": str(e)})
+        task.finish("error", error=str(e))
+
+
+@router.post("/sessions/{sid}/circuit/replay")
+async def replay_circuit(sid: str):
+    load_session_or_404(sid)
+
+    existing = get_agent_task(sid, "circuit")
+    if existing and existing.status == "running":
+        raise HTTPException(409, "Circuit agent is already running")
+
+    task = AgentTask()
+    set_agent_task(sid, "circuit", task)
+    task.asyncio_task = asyncio.create_task(_replay_circuit_background(sid, task))
+    return {"status": "running"}
+
+
 @router.get("/sessions/{sid}/circuit/tokens")
 def get_circuit_tokens(sid: str):
     s = load_session_or_404(sid)
